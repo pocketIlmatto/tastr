@@ -45,3 +45,23 @@ def chroma(ctx: AnalysisContext) -> np.ndarray:
 
 def frame_times(ctx: AnalysisContext, n_frames: int) -> np.ndarray:
     return np.arange(n_frames) * ctx.hop / ctx.sr
+
+
+def mel_percussive(ctx: AnalysisContext) -> tuple[np.ndarray, np.ndarray]:
+    """(96 x frames mel power of the percussive part, mel bin centre frequencies)."""
+    import librosa
+
+    _, y_perc = ctx.get("hpss", hpss)
+    n_mels = 96
+    mel = librosa.feature.melspectrogram(y=y_perc, sr=ctx.sr, hop_length=ctx.hop, n_mels=n_mels)
+    return mel, librosa.mel_frequencies(n_mels=n_mels, fmax=ctx.sr / 2)
+
+
+def bass_cqt(ctx: AnalysisContext) -> np.ndarray:
+    """36 x frames CQT magnitude of the harmonic part, C1 up three octaves."""
+    import librosa
+
+    y_harm, _ = ctx.get("hpss", hpss)
+    return np.abs(
+        librosa.cqt(y_harm, sr=ctx.sr, hop_length=ctx.hop, fmin=librosa.note_to_hz("C1"), n_bins=36, bins_per_octave=12)
+    )

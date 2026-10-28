@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tastr</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Tastr</h1>
+  <nav>
+    <button data-view="library" class="active">Library</button>
+    <button data-view="explore">Explore</button>
+  </nav>
+</header>
+<main>
+  <section id="view-library">
+    <div id="drop" tabindex="0">
+      <p><strong>Drop audio files here</strong> or <label class="link">browse<input id="file-input" type="file" multiple accept="audio/*,.m4a,.aac,.flac,.ogg,.mp3,.wav" hidden></label></p>
+      <form id="url-form"><input id="url-input" type="url" placeholder="…or paste a track / playlist link"><button>Analyze</button></form>
+      <p id="status" role="status"></p>
+    </div>
+    <div class="split">
+      <ul id="track-list" aria-label="Tracks"></ul>
+      <article id="card"><p class="muted">Select a track.</p></article>
+    </div>
+  </section>
+  <section id="view-explore" hidden>
+    <div class="filters">
+      <label>Tag <select id="f-tag"><option value="">any</option></select></label>
+      <label>BPM <input id="f-min" type="number" placeholder="min"> – <input id="f-max" type="number" placeholder="max"></label>
+    </div>
+    <div id="scatter-wrap"></div>
+    <h2>SQL</h2>
+    <div id="examples"></div>
+    <textarea id="sql" rows="4" spellcheck="false">SELECT title, bpm, camelot, energy FROM tracks ORDER BY bpm</textarea>
+    <button id="run-sql">Run</button>
+    <p id="sql-error" class="error"></p>
+    <div class="table-wrap"><table id="sql-result"></table></div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

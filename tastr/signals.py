@@ -47,6 +47,14 @@ def frame_times(ctx: AnalysisContext, n_frames: int) -> np.ndarray:
     return np.arange(n_frames) * ctx.hop / ctx.sr
 
 
+def mfcc(ctx: AnalysisContext, n_mfcc: int = 13) -> np.ndarray:
+    """n_mfcc x frames timbre features of the full mix (same hop as the other signals)."""
+    import librosa
+
+    mel = librosa.feature.melspectrogram(y=ctx.y, sr=ctx.sr, hop_length=ctx.hop)
+    return librosa.feature.mfcc(S=librosa.power_to_db(mel + 1e-10), n_mfcc=n_mfcc)
+
+
 def mel_percussive(ctx: AnalysisContext) -> tuple[np.ndarray, np.ndarray]:
     """(96 x frames mel power of the percussive part, mel bin centre frequencies)."""
     import librosa

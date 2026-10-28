@@ -2,3 +2,5 @@
 
 Add one module per service and import it here. See docs/modules/links.md.
 """
+
+from . import streaming, ytdlp  # noqa: F401

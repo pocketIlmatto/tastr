@@ -59,6 +59,18 @@ def test_synth_boundaries_energy_and_labels(synth):
     assert card.features["section_contrast"] > 0.1
 
 
+def test_partial_trailing_bar_does_not_hide_a_boundary(synth):
+    # The real core stage extends the beat grid over the whole file, so the synth's
+    # 1 s tail becomes a 33rd, partial bar. It must not use up a cluster.
+    y, truth = synth
+    card = _run(y, 22050, _bars(truth, 33))
+    _check_valid(card)
+    bounds = [s.start for s in card.sections[1:]]
+    for target in (15.5, 46.5):
+        assert min(abs(b - target) for b in bounds) <= truth["bar_seconds"]
+    assert card.sections[0].label == "intro"
+
+
 def test_no_downbeats_falls_back_to_blocks(synth):
     y, _ = synth
     card = _run(y, 22050, [])

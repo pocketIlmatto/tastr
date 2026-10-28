@@ -42,7 +42,7 @@ class SectionsStage:
             return
 
         z = _bar_vectors(ctx, bar_times, duration)
-        starts = _snap(_boundaries(z, duration), n_bars)
+        starts = _segment(z, duration, n_bars)
 
         edges = starts + [n_bars]
         spans = [(edges[i], edges[i + 1]) for i in range(len(starts))]
@@ -132,15 +132,30 @@ def _bar_vectors(ctx: AnalysisContext, bar_times: np.ndarray, duration: float) -
     return (bars - bars.mean(axis=1, keepdims=True)) / (bars.std(axis=1, keepdims=True) + 1e-9)
 
 
-def _boundaries(z: np.ndarray, duration: float) -> list[int]:
+def _boundaries(z: np.ndarray, duration: float, k: int | None = None) -> list[int]:
     """Bar indices where a new section starts (always includes 0), before snapping."""
     import librosa
 
     n_bars = z.shape[1]
-    k = int(np.clip(round(duration / 28), 3, 12))
-    k = min(k, max(2, n_bars // PHRASE_BARS))
+    if k is None:
+        k = int(np.clip(round(duration / 28), 3, 12))
+        k = min(k, max(2, n_bars // PHRASE_BARS))
     # Returns the k left-boundary bar indices of the segments (always starting at 0).
     return sorted({0} | {int(b) for b in librosa.segment.agglomerative(z, k) if 0 < b < n_bars})
+
+
+def _segment(z: np.ndarray, duration: float, n_bars: int) -> list[int]:
+    """Snapped section starts. Clusters that snapping throws away (e.g. a lone partial bar
+    at the end, which core's extended beat grid often produces) are retried with a larger
+    k so they don't eat a real boundary."""
+    target = int(np.clip(round(duration / 28), 3, 12))
+    target = min(target, max(2, n_bars // PHRASE_BARS))
+    best = _snap(_boundaries(z, duration), n_bars)
+    for extra in range(1, 4):
+        if len(best) >= target or target + extra > n_bars:
+            break
+        best = max(best, _snap(_boundaries(z, duration, target + extra), n_bars), key=len)
+    return best
 
 
 def _snap(starts: list[int], n_bars: int) -> list[int]:

@@ -12,18 +12,44 @@ DuckDB.
 
 ## Quick start
 
+You need Python 3.10 or newer. Check with `python3 --version`. If `python3` is
+not found, install Python from [python.org](https://www.python.org/downloads/)
+or, on a Mac, run `brew install python`.
+
+From the repo folder:
+
 ```bash
-pip install -e '.[dev]'          # add ,links for yt-dlp link support later
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[dev]'    # add ,links for yt-dlp link support later
+tastr serve
+```
+
+Then open http://127.0.0.1:8000 in your browser and drop in your audio files.
+The web UI is where you analyze tracks and browse their cards.
+
+## Command line
+
+The `tastr` command does the same work from a terminal. Activate the virtualenv
+from the Quick start first (`source .venv/bin/activate`).
+
+```bash
 tastr analyze ~/Music/some-track.wav ~/Music/folder/
 tastr list
 tastr show 1                     # full card as JSON
 tastr query "SELECT title, bpm, camelot FROM tracks ORDER BY bpm"
 tastr stages                     # pipeline stages in run order
-tastr serve                      # web UI (in progress)
-python -m pytest -q
+tastr serve --host 127.0.0.1 --port 8000   # web UI (defaults shown)
 ```
 
-The database lives at `~/.tastr/tastr.db` (override with `--db` or `TASTR_DB`).
+The database lives at `~/.tastr/tastr.db`. Override it with `--db` or the
+`TASTR_DB` environment variable. The web UI reads the same database.
+
+To run the tests:
+
+```bash
+python -m pytest -q
+```
 
 ## Layout
 

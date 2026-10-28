@@ -73,3 +73,16 @@ def bass_cqt(ctx: AnalysisContext) -> np.ndarray:
     return np.abs(
         librosa.cqt(y_harm, sr=ctx.sr, hop_length=ctx.hop, fmin=librosa.note_to_hz("C1"), n_bins=36, bins_per_octave=12)
     )
+
+
+def low_band_flux(ctx: AnalysisContext, lo: float = 20.0, hi: float = 150.0) -> np.ndarray:
+    """Onset flux of the percussive part restricted to a low band (kick region), one value per hop."""
+    import librosa
+
+    mel, freqs = ctx.get("mel_percussive", mel_percussive)
+    mask = (freqs >= lo) & (freqs < hi)
+    if not mask.any():
+        return np.zeros(mel.shape[1])
+    log_s = librosa.power_to_db(mel[mask] + 1e-10)
+    flux = np.maximum(0.0, np.diff(log_s, axis=1, prepend=log_s[:, :1]))
+    return flux.mean(axis=0)

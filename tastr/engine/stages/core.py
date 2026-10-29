@@ -21,7 +21,7 @@ MIN_BEATS = 8
 
 class CoreStage:
     name = "core"
-    version = "0.1.0"
+    version = "0.1.1"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -96,7 +96,7 @@ class CoreStage:
 
         # --- Key ----------------------------------------------------------------
         chroma = ctx.get("chroma", signals.chroma)
-        profile = chroma.mean(axis=1)
+        profile = music.key_profile(chroma)
         if np.any(profile > 0):
             est = music.estimate_key(profile)
             core.key = Key(

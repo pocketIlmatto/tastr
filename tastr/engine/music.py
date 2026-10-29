@@ -37,8 +37,21 @@ def camelot(tonic: int, mode: str) -> str:
     return f"{number}{'B' if mode == 'major' else 'A'}"
 
 
+# Added to every minor key's correlation. Dance music is mostly minor (about 85% of GiantSteps), and
+# the mean chroma of a minor track often leans major (a prominent bass or lead third, an
+# unresolved breakdown), which a flat prior turns into parallel-mode errors. Anything from 0.08 to
+# 0.25 scored about the same on GiantSteps; see docs/bench.md.
+MINOR_PRIOR = 0.10
+
+
+def key_profile(chroma: np.ndarray) -> np.ndarray:
+    """Mean of the per-frame normalized chroma (12 x frames), so loud frames don't dominate the key."""
+    chroma = np.asarray(chroma, dtype=float)
+    return (chroma / (chroma.sum(axis=0, keepdims=True) + 1e-9)).mean(axis=1)
+
+
 def estimate_key(chroma_profile: np.ndarray) -> dict:
-    """Correlate a 12-bin chroma profile against all 24 Krumhansl-Kessler keys."""
+    """Correlate a 12-bin chroma profile against all 24 Krumhansl-Kessler keys, favoring minor slightly."""
     profile = np.asarray(chroma_profile, dtype=float)
     if not np.any(profile > 0):
         return {"tonic": 0, "mode": "major", "confidence": 0.0, "scores": {}}
@@ -46,7 +59,8 @@ def estimate_key(chroma_profile: np.ndarray) -> dict:
     for tonic in range(12):
         for mode, template in (("major", KK_MAJOR), ("minor", KK_MINOR)):
             r = np.corrcoef(np.roll(template, tonic), profile)[0, 1]
-            scores.append((float(np.nan_to_num(r)), tonic, mode))
+            r = float(np.nan_to_num(r)) + (MINOR_PRIOR if mode == "minor" else 0.0)
+            scores.append((r, tonic, mode))
     scores.sort(reverse=True)
     best, second = scores[0], scores[1]
     # Gap between the top two candidates, scaled so ~0.15 of separation reads as "sure".

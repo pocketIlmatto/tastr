@@ -122,3 +122,24 @@ def test_three_minute_track_under_30s():
     t0 = time.perf_counter()
     analyze(y)
     assert time.perf_counter() - t0 < 30
+
+
+def test_key_profile_ignores_frame_loudness():
+    import numpy as np
+
+    from tastr.engine import music
+
+    quiet = np.zeros((12, 10)); quiet[0] = 1.0
+    loud = np.zeros((12, 10)); loud[7] = 100.0
+    profile = music.key_profile(np.concatenate([quiet, loud], axis=1))
+    assert profile[0] == pytest.approx(profile[7])
+
+
+def test_estimate_key_leans_minor_when_major_and_minor_tie():
+    import numpy as np
+
+    from tastr.engine import music
+
+    # Halfway between C major and its parallel minor: the minor prior should settle it.
+    profile = (music.KK_MAJOR + music.KK_MINOR) / 2
+    assert music.estimate_key(profile)["mode"] == "minor"

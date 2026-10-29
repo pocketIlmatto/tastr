@@ -42,14 +42,30 @@ redistributing its labels or audio.
 
 | Name | Labels | Size | Where |
 |---|---|---|---|
-| `giantsteps-key` | global key | 604 two-minute EDM previews | github.com/GiantStepsMIR/giantsteps-key-dataset (`audio_dl.sh` fetches the audio) |
-| `giantsteps-tempo` | global BPM | 664 EDM previews | github.com/GiantStepsMIR/giantsteps-tempo-dataset (uses `annotations_v2` when present) |
+| `giantsteps-key` | global key | 604 two-minute EDM previews | github.com/GiantSteps/giantsteps-key-dataset for the labels; see "Getting the GiantSteps audio" |
+| `giantsteps-tempo` | global BPM | 664 EDM previews | github.com/GiantSteps/giantsteps-tempo-dataset (uses `annotations_v2` when present) |
 | `harmonix` | BPM, beats, downbeats, sections | 912 pop/EDM tracks | github.com/urinieto/harmonixset; audio is not distributed, put your copies in `<root>/audio` named by track id |
 | `manifest` | whatever you fill in | your tracks | a CSV or JSON file, below |
 | `synth` | everything, exact | 12 generated tracks | built in; a smoke test, not a benchmark |
 
 GiantSteps is the closest match to dance music libraries and is the main key
 and tempo benchmark. Harmonix is the one with sections and downbeats.
+
+### Getting the GiantSteps audio
+
+The datasets' `audio_dl.sh` scripts no longer work: the JKU mirror is gone from most networks and
+Beatport's backup returns 404. The key dataset's audio is also published on Zenodo as part of
+GiantSteps+ (record 4153506, `audio.zip`, 600 of the 604 tracks, named `<id> <artist> - <title>.mp3`).
+The loaders want `<id>.LOFI.mp3`, so stage a folder with the labels from the dataset repo and one
+symlink per track:
+
+```
+<root>/annotations/key/<id>.LOFI.key      # from the GiantSteps repo
+<root>/audio/<id>.LOFI.mp3                # symlink to the Zenodo file for that id
+```
+
+That audio covers only 43 of the 664 tempo tracks, so tempo scores from it are a small sample.
+Keep the data outside the repo and never commit audio.
 
 ### Your own tracks
 
@@ -63,3 +79,16 @@ Night Shift (Extended Mix).mp3,124,A minor,"0:00 1:01 2:02 3:34",intro build dro
 `path` is relative to the manifest file. `key` accepts "A minor", "Am",
 "F# maj" or Camelot codes like "8A". `boundaries` are section start times in
 seconds or m:ss.
+
+## Key detection notes
+
+Measured on GiantSteps Key (599 tracks, labels from the original dataset):
+
+- Most key errors are not relative major/minor swaps. Before the minor prior, 12% of tracks were
+  parallel-mode errors (right tonic, wrong mode), 11% were a fifth off and only 4.5% were relative swaps.
+- The mean of per-frame normalized chroma scores better than the plain mean, and adding a small bonus
+  (`music.MINOR_PRIOR`) to minor keys scores much better than either, because 85% of the labels are minor.
+  The prior is flat from about 0.08 to 0.25, so its exact value is not delicate. If you analyze mostly
+  major-key music, lower it.
+- Tried and dropped (no gain on GiantSteps): bass-weighted chroma, band-split chroma with learned profiles,
+  tuning-corrected 36-bin CQT chroma, 10 s windowed voting, Temperley profiles, learned per-mode profiles.

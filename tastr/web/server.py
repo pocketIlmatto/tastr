@@ -160,6 +160,20 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             body = card_body(c, track_id)
         return {"changed": result == "changed", "tags_found": bool(body["source"].get("file_tags")), "card": body}
 
+    @app.post("/api/tracks/{track_id}/reanalyze")
+    def reanalyze(track_id: int):
+        """Run the full engine again on the track's stored audio file (same id, fresh card)."""
+        with closing(conn()) as c:
+            try:
+                result = service.reanalyze_track(c, track_id)
+            except FileNotFoundError:
+                raise HTTPException(410, "The original audio file is no longer on disk.")
+            if result is None:
+                raise HTTPException(404, "no such track")
+            if result.error:
+                raise HTTPException(422, f"Couldn't analyze the file: {result.error}")
+            return {"card": card_body(c, track_id)}
+
     @app.delete("/api/tracks/{track_id}", status_code=204)
     def delete_track(track_id: int):
         with closing(conn()) as c:

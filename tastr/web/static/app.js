@@ -1147,6 +1147,17 @@ function trackMenu(c) {
       try { await loadTracks(); renderList(); } catch (_) {}
     } catch (e) { tell(e.message, true); }
   };
+  const reanalyze = async () => {
+    close(true);
+    tell("Re-analyzing… this can take a minute", false, true);
+    try {
+      const r = await api(`/api/tracks/${c.id}/reanalyze`, { method: "POST" });
+      viewsCache = null; // the new card may carry its own waveform and spectrogram
+      menuNote = { id: c.id, msg: "Re-analyzed with the current engine" };
+      if (currentId === c.id) renderCard(r.card); else menuNote = null;
+      try { await loadTracks(); renderList(); } catch (_) {}
+    } catch (e) { tell(e.message, true); }
+  };
   const remove = async () => {
     try {
       await api(`/api/tracks/${c.id}`, { method: "DELETE" });
@@ -1160,6 +1171,7 @@ function trackMenu(c) {
     pop.replaceChildren(
       item("Copy track summary", { onclick: copy }),
       isFile ? item("Reload metadata", { onclick: reload }) : null,
+      c.has_audio ? item("Re-analyze", { onclick: reanalyze }) : null, // needs the original audio on disk
       h("hr", { class: "menu-sep" }),
       item("Delete track…", { danger: true, onclick: showConfirm }));
   };

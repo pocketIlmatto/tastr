@@ -202,11 +202,32 @@ def test_retag_endpoint(client, db_path, synth_wav):
     assert client.post("/api/tracks/999/retag").status_code == 404
 
 
+def test_reanalyze_endpoint(client, db_path, synth_wav):
+    path, _ = synth_wav
+    conn = db.connect(db_path)
+    card = full_card()  # a stale card: made-up analysis, no views, pointing at a real file
+    card.source = Source(kind="file", uri=str(path), local_path=str(path), title="old title", sha256="stale")
+    card.extras.pop("views", None)
+    tid = db.save_card(conn, card)
+    gone = db.save_card(conn, full_card())  # points at /x.wav, which isn't there
+    conn.close()
+
+    body = client.post(f"/api/tracks/{tid}/reanalyze").json()["card"]
+    assert body["id"] == tid and body["has_views"]
+    assert body["source"]["title"] == "synth_124_Am"  # file tags re-read too
+    assert body["core"]["bpm"] == pytest.approx(124, abs=2)
+    assert [t["id"] for t in client.get("/api/tracks").json()].count(tid) == 1  # replaced in place, not added
+
+    r = client.post(f"/api/tracks/{gone}/reanalyze")
+    assert r.status_code == 410 and "no longer on disk" in r.json()["detail"]
+    assert client.post("/api/tracks/999/reanalyze").status_code == 404
+
+
 def test_ui_has_track_actions_menu():
     from tastr.web.server import STATIC_DIR
 
     js = (STATIC_DIR / "app.js").read_text()
-    assert "Track actions" in js and "/retag" in js and "Copy track summary" in js
+    assert "Track actions" in js and "/retag" in js and "/reanalyze" in js and "Copy track summary" in js
     assert "confirm(" not in js  # deleting confirms inside the menu, not with a browser dialog
 
 

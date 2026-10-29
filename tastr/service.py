@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 from . import db
 from .engine import analyze_file
@@ -39,3 +40,22 @@ def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] |
 
 def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], stages: list[str] | None = None) -> list[AnalyzeResult]:
     return [analyze_source(conn, s, stages) for s in resolve_inputs(inputs)]
+
+
+def reanalyze_track(conn: sqlite3.Connection, track_id: int) -> AnalyzeResult | None:
+    """Run the full engine again on a stored track's audio file, so it picks up engine changes.
+
+    Keeps the track's id and source (links stay links). File tracks also get their tags
+    re-read. Returns None if there is no such track; raises FileNotFoundError if its
+    audio file is no longer on disk. A failed analysis leaves the stored card as it was.
+    """
+    card = db.load_card(conn, track_id)
+    if card is None:
+        return None
+    source = card.source
+    if not source.local_path or not Path(source.local_path).is_file():
+        raise FileNotFoundError(source.local_path or source.uri)
+    result = analyze_source(conn, source)
+    if result.track_id is not None and source.kind == "file":
+        db.retag_track(conn, result.track_id)
+    return result

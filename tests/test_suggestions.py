@@ -48,3 +48,29 @@ def test_empty_core_does_not_raise():
     ctx = AnalysisContext(y=np.zeros(SR, dtype=np.float32), sr=SR, card=card)
     SuggestionsStage().run(ctx)
     assert isinstance(card.suggestions, list)
+
+
+def test_detected_groove_by_section(synth_wav, truth_core):
+    from tastr.card import Section
+
+    y = load_audio(str(synth_wav[0]), SR)
+    base = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x")), stages=["suggestions"])
+    bars = len(base.core.downbeat_times) - 1
+    assert bars >= 4
+    card = TrackCard(source=Source(kind="file", uri="x"), core=base.core)
+    half = bars // 2
+    card.sections = [
+        Section(0.0, 1.0, "intro", "A", 1, half, 0.3),
+        Section(1.0, 2.0, "drop", "B", half + 1, bars, 0.9),
+    ]
+    SuggestionsStage().run(AnalysisContext(y=y, sr=SR, card=card))
+    groove = next(s for s in card.suggestions if s.title == "Detected groove")
+    by = groove.data["by_section"]
+    assert [s["idx"] for s in by] == [0, 1]
+    assert [s["label"] for s in by] == ["intro", "drop"]
+    for s in by:
+        assert set(s["pattern"]) == set(groove.data["pattern"])
+        assert all(len(p) == 16 for p in s["pattern"].values())
+    assert by[0]["pattern"]["kick"][0] == "x"
+    assert all(groove.data["pattern"][k] for k in ("kick", "hat"))
+    json.dumps(groove.data)

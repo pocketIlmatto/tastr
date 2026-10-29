@@ -122,17 +122,20 @@ def _bar_energy(ctx: AnalysisContext, step_frames: np.ndarray) -> np.ndarray:
     return np.array([rms[a:max(b, a + 1)].mean() for a, b in zip(step_frames[:, 0], ends)])
 
 
+DRUM_BANDS = {"kick": (20, 150), "snare": (180, 2500), "hat": (6000, None)}
+
+
 def _drum_grid(ctx: AnalysisContext, step_frames: np.ndarray) -> dict:
     mel, freqs = ctx.get("mel_percussive", signals.mel_percussive)
     energies = _bar_energy(ctx, step_frames)
     busy = energies >= np.median(energies)
     if busy.sum() < 2:
         busy = np.ones(len(energies), dtype=bool)
-    bands = {"kick": (20, 150), "snare": (180, 2500), "hat": (6000, ctx.sr / 2)}
     grid = {}
-    for lane, (lo, hi) in bands.items():
+    for lane, (lo, hi) in DRUM_BANDS.items():
         # sqrt compresses flux toward perceived loudness so a slightly weaker hit still reads as a hit
-        profile = np.sqrt(_sample(_band_flux(mel, freqs, lo, hi), step_frames)[busy].mean(axis=0))
+        steps = np.sqrt(_sample(_band_flux(mel, freqs, lo, hi or ctx.sr / 2), step_frames))
+        profile = steps[busy].mean(axis=0)
         peak = float(profile.max())
         norm = profile / peak if peak > 0 else profile
         contrast = peak / (float(np.median(profile)) + 1e-9) if peak > 0 else 0.0
@@ -140,8 +143,32 @@ def _drum_grid(ctx: AnalysisContext, step_frames: np.ndarray) -> dict:
             "pattern": _pattern(norm),
             "velocity": [round(float(v), 3) for v in norm],
             "detected": bool(contrast >= 1.4 and peak > 0.05),
+            "_steps": steps,
+            "_peak": peak,
         }
     return grid
+
+
+def _section_grooves(grid: dict, energies: np.ndarray, sections: list[tuple[int, object]]) -> list[dict]:
+    """Per-section 16-step patterns, scaled against the whole-track peak so a quiet section stays sparse."""
+    n_bars = energies.size
+    out = []
+    for idx, sec in sections:
+        a = max(0, sec.start_bar - 1)
+        b = min(n_bars, sec.end_bar if sec.end_bar is not None else sec.start_bar)
+        if b <= a:
+            continue
+        busy = energies[a:b] >= np.median(energies[a:b])
+        pattern = {}
+        for lane, g in grid.items():
+            if g["_peak"] <= 0:
+                pattern[lane] = "." * STEPS
+                continue
+            profile = g["_steps"][a:b][busy].mean(axis=0)
+            pattern[lane] = _pattern(np.minimum(profile / g["_peak"], 1.0))
+        out.append({"idx": idx, "label": sec.label, "letter": sec.letter, "start_bar": sec.start_bar,
+                    "end_bar": sec.end_bar, "energy": sec.energy, "pattern": pattern})
+    return out
 
 
 def _common_loop(seq: list, length: int) -> tuple | None:
@@ -219,7 +246,7 @@ def _harmony_summary(ctx: AnalysisContext, step_frames: np.ndarray, tonic: int, 
 # --- Suggestion rules ------------------------------------------------------------
 
 
-def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict) -> list[Suggestion]:
+def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_section: list[dict] | None = None) -> list[Suggestion]:
     card = ctx.card
     core, f = card.core, card.features
     bpm, key = core.bpm, core.key
@@ -260,10 +287,14 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict) -> list[
     detected = {k: v["pattern"] for k, v in drums.items() if v["detected"]}
     if detected:
         rows = "; ".join(f"{k} on steps {', '.join(map(str, _step_list(p))) or 'none'}" for k, p in detected.items())
-        add("drums", "Detected groove, ready for a Drum Rack",
-            f"This is the 16-step pattern averaged over the busiest bars: {rows}. Program it on a Drum Rack "
-            f"(kick {DRUM_RACK['kick']}, snare {DRUM_RACK['snare']}, hat {DRUM_RACK['hat']}) and vary the last bar of every 4.",
-            {"pattern": detected, "pads": DRUM_RACK, "origin": "detected"})
+        data = {"pattern": detected, "pads": DRUM_RACK, "origin": "detected"}
+        if by_section:
+            data["by_section"] = [{**sec, "pattern": {k: v for k, v in sec["pattern"].items() if k in detected}}
+                                  for sec in by_section]
+        add("drums", "Detected groove",
+            f"Measured per section, since drums change between sections. Averaged over the busiest bars the whole "
+            f"track reads as {rows}. Program it on a Drum Rack (kick {DRUM_RACK['kick']}, snare {DRUM_RACK['snare']}, "
+            f"hat {DRUM_RACK['hat']}) and vary the last bar of every 4.", data)
     for name, pattern in VARIATIONS[style] if style else []:
         add("drums", f"Pattern idea: {name}",
             f"A {name.lower()} pattern that sits at this tempo. Lanes map to default Drum Rack pads.",
@@ -359,13 +390,17 @@ class SuggestionsStage:
             bass = _bass_summary(ctx, step_frames, tonic, scale)
             if tonic is not None:
                 harm = _harmony_summary(ctx, step_frames, tonic, scale)
+        by_section = []
         if drums:
-            card.extras["suggestions.drum_grid"] = drums
+            secs = [(i, x) for i, x in enumerate(card.sections) if x.start_bar is not None]
+            if len(secs) > 1:
+                by_section = _section_grooves(drums, _bar_energy(ctx, step_frames), secs)
+            card.extras["suggestions.drum_grid"] = {k: {f: v for f, v in g.items() if not f.startswith("_")} for k, g in drums.items()}
         if bass:
             card.extras["suggestions.bass"] = bass
         if harm:
             card.extras["suggestions.harmony"] = harm
-        card.suggestions = _suggest(ctx, drums, bass, harm)
+        card.suggestions = _suggest(ctx, drums, bass, harm, by_section)
 
 
 register_stage(SuggestionsStage())

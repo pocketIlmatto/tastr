@@ -117,7 +117,10 @@ function stat(value, label) {
   return h("div", { class: "stat" }, h("b", {}, value), h("span", {}, label));
 }
 
+let sectionBus = new EventTarget();
+
 function renderCard(c) {
+  sectionBus = new EventTarget();
   const core = c.core || {};
   const key = core.key;
   const root = $("card");
@@ -188,7 +191,7 @@ function energyChart(series, sections, duration) {
   const zoomLabel = h("span", { class: "muted" });
   const btn = (label, title, fn) => h("button", { type: "button", title, "aria-label": title, onclick: fn }, label);
   bar.append(btn("−", "Zoom out", () => zoom(1.6)), btn("+", "Zoom in", () => zoom(1 / 1.6)), btn("Reset", "Show whole track", () => { view.a = 0; view.b = end; draw(); }), zoomLabel,
-    h("span", { class: "muted hint" }, "Scroll to zoom, drag to pan"));
+    h("span", { class: "muted hint" }, "Click a section to pick it. Scroll to zoom, drag to pan"));
   const tip = h("div", { class: "chart-tip", hidden: "" });
   const host = h("div", { class: "chart-host" });
   wrap.append(bar, host, tip,
@@ -217,6 +220,9 @@ function energyChart(series, sections, duration) {
     view.a = c - r * span; view.b = view.a + span; clampView(); draw();
   }
 
+  const bus = sectionBus;
+  let selIdx = -1;
+  bus.addEventListener("section", (e) => { if (e.detail.from !== "chart") { selIdx = e.detail.idx; draw(); } });
   let cursorT = null;
   const svgEl = svg("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Energy over time with sections" });
   host.append(svgEl);
@@ -226,10 +232,10 @@ function energyChart(series, sections, duration) {
     s.replaceChildren();
     s.append(svg("defs", {}, svg("clipPath", { id: clipId }, svg("rect", { x: L, y: 0, width: W - L - R, height: H }))));
     const plot = svg("g", { "clip-path": `url(#${clipId})` });
-    sections.forEach((sec) => {
+    sections.forEach((sec, si) => {
       if (!isNum(sec.start) || !isNum(sec.end) || sec.end < view.a || sec.start > view.b) return;
       const color = SEC_COLORS[letters.indexOf(sec.letter || sec.label) % SEC_COLORS.length];
-      plot.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: 0.18 }));
+      plot.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: si === selIdx ? 0.4 : 0.18, stroke: si === selIdx ? color : "none", "stroke-width": 2 }));
       plot.append(svg("text", { class: "lbl", x: Math.max(L, x(sec.start)) + 3, y: T + 12 }, document.createTextNode([sec.label, sec.letter].filter(Boolean).join(" "))));
     });
     [0.25, 0.5, 0.75].forEach((v) => plot.append(svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--line)", "stroke-dasharray": "2 3" })));
@@ -283,7 +289,13 @@ function energyChart(series, sections, duration) {
     }
     cursorT = tAt(Math.max(L, Math.min(W - R, px))); showTip(cursorT);
   });
-  const up = () => { drag = null; svgEl.style.cursor = atEdge() ? "grab" : "crosshair"; };
+  const up = (e) => {
+    if (e && e.type === "pointerup" && drag && Math.abs(toVB(e).px - drag.px) < 3) {
+      const t0 = tAt(toVB(e).px), si = sections.findIndex((q) => t0 >= q.start && t0 < q.end);
+      if (si >= 0) { selIdx = si; draw(); bus.dispatchEvent(new CustomEvent("section", { detail: { idx: si, from: "chart" } })); }
+    }
+    drag = null; svgEl.style.cursor = atEdge() ? "grab" : "crosshair";
+  };
   svgEl.addEventListener("pointerup", up);
   svgEl.addEventListener("pointercancel", up);
   svgEl.addEventListener("pointerleave", () => { if (!drag) hideTip(); });
@@ -295,6 +307,30 @@ function energyChart(series, sections, duration) {
   return wrap;
 }
 
+function laneRows(pattern, prev) {
+  const rows = [];
+  for (const [lane, pat] of Object.entries(pattern)) {
+    if (typeof pat !== "string") continue;
+    const cells = [...pat.slice(0, 16)].map((ch, i) => {
+      const changed = prev && prev[lane] && prev[lane][i] !== ch;
+      return h("i", { class: [i % 4 === 0 && i ? "beat" : "", ch === "x" ? "full" : ch === "o" ? "half" : "", changed ? "chg" : ""].join(" ").trim() });
+    });
+    rows.push(h("div", { class: "drum-lane" }, h("span", { class: "name" }, lane), h("div", { class: "drum-grid" }, cells)));
+  }
+  return rows;
+}
+
+function diffText(pattern, prev) {
+  const parts = [];
+  for (const lane of Object.keys(pattern)) {
+    if (!prev || typeof prev[lane] !== "string") continue;
+    let add = 0, drop = 0;
+    [...pattern[lane]].forEach((ch, i) => { const was = prev[lane][i] !== "."; const is = ch !== "."; if (is && !was) add++; if (!is && was) drop++; });
+    if (add || drop) parts.push(`${lane} ${[add ? "+" + add : "", drop ? "−" + drop : ""].filter(Boolean).join(" ")}`);
+  }
+  return parts.length ? parts.join(", ") : "same as previous section";
+}
+
 function drumGrid(s) {
   const det = s.data.origin === "detected";
   const wrap = h("div", { class: "sug" }, h("b", {}, s.title));
@@ -302,12 +338,35 @@ function drumGrid(s) {
     wrap.append(h("span", { class: "origin " + (det ? "det" : "tpl") },
       det ? "Measured from this track" : `Template for ${s.data.style || "this tempo"}, not from the audio`));
   }
-  for (const [lane, pat] of Object.entries(s.data.pattern)) {
-    if (typeof pat !== "string") continue;
-    const cells = [...pat.slice(0, 16)].map((ch, i) =>
-      h("i", { class: [i % 4 === 0 && i ? "beat" : "", ch === "x" ? "full" : ch === "o" ? "half" : ""].join(" ").trim() }));
-    wrap.append(h("div", { class: "drum-lane" }, h("span", { class: "name" }, lane), h("div", { class: "drum-grid" }, cells)));
+  const secs = s.data.by_section;
+  if (!secs || !secs.length) { wrap.append(...laneRows(s.data.pattern)); return wrap; }
+  const letters = [...new Set(secs.map((x) => x.letter || x.label))];
+  const bus = sectionBus;
+  let sel = secs.reduce((best, x, k) => ((x.energy || 0) > (secs[best].energy || 0) ? k : best), 0), showChg = true;
+  const tabs = h("div", { class: "sec-tabs", role: "tablist", "aria-label": "Section" });
+  const body = h("div", { class: "sec-body" });
+  const note = h("p", { class: "muted sec-note" });
+  const toggle = h("input", { type: "checkbox", checked: "" });
+  toggle.addEventListener("change", () => { showChg = toggle.checked; paint(true); });
+  function paint(quiet) {
+    [...tabs.children].forEach((b, k) => b.setAttribute("aria-selected", String(k === sel)));
+    const sec = secs[sel], before = sel > 0 ? secs[sel - 1] : null;
+    body.replaceChildren(...laneRows(sec.pattern, before && showChg ? before.pattern : null));
+    const name = (x) => `${x.label} ${x.letter || ""}`.trim();
+    note.textContent = `${name(sec)}, bars ${sec.start_bar}-${sec.end_bar}. ` + (before ? `Versus ${name(before)}: ${diffText(sec.pattern, before.pattern)}.` : "First section.");
+    if (quiet !== true) bus.dispatchEvent(new CustomEvent("section", { detail: { idx: sec.idx, from: "tabs" } }));
   }
+  bus.addEventListener("section", (e) => {
+    if (e.detail.from !== "chart") return;
+    const k = secs.findIndex((x) => x.idx === e.detail.idx);
+    if (k >= 0) { sel = k; paint(true); }
+  });
+  secs.forEach((x, k) => tabs.append(h("button", {
+    type: "button", role: "tab", class: "sec-tab", style: `--c:${SEC_COLORS[letters.indexOf(x.letter || x.label) % SEC_COLORS.length]}`,
+    onclick: () => { sel = k; paint(); },
+  }, `${x.label} ${x.letter || ""}`.trim())));
+  wrap.append(tabs, body, note, h("label", { class: "chg-toggle muted" }, toggle, " Outline steps that changed from the previous section"));
+  paint(true);
   return wrap;
 }
 

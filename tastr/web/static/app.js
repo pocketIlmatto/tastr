@@ -52,6 +52,7 @@ function svg(tag, attrs, ...kids) {
   for (const kid of kids.flat()) if (kid != null) el.append(kid);
   return el;
 }
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const isNum = (x) => typeof x === "number" && isFinite(x);
 function mmss(sec) {
   if (!isNum(sec)) return "–";
@@ -155,9 +156,23 @@ function renderCard(c) {
     ]));
   }
 
-  const sugs = c.suggestions || [];
+  // Template grids are tempo-based guesses, so they stay hidden (here and in the Try list) until asked for.
+  const isTemplate = (s) => s.data && s.data.origin === "template";
+  const templates = (c.suggestions || []).filter(isTemplate);
+  const shown = ideasShown.has(c.id);
+  const sugs = (c.suggestions || []).filter((s) => shown || !isTemplate(s));
   const grids = sugs.filter((s) => s.data && s.data.pattern && typeof s.data.pattern === "object");
-  if (grids.length) root.append(section("drums", "Drum patterns", grids.map(drumGrid)));
+  if (grids.length || templates.length) {
+    const body = grids.map(drumGrid);
+    if (templates.length) {
+      body.push(h("div", { class: "ideas-bar" },
+        h("button", { type: "button", onclick: () => { if (shown) ideasShown.delete(c.id); else ideasShown.add(c.id); renderCard(c); } }, shown ? "Hide pattern ideas" : "Suggest pattern ideas"),
+        h("span", { class: "muted" }, shown
+          ? "Templates chosen by tempo, not measured from this track."
+          : `Starting points${templates[0].data.style ? ` for ${templates[0].data.style}` : ""}, picked by tempo. Not measured from this track.`)));
+    }
+    root.append(section("drums", "Drum patterns", body));
+  }
   if (sugs.length) {
     const pick = h("select", { class: "daw-pick", "aria-label": "Your DAW", onchange: (e) => {
       daw = e.target.value;
@@ -182,6 +197,7 @@ function renderCard(c) {
 
 // Card sections are <details>; which are open is remembered across tracks (Metadata starts closed).
 const openState = {};
+const ideasShown = new Set(); // track ids whose template pattern ideas are revealed
 function section(key, title, body, defaultOpen = true) {
   const open = key in openState ? openState[key] : defaultOpen;
   const det = h("details", { class: "sec", ...(open ? { open: "" } : {}) }, h("summary", {}, title), h("div", { class: "sec-content" }, body));
@@ -242,7 +258,7 @@ function keyName(k) {
 }
 
 function energyChart(series, sections, duration) {
-  const W = 700, H = 200, L = 40, R = 8, T = 8, B = 22;
+  const W = 700, H = 220, L = 40, R = 8, T = 28, B = 22;
   const times = (series && series.times) || [], vals = (series && series.values) || [];
   const end = Math.max(duration || 0, times.length ? times[times.length - 1] : 0, ...sections.map((s) => s.end || 0), 1);
   const letters = [...new Set(sections.map((x) => x.letter || x.label))];
@@ -299,7 +315,12 @@ function energyChart(series, sections, duration) {
       if (!isNum(sec.start) || !isNum(sec.end) || sec.end < view.a || sec.start > view.b) return;
       const color = SEC_COLORS[letters.indexOf(sec.letter || sec.label) % SEC_COLORS.length];
       plot.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: si === selIdx ? 0.4 : 0.18, stroke: si === selIdx ? color : "none", "stroke-width": 2 }));
-      plot.append(svg("text", { class: "lbl", x: Math.max(L, x(sec.start)) + 3, y: T + 12 }, document.createTextNode([sec.label, sec.letter].filter(Boolean).join(" "))));
+      // Label band above the grid: solid block per section, text shortens to the letter, then disappears.
+      const x0 = Math.max(L, x(sec.start)), x1 = Math.min(W - R, x(sec.end)), room = x1 - x0;
+      plot.append(svg("rect", { x: x0, y: 4, width: Math.max(1, room), height: 18, rx: 2, fill: color, stroke: si === selIdx ? "var(--fg)" : "var(--panel)", "stroke-width": si === selIdx ? 2 : 1 }));
+      const full = [cap(sec.label), sec.letter].filter(Boolean).join(" ");
+      const label = room > full.length * 6.2 + 8 ? full : room > 22 ? (sec.letter || cap(sec.label).slice(0, 3)) : "";
+      if (label) plot.append(svg("text", { class: "band", x: x0 + 5, y: 16.5 }, document.createTextNode(label)));
     });
     [0.25, 0.5, 0.75].forEach((v) => plot.append(svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--line)", "stroke-dasharray": "2 3" })));
     if (pts.length > 1) {
@@ -329,7 +350,7 @@ function energyChart(series, sections, duration) {
     tip.replaceChildren(
       h("b", {}, mmss(t)),
       v != null ? h("div", {}, `Energy ${v.toFixed(2)}`, h("span", { class: "muted" }, v > .75 ? " (loud, full)" : v > .45 ? " (medium)" : " (quiet, sparse)")) : null,
-      sec ? h("div", { class: "muted" }, `${sec.label} ${sec.letter || ""} · bars ${sec.start_bar}–${sec.end_bar}`.replace("  ", " ")) : null);
+      sec ? h("div", { class: "muted" }, `${cap(sec.label)} ${sec.letter || ""} · bars ${sec.start_bar}–${sec.end_bar}`.replace("  ", " ")) : null);
     tip.hidden = false;
     const r = svgEl.getBoundingClientRect(), hr = wrap.getBoundingClientRect();
     const left = r.left - hr.left + (x(t) / W) * r.width;
@@ -394,6 +415,9 @@ function diffText(pattern, prev) {
   return parts.length ? parts.join(", ") : "same as previous section";
 }
 
+const legend = () => h("p", { class: "muted grid-legend" },
+  h("i", { class: "sw full" }), " Strong hit ", h("i", { class: "sw half" }), " Softer hit ", h("i", { class: "sw" }), " No hit. 16 steps = one bar of 16th notes.");
+
 function drumGrid(s) {
   const det = s.data.origin === "detected";
   const wrap = h("div", { class: "sug" }, h("b", {}, s.title));
@@ -402,7 +426,7 @@ function drumGrid(s) {
       det ? "Measured from this track" : `Template for ${s.data.style || "this tempo"}, not from the audio`));
   }
   const secs = s.data.by_section;
-  if (!secs || !secs.length) { wrap.append(...laneRows(s.data.pattern)); return wrap; }
+  if (!secs || !secs.length) { wrap.append(...laneRows(s.data.pattern), legend()); return wrap; }
   const letters = [...new Set(secs.map((x) => x.letter || x.label))];
   const bus = sectionBus;
   let sel = secs.reduce((best, x, k) => ((x.energy || 0) > (secs[best].energy || 0) ? k : best), 0), showChg = true;
@@ -415,7 +439,7 @@ function drumGrid(s) {
     [...tabs.children].forEach((b, k) => b.setAttribute("aria-selected", String(k === sel)));
     const sec = secs[sel], before = sel > 0 ? secs[sel - 1] : null;
     body.replaceChildren(...laneRows(sec.pattern, before && showChg ? before.pattern : null));
-    const name = (x) => `${x.label} ${x.letter || ""}`.trim();
+    const name = (x) => `${cap(x.label)} ${x.letter || ""}`.trim();
     note.textContent = `${name(sec)}, bars ${sec.start_bar}-${sec.end_bar}. ` + (before ? `Versus ${name(before)}: ${diffText(sec.pattern, before.pattern)}.` : "First section.");
     if (quiet !== true) bus.dispatchEvent(new CustomEvent("section", { detail: { idx: sec.idx, from: "tabs" } }));
   }
@@ -427,8 +451,8 @@ function drumGrid(s) {
   secs.forEach((x, k) => tabs.append(h("button", {
     type: "button", role: "tab", class: "sec-tab", style: `--c:${SEC_COLORS[letters.indexOf(x.letter || x.label) % SEC_COLORS.length]}`,
     onclick: () => { sel = k; paint(); },
-  }, `${x.label} ${x.letter || ""}`.trim())));
-  wrap.append(tabs, body, note, h("label", { class: "chg-toggle muted" }, toggle, " Outline steps that changed from the previous section"));
+  }, `${cap(x.label)} ${x.letter || ""}`.trim())));
+  wrap.append(tabs, body, legend(), note, h("label", { class: "chg-toggle muted" }, toggle, " Outline steps that changed from the previous section"));
   paint(true);
   return wrap;
 }

@@ -73,6 +73,10 @@ def test_detected_groove_by_section(synth_wav, truth_core):
         assert all(len(p) == 16 for p in s["pattern"].values())
     assert by[0]["pattern"]["kick"][0] == "x"
     assert all(groove.data["pattern"][k] for k in ("kick", "hat"))
+    # Section labels stay lowercase in data but are capitalized in the arrangement text.
+    arr = next(s for s in card.suggestions if s.title.startswith("Arrangement map"))
+    assert "Intro A (bars" in arr.body and "Drop B (bars" in arr.body
+    assert [x["name"] for x in arr.data["locators"]] == ["Intro A", "Drop B"]
     json.dumps(groove.data)
 
 

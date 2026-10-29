@@ -99,3 +99,11 @@ def test_ui_has_collapsible_sections():
     js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
     for key in ("meta", "energy", "vibe", "drums", "try"):
         assert f'section("{key}"' in js
+
+
+def test_ui_hides_template_grids_until_requested():
+    from pathlib import Path
+
+    js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
+    for needle in ('origin === "template"', "ideasShown", "Suggest pattern ideas", "Hide pattern ideas", "Strong hit"):
+        assert needle in js

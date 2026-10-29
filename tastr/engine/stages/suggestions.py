@@ -349,7 +349,7 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
     # --- Arrangement ---
     secs = [s for s in card.sections if s.start_bar is not None]
     if len(secs) > 1:
-        names = [f"{s.label} {s.letter}" if s.letter else s.label for s in secs]
+        names = [f"{s.label.capitalize()} {s.letter}" if s.letter else s.label.capitalize() for s in secs]
         layout = ", ".join(f"{n} (bars {s.start_bar}-{s.end_bar})" for n, s in zip(names, secs))
         add("arrangement", f"Arrangement map: {len(secs)} sections",
             f"Rough layout: {layout}. Drop locators at those bars in Arrangement View to rebuild the structure, "

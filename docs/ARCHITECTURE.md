@@ -8,6 +8,7 @@ decoded mono audio @ 22050 Hz   engine.audio.load_audio()
    │  tastr/engine/pipeline.py  run_pipeline(): stages in dependency order
    ▼
 core ──► sections ──► tags ──► suggestions        tastr/engine/stages/*.py
+views (independent: waveform + spectrogram data for the UI)
    │
    ▼
 TrackCard (tastr/engine/card.py)  ──►  SQLite (tastr/db.py)  ──►  CLI (tastr/cli.py) / web (tastr/web/)
@@ -30,7 +31,7 @@ The single contract between modules. Every stage writes only its own part:
 | `suggestions` | `suggestions` stage | list of `Suggestion(category, title, body, data)` |
 | `features` | any stage | flat `name -> float`; see the feature registry below |
 | `series` | any stage | named curves `Series(times, values)` for plots |
-| `extras` | any stage | structured JSON; keys prefixed with the stage name (`"suggestions.drum_grid"`) |
+| `extras` | any stage | structured JSON; keys prefixed with the stage name (`"suggestions.drum_grid"`). `extras["views"]` (the `views` stage) holds the waveform (int8 min/max per block, base64) and spectrogram (grayscale log-frequency PNG data URL); the web API serves it from `/api/tracks/{id}/views` and leaves it out of the card body |
 | `stages_run`, `errors` | pipeline | a failed stage lands in `errors`; its dependents are skipped |
 
 Changing an existing field is a schema change: bump `CARD_SCHEMA_VERSION`

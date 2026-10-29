@@ -6,9 +6,10 @@ Each module owns one part of the track card:
     sections     rough section timestamps and labels             -> card.sections
     tags         vibe tags                                       -> card.tags
     suggestions  "Try this in Ableton" ideas                     -> card.suggestions
+    views        waveform + spectrogram picture data for the UI  -> card.extras["views"]
 
 Any stage may also add scalar `card.features`, `card.series` curves and
 structured `card.extras`. Prefix extras keys with the stage name.
 """
 
-from . import core, sections, suggestions, tags  # noqa: F401
+from . import core, sections, suggestions, tags, views  # noqa: F401

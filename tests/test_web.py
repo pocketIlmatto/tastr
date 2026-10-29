@@ -208,3 +208,35 @@ def test_ui_has_track_actions_menu():
     js = (STATIC_DIR / "app.js").read_text()
     assert "Track actions" in js and "/retag" in js and "Copy track summary" in js
     assert "confirm(" not in js  # deleting confirms inside the menu, not with a browser dialog
+
+
+def test_audio_streams_with_range_and_views_load_separately(client, synth_wav, truth_core):
+    path, _ = synth_wav
+    with open(path, "rb") as f:
+        tid = client.post("/api/analyze", files=[("files", (path.name, f, "audio/wav"))]).json()["results"][0]["track_id"]
+    body = client.get(f"/api/tracks/{tid}").json()
+    assert body["has_audio"] and body["has_views"] and "views" not in body["extras"]
+    full = client.get(f"/api/tracks/{tid}/audio")
+    assert full.status_code == 200 and full.headers["content-type"] == "audio/wav"
+    assert full.content == path.read_bytes()
+    part = client.get(f"/api/tracks/{tid}/audio", headers={"Range": "bytes=0-99"})
+    assert part.status_code == 206 and len(part.content) == 100
+    views = client.get(f"/api/tracks/{tid}/views").json()
+    assert set(views) == {"waveform", "spectrogram"} and views["spectrogram"]["png"].startswith("data:image/png;base64,")
+
+
+def test_tracks_without_audio_or_views_say_so(client, seeded):
+    body = client.get(f"/api/tracks/{seeded}").json()
+    assert body["has_audio"] is False and body["has_views"] is False
+    assert client.get(f"/api/tracks/{seeded}/audio").status_code == 404
+    assert client.get(f"/api/tracks/{seeded}/views").status_code == 404
+    assert client.get("/api/tracks/999/audio").status_code == 404
+
+
+def test_ui_has_audio_views_and_transport():
+    from pathlib import Path
+
+    js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
+    for needle in ("/audio`", "/views`", "decodeAudioData", '"Waveform"', '"Spectrogram"', "chartMode", "scrubStart", "spectrogramLevels",
+                   "downbeat_times", 'aria-label": "Seek"', "Preparing audio preview", "player = me"):
+        assert needle in js

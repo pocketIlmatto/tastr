@@ -110,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         if card is None:
             print(f"no track {args.track_id}", file=sys.stderr)
             return 1
+        if "views" in card.extras:  # hundreds of KB of base64 picture data; the web UI is where it's useful
+            card.extras["views"] = f"<waveform + spectrogram data, {len(json.dumps(card.extras['views'])) // 1024} KB>"
         print(card.to_json(indent=2))
         return 0
 

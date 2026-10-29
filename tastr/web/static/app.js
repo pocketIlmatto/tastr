@@ -282,7 +282,7 @@ function renderCard(c) {
 
   const energy = c.series && c.series.energy;
   if (energy && energy.times && energy.times.length > 1 || (c.sections || []).length) {
-    root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration)]));
+    root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration, c)]));
   }
 
   if ((c.tags || []).length) {
@@ -387,7 +387,113 @@ function keyName(k) {
   return isNum(k.tonic) ? `${NOTES[k.tonic % 12]} ${k.mode || ""}`.trim() : "–";
 }
 
-function energyChart(series, sections, duration) {
+// ---------- track audio: the original file for playback/scrubbing, and waveform/spectrogram picture data ----------
+const SPEC_ROWS = 120, SPEC_HOP = 0.1, SPEC_FMIN = 40, SPEC_FMAX = 10000;
+const SPEC_RAMP = [[8, 8, 24], [60, 20, 120], [170, 40, 120], [240, 120, 40], [255, 235, 160]];
+let chartMode = "energy"; // Energy | Waveform | Spectrogram, remembered across cards for the session
+let audioCache = null, viewsCache = null;
+const txt = (s) => document.createTextNode(s);
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+// The decoded original file (plus a mono reversed copy, made on first backwards scrub). Fetched on first need, not on card open.
+function trackAudio(c) {
+  if (!audioCache || audioCache.id !== c.id) {
+    const promise = fetch(`/api/tracks/${c.id}/audio`)
+      .then((r) => { if (!r.ok) throw new Error(r.status === 404 ? "The original file is not on disk." : r.statusText); return r.arrayBuffer(); })
+      .then((bytes) => new Promise((ok, fail) => audioCtx().decodeAudioData(bytes, ok, () => fail(new Error("This browser can't decode the file's format.")))))
+      .then((buf) => ({ buf, rev: null }));
+    audioCache = { id: c.id, promise };
+    promise.catch(() => { if (audioCache && audioCache.promise === promise) audioCache = null; });
+  }
+  return audioCache.promise;
+}
+// Gray levels (0..252, row 0 = top/highest band) -> a dark-to-yellow image as a data URL.
+function rampImage(level, frames, rows) {
+  const cv = document.createElement("canvas"); cv.width = frames; cv.height = rows;
+  const g = cv.getContext("2d"), img = g.createImageData(frames, rows), n = SPEC_RAMP.length - 1;
+  for (let i = 0; i < frames * rows; i++) {
+    const u = Math.max(0, Math.min(1, level[i] / 252)) * n, i0 = Math.min(n - 1, Math.floor(u)), q = u - i0;
+    for (let ch = 0; ch < 3; ch++) img.data[i * 4 + ch] = SPEC_RAMP[i0][ch] + (SPEC_RAMP[i0 + 1][ch] - SPEC_RAMP[i0][ch]) * q;
+    img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return cv.toDataURL("image/png");
+}
+function loadImage(src) {
+  return new Promise((ok, fail) => { const im = new Image(); im.onload = () => ok(im); im.onerror = () => fail(new Error("bad spectrogram image")); im.src = src; });
+}
+// Stored by the engine's `views` stage: int8 min/max per block, and a grayscale log-frequency PNG to color here.
+async function viewsFromCard(c) {
+  const v = await api(`/api/tracks/${c.id}/views`);
+  const bin = atob(v.waveform.data), raw = new Int8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) raw[i] = (bin.charCodeAt(i) << 24) >> 24;
+  const n = raw.length >> 1, mn = new Float32Array(n), mx = new Float32Array(n);
+  for (let b = 0; b < n; b++) { mn[b] = raw[2 * b] / 127; mx[b] = raw[2 * b + 1] / 127; }
+  const s = v.spectrogram, im = await loadImage(s.png);
+  const cv = document.createElement("canvas"); cv.width = im.width; cv.height = im.height;
+  const g = cv.getContext("2d"); g.drawImage(im, 0, 0);
+  const px = g.getImageData(0, 0, im.width, im.height).data, level = new Uint8Array(im.width * im.height);
+  for (let i = 0; i < level.length; i++) level[i] = px[i * 4];
+  return { mn, mx, peak: 1, perSec: v.waveform.sr / v.waveform.block, spec: rampImage(level, im.width, im.height), specEnd: s.frames * s.hop };
+}
+// Cards analyzed before the `views` stage existed: compute both from the decoded file in the browser.
+async function viewsFromAudio(c) {
+  const { buf } = await trackAudio(c);
+  const sr = buf.sampleRate, chans = [...Array(buf.numberOfChannels)].map((_, k) => buf.getChannelData(k));
+  const d = new Float32Array(buf.length);
+  for (const ch of chans) for (let i = 0; i < d.length; i++) d[i] += ch[i] / chans.length;
+  await delay(0);
+  const BLK = Math.round(sr / 86), nBlk = Math.ceil(d.length / BLK), mn = new Float32Array(nBlk), mx = new Float32Array(nBlk);
+  let peak = 1e-6;
+  for (let b = 0; b < nBlk; b++) {
+    let lo = 1, hi = -1;
+    for (let i = b * BLK, e = Math.min(d.length, i + BLK); i < e; i++) { const v = d[i]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    mn[b] = lo; mx[b] = hi; peak = Math.max(peak, -lo, hi);
+  }
+  await delay(0);
+  const s = spectrogramLevels(d, sr);
+  return { mn, mx, peak, perSec: sr / BLK, spec: rampImage(s.level, s.frames, SPEC_ROWS), specEnd: s.frames * SPEC_HOP };
+}
+function trackViews(c) {
+  if (!viewsCache || viewsCache.id !== c.id) {
+    const promise = c.has_views ? viewsFromCard(c) : viewsFromAudio(c);
+    viewsCache = { id: c.id, promise };
+    promise.catch(() => { if (viewsCache && viewsCache.promise === promise) viewsCache = null; });
+  }
+  return viewsCache.promise;
+}
+// Log-frequency magnitude (dB) per 0.1 s, same layout as the engine's: 0..252 over the top 70 dB, row 0 = top.
+function spectrogramLevels(d, sr) {
+  const N = sr > 32000 ? 4096 : 2048, bits = Math.log2(N), hop = Math.round(SPEC_HOP * sr), frames = Math.max(1, Math.floor((d.length - N) / hop));
+  const win = new Float32Array(N), cosT = new Float32Array(N / 2), sinT = new Float32Array(N / 2), rev = new Uint16Array(N);
+  for (let i = 0; i < N; i++) { win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1)); let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); rev[i] = r; }
+  for (let i = 0; i < N / 2; i++) { cosT[i] = Math.cos((2 * Math.PI * i) / N); sinT[i] = -Math.sin((2 * Math.PI * i) / N); }
+  const re = new Float32Array(N), im = new Float32Array(N);
+  const rowBin = [...Array(SPEC_ROWS + 1)].map((_, r) => (SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, r / SPEC_ROWS)) / (sr / N));
+  const mag = new Float32Array(N / 2), db = new Float32Array(frames * SPEC_ROWS);
+  let top = -1e9;
+  for (let f = 0; f < frames; f++) {
+    for (let i = 0; i < N; i++) { const v = f * hop + i < d.length ? d[f * hop + i] : 0; re[rev[i]] = v * win[i]; im[rev[i]] = 0; }
+    for (let size = 2; size <= N; size <<= 1) {
+      const half = size >> 1, stepT = N / size;
+      for (let i = 0; i < N; i += size) for (let j = 0, k = 0; j < half; j++, k += stepT) {
+        const a = i + j, b = a + half, tr = re[b] * cosT[k] - im[b] * sinT[k], ti = re[b] * sinT[k] + im[b] * cosT[k];
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+      }
+    }
+    for (let i = 0; i < N / 2; i++) mag[i] = Math.hypot(re[i], im[i]);
+    for (let r = 0; r < SPEC_ROWS; r++) {
+      const a = Math.ceil(rowBin[r]), b = Math.max(a + 1, Math.ceil(rowBin[r + 1]));
+      let m = 0; for (let k = a; k < b && k < N / 2; k++) m = Math.max(m, mag[k]);
+      const v = 20 * Math.log10(m + 1e-6); db[f * SPEC_ROWS + r] = v; if (v > top) top = v;
+    }
+  }
+  const level = new Uint8Array(frames * SPEC_ROWS);
+  for (let f = 0; f < frames; f++) for (let r = 0; r < SPEC_ROWS; r++)
+    level[(SPEC_ROWS - 1 - r) * frames + f] = Math.round(Math.max(0, Math.min(1, (db[f * SPEC_ROWS + r] - (top - 70)) / 70)) * 252);
+  return { level, frames };
+}
+
+function energyChart(series, sections, duration, card) {
   const W = 700, H = 220, L = 40, R = 8, T = 28, B = 22;
   const times = (series && series.times) || [], vals = (series && series.values) || [];
   const end = Math.max(duration || 0, times.length ? times[times.length - 1] : 0, ...sections.map((s) => s.end || 0), 1);
@@ -395,18 +501,38 @@ function energyChart(series, sections, duration) {
   const pts = times.map((t, i) => [t, vals[i]]).filter(([t, v]) => isNum(t) && isNum(v));
   const view = { a: 0, b: end };
   const minSpan = Math.min(end, 12);
+  const canPlay = !!card.has_audio, hasViews = canPlay || !!card.has_views;
   const wrap = h("div", { class: "chart-wrap" });
   const bar = h("div", { class: "chart-bar" });
   const zoomLabel = h("span", { class: "muted" });
   const btn = (label, title, fn) => h("button", { type: "button", title, "aria-label": title, onclick: fn }, label);
   bar.append(btn("−", "Zoom out", () => zoom(1.6)), btn("+", "Zoom in", () => zoom(1 / 1.6)), btn("Reset", "Show whole track", () => { view.a = 0; view.b = end; draw(); }), zoomLabel,
-    h("span", { class: "muted hint" }, "Click a section to pick it. Scroll to zoom, drag to pan"));
+    h("span", { class: "muted hint" }, canPlay
+      ? "Click the chart to pick a section and play from there. Drag the playhead to scrub; you hear the track as you drag. Scroll to zoom, drag to pan"
+      : "Click a section to pick it. Scroll to zoom, drag to pan"));
   const tip = h("div", { class: "chart-tip", hidden: "" });
   const host = h("div", { class: "chart-host" });
-  wrap.append(bar, host, tip,
-    h("p", { class: "muted chart-key" },
-      h("span", { class: "key-line" }), " Energy: how loud and dense the track is at each moment, sampled every ~3 s. ",
-      h("span", { class: "key-box" }), " Shaded blocks are detected sections; same color means the same part repeats."));
+  const MODES = [["energy", "Energy"], ["wave", "Waveform"], ["spec", "Spectrogram"]];
+  let mode = hasViews ? chartMode : "energy", pics = null;
+  const KEYS = {
+    energy: [h("span", { class: "key-line" }), " Energy: how loud and dense the track is at each moment, sampled every ~3 s. ", h("span", { class: "key-box" }), " Shaded blocks are detected sections; same color means the same part repeats."],
+    wave: ["Waveform: the shape of the sound over time. Taller means louder. Faint lines are beats, darker lines are bars, numbered from the start."],
+    spec: ["Spectrogram: which pitches are present over time. Low sounds at the bottom, high at the top, brighter means stronger."],
+  };
+  const keyP = h("p", { class: "muted chart-key" });
+  const modeBtns = MODES.map(([k, label]) => h("button", { type: "button", role: "tab", class: "mode-tab", "aria-selected": String(k === mode), onclick: () => setMode(k) }, label));
+  const modes = h("div", { class: "chart-modes", role: "tablist", "aria-label": "Visualization" }, modeBtns);
+  const busy = h("div", { class: "chart-busy", hidden: "", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), "Preparing audio preview…");
+  const playBtn = h("button", { type: "button", class: "tp-play", "aria-label": "Play" }, "▶");
+  const timeL = h("span", { class: "tp-time" }, `0:00 / ${mmss(duration)}`);
+  const seekR = h("input", { type: "range", class: "tp-seek", min: "0", max: String(end), step: "0.1", value: "0", "aria-label": "Seek" });
+  const transport = h("div", { class: "transport" }, playBtn, timeL, seekR);
+  const note = h("p", { class: "muted chart-key" });
+  if (!canPlay) note.textContent = hasViews
+    ? "The original file is no longer on disk, so playback is off."
+    : "The original file isn't on disk (or this track came from a link that wasn't kept), so playback and the waveform and spectrogram views are off.";
+  const say = (m) => { note.textContent = m; note.classList.toggle("error", !!m); };
+  wrap.append(...(hasViews ? [modes] : []), bar, h("div", { class: "chart-hostwrap" }, host, busy), tip, ...(canPlay ? [transport] : []), keyP, note);
 
   const x = (t) => L + ((t - view.a) / (view.b - view.a)) * (W - L - R);
   const tAt = (px) => view.a + ((px - L) / (W - L - R)) * (view.b - view.a);
@@ -444,28 +570,77 @@ function energyChart(series, sections, duration) {
     sections.forEach((sec, si) => {
       if (!isNum(sec.start) || !isNum(sec.end) || sec.end < view.a || sec.start > view.b) return;
       const color = SEC_COLORS[letters.indexOf(sec.letter || sec.label) % SEC_COLORS.length];
-      plot.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: si === selIdx ? 0.4 : 0.18, stroke: si === selIdx ? color : "none", "stroke-width": 2 }));
+      // The spectrogram has its own colors, so sections there are dashed boundaries plus a light tint on the selected one.
+      plot.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: mode === "spec" ? (si === selIdx ? 0.28 : 0) : si === selIdx ? 0.4 : 0.18, stroke: si === selIdx ? color : "none", "stroke-width": 2 }));
+      if (mode === "spec") plot.append(svg("line", { x1: x(sec.start), x2: x(sec.start), y1: T, y2: H - B, stroke: "#fff", opacity: 0.3, "stroke-dasharray": "3 3" }));
       // Label band above the grid: solid block per section, text shortens to the letter, then disappears.
       const x0 = Math.max(L, x(sec.start)), x1 = Math.min(W - R, x(sec.end)), room = x1 - x0;
       plot.append(svg("rect", { x: x0, y: 4, width: Math.max(1, room), height: 18, rx: 2, fill: color, stroke: si === selIdx ? "var(--fg)" : "var(--panel)", "stroke-width": si === selIdx ? 2 : 1 }));
       const full = [cap(sec.label), sec.letter].filter(Boolean).join(" ");
       const label = room > full.length * 6.2 + 8 ? full : room > 22 ? (sec.letter || cap(sec.label).slice(0, 3)) : "";
-      if (label) plot.append(svg("text", { class: "band", x: x0 + 5, y: 16.5 }, document.createTextNode(label)));
+      if (label) plot.append(svg("text", { class: "band", x: x0 + 5, y: 16.5 }, txt(label)));
     });
-    [0.25, 0.5, 0.75].forEach((v) => plot.append(svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--line)", "stroke-dasharray": "2 3" })));
-    if (pts.length > 1) {
-      const line = pts.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`);
-      plot.append(svg("polygon", { points: `${x(pts[0][0])},${y(0)} ${line.join(" ")} ${x(pts[pts.length - 1][0])},${y(0)}`, fill: "var(--accent)", opacity: 0.25 }));
-      plot.append(svg("polyline", { points: line.join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2 }));
+    if (mode === "energy") {
+      [0.25, 0.5, 0.75].forEach((v) => plot.append(svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--line)", "stroke-dasharray": "2 3" })));
+      if (pts.length > 1) {
+        const line = pts.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`);
+        plot.append(svg("polygon", { points: `${x(pts[0][0])},${y(0)} ${line.join(" ")} ${x(pts[pts.length - 1][0])},${y(0)}`, fill: "var(--accent)", opacity: 0.25 }));
+        plot.append(svg("polyline", { points: line.join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2 }));
+      }
+    } else if (!pics) {
+      plot.append(svg("text", { x: (L + W - R) / 2, y: (T + H - B) / 2, "text-anchor": "middle", fill: "var(--muted)" }, txt("Preparing audio preview…")));
+    } else if (mode === "wave") {
+      const mid = (T + H - B) / 2, amp = (H - T - B) / 2 - 2, cols = W - L - R;
+      plot.append(svg("line", { x1: L, x2: W - R, y1: mid, y2: mid, stroke: "var(--line)" }));
+      // Beat grid: bar lines thinned by stride to stay >= 10 px apart, labels >= 30 px apart, beats only when >= 6 px apart.
+      const beats = (card.core.beat_times || []).filter((t) => t >= view.a && t <= view.b), bars = card.core.downbeat_times || [];
+      const pxPer = (W - L - R) / (view.b - view.a), barGap = bars.length > 1 ? (bars[1] - bars[0]) * pxPer : 0;
+      if (beats.length && barGap / 4 >= 6) {
+        let bd = ""; for (const t of beats) bd += `M${x(t).toFixed(1)},${T}V${H - B}`;
+        plot.append(svg("path", { d: bd, stroke: "var(--muted)", "stroke-width": 0.5, opacity: 0.35 }));
+      }
+      const stride = [1, 2, 4, 8, 16, 32].find((k) => barGap * k >= 10) || 64;
+      let bd2 = "";
+      bars.forEach((t, i) => { if (i % stride || t < view.a || t > view.b) return; bd2 += `M${x(t).toFixed(1)},${T}V${H - B}`; });
+      if (bd2) plot.append(svg("path", { d: bd2, stroke: "var(--fg)", "stroke-width": 1, opacity: 0.3 }));
+      const labelEvery = [1, 2, 4, 8, 16, 32, 64].find((k) => barGap * k >= 30) || 128;
+      bars.forEach((t, i) => { if (i % labelEvery || t < view.a || t > view.b) return; plot.append(svg("text", { class: "barnum", x: x(t) + 3, y: T + 11 }, txt(String(i + 1)))); });
+      let d = "";
+      for (let i = 0; i < cols; i++) {
+        const t0 = tAt(L + i), t1 = tAt(L + i + 1);
+        const b0 = Math.max(0, Math.floor(t0 * pics.perSec)), b1 = Math.min(pics.mn.length - 1, Math.max(b0, Math.floor(t1 * pics.perSec)));
+        let lo = 1, hi = -1; for (let k = b0; k <= b1; k++) { if (pics.mn[k] < lo) lo = pics.mn[k]; if (pics.mx[k] > hi) hi = pics.mx[k]; }
+        if (hi < lo) continue;
+        d += `M${(L + i + 0.5).toFixed(1)},${(mid - (hi / pics.peak) * amp).toFixed(1)}V${(mid - (lo / pics.peak) * amp).toFixed(1)}`;
+      }
+      plot.append(svg("path", { d, stroke: "var(--accent)", "stroke-width": 1, fill: "none" }));
+    } else {
+      plot.append(svg("image", { href: pics.spec, x: x(0), y: T, width: x(pics.specEnd) - x(0), height: H - T - B, preserveAspectRatio: "none" }));
     }
     s.append(plot);
-    [0, 0.5, 1].forEach((v) => s.append(svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, document.createTextNode(v))));
-    s.append(svg("text", { x: 10, y: (H - B + T) / 2, "text-anchor": "middle", transform: `rotate(-90 10 ${(H - B + T) / 2})` }, document.createTextNode("energy")));
+    const yLabel = (text) => s.append(svg("text", { x: 10, y: (H - B + T) / 2, "text-anchor": "middle", transform: `rotate(-90 10 ${(H - B + T) / 2})` }, txt(text)));
+    if (mode === "energy") {
+      [0, 0.5, 1].forEach((v) => s.append(svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, txt(v))));
+      yLabel("energy");
+    } else if (mode === "wave") {
+      yLabel("level");
+    } else {
+      [[100, "100"], [1000, "1k"], [10000, "10k"]].forEach(([f, label]) => {
+        const yy = T + (1 - Math.log(f / SPEC_FMIN) / Math.log(SPEC_FMAX / SPEC_FMIN)) * (H - T - B);
+        s.append(svg("text", { x: L - 6, y: yy + 4, "text-anchor": "end" }, txt(label)));
+      });
+      yLabel("Hz");
+    }
     const span = view.b - view.a;
     const step = [5, 10, 15, 30, 60, 120].find((st) => span / st <= 8) || 120;
-    for (let t = Math.ceil(view.a / step) * step; t <= view.b; t += step) s.append(svg("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, document.createTextNode(mmss(t))));
+    for (let t = Math.ceil(view.a / step) * step; t <= view.b; t += step) s.append(svg("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, txt(mmss(t))));
     s.append(svg("line", { class: "cursor", x1: 0, x2: 0, y1: T, y2: H - B, stroke: "var(--fg)", "stroke-width": 1, opacity: 0, "pointer-events": "none" }));
     s.append(svg("circle", { class: "cursor-dot", r: 4, fill: "var(--accent)", stroke: "var(--bg)", "stroke-width": 2, opacity: 0, "pointer-events": "none" }));
+    if (canPlay) {
+      s.append(svg("line", { class: "playhead", y1: T - 4, y2: H - B, stroke: "var(--fg)", "stroke-width": 2, "pointer-events": "none" }));
+      s.append(svg("path", { class: "playhead-knob", d: "M-6,0 L6,0 L0,8 Z", fill: "var(--fg)", "pointer-events": "none" }));
+      paintHead();
+    }
     zoomLabel.textContent = view.b - view.a >= end - 0.01 ? "Whole track" : `${mmss(view.a)}–${mmss(view.b)}`;
     if (!drag) s.style.cursor = view.b - view.a < end - 0.01 ? "grab" : "crosshair";
     if (cursorT != null) showTip(cursorT);
@@ -473,8 +648,9 @@ function energyChart(series, sections, duration) {
   const toVB = (e) => { const r = svgEl.getBoundingClientRect(); return { px: ((e.clientX - r.left) / r.width) * W }; };
   function showTip(t) {
     const cur = svgEl.querySelector(".cursor"), dot = svgEl.querySelector(".cursor-dot");
+    if (!cur) return;
     if (t < view.a || t > view.b) { hideTip(); return; }
-    const v = energyAt(t), sec = sections.find((q) => t >= q.start && t < q.end);
+    const v = mode === "energy" ? energyAt(t) : null, sec = sections.find((q) => t >= q.start && t < q.end);
     cur.setAttribute("x1", x(t)); cur.setAttribute("x2", x(t)); cur.setAttribute("opacity", 0.5);
     if (v != null) { dot.setAttribute("cx", x(t)); dot.setAttribute("cy", y(v)); dot.setAttribute("opacity", 1); }
     tip.replaceChildren(
@@ -489,13 +665,22 @@ function energyChart(series, sections, duration) {
   }
   function hideTip() {
     cursorT = null; tip.hidden = true;
-    if (svgEl) for (const q of [".cursor", ".cursor-dot"]) svgEl.querySelector(q).setAttribute("opacity", 0);
+    if (svgEl) for (const q of [".cursor", ".cursor-dot"]) { const el = svgEl.querySelector(q); if (el) el.setAttribute("opacity", 0); }
   }
   let drag = null;
   const atEdge = () => view.b - view.a < end - 0.01;
-  svgEl.addEventListener("pointerdown", (e) => { svgEl.setPointerCapture(e.pointerId); drag = { px: toVB(e).px, a: view.a, b: view.b }; });
+  const nearHead = (px) => { if (!canPlay) return false; const t = tNow(); return t >= view.a && t <= view.b && Math.abs(px - x(t)) <= 8; };
+  const setHot = (on) => svgEl.classList.toggle("head-hot", on);
+  svgEl.addEventListener("pointerdown", (e) => {
+    svgEl.setPointerCapture(e.pointerId);
+    const px = toVB(e).px;
+    if (nearHead(px)) { const was = playing; if (was) me.stop(); drag = { scrub: true, was, px }; setHot(true); svgEl.style.cursor = "grabbing"; hideTip(); scrubStart(); return; }
+    drag = { px, a: view.a, b: view.b };
+  });
   svgEl.addEventListener("pointermove", (e) => {
     const { px } = toVB(e);
+    if (drag && drag.scrub) { if (scrub) scrub.target = Math.max(0, Math.min(end, tAt(Math.max(L, Math.min(W - R, px))))); return; }
+    if (!drag) { const hot = nearHead(px); setHot(hot); svgEl.style.cursor = hot || atEdge() ? "grab" : "crosshair"; if (hot) { hideTip(); return; } }
     if (drag && atEdge()) {
       const dt = ((px - drag.px) / (W - L - R)) * (drag.b - drag.a);
       view.a = drag.a - dt; view.b = drag.b - dt; clampView();
@@ -504,19 +689,145 @@ function energyChart(series, sections, duration) {
     cursorT = tAt(Math.max(L, Math.min(W - R, px))); showTip(cursorT);
   });
   const up = (e) => {
+    if (drag && drag.scrub) { const was = drag.was; drag = null; setHot(false); svgEl.style.cursor = "grab"; scrubEnd(); if (was) play(); else paintHead(); return; }
     if (e && e.type === "pointerup" && drag && Math.abs(toVB(e).px - drag.px) < 3) {
       const t0 = tAt(toVB(e).px), si = sections.findIndex((q) => t0 >= q.start && t0 < q.end);
+      if (canPlay) seek(t0);
       if (si >= 0) { selIdx = si; draw(); bus.dispatchEvent(new CustomEvent("section", { detail: { idx: si, from: "chart" } })); }
     }
     drag = null; svgEl.style.cursor = atEdge() ? "grab" : "crosshair";
   };
   svgEl.addEventListener("pointerup", up);
   svgEl.addEventListener("pointercancel", up);
-  svgEl.addEventListener("pointerleave", () => { if (!drag) hideTip(); });
+  svgEl.addEventListener("pointerleave", () => { if (!drag) { hideTip(); setHot(false); } });
   svgEl.addEventListener("wheel", (e) => {
     e.preventDefault();
     zoom(Math.exp(Math.sign(e.deltaY) * 0.25), tAt(Math.max(L, Math.min(W - R, toVB(e).px))));
   }, { passive: false });
+
+  // ---- mode switching ----
+  function setMode(k) {
+    mode = chartMode = k;
+    modeBtns.forEach((b, i) => b.setAttribute("aria-selected", String(MODES[i][0] === k)));
+    keyP.replaceChildren(...KEYS[k]);
+    if (k !== "energy" && !pics) ensurePics(); else draw();
+  }
+  async function withBusy(work) {
+    busy.hidden = false;
+    try { return await work(); }
+    catch (err) { say(`Couldn't load the audio: ${err.message}`); return null; }
+    finally { busy.hidden = true; }
+  }
+  async function ensurePics() {
+    if (!pics) pics = await withBusy(() => trackViews(card));
+    draw();
+  }
+  let audio = null;
+  async function ensureAudio() {
+    if (!audio) audio = await withBusy(() => trackAudio(card));
+    return audio;
+  }
+
+  // ---- transport ----
+  let pos = 0, src = null, startedAt = 0, playing = false, raf = 0;
+  const tNow = () => (playing ? Math.min(end, actx.currentTime - startedAt) : pos);
+  function paintHead() {
+    const ph = svgEl.querySelector(".playhead"); if (!ph) return;
+    const t = tNow(), vis = t >= view.a && t <= view.b;
+    ph.setAttribute("x1", x(t)); ph.setAttribute("x2", x(t)); ph.setAttribute("opacity", vis ? 0.9 : 0);
+    const kn = svgEl.querySelector(".playhead-knob"); kn.setAttribute("transform", `translate(${x(t)},${T - 9})`); kn.setAttribute("opacity", vis ? 1 : 0);
+    seekR.value = String(t); timeL.textContent = `${mmss(t)} / ${mmss(duration)}`;
+  }
+  function startSrc() {
+    const ctx = audioCtx(); if (ctx.state === "suspended") ctx.resume();
+    if (src) { src.onended = null; try { src.stop(); } catch (_) {} }
+    src = ctx.createBufferSource(); src.buffer = audio.buf; src.connect(ctx.destination);
+    src.onended = () => { if (playing) { me.stop(); pos = 0; paintHead(); } };
+    src.start(0, pos); startedAt = ctx.currentTime - pos;
+  }
+  // Registered as the shared `player`, so the drum sequencer and track playback stop each other.
+  const me = { stop() {
+    if (!playing) return;
+    pos = tNow(); playing = false; cancelAnimationFrame(raf);
+    if (src) { src.onended = null; try { src.stop(); } catch (_) {} src = null; }
+    if (player === me) player = null;
+    playBtn.textContent = "▶"; playBtn.setAttribute("aria-label", "Play"); paintHead();
+  } };
+  function loop() {
+    if (!playing) return;
+    if (!svgEl.isConnected) { me.stop(); return; }
+    const t = tNow();
+    // When zoomed in and the playhead leaves the view, page so it sits 10% from the left.
+    if (t > view.b || t < view.a) { const span = view.b - view.a; view.a = Math.max(0, Math.min(end - span, t - span * 0.1)); view.b = view.a + span; draw(); }
+    else paintHead();
+    raf = requestAnimationFrame(loop);
+  }
+  async function play() {
+    if (!(await ensureAudio()) || !svgEl.isConnected) return;
+    stopAllPlayback();
+    if (pos >= end - 0.2) pos = 0;
+    startSrc(); playing = true; player = me;
+    playBtn.textContent = "❚❚"; playBtn.setAttribute("aria-label", "Pause"); loop();
+  }
+  playBtn.onclick = () => { if (playing) me.stop(); else play(); };
+  function seek(t) {
+    pos = Math.max(0, Math.min(end, t));
+    if (playing) startSrc();
+    paintHead();
+  }
+  seekR.addEventListener("input", () => seek(+seekR.value));
+
+  // ---- audible scrubbing: the play position chases the pointer, speed follows the drag (backwards uses a reversed copy) ----
+  let scrub = null;
+  function scrubStart() {
+    scrub = { pos, target: pos, dir: 0, src: null, g: null, last: performance.now(), raf: 0 };
+    const s = scrub;
+    if (audio) scrubAudio(s);
+    else ensureAudio().then(() => { if (scrub === s && audio) scrubAudio(s); });
+    scrubLoop();
+  }
+  function scrubAudio(s) {
+    const ctx = audioCtx(); if (ctx.state === "suspended") ctx.resume();
+    if (!audio.rev) {
+      // Mono reversed copy: half the memory of a stereo one, and fine for hearing where you are.
+      const b = audio.buf, n = b.length, chans = [...Array(b.numberOfChannels)].map((_, k) => b.getChannelData(k)), r = new Float32Array(n);
+      for (const ch of chans) for (let i = 0; i < n; i++) r[i] += ch[n - 1 - i] / chans.length;
+      audio.rev = ctx.createBuffer(1, n, b.sampleRate); audio.rev.copyToChannel(r, 0);
+    }
+    s.g = ctx.createGain(); s.g.gain.value = 0; s.g.connect(ctx.destination);
+  }
+  function scrubSrc(dir) {
+    const ctx = audioCtx();
+    if (scrub.src) { try { scrub.src.stop(); } catch (_) {} }
+    const sn = ctx.createBufferSource(); sn.buffer = dir > 0 ? audio.buf : audio.rev; sn.playbackRate.value = 0.0001; sn.connect(scrub.g);
+    sn.start(0, Math.max(0, dir > 0 ? scrub.pos : audio.buf.duration - scrub.pos)); scrub.src = sn; scrub.dir = dir;
+  }
+  function scrubLoop() {
+    if (!scrub) return;
+    const now = performance.now(), dt = Math.min(0.05, (now - scrub.last) / 1000); scrub.last = now;
+    const gap = scrub.target - scrub.pos;
+    if (Math.abs(gap) > 1.5) { scrub.pos = scrub.target - Math.sign(gap) * 0.1; if (scrub.g) scrubSrc(Math.sign(gap)); }
+    let rate = Math.max(-8, Math.min(8, (scrub.target - scrub.pos) / 0.08));
+    if (Math.abs(rate) < 0.04) rate = 0;
+    if (scrub.g) {
+      const ctx = audioCtx(), dir = rate > 0 ? 1 : rate < 0 ? -1 : scrub.dir;
+      if (dir && dir !== scrub.dir) scrubSrc(dir);
+      if (scrub.src) scrub.src.playbackRate.setTargetAtTime(Math.max(0.0001, Math.abs(rate)), ctx.currentTime, 0.015);
+      scrub.g.gain.setTargetAtTime(rate ? 0.9 : 0, ctx.currentTime, 0.02);
+    }
+    scrub.pos = Math.max(0, Math.min(end, scrub.pos + rate * dt)); pos = scrub.pos; paintHead();
+    scrub.raf = requestAnimationFrame(scrubLoop);
+  }
+  function scrubEnd() {
+    if (!scrub) return;
+    cancelAnimationFrame(scrub.raf);
+    if (scrub.src) { try { scrub.src.stop(audioCtx().currentTime + 0.03); } catch (_) {} }
+    if (scrub.g) scrub.g.gain.setTargetAtTime(0, audioCtx().currentTime, 0.01);
+    pos = scrub.pos; scrub = null;
+  }
+
+  keyP.replaceChildren(...KEYS[mode]);
+  if (mode !== "energy") ensurePics();
   draw();
   return wrap;
 }

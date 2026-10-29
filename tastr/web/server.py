@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import mimetypes
 import os
 import re
 import sqlite3
@@ -20,6 +21,9 @@ from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import IngestError
 
 STATIC_DIR = Path(__file__).parent / "static"
+# Types the stdlib doesn't know everywhere; browsers need them to decode the stream.
+AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
+               ".ogg": "audio/ogg", ".aif": "audio/aiff", ".aiff": "audio/aiff", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
 MAX_QUERY_ROWS = 5000
 
 
@@ -80,12 +84,46 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         if card is None:
             raise HTTPException(404, "no such track")
         card.source.title = _unprefixed(card.source.title, card.source.uri)
-        return {"id": track_id, **card.to_dict(), "metadata": describe(card, row[0] if row else None)}
+        body = {"id": track_id, **card.to_dict(), "metadata": describe(card, row[0] if row else None)}
+        # Waveform/spectrogram data is large, so the UI fetches it from /views only when a view needs it.
+        views = body["extras"].pop("views", None)
+        body["has_views"] = views is not None
+        body["has_audio"] = _audio_path(card) is not None
+        return body
+
+    def _audio_path(card) -> Path | None:
+        p = card.source.local_path
+        return Path(p) if p and Path(p).is_file() else None
 
     @app.get("/api/tracks/{track_id}")
     def track(track_id: int):
         with closing(conn()) as c:
             return card_body(c, track_id)
+
+    @app.get("/api/tracks/{track_id}/audio")
+    def track_audio(track_id: int):
+        """The original audio file, with Range support so the browser can seek."""
+        with closing(conn()) as c:
+            card = db.load_card(c, track_id)
+        if card is None:
+            raise HTTPException(404, "no such track")
+        path = _audio_path(card)
+        if path is None:
+            raise HTTPException(404, "The original audio file is not on disk.")
+        media = AUDIO_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return FileResponse(path, media_type=media)
+
+    @app.get("/api/tracks/{track_id}/views")
+    def track_views(track_id: int):
+        """Waveform and spectrogram data from the `views` stage (404 for cards analyzed before it existed)."""
+        with closing(conn()) as c:
+            card = db.load_card(c, track_id)
+        if card is None:
+            raise HTTPException(404, "no such track")
+        views = card.extras.get("views")
+        if views is None:
+            raise HTTPException(404, "This track was analyzed before waveform data was stored.")
+        return views
 
     @app.post("/api/tracks/{track_id}/retag")
     def retag(track_id: int):

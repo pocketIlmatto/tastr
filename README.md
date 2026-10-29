@@ -96,7 +96,7 @@ tastr/engine/               the analysis engine; imports nothing else from tastr
   audio.py                  decoding files to mono audio (librosa, ffmpeg fallback)
   signals.py                shared intermediates (HPSS, onset envelope, chroma, RMS)
   music.py                  key profiles, scales, chords, Camelot
-  stages/                   core, sections, tags, suggestions (one module each)
+  stages/                   core, sections, tags, suggestions, views (one module each)
   bench/                    accuracy benchmark: dataset loaders, metrics, runner
   bench/synth.py            synthetic tracks with known BPM/key/sections (tests/synth.py re-exports it)
 tastr/ingest.py             files/folders/links -> Sources, URL resolver registry

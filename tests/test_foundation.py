@@ -36,7 +36,7 @@ def test_card_roundtrip():
 
 def test_stage_order_and_requirements():
     names = [s.name for s in resolve_order()]
-    assert names == ["core", "sections", "tags", "suggestions"]
+    assert names == ["core", "sections", "tags", "suggestions", "views"]
     assert [s.name for s in resolve_order(["tags"])] == ["core", "sections", "tags"]
     with pytest.raises(KeyError):
         resolve_order(["nope"])
@@ -115,7 +115,7 @@ def test_cli_end_to_end(db_path, synth_wav, capsys):
     assert "synth_124_Am" in capsys.readouterr().out
     assert main(["--db", str(db_path), "show", "1"]) == 0
     card = json.loads(capsys.readouterr().out)
-    assert set(card["stages_run"]) == {"core", "sections", "tags", "suggestions"}
+    assert set(card["stages_run"]) == {"core", "sections", "tags", "suggestions", "views"}
     assert card["errors"] == {}
     assert main(["--db", str(db_path), "query", "SELECT title FROM tracks"]) == 0
     assert json.loads(capsys.readouterr().out.strip()) == {"title": "synth_124_Am"}

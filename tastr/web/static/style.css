@@ -77,6 +77,18 @@ svg text.band { fill: var(--bg); font-weight: 600; }
 .sug p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 svg.chart { touch-action: pan-y; user-select: none; }
 .chart-wrap { position: relative; }
+svg.chart .barnum { font-size: 10px; fill: var(--muted); }
+svg.chart.head-hot .playhead { stroke-width: 3; }
+.chart-modes { display: flex; gap: 4px; margin-bottom: 8px; }
+.mode-tab { font-size: 13px; padding: 3px 12px; border-radius: 999px; }
+.mode-tab[aria-selected="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.chart-hostwrap { position: relative; }
+.chart-busy { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; background: color-mix(in srgb, var(--panel) 80%, transparent); border-radius: 8px; font-size: 13px; color: var(--muted); }
+.chart-busy[hidden] { display: none; }
+.transport { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.tp-play { width: 38px; height: 32px; padding: 0; flex: none; }
+.tp-time { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--muted); flex: none; min-width: 84px; }
+.tp-seek { flex: 1; min-width: 0; padding: 0; accent-color: var(--accent); }
 .chart-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 13px; }
 .chart-bar button { padding: 2px 10px; }
 .chart-bar .hint { margin-left: auto; }

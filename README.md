@@ -40,6 +40,7 @@ tastr show 1                     # full card as JSON
 tastr query "SELECT title, bpm, camelot FROM tracks ORDER BY bpm"
 tastr stages                     # pipeline stages in run order
 tastr serve --host 127.0.0.1 --port 8000   # web UI (defaults shown)
+tastr bench synth                # score the engine on labeled tracks (docs/bench.md)
 ```
 
 The database lives at `~/.tastr/tastr.db`. Override it with `--db` or the
@@ -63,7 +64,8 @@ tastr/resolvers/     link/playlist resolvers
 tastr/db.py          SQLite schema and save/load/query
 tastr/service.py     inputs -> pipeline -> DB, used by the CLI and web app
 tastr/web/           FastAPI app and UI
-tests/synth.py       synthetic tracks with known BPM/key/sections for tests
+tastr/bench/         accuracy benchmark: dataset loaders, metrics, runner
+tastr/bench/synth.py synthetic tracks with known BPM/key/sections (tests/synth.py re-exports it)
 ```
 
 Read `docs/ARCHITECTURE.md` for the data flow, card fields, feature names and

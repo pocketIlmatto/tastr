@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr stages`, `tastr serve`."""
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr stages`, `tastr serve`, `tastr bench`."""
 
 from __future__ import annotations
 
@@ -30,7 +30,41 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=8000)
 
+    b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
+    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, harmonix or manifest")
+    b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
+    b.add_argument("--stages", help="comma-separated stage names (default: core,sections)")
+    b.add_argument("--limit", type=int, help="only the first N tracks")
+    b.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel")
+    b.add_argument("--out", help="write the full JSON report here")
+    b.add_argument("--baseline", help="earlier report to compare against")
+
     args = p.parse_args(argv)
+
+    if args.cmd == "bench":
+        from . import bench
+        from .bench import runner
+
+        try:
+            items = bench.load(args.dataset, args.path)
+        except (ValueError, FileNotFoundError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        if not items:
+            print(f"error: no labeled tracks with audio found for {args.dataset} at {args.path}", file=sys.stderr)
+            return 2
+
+        def progress(i, n, row):
+            print(f"\r{i}/{n} {row['id'][:50]:50}", end="", file=sys.stderr, flush=True)
+
+        stages = args.stages.split(",") if args.stages else None
+        report = runner.run(items, stages=stages, jobs=args.jobs, limit=args.limit, progress=progress)
+        print(file=sys.stderr)
+        baseline = runner.load_report(args.baseline) if args.baseline else None
+        print(runner.format_summary(report, baseline))
+        if args.out:
+            runner.save(report, args.out)
+        return 0
 
     if args.cmd == "stages":
         for st in resolve_order():

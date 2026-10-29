@@ -13,7 +13,67 @@
     <button data-view="library" class="active">Library</button>
     <button data-view="explore">Explore</button>
   </nav>
+  <button type="button" id="help-btn" aria-haspopup="dialog" aria-controls="help" aria-keyshortcuts="?" title="Keyboard and mouse shortcuts (?)">?</button>
 </header>
+<dialog id="help" aria-labelledby="help-title">
+  <div class="help-head"><h2 id="help-title">Keyboard and mouse shortcuts</h2><button type="button" id="help-close" aria-label="Close">✕</button></div>
+  <div class="help-body">
+    <section>
+      <h3>Anywhere</h3>
+      <dl>
+        <dt><kbd>?</kbd></dt><dd>Open this help (not while typing in a field)</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close this help</dd>
+        <dt><kbd>Tab</kbd> / <kbd>Shift</kbd> <kbd>Tab</kbd></dt><dd>Move between buttons, tracks, tags and steps</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Track list</h3>
+      <dl>
+        <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move to the previous or next track</dd>
+        <dt><kbd>Enter</kbd> / <kbd>Space</kbd></dt><dd>Open the track</dd>
+        <dt><kbd>Ctrl</kbd>/<kbd>⌘</kbd> click</dt><dd>Start selecting, with that track picked</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Selecting tracks</h3>
+      <dl>
+        <dt>Click, <kbd>Enter</kbd> / <kbd>Space</kbd></dt><dd>Pick or unpick a track</dd>
+        <dt><kbd>Shift</kbd> click, <kbd>Shift</kbd> <kbd>Space</kbd></dt><dd>Pick or unpick everything from the last track you toggled</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Stop selecting and clear the selection</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Menus (⋯ and Actions)</h3>
+      <dl>
+        <dt><kbd>Enter</kbd> / <kbd>Space</kbd></dt><dd>Open the menu, or choose the focused item</dd>
+        <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move between items</dd>
+        <dt><kbd>Esc</kbd></dt><dd>Close the menu</dd>
+        <dt><kbd>Tab</kbd></dt><dd>Close the menu and move on</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Energy, waveform and spectrogram</h3>
+      <dl>
+        <dt>Click</dt><dd>Pick that section and play from there</dd>
+        <dt>Drag the playhead</dt><dd>Scrub; you hear the track as you drag</dd>
+        <dt>Scroll</dt><dd>Zoom in or out around the pointer</dd>
+        <dt>Drag</dt><dd>Pan when zoomed in</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Drum grid</h3>
+      <dl>
+        <dt>Click, <kbd>Enter</kbd> / <kbd>Space</kbd></dt><dd>Cycle a step: empty, strong, softer, empty</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Explore</h3>
+      <dl>
+        <dt><kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>Enter</kbd></dt><dd>Run the SQL query</dd>
+      </dl>
+    </section>
+  </div>
+</dialog>
 <main>
   <section id="view-library">
     <div id="drop" tabindex="0">
@@ -37,7 +97,8 @@
             <label>Key <select id="lib-key"></select></label>
             <label class="lib-bpm">BPM <input id="lib-bmin" type="number" min="0" max="300" placeholder="min" aria-label="Minimum BPM"> – <input id="lib-bmax" type="number" min="0" max="300" placeholder="max" aria-label="Maximum BPM"></label>
           </div>
-          <div class="lib-count muted"><span id="lib-n" role="status" aria-live="polite"></span> <button type="button" id="lib-clear" class="linklike" hidden>Clear filters</button></div>
+          <div class="lib-count muted"><span id="lib-n" role="status" aria-live="polite"></span> <button type="button" id="lib-clear" class="linklike" hidden>Clear filters</button><button type="button" id="lib-sel" aria-pressed="false" title="Select several tracks for bulk actions (or Ctrl/Cmd-click a track)">Select</button></div>
+          <div id="lib-bulk" hidden></div>
         </div>
         <ul id="track-list" aria-label="Tracks"></ul>
       </aside>

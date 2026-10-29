@@ -206,13 +206,161 @@ function renderList() {
           h("div", { class: "s" }, p.active ? "Analyzing…" : "Waiting…")));
   }
   for (const t of shown) {
-    ul.append(h("li", { class: "trk" + (t.id === currentId ? " active" : ""), "data-id": t.id, tabindex: "0", "aria-current": t.id === currentId ? "true" : null, onclick: () => openTrack(t.id) },
-      h("div", { class: "t", title: t.title }, t.title || `Track ${t.id}`),
-      h("div", { class: "s" }, h("span", { class: "s-txt" }, [t.artist, isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, mmss(t.duration)].filter(Boolean).join(" · ")),
-        h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` })))));
+    const picked = sel.has(t.id), job = jobs.get(t.id);
+    ul.append(h("li", { class: "trk" + (t.id === currentId ? " active" : "") + (picked ? " picked" : ""), "data-id": t.id, tabindex: "0",
+        "aria-current": t.id === currentId ? "true" : null, role: selecting ? "checkbox" : null, "aria-checked": selecting ? String(picked) : null,
+        onclick: (e) => { if (selecting) toggleSel(t.id, e.shiftKey); else if (e.metaKey || e.ctrlKey) { setSelecting(true); toggleSel(t.id, false); } else openTrack(t.id); } },
+      selecting ? h("span", { class: "pick" + (picked ? " on" : ""), "aria-hidden": "true" }) : null,
+      h("div", { class: "trk-main" },
+        h("div", { class: "t", title: t.title }, t.title || `Track ${t.id}`),
+        job ? h("div", { class: "s job" + (job.error ? " fail" : ""), title: job.error || null }, job.error ? null : h("span", { class: "spin" + (job.active ? "" : " idle"), "aria-hidden": "true" }), job.text)
+          : h("div", { class: "s" }, h("span", { class: "s-txt" }, [t.artist, isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, mmss(t.duration)].filter(Boolean).join(" · ")),
+            h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` }))))));
   }
   ul.scrollTop = top;
+  renderBulk(shown);
 }
+
+// ---------- bulk selection and actions ----------
+// Selection is by track id, so it survives filtering and sorting.
+const sel = new Set();
+// Per-row job state while a bulk action runs: { text, active } or { text, error } once a track failed.
+const jobs = new Map();
+let selecting = false, lastSel = null, bulkMsg = "", bulkBusy = false, bulkTimer;
+function setSelecting(on) {
+  selecting = on;
+  if (!on) { sel.clear(); lastSel = null; }
+  $("lib-sel").setAttribute("aria-pressed", String(on)); $("lib-sel").textContent = on ? "Done" : "Select";
+  renderList();
+}
+// Shift picks or unpicks the range from the last toggled row, in the current visible order.
+function toggleSel(id, range) {
+  const ids = visibleTracks().map((t) => t.id);
+  if (range && lastSel != null && ids.includes(lastSel)) {
+    const [a, b] = [ids.indexOf(lastSel), ids.indexOf(id)].sort((x, y) => x - y);
+    const on = !sel.has(id);
+    ids.slice(a, b + 1).forEach((x) => (on ? sel.add(x) : sel.delete(x)));
+  } else if (sel.has(id)) sel.delete(id); else sel.add(id);
+  lastSel = id;
+  renderList();
+  const li = $("track-list").querySelector(`li.trk[data-id="${id}"]`);
+  if (li) li.focus();
+}
+function sayBulk(msg, fadeMs) {
+  clearTimeout(bulkTimer);
+  bulkMsg = msg;
+  if (fadeMs) bulkTimer = setTimeout(() => { if (!bulkBusy) { bulkMsg = ""; renderList(); } }, fadeMs);
+}
+function renderBulk(shown) {
+  const box = $("lib-bulk");
+  box.hidden = !selecting && !bulkMsg && !jobs.size;
+  if (box.hidden) return;
+  const kids = [];
+  if (selecting) {
+    const allShown = shown.length && shown.every((t) => sel.has(t.id));
+    kids.push(h("div", { class: "bulk-row" },
+      h("b", {}, `${sel.size} selected`),
+      h("button", { type: "button", class: "linklike", onclick: () => { shown.forEach((t) => (allShown ? sel.delete(t.id) : sel.add(t.id))); renderList(); } },
+        allShown ? "Select none" : `Select all ${shown.length}${libActive() ? " shown" : ""}`),
+      sel.size ? h("button", { type: "button", class: "linklike", onclick: () => { sel.clear(); renderList(); } }, "Clear") : null),
+      bulkMenu());
+  }
+  if (bulkMsg || jobs.size) kids.push(h("div", { class: "bulk-say muted", role: "status", "aria-live": "polite" }, bulkBusy ? h("span", { class: "spin", "aria-hidden": "true" }) : null, bulkMsg,
+    // Failed rows keep their note until the next run or until dismissed here.
+    !bulkBusy && jobs.size ? h("button", { type: "button", class: "linklike", onclick: () => { jobs.clear(); sayBulk(""); renderList(); } }, "Dismiss") : null));
+  box.replaceChildren(...kids);
+}
+const plural = (n) => `${n} track${n === 1 ? "" : "s"}`;
+// Each action calls the per-track endpoint; `run` resolves to the track's fresh card (or null).
+const BULK = {
+  reload: { label: "Reload metadata", doing: "Reloading metadata…", fail: "Couldn't reload metadata",
+    done: (n) => `Reloaded metadata for ${plural(n)}.`,
+    run: async (id) => (await api(`/api/tracks/${id}/retag`, { method: "POST" })).card },
+  reanalyze: { label: "Re-analyze", doing: "Re-analyzing…", fail: "Couldn't re-analyze",
+    done: (n) => `Re-analyzed ${plural(n)}.`,
+    run: async (id) => (await api(`/api/tracks/${id}/reanalyze`, { method: "POST" })).card },
+};
+function bulkMenu() {
+  const n = sel.size;
+  const btn = h("button", { type: "button", class: "bulk-btn", "aria-haspopup": "menu", "aria-expanded": "false", disabled: n && !bulkBusy ? null : "" }, `Actions${n ? ` for ${n}` : ""} ▾`);
+  const pop = h("div", { class: "menu-pop bulk-pop", role: "menu", hidden: "" });
+  const wrap = h("div", { class: "menu-wrap bulk-wrap" }, btn, pop);
+  const close = (refocus) => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); document.removeEventListener("pointerdown", outside, true); if (refocus) btn.focus(); };
+  const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
+  const item = (label, onclick, o = {}) => h("button", { type: "button", role: "menuitem", class: "menu-item" + (o.danger ? " danger" : ""), onclick }, label, o.note ? h("span", { class: "menu-note" }, o.note) : null);
+  const items = () => [...pop.querySelectorAll("[role=menuitem], .menu-confirm button")];
+  const showMain = () => pop.replaceChildren(
+    ...Object.entries(BULK).map(([k, v]) => item(v.label, () => { close(false); runBulk(k, [...sel]); }, { note: v.note })),
+    h("hr", { class: "menu-sep" }),
+    item(`Delete ${plural(n)}…`, showConfirm, { danger: true }));
+  const showConfirm = () => {
+    pop.replaceChildren(h("div", { class: "menu-confirm", role: "group", "aria-label": "Confirm delete" },
+      h("p", {}, h("b", {}, `Delete ${plural(n)}?`), h("br"), h("span", { class: "muted" }, "This removes them and their analysis from your library.")),
+      h("div", { class: "menu-confirm-btns" },
+        h("button", { type: "button", onclick: () => { showMain(); items()[0].focus(); } }, "Cancel"),
+        h("button", { type: "button", class: "danger-solid", onclick: () => { close(false); deleteBulk([...sel]); } }, "Delete"))));
+    pop.querySelector("button").focus();
+  };
+  btn.onclick = () => {
+    if (!pop.hidden) { close(true); return; }
+    showMain(); pop.hidden = false; btn.setAttribute("aria-expanded", "true"); items()[0].focus();
+    document.addEventListener("pointerdown", outside, true);
+  };
+  pop.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); close(true); return; }
+    const list = items(), i = list.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") { e.preventDefault(); list[(i + 1) % list.length].focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); list[(i - 1 + list.length) % list.length].focus(); }
+    else if (e.key === "Tab") close(false);
+  });
+  return wrap;
+}
+// Jobs run one track at a time. The user can leave select mode and keep browsing meanwhile.
+async function runBulk(kind, ids) {
+  const b = BULK[kind];
+  if (!ids.length || bulkBusy) return;
+  bulkBusy = true;
+  jobs.clear();
+  ids.forEach((id) => jobs.set(id, { text: "Queued", active: false }));
+  let failed = 0;
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!tracks.some((t) => t.id === id)) { jobs.delete(id); continue; }
+    jobs.set(id, { text: b.doing, active: true });
+    sayBulk(`${b.doing.replace("…", "")} ${i + 1} of ${ids.length}…`);
+    renderList();
+    try {
+      const card = await b.run(id);
+      jobs.delete(id);
+      if (card && currentId === id) renderCard(card);
+    } catch (e) {
+      failed++;
+      jobs.set(id, { text: b.fail, error: e.message });
+    }
+  }
+  bulkBusy = false;
+  try { await loadTracks(); } catch (_) {}
+  const ok = ids.length - failed;
+  sayBulk(b.done(ok) + (failed ? ` ${plural(failed)} failed.` : ""), failed ? 0 : 5000);
+  renderList();
+}
+async function deleteBulk(ids) {
+  if (!ids.length || bulkBusy) return;
+  bulkBusy = true;
+  sayBulk(`Deleting ${plural(ids.length)}…`);
+  renderList();
+  const gone = [];
+  for (const id of ids) {
+    try { await api(`/api/tracks/${id}`, { method: "DELETE" }); gone.push(id); } catch (_) {}
+  }
+  bulkBusy = false;
+  gone.forEach((id) => { sel.delete(id); jobs.delete(id); });
+  if (gone.includes(currentId)) { currentId = null; $("card").replaceChildren(h("p", { class: "muted" }, "Select a track.")); }
+  const failed = ids.length - gone.length;
+  sayBulk(`Deleted ${plural(gone.length)}.` + (failed ? ` Couldn't delete ${plural(failed)}.` : ""), failed ? 0 : 4000);
+  await refresh();
+}
+$("lib-sel").addEventListener("click", () => setSelecting(!selecting));
 $("lib-q").addEventListener("input", (e) => { lib.q = e.target.value; renderList(); });
 $("lib-sort").addEventListener("change", (e) => { lib.sort = e.target.value; renderList(); });
 $("lib-vibe").addEventListener("change", (e) => { lib.vibe = e.target.value; renderList(); });
@@ -223,7 +371,8 @@ $("lib-clear").addEventListener("click", clearFilters);
 $("lib-fbtn").addEventListener("click", () => { const f = $("lib-filters"), open = f.hidden; f.hidden = !open; $("lib-fbtn").setAttribute("aria-expanded", String(open)); });
 $("track-list").addEventListener("keydown", (e) => {
   const li = e.target.closest("li.trk"); if (!li) return;
-  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTrack(+li.dataset.id); return; }
+  if (e.key === "Escape" && selecting) { e.preventDefault(); setSelecting(false); return; }
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (selecting) toggleSel(+li.dataset.id, e.shiftKey); else openTrack(+li.dataset.id); return; }
   const dir = { ArrowDown: "nextElementSibling", ArrowUp: "previousElementSibling" }[e.key];
   if (!dir) return;
   e.preventDefault();
@@ -1458,3 +1607,19 @@ async function runSql() {
 $("run-sql").addEventListener("click", runSql);
 
 refresh().catch((e) => setStatus(e.message, true));
+
+// ---------- help ----------
+// "?" opens the shortcuts dialog unless the user is typing; the dialog closes on Esc, its ✕ or a click outside it.
+const help = $("help");
+const openHelp = () => { if (!help.open) help.showModal(); };
+$("help-btn").addEventListener("click", openHelp);
+$("help-close").addEventListener("click", () => help.close());
+help.addEventListener("click", (e) => { if (e.target === help) help.close(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "?" || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
+  e.preventDefault();
+  openHelp();
+});
+$("sql").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runSql(); } });

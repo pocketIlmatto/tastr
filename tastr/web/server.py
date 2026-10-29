@@ -66,8 +66,12 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         with closing(conn()) as c:
             rows = db.list_tracks(c)
             uris = dict(c.execute("SELECT id, source_uri FROM tracks").fetchall())
+            vibes: dict[int, list[str]] = {}
+            for tid, tag in c.execute("SELECT track_id, tag FROM tags ORDER BY score DESC"):
+                vibes.setdefault(tid, []).append(tag)
         for r in rows:  # tracks uploaded before the hash moved into a folder still have it in their title
             r["title"] = _unprefixed(r["title"], uris.get(r["id"]))
+            r["tags"] = vibes.get(r["id"], [])
         return rows
 
     @app.get("/api/tracks/{track_id}")

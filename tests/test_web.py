@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tastr import db
-from tastr.engine.card import Source, TrackCard
+from tastr.engine.card import Source, Tag, TrackCard
 from tastr.web.server import create_app
 from test_foundation import full_card
 
@@ -165,3 +165,13 @@ def test_ui_walks_dropped_folders():
     js = (static / "app.js").read_text()
     assert "webkitGetAsEntry" in js and "createReader" in js
     assert "webkitdirectory" in (static / "index.html").read_text()
+def test_track_list_has_artist_and_vibes_for_the_library_filters(client, db_path):
+    card = full_card()
+    card.source.artist = "Okra Lane"
+    card.tags = [Tag("driving", 0.5), Tag("dark", 0.8)]
+    conn = db.connect(db_path)
+    db.save_card(conn, card)
+    conn.close()
+    row = client.get("/api/tracks").json()[0]
+    assert row["artist"] == "Okra Lane"
+    assert row["tags"] == ["dark", "driving"]  # strongest first

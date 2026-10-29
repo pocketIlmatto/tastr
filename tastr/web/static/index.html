@@ -22,7 +22,25 @@
       <p id="status" role="status"></p>
     </div>
     <div class="split">
-      <ul id="track-list" aria-label="Tracks"></ul>
+      <aside id="lib">
+        <div id="lib-tools">
+          <input id="lib-q" type="search" placeholder="Search title or artist" aria-label="Search tracks">
+          <div class="lib-row">
+            <label>Sort <select id="lib-sort" aria-label="Sort tracks">
+              <option value="new">Newest</option><option value="title">Title A–Z</option><option value="bpm">BPM, slow to fast</option>
+              <option value="bpmd">BPM, fast to slow</option><option value="key">Key</option><option value="energy">Energy, high to low</option><option value="len">Length, long to short</option>
+            </select></label>
+            <button type="button" id="lib-fbtn" aria-expanded="false" aria-controls="lib-filters">Filters</button>
+          </div>
+          <div id="lib-filters" hidden>
+            <label>Vibe <select id="lib-vibe"></select></label>
+            <label>Key <select id="lib-key"></select></label>
+            <label class="lib-bpm">BPM <input id="lib-bmin" type="number" min="0" max="300" placeholder="min" aria-label="Minimum BPM"> – <input id="lib-bmax" type="number" min="0" max="300" placeholder="max" aria-label="Maximum BPM"></label>
+          </div>
+          <div class="lib-count muted"><span id="lib-n" role="status" aria-live="polite"></span> <button type="button" id="lib-clear" class="linklike" hidden>Clear filters</button></div>
+        </div>
+        <ul id="track-list" aria-label="Tracks"></ul>
+      </aside>
       <article id="card"><p class="muted">Select a track.</p></article>
     </div>
   </section>

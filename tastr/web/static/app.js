@@ -134,12 +134,47 @@ document.querySelectorAll("nav button").forEach((b) =>
 );
 
 // ---------- library ----------
-async function refresh(selectId) {
+const lib = { q: "", sort: "new", vibe: "", key: "", bmin: "", bmax: "" };
+const keyRank = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); return m ? +m[1] * 2 + (m[2] === "B" ? 1 : 0) : 999; };
+const SORTS = {
+  new: (a, b) => b.id - a.id,
+  title: (a, b) => (a.title || "").localeCompare(b.title || ""),
+  bpm: (a, b) => (a.bpm ?? 999) - (b.bpm ?? 999),
+  bpmd: (a, b) => (b.bpm ?? -1) - (a.bpm ?? -1),
+  key: (a, b) => keyRank(a.camelot) - keyRank(b.camelot) || (a.bpm ?? 0) - (b.bpm ?? 0),
+  energy: (a, b) => (b.energy ?? -1) - (a.energy ?? -1),
+  len: (a, b) => (b.duration ?? 0) - (a.duration ?? 0),
+};
+const libActive = () => !!(lib.q || lib.vibe || lib.key || lib.bmin || lib.bmax);
+// Search, sort and filters run in the browser, which is fine for a few hundred tracks.
+function visibleTracks() {
+  const q = lib.q.trim().toLowerCase(), lo = lib.bmin === "" ? null : +lib.bmin, hi = lib.bmax === "" ? null : +lib.bmax;
+  return tracks.filter((t) =>
+    (!q || `${t.title} ${t.artist || ""}`.toLowerCase().includes(q)) &&
+    (!lib.vibe || (t.tags || []).includes(lib.vibe)) && (!lib.key || t.camelot === lib.key) &&
+    (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi))).sort(SORTS[lib.sort]);
+}
+function fillFilterOptions() {
+  const vibes = [...new Set(tracks.flatMap((t) => t.tags || []))].sort(), keys = [...new Set(tracks.map((t) => t.camelot).filter(Boolean))].sort((a, b) => keyRank(a) - keyRank(b));
+  $("lib-vibe").replaceChildren(h("option", { value: "" }, "Any vibe"), ...vibes.map((v) => h("option", { value: v }, v)));
+  $("lib-key").replaceChildren(h("option", { value: "" }, "Any key"), ...keys.map((k) => h("option", { value: k }, k)));
+  $("lib-vibe").value = lib.vibe; $("lib-key").value = lib.key;
+}
+function syncTools() {
+  $("lib-q").value = lib.q; $("lib-sort").value = lib.sort; $("lib-vibe").value = lib.vibe; $("lib-key").value = lib.key; $("lib-bmin").value = lib.bmin; $("lib-bmax").value = lib.bmax;
+}
+async function loadTracks() {
   tracks = await api("/api/tracks");
+  fillFilterOptions();
+}
+async function refresh(selectId) {
+  await loadTracks();
+  // A freshly analyzed track must be visible, so show everything, newest first.
+  if (selectId != null) { Object.assign(lib, { q: "", vibe: "", key: "", bmin: "", bmax: "", sort: "new" }); syncTools(); }
   renderList();
   if (selectId != null) openTrack(selectId);
-  else if (currentId != null && tracks.some((t) => t.id === currentId)) renderList();
 }
+function clearFilters() { Object.assign(lib, { q: "", vibe: "", key: "", bmin: "", bmax: "" }); syncTools(); renderList(); }
 
 // Placeholder rows for files being analyzed (or that failed), shown above the saved tracks.
 const pending = [];
@@ -152,9 +187,14 @@ function shortError(err) {
   return line.length > 120 ? line.slice(0, 117) + "…" : line;
 }
 function renderList() {
-  const ul = $("track-list");
+  const ul = $("track-list"), top = ul.scrollTop;
   ul.replaceChildren();
-  if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted" }, "No tracks yet."));
+  const shown = visibleTracks();
+  $("lib-n").textContent = libActive() ? `${shown.length} of ${tracks.length} tracks` : `${tracks.length} track${tracks.length === 1 ? "" : "s"}`;
+  $("lib-clear").hidden = !libActive();
+  $("lib-tools").hidden = !tracks.length;
+  if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
+  else if (!shown.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
   for (const p of pending) {
     ul.append(p.failed
       ? h("li", { class: "pending failed", "aria-label": `${cleanName(p.name)}: could not be analyzed` },
@@ -165,19 +205,40 @@ function renderList() {
           h("div", { class: "t" }, h("span", { class: "spin" + (p.active ? "" : " idle"), "aria-hidden": "true" }), cleanName(p.name)),
           h("div", { class: "s" }, p.active ? "Analyzing…" : "Waiting…")));
   }
-  for (const t of tracks) {
-    ul.append(
-      h("li", { class: t.id === currentId ? "active" : "", onclick: () => openTrack(t.id) },
-        h("div", { class: "t" }, t.title || `Track ${t.id}`),
-        h("div", { class: "s" }, [isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, mmss(t.duration)].filter(Boolean).join(" · "))
-      )
-    );
+  for (const t of shown) {
+    ul.append(h("li", { class: "trk" + (t.id === currentId ? " active" : ""), "data-id": t.id, tabindex: "0", "aria-current": t.id === currentId ? "true" : null, onclick: () => openTrack(t.id) },
+      h("div", { class: "t", title: t.title }, t.title || `Track ${t.id}`),
+      h("div", { class: "s" }, h("span", { class: "s-txt" }, [t.artist, isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, mmss(t.duration)].filter(Boolean).join(" · ")),
+        h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` })))));
   }
+  ul.scrollTop = top;
 }
+$("lib-q").addEventListener("input", (e) => { lib.q = e.target.value; renderList(); });
+$("lib-sort").addEventListener("change", (e) => { lib.sort = e.target.value; renderList(); });
+$("lib-vibe").addEventListener("change", (e) => { lib.vibe = e.target.value; renderList(); });
+$("lib-key").addEventListener("change", (e) => { lib.key = e.target.value; renderList(); });
+$("lib-bmin").addEventListener("input", (e) => { lib.bmin = e.target.value; renderList(); });
+$("lib-bmax").addEventListener("input", (e) => { lib.bmax = e.target.value; renderList(); });
+$("lib-clear").addEventListener("click", clearFilters);
+$("lib-fbtn").addEventListener("click", () => { const f = $("lib-filters"), open = f.hidden; f.hidden = !open; $("lib-fbtn").setAttribute("aria-expanded", String(open)); });
+$("track-list").addEventListener("keydown", (e) => {
+  const li = e.target.closest("li.trk"); if (!li) return;
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTrack(+li.dataset.id); return; }
+  const dir = { ArrowDown: "nextElementSibling", ArrowUp: "previousElementSibling" }[e.key];
+  if (!dir) return;
+  e.preventDefault();
+  let n = li[dir]; while (n && !n.classList.contains("trk")) n = n[dir];
+  if (n) n.focus();
+});
 
 async function openTrack(id) {
   currentId = id;
-  renderList();
+  // Update the highlight in place so the list keeps its scroll position and focus.
+  document.querySelectorAll("#track-list li.trk").forEach((li) => {
+    const on = +li.dataset.id === id;
+    li.classList.toggle("active", on);
+    if (on) { li.setAttribute("aria-current", "true"); li.scrollIntoView({ block: "nearest" }); } else li.removeAttribute("aria-current");
+  });
   switchTo("library");
   try {
     renderCard(await api(`/api/tracks/${id}`));
@@ -744,7 +805,7 @@ async function runBatch(items, rows) {
     if (ok.length) lastId = ok[ok.length - 1].track_id;
     // Keep a failed row only for what failed; a single result keeps the name the user gave (the server's title carries a hash prefix).
     pending.splice(pending.indexOf(row), 1, ...bad.map((r) => ({ name: results.length === 1 ? row.name : r.title, failed: true, error: r.error })));
-    try { tracks = await api("/api/tracks"); } catch (_) {}
+    try { await loadTracks(); } catch (_) {}
     renderList();
   }
   setStatus(`Analyzed ${done} track(s)` + (failed ? `, ${failed} failed` : "") + ".", failed > 0);
@@ -821,7 +882,7 @@ async function loadTags() {
 }
 
 async function renderExplore() {
-  tracks = await api("/api/tracks");
+  await loadTracks();
   await loadTags();
   drawScatter();
 }

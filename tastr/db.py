@@ -219,7 +219,7 @@ def load_card(conn: sqlite3.Connection, track_id: int) -> TrackCard | None:
 
 def list_tracks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT id, title, duration, bpm, key_name, camelot, energy, analyzed_at FROM tracks ORDER BY id"
+        "SELECT id, title, artist, duration, bpm, key_name, camelot, energy, analyzed_at FROM tracks ORDER BY id"
     ).fetchall()
     return [dict(r) for r in rows]
 

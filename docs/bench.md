@@ -92,6 +92,16 @@ Measured on GiantSteps Key (599 tracks, labels from the original dataset):
   major-key music, lower it.
 - Tried and dropped (no gain on GiantSteps): bass-weighted chroma, band-split chroma with learned profiles,
   tuning-corrected 36-bin CQT chroma, 10 s windowed voting, Temperley profiles, learned per-mode profiles.
+- Fifth errors (about 13% of tracks) did not respond to cheap changes. Checked on two disjoint 200-track
+  subsets (every third track, offsets 0 and 1) so a gain had to hold on tracks it was not tuned on:
+  Shaath/KeyFinder EDM profiles (+0.02 MIREX on one subset, -0.015 on the other, so noise), compressing the
+  chroma (power 0.35 to 0.7), a bonus for tonic energy or for tonic+fifth+third energy, and a minor prior above
+  0.10 (which just fits GiantSteps' 85% minor labels). Subset scores for the current method range from 0.605
+  to 0.655, so differences under about 0.03 on 200 tracks are not evidence.
+- Iterating quickly: extract the chroma once per track (`signals.chroma`) to `.npz`, then score `estimate_key`
+  variants offline in seconds; run the full bench only for a candidate that wins on both subsets.
+- Environment: librosa 1.0 with numba 0.68 and numpy 2.5 segfaults in `onset_detect`. These worked:
+  numpy<2.3, numba 0.61.2, llvmlite 0.44.0, librosa 0.11.0, scipy<1.16.
 
 ## Drum lanes
 

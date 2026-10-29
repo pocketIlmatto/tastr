@@ -108,6 +108,7 @@ def test_resolve_inputs(tmp_path, synth_wav):
         resolve_inputs([str(tmp_path / "missing.wav")])
 
 
+@pytest.mark.audio
 def test_cli_end_to_end(db_path, synth_wav, capsys):
     path, _ = synth_wav
     assert main(["--db", str(db_path), "analyze", str(path)]) == 0

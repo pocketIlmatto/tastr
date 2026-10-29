@@ -1,7 +1,14 @@
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
+
+# Under pytest-xdist every worker JIT-compiles librosa's numba kernels at once; sharing one on-disk
+# numba cache between them segfaulted a CI worker, so give each worker its own (set before numba loads).
+if os.environ.get("PYTEST_XDIST_WORKER"):
+    os.environ["NUMBA_CACHE_DIR"] = str(Path(tempfile.gettempdir()) / f"numba-{os.environ['PYTEST_XDIST_WORKER']}")
 
 sys.path.insert(0, str(Path(__file__).parent))
 

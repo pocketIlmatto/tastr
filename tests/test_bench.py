@@ -105,8 +105,9 @@ def test_review_queue_puts_confident_mistakes_first():
     assert [r["id"] for r in runner.review_queue(rows)] == ["wrong-sure", "wrong-unsure", "ok-unsure", "ok-sure"]
 
 
+@pytest.mark.audio
 def test_bench_cli_on_manifest(tmp_path, capsys):
-    y, truth = make_track(bpm=124, tonic=9, mode="minor", bars_per_section=(4, 8, 4))
+    y, truth = make_track(bpm=124, tonic=9, mode="minor", bars_per_section=(2, 4, 2))
     write_wav(tmp_path / "t.wav", y)
     (tmp_path / "m.json").write_text(json.dumps([{"path": "t.wav", "bpm": 124, "key": "A minor",
                                                   "boundaries": [s["start"] for s in truth["sections"]]}]))

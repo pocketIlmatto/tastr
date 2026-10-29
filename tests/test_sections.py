@@ -7,6 +7,9 @@ from tastr.pipeline import AnalysisContext, run_pipeline
 from tastr.stages.sections import SectionsStage
 
 
+pytestmark = pytest.mark.audio
+
+
 def _run(y, sr, downbeats=None, bpm=124.0, series=None):
     card = TrackCard(source=Source(kind="file", uri="x"))
     card.core = Core(bpm=bpm, downbeat_times=list(downbeats or []))

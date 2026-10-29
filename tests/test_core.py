@@ -8,6 +8,8 @@ from tastr.card import Source, TrackCard
 from tastr.pipeline import run_pipeline
 from tastr.stages.core import _swing
 
+SHORT = (4, 8, 4)  # 16 bars is plenty for tempo and key
+
 RANGES = {
     "brightness": (0, 1),
     "percussiveness": (0, 1),
@@ -21,9 +23,19 @@ RANGES = {
 }
 
 
+pytestmark = pytest.mark.audio
+
+
 def analyze(y, sr=SR):
     card = TrackCard(source=Source(kind="file", uri="synthetic"))
     return run_pipeline(y, sr, card, stages=["core"])
+
+
+@pytest.fixture(scope="module")
+def default_card():
+    """The default synth track analyzed once, shared by the tests that only inspect the result."""
+    y, truth = make_track(bpm=124)
+    return analyze(y), truth
 
 
 def near_multiple(value, truth, tol=1.0):
@@ -32,7 +44,7 @@ def near_multiple(value, truth, tol=1.0):
 
 @pytest.mark.parametrize("bpm", [100, 124, 140])
 def test_bpm(bpm):
-    y, truth = make_track(bpm=bpm)
+    y, truth = make_track(bpm=bpm, bars_per_section=SHORT)
     card = analyze(y)
     assert not card.errors
     assert abs(card.core.bpm - bpm) <= 1.0 or near_multiple(card.core.bpm, bpm)
@@ -42,15 +54,14 @@ def test_bpm(bpm):
 @pytest.mark.parametrize("tonic,mode,allowed", [(9, "minor", {(9, "minor"), (0, "major")}),
                                                 (7, "major", {(7, "major"), (4, "minor")})])
 def test_key(tonic, mode, allowed):
-    y, _ = make_track(bpm=124, tonic=tonic, mode=mode)
+    y, _ = make_track(bpm=124, tonic=tonic, mode=mode, bars_per_section=SHORT)
     key = analyze(y).core.key
     assert (key.tonic, key.mode) in allowed
     assert key.camelot and key.scale and 0 <= key.confidence <= 1
 
 
-def test_beat_grid():
-    y, _ = make_track(bpm=124)
-    card = analyze(y)
+def test_beat_grid(default_card):
+    card, _ = default_card
     beats, downs = card.core.beat_times, card.core.downbeat_times
     assert len(downs) * 4 <= len(beats) + 4
     assert beats == sorted(beats) and downs == sorted(downs)
@@ -58,9 +69,8 @@ def test_beat_grid():
     assert set(downs) <= set(beats)
 
 
-def test_energy_series_follows_arrangement():
-    y, truth = make_track(bpm=124)
-    card = analyze(y)
+def test_energy_series_follows_arrangement(default_card):
+    card, truth = default_card
     s = card.series["energy"]
     assert len(s.values) == len(card.core.downbeat_times) == len(s.times)
     assert all(0 <= v <= 1 for v in s.values)
@@ -73,9 +83,8 @@ def test_energy_series_follows_arrangement():
     assert 0 <= card.core.energy <= 1
 
 
-def test_registry_features_present_and_in_range():
-    y, _ = make_track(bpm=124)
-    feats = analyze(y).features
+def test_registry_features_present_and_in_range(default_card):
+    feats = default_card[0].features
     for name, (lo, hi) in RANGES.items():
         assert name in feats, name
         assert np.isfinite(feats[name]) and lo <= feats[name] <= hi, (name, feats[name])
@@ -105,6 +114,7 @@ def test_swing_measures_offbeat_position():
         assert conf > 0.8
 
 
+@pytest.mark.perf
 def test_three_minute_track_under_30s():
     y, _ = make_track(bpm=124, bars_per_section=(12, 32, 16, 12, 16, 12))  # ~3.2 min at 124 BPM
     assert y.size / SR >= 180

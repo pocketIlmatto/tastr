@@ -20,7 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 links = ["yt-dlp"]
-dev = ["pytest>=8", "httpx>=0.27"]
+dev = ["pytest>=8", "pytest-xdist>=3.5", "httpx>=0.27"]
 
 [project.scripts]
 tastr = "tastr.cli:main"
@@ -33,3 +33,7 @@ tastr = ["web/*", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "audio: runs real audio analysis (slow); skipped on UI-only PRs",
+    "perf: wall-clock budget test; run serially on main, not under xdist",
+]

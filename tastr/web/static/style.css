@@ -41,12 +41,14 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .card-head { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; }
 .card-head h2 { margin: 0; flex-basis: 100%; font-size: 22px; overflow-wrap: anywhere; }
 .stat { display: flex; flex-direction: column; }
-.stat b { font-size: 22px; }
+.stat b { font-size: 22px; font-variant-numeric: tabular-nums; }
 .stat span { color: var(--muted); font-size: 12px; }
 .meter { width: 120px; height: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-top: 8px; }
 .meter > i { display: block; height: 100%; background: var(--accent); }
 .card-actions { margin-top: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { position: relative; cursor: help; }
+.chip:hover::after, .chip:focus-visible::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 3; width: max-content; max-width: min(260px, 70vw); background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; line-height: 1.35; box-shadow: 0 2px 8px rgb(0 0 0 / .18); }
 .chip { border-radius: 999px; padding: 2px 10px; background: color-mix(in srgb, var(--accent) calc(var(--s) * 70% + 8%), var(--panel)); border: 1px solid var(--line); }
 svg.chart { width: 100%; height: auto; display: block; background: var(--panel); border-radius: 8px; }
 svg text { fill: var(--muted); font-size: 11px; }
@@ -61,6 +63,18 @@ svg text.lbl { fill: var(--fg); }
 .sug { margin: 8px 0; }
 .sug b { display: block; }
 .sug p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+svg.chart { touch-action: pan-y; user-select: none; }
+.chart-wrap { position: relative; }
+.chart-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 13px; }
+.chart-bar button { padding: 2px 10px; }
+.chart-bar .hint { margin-left: auto; }
+.chart-tip { position: absolute; z-index: 2; pointer-events: none; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 12px; box-shadow: 0 2px 8px rgb(0 0 0 / .18); white-space: nowrap; }
+.chart-key { font-size: 12px; margin: 6px 0 0; }
+.key-line { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--accent); vertical-align: middle; }
+.key-box { display: inline-block; width: 12px; height: 10px; background: var(--accent); opacity: .25; border-radius: 2px; vertical-align: middle; }
+.origin { display: inline-block; font-size: 12px; border-radius: 999px; padding: 1px 8px; margin: 2px 0 4px; border: 1px solid var(--line); color: var(--muted); }
+.origin.det { background: var(--accent-soft); color: var(--fg); border-color: var(--accent); }
+.origin.tpl { border-style: dashed; }
 .errors { color: var(--muted); font-size: 13px; border-left: 3px solid var(--line); padding-left: 8px; margin-top: 16px; }
 .filters { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
 #examples { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }

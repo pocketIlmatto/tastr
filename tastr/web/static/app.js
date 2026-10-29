@@ -13,6 +13,24 @@ const EXAMPLES = {
     "SELECT avg(end_bar - start_bar + 1) AS avg_drop_bars FROM sections WHERE label = 'drop'",
 };
 
+const TAG_HELP = {
+  "high energy": "Overall energy is above about 0.6, so the track is loud and dense.",
+  "chill": "Low energy for its tempo, so it sits back.",
+  "melancholic": "Minor key with low energy.",
+  "dark": "Dull, low-frequency sound, helped along by a minor key.",
+  "bright": "Lots of high-frequency content, helped along by a major key.",
+  "euphoric": "Major key, bright sound and high energy together.",
+  "driving": "Strong, clear pulse at 115-150 BPM.",
+  "danceable": "Steady beat that is easy to dance to.",
+  "hypnotic": "Very clear pulse and little change between sections.",
+  "bass-heavy": "A large share of the energy sits in the low end.",
+  "percussive": "Dominated by drum hits and sharp attacks.",
+  "atmospheric": "Few drum hits and a weak pulse, so it floats.",
+  "dynamic": "Sections differ a lot in energy, with big builds and drops.",
+  "swung": "Off-beat 16ths land late, giving a shuffle feel.",
+};
+const tagHelp = (tag) => TAG_HELP[tag] || (/ tempo$/.test(tag) ? "Tempo falls in the typical range for this style. A hint, not a genre call." : "");
+
 let tracks = [];
 let tagsByTrack = {};
 let currentId = null;
@@ -127,7 +145,7 @@ function renderCard(c) {
   if ((c.tags || []).length) {
     root.append(h("h3", {}, "Vibe"),
       h("div", { class: "chips" }, [...c.tags].sort((a, b) => b.score - a.score).map((t) =>
-        h("span", { class: "chip", style: `--s:${isNum(t.score) ? t.score : 0}`, title: isNum(t.score) ? t.score.toFixed(2) : "" }, t.tag))));
+        h("span", { class: "chip", tabindex: "0", style: `--s:${isNum(t.score) ? t.score : 0}`, "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`.trim() }, t.tag))));
   }
 
   const sugs = c.suggestions || [];
@@ -158,35 +176,132 @@ function keyName(k) {
 }
 
 function energyChart(series, sections, duration) {
-  const W = 700, H = 200, L = 30, R = 8, T = 8, B = 22;
-  const times = (series && series.times) || [];
-  const vals = (series && series.values) || [];
+  const W = 700, H = 200, L = 40, R = 8, T = 8, B = 22;
+  const times = (series && series.times) || [], vals = (series && series.values) || [];
   const end = Math.max(duration || 0, times.length ? times[times.length - 1] : 0, ...sections.map((s) => s.end || 0), 1);
-  const x = (t) => L + (t / end) * (W - L - R);
-  const y = (v) => T + (1 - Math.max(0, Math.min(1, v))) * (H - T - B);
-  const s = svg("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Energy over time with sections" });
   const letters = [...new Set(sections.map((x) => x.letter || x.label))];
-  sections.forEach((sec) => {
-    if (!isNum(sec.start) || !isNum(sec.end)) return;
-    const color = SEC_COLORS[letters.indexOf(sec.letter || sec.label) % SEC_COLORS.length];
-    s.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: 0.18 }));
-    const label = [sec.label, sec.letter].filter(Boolean).join(" ");
-    s.append(svg("text", { class: "lbl", x: x(sec.start) + 3, y: T + 12 }, document.createTextNode(label)));
-  });
-  [0, 0.5, 1].forEach((v) => s.append(svg("text", { x: 2, y: y(v) + 4 }, document.createTextNode(v))));
   const pts = times.map((t, i) => [t, vals[i]]).filter(([t, v]) => isNum(t) && isNum(v));
-  if (pts.length > 1) {
-    const line = pts.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`);
-    s.append(svg("polygon", { points: `${x(pts[0][0])},${y(0)} ${line.join(" ")} ${x(pts[pts.length - 1][0])},${y(0)}`, fill: "var(--accent)", opacity: 0.25 }));
-    s.append(svg("polyline", { points: line.join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2 }));
+  const view = { a: 0, b: end };
+  const minSpan = Math.min(end, 12);
+  const wrap = h("div", { class: "chart-wrap" });
+  const bar = h("div", { class: "chart-bar" });
+  const zoomLabel = h("span", { class: "muted" });
+  const btn = (label, title, fn) => h("button", { type: "button", title, "aria-label": title, onclick: fn }, label);
+  bar.append(btn("−", "Zoom out", () => zoom(1.6)), btn("+", "Zoom in", () => zoom(1 / 1.6)), btn("Reset", "Show whole track", () => { view.a = 0; view.b = end; draw(); }), zoomLabel,
+    h("span", { class: "muted hint" }, "Scroll to zoom, drag to pan"));
+  const tip = h("div", { class: "chart-tip", hidden: "" });
+  const host = h("div", { class: "chart-host" });
+  wrap.append(bar, host, tip,
+    h("p", { class: "muted chart-key" },
+      h("span", { class: "key-line" }), " Energy: how loud and dense the track is at each moment, sampled every ~3 s. ",
+      h("span", { class: "key-box" }), " Shaded blocks are detected sections; same color means the same part repeats."));
+
+  const x = (t) => L + ((t - view.a) / (view.b - view.a)) * (W - L - R);
+  const tAt = (px) => view.a + ((px - L) / (W - L - R)) * (view.b - view.a);
+  const y = (v) => T + (1 - Math.max(0, Math.min(1, v))) * (H - T - B);
+  const energyAt = (t) => {
+    if (!pts.length) return null;
+    let lo = 0, hi = pts.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m][0] <= t) lo = m; else hi = m; }
+    const [t0, v0] = pts[lo], [t1, v1] = pts[hi];
+    return t1 === t0 ? v0 : v0 + ((Math.max(t0, Math.min(t1, t)) - t0) / (t1 - t0)) * (v1 - v0);
+  };
+  const clampView = () => {
+    const span = Math.max(minSpan, Math.min(end, view.b - view.a));
+    view.a = Math.max(0, Math.min(end - span, view.a)); view.b = view.a + span;
+  };
+  function zoom(f, center) {
+    const c = center == null ? (view.a + view.b) / 2 : center;
+    const span = Math.max(minSpan, Math.min(end, (view.b - view.a) * f));
+    const r = (c - view.a) / (view.b - view.a);
+    view.a = c - r * span; view.b = view.a + span; clampView(); draw();
   }
-  const step = end > 300 ? 60 : end > 120 ? 30 : 15;
-  for (let t = 0; t <= end; t += step) s.append(svg("text", { x: x(t), y: H - 6 }, document.createTextNode(mmss(t))));
-  return s;
+
+  let cursorT = null;
+  const svgEl = svg("svg", { class: "chart", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Energy over time with sections" });
+  host.append(svgEl);
+  const clipId = "clip" + Math.random().toString(36).slice(2, 8);
+  function draw() {
+    const s = svgEl;
+    s.replaceChildren();
+    s.append(svg("defs", {}, svg("clipPath", { id: clipId }, svg("rect", { x: L, y: 0, width: W - L - R, height: H }))));
+    const plot = svg("g", { "clip-path": `url(#${clipId})` });
+    sections.forEach((sec) => {
+      if (!isNum(sec.start) || !isNum(sec.end) || sec.end < view.a || sec.start > view.b) return;
+      const color = SEC_COLORS[letters.indexOf(sec.letter || sec.label) % SEC_COLORS.length];
+      plot.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: 0.18 }));
+      plot.append(svg("text", { class: "lbl", x: Math.max(L, x(sec.start)) + 3, y: T + 12 }, document.createTextNode([sec.label, sec.letter].filter(Boolean).join(" "))));
+    });
+    [0.25, 0.5, 0.75].forEach((v) => plot.append(svg("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: "var(--line)", "stroke-dasharray": "2 3" })));
+    if (pts.length > 1) {
+      const line = pts.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`);
+      plot.append(svg("polygon", { points: `${x(pts[0][0])},${y(0)} ${line.join(" ")} ${x(pts[pts.length - 1][0])},${y(0)}`, fill: "var(--accent)", opacity: 0.25 }));
+      plot.append(svg("polyline", { points: line.join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2 }));
+    }
+    s.append(plot);
+    [0, 0.5, 1].forEach((v) => s.append(svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, document.createTextNode(v))));
+    s.append(svg("text", { x: 10, y: (H - B + T) / 2, "text-anchor": "middle", transform: `rotate(-90 10 ${(H - B + T) / 2})` }, document.createTextNode("energy")));
+    const span = view.b - view.a;
+    const step = [5, 10, 15, 30, 60, 120].find((st) => span / st <= 8) || 120;
+    for (let t = Math.ceil(view.a / step) * step; t <= view.b; t += step) s.append(svg("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, document.createTextNode(mmss(t))));
+    s.append(svg("line", { class: "cursor", x1: 0, x2: 0, y1: T, y2: H - B, stroke: "var(--fg)", "stroke-width": 1, opacity: 0, "pointer-events": "none" }));
+    s.append(svg("circle", { class: "cursor-dot", r: 4, fill: "var(--accent)", stroke: "var(--bg)", "stroke-width": 2, opacity: 0, "pointer-events": "none" }));
+    zoomLabel.textContent = view.b - view.a >= end - 0.01 ? "Whole track" : `${mmss(view.a)}–${mmss(view.b)}`;
+    if (!drag) s.style.cursor = view.b - view.a < end - 0.01 ? "grab" : "crosshair";
+    if (cursorT != null) showTip(cursorT);
+  }
+  const toVB = (e) => { const r = svgEl.getBoundingClientRect(); return { px: ((e.clientX - r.left) / r.width) * W }; };
+  function showTip(t) {
+    const cur = svgEl.querySelector(".cursor"), dot = svgEl.querySelector(".cursor-dot");
+    if (t < view.a || t > view.b) { hideTip(); return; }
+    const v = energyAt(t), sec = sections.find((q) => t >= q.start && t < q.end);
+    cur.setAttribute("x1", x(t)); cur.setAttribute("x2", x(t)); cur.setAttribute("opacity", 0.5);
+    if (v != null) { dot.setAttribute("cx", x(t)); dot.setAttribute("cy", y(v)); dot.setAttribute("opacity", 1); }
+    tip.replaceChildren(
+      h("b", {}, mmss(t)),
+      v != null ? h("div", {}, `Energy ${v.toFixed(2)}`, h("span", { class: "muted" }, v > .75 ? " (loud, full)" : v > .45 ? " (medium)" : " (quiet, sparse)")) : null,
+      sec ? h("div", { class: "muted" }, `${sec.label} ${sec.letter || ""} · bars ${sec.start_bar}–${sec.end_bar}`.replace("  ", " ")) : null);
+    tip.hidden = false;
+    const r = svgEl.getBoundingClientRect(), hr = wrap.getBoundingClientRect();
+    const left = r.left - hr.left + (x(t) / W) * r.width;
+    tip.style.left = Math.min(Math.max(left + 12, 0), hr.width - tip.offsetWidth) + "px";
+    tip.style.top = (r.top - hr.top + 8) + "px";
+  }
+  function hideTip() {
+    cursorT = null; tip.hidden = true;
+    if (svgEl) for (const q of [".cursor", ".cursor-dot"]) svgEl.querySelector(q).setAttribute("opacity", 0);
+  }
+  let drag = null;
+  const atEdge = () => view.b - view.a < end - 0.01;
+  svgEl.addEventListener("pointerdown", (e) => { svgEl.setPointerCapture(e.pointerId); drag = { px: toVB(e).px, a: view.a, b: view.b }; });
+  svgEl.addEventListener("pointermove", (e) => {
+    const { px } = toVB(e);
+    if (drag && atEdge()) {
+      const dt = ((px - drag.px) / (W - L - R)) * (drag.b - drag.a);
+      view.a = drag.a - dt; view.b = drag.b - dt; clampView();
+      svgEl.style.cursor = "grabbing"; hideTip(); draw(); return;
+    }
+    cursorT = tAt(Math.max(L, Math.min(W - R, px))); showTip(cursorT);
+  });
+  const up = () => { drag = null; svgEl.style.cursor = atEdge() ? "grab" : "crosshair"; };
+  svgEl.addEventListener("pointerup", up);
+  svgEl.addEventListener("pointercancel", up);
+  svgEl.addEventListener("pointerleave", () => { if (!drag) hideTip(); });
+  svgEl.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    zoom(Math.exp(Math.sign(e.deltaY) * 0.25), tAt(Math.max(L, Math.min(W - R, toVB(e).px))));
+  }, { passive: false });
+  draw();
+  return wrap;
 }
 
 function drumGrid(s) {
+  const det = s.data.origin === "detected";
   const wrap = h("div", { class: "sug" }, h("b", {}, s.title));
+  if (s.data.origin) {
+    wrap.append(h("span", { class: "origin " + (det ? "det" : "tpl") },
+      det ? "Measured from this track" : `Template for ${s.data.style || "this tempo"}, not from the audio`));
+  }
   for (const [lane, pat] of Object.entries(s.data.pattern)) {
     if (typeof pat !== "string") continue;
     const cells = [...pat.slice(0, 16)].map((ch, i) =>

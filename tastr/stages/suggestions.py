@@ -46,6 +46,10 @@ VARIATIONS = {
 }
 
 
+STYLE_LABELS = {"four_floor": "four on the floor", "dnb": "drum and bass", "halftime": "halftime",
+                "hiphop": "hip-hop", "generic": "generic backbeat"}
+
+
 def _style(bpm: float, perc: float | None) -> str:
     if 160 <= bpm <= 185:
         return "dnb"
@@ -259,11 +263,11 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict) -> list[
         add("drums", "Detected groove, ready for a Drum Rack",
             f"This is the 16-step pattern averaged over the busiest bars: {rows}. Program it on a Drum Rack "
             f"(kick {DRUM_RACK['kick']}, snare {DRUM_RACK['snare']}, hat {DRUM_RACK['hat']}) and vary the last bar of every 4.",
-            {"pattern": detected, "pads": DRUM_RACK})
+            {"pattern": detected, "pads": DRUM_RACK, "origin": "detected"})
     for name, pattern in VARIATIONS[style] if style else []:
         add("drums", f"Pattern idea: {name}",
             f"A {name.lower()} pattern that sits at this tempo. Lanes map to default Drum Rack pads.",
-            {"pattern": pattern, "pads": DRUM_RACK})
+            {"pattern": pattern, "pads": DRUM_RACK, "origin": "template", "style": STYLE_LABELS[style]})
 
     # --- Bass ---
     if bass.get("loop"):

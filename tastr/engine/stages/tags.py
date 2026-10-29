@@ -18,8 +18,11 @@ TEMPO_STYLES = [
 ]
 
 
-def vibe_tags(bpm, mode, energy, f: dict) -> list[Tag]:
-    """Score every tag whose inputs are present; missing inputs skip the rule."""
+def vibe_scores(bpm, mode, energy, f: dict) -> dict[str, float]:
+    """Score every tag whose inputs are present (missing inputs skip the rule).
+
+    Returns every positive score, including those under MIN_SCORE, sorted high to low.
+    """
     minor = None if mode is None else mode == "minor"
     bright = f.get("brightness")
     perc = f.get("percussiveness")
@@ -66,8 +69,12 @@ def vibe_tags(bpm, mode, energy, f: dict) -> list[Tag]:
             if lo <= bpm <= hi:
                 add(name, 0.5)
 
-    ranked = sorted(scores.items(), key=lambda kv: -kv[1])
-    return [Tag(t, s) for t, s in ranked if s >= MIN_SCORE]
+    return dict(sorted(scores.items(), key=lambda kv: -kv[1]))
+
+
+def vibe_tags(bpm, mode, energy, f: dict) -> list[Tag]:
+    """The tags worth showing: scores of MIN_SCORE and up."""
+    return [Tag(t, s) for t, s in vibe_scores(bpm, mode, energy, f).items() if s >= MIN_SCORE]
 
 
 class TagsStage:
@@ -78,7 +85,9 @@ class TagsStage:
     def run(self, ctx: AnalysisContext) -> None:
         card = ctx.card
         key = card.core.key
-        card.tags = vibe_tags(card.core.bpm, key.mode if key else None, card.core.energy, card.features)
+        scores = vibe_scores(card.core.bpm, key.mode if key else None, card.core.energy, card.features)
+        card.tags = [Tag(t, s) for t, s in scores.items() if s >= MIN_SCORE]
+        card.extras["tags.vibe_scores"] = scores  # includes the ones under MIN_SCORE, for "show all scores"
 
 
 register_stage(TagsStage())

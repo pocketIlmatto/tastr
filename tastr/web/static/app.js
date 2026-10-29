@@ -31,6 +31,61 @@ const TAG_HELP = {
 };
 const tagHelp = (tag) => TAG_HELP[tag] || (/ tempo$/.test(tag) ? "Tempo falls in the typical range for this style. A hint, not a genre call." : "");
 
+const VIBE_MIN = 0.2;
+const VIBE_RULES = {
+  "high energy": "Loudness and density well above average (energy above 0.6).",
+  "chill": "Low energy; the bar is lower for tracks faster than 115 BPM.",
+  "melancholic": "Minor key with energy below 0.5.",
+  "dark": "Dull, low-treble sound, more so in a minor key.",
+  "bright": "Lots of treble, more so in a major key.",
+  "euphoric": "Major key, high energy and a bright sound together.",
+  "driving": "Strong, steady pulse at 115-150 BPM.",
+  "danceable": "Steady, regular rhythm that is easy to move to.",
+  "hypnotic": "Strong pulse with very little change between sections.",
+  "bass-heavy": "A large share of the energy sits in the low end.",
+  "percussive": "Sharp, drum-like attacks stand out.",
+  "atmospheric": "Few sharp attacks and a weak pulse, so washy and ambient.",
+  "dynamic": "Big contrast in loudness between sections.",
+  "swung": "16th notes land late by a clear, measurable amount (needs a confident swing reading).",
+};
+// The vibe-to-group map lives here, not in the engine. tests/test_web.py checks every vibe the engine can produce has a group.
+const VIBE_GROUPS = [
+  { key: "mood", name: "Mood", color: "var(--sec0)", tags: ["dark", "bright", "melancholic", "euphoric"] },
+  { key: "energy", name: "Energy", color: "var(--sec2)", tags: ["high energy", "chill", "dynamic"] },
+  { key: "rhythm", name: "Rhythm", color: "var(--sec1)", tags: ["driving", "danceable", "hypnotic", "percussive", "swung"] },
+  { key: "sound", name: "Sound", color: "var(--sec4)", tags: ["bass-heavy", "atmospheric"] },
+  { key: "tempo", name: "Tempo", color: "var(--muted)", tags: [], match: (tag) => /tempo$/.test(tag) },
+  { key: "other", name: "Other", color: "var(--other)", tags: [] },
+];
+const groupOf = (tag) => VIBE_GROUPS.find((g) => g.tags.includes(tag) || (g.match && g.match(tag))) || VIBE_GROUPS[VIBE_GROUPS.length - 1];
+const vibeHelp = (tag) => VIBE_RULES[tag] || tagHelp(tag);
+
+function vibeBody(c) {
+  const shown = [...c.tags].sort((a, b) => b.score - a.score);
+  const shownSet = new Set(shown.map((t) => t.tag));
+  const all = (c.extras && c.extras["tags.vibe_scores"]) || {};
+  const below = Object.entries(all).filter(([tag]) => !shownSet.has(tag)).map(([tag, score]) => ({ tag, score })).sort((a, b) => b.score - a.score);
+  const rowOf = (t, on) => h("li", { class: "vibe-row" + (on ? "" : " off"), style: `--g:${groupOf(t.tag).color}` },
+    h("span", { class: "vibe-name", tabindex: "0", "data-tip": vibeHelp(t.tag) }, h("i", { class: "vibe-dot", title: groupOf(t.tag).name }), t.tag),
+    h("span", { class: "vibe-bar", role: "img", "aria-label": `Score ${t.score.toFixed(2)} of 1` }, h("i", { style: `width:${t.score * 100}%` })),
+    h("span", { class: "vibe-num" }, t.score.toFixed(2)),
+    h("span", { class: "vibe-state" }, on ? "Shown" : "Hidden"));
+  const list = h("ul", { class: "vibe-list", hidden: "" },
+    h("li", { class: "vibe-head", "aria-hidden": "true" }, h("span", {}, "Vibe"), h("span", { class: "vibe-axis" }, h("span", { class: "vibe-min", style: `left:${VIBE_MIN * 100}%` }, "0.20 cut-off")), h("span", {}), h("span", {})),
+    ...shown.map((t) => rowOf(t, true)), ...below.map((t) => rowOf(t, false)));
+  const btn = h("button", { type: "button", class: "vibe-toggle", "aria-expanded": "false" }, "Show all scores");
+  btn.onclick = () => { const open = list.hidden; list.hidden = !open; btn.setAttribute("aria-expanded", String(open)); btn.textContent = open ? "Hide scores" : "Show all scores"; };
+  const note = h("p", { class: "vibe-note muted" },
+    h("span", { class: "vibe-scale", "aria-hidden": "true" }),
+    h("span", { tabindex: "0", "data-tip": `Each vibe gets a score from 0 to 1 from the track's measurements. Chips are grouped by kind of vibe (mood, energy, rhythm, sound, tempo), and each group has its own color. A stronger color means a higher score. Vibes scoring under ${VIBE_MIN.toFixed(2)} are left out, and a vibe the track doesn't qualify for at all gets no score.` }, `Stronger color = higher score. Shown from ${VIBE_MIN.toFixed(2)} up.`));
+  return h("div", { class: "vibe" },
+    VIBE_GROUPS.map((g) => ({ g, items: shown.filter((t) => groupOf(t.tag) === g) })).filter((x) => x.items.length).map(({ g, items }) =>
+      h("div", { class: "vibe-group", style: `--g:${g.color}` }, h("span", { class: "vibe-glabel" }, g.name),
+        h("div", { class: "chips" }, items.map((t) =>
+          h("span", { class: "chip", tabindex: "0", style: `--t:${isNum(t.score) ? Math.max(0, Math.min(1, (t.score - VIBE_MIN) / (1 - VIBE_MIN))) : 0}`, "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`.trim() }, t.tag))))),
+    h("div", { class: "vibe-foot" }, note, btn), list);
+}
+
 let tracks = [];
 let tagsByTrack = {};
 let currentId = null;
@@ -151,10 +206,7 @@ function renderCard(c) {
   }
 
   if ((c.tags || []).length) {
-    root.append(section("vibe", "Vibe", [
-      h("div", { class: "chips" }, [...c.tags].sort((a, b) => b.score - a.score).map((t) =>
-        h("span", { class: "chip", tabindex: "0", style: `--s:${isNum(t.score) ? t.score : 0}`, "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`.trim() }, t.tag))),
-    ]));
+    root.append(section("vibe", "Vibe", [vibeBody(c)]));
   }
 
   // Template grids are tempo-based guesses, so they stay hidden (here and in the Try list) until asked for.

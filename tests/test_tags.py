@@ -42,3 +42,17 @@ def test_sorted_thresholded_unique():
 def test_swing_needs_confidence():
     assert "swung" not in run(bpm=100, swing_percent=62, swing_confidence=0.1)[0]
     assert "swung" in run(bpm=100, swing_percent=62, swing_confidence=0.6)[0]
+
+
+def test_scores_under_cutoff_are_kept_but_not_listed():
+    from tastr.engine.stages.tags import MIN_SCORE, vibe_scores
+
+    # energy 0.62 gives "high energy" a score of about 0.07: positive, but under the cut-off
+    card = TrackCard(source=Source(kind="file", uri="x"), core=Core(energy=0.62), features={})
+    TagsStage().run(AnalysisContext(y=np.zeros(1, dtype=np.float32), sr=22050, card=card))
+    scores = card.extras["tags.vibe_scores"]
+    assert 0 < scores["high energy"] < MIN_SCORE
+    assert "high energy" not in {t.tag for t in card.tags}
+    assert all(scores[t.tag] == t.score for t in card.tags)
+    assert list(scores.values()) == sorted(scores.values(), reverse=True)
+    assert scores == vibe_scores(None, None, 0.62, {})

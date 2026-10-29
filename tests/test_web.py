@@ -107,3 +107,22 @@ def test_ui_hides_template_grids_until_requested():
     js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
     for needle in ('origin === "template"', "ideasShown", "Suggest pattern ideas", "Hide pattern ideas", "Strong", "beat-group", "STYLE_INFO", "sec-link", "midiBytes", "startPlayer", "Export MIDI", "Copy as text", "Reset edits"):
         assert needle in js
+
+
+def test_every_vibe_the_engine_can_produce_has_a_ui_group():
+    """Fails when a vibe is added to the engine but not to VIBE_GROUPS in app.js."""
+    import re
+    from pathlib import Path
+
+    from tastr.engine.stages import tags
+
+    src = (Path(tags.__file__).parents[2] / "web" / "static" / "app.js").read_text()
+    groups = src[src.index("const VIBE_GROUPS"):src.index("const groupOf")]
+    mapped = set(re.findall(r'"([^"]+)"', " ".join(re.findall(r"tags: \[([^\]]*)\]", groups))))
+    has_tempo_group = "/tempo$/" in groups
+
+    engine = set(re.findall(r'add\("([^"]+)"', Path(tags.__file__).read_text()))
+    engine |= {name for name, _, _ in tags.TEMPO_STYLES}
+    missing = {t for t in engine if t not in mapped and not (has_tempo_group and t.endswith("tempo"))}
+    assert not missing, f"vibes with no group in VIBE_GROUPS: {sorted(missing)}"
+    assert len(engine) >= 14

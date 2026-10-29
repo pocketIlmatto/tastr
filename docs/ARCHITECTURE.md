@@ -26,7 +26,7 @@ The single contract between modules. Every stage writes only its own part:
 | `duration`, `sample_rate` | pipeline | |
 | `core` (`bpm`, `bpm_confidence`, `key`, `energy`, `loudness_db`, `beat_times`, `downbeat_times`) | `core` stage | `key` is a `Key(tonic, mode, scale, camelot, confidence)` |
 | `sections` | `sections` stage | list of `Section` |
-| `tags` | `tags` stage | list of `Tag(tag, score)` |
+| `tags` | `tags` stage | list of `Tag(tag, score)`, scores of 0.20 and up. Every positive score, including the ones under 0.20, is in `extras["tags.vibe_scores"]` (`tag -> score`) |
 | `suggestions` | `suggestions` stage | list of `Suggestion(category, title, body, data)` |
 | `features` | any stage | flat `name -> float`; see the feature registry below |
 | `series` | any stage | named curves `Series(times, values)` for plots |

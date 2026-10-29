@@ -132,6 +132,32 @@ def giantsteps_key(root: str | Path) -> list[Item]:
     return items
 
 
+def beatport_key(root: str | Path) -> list[Item]:
+    """Beatport EDM Key: 1,486 two-minute EDM previews, one global key each.
+
+    Zenodo record 1101082, unzipped under <root>: key files <root>/keys/<id> <name>.txt
+    (text like "D minor") and audio anywhere under <root> named "<id> <name>.mp3".
+    Only plain major/minor labels are scored; ambiguous ("E minor | E major"),
+    atonal ("X"), modal ("F minor phrygian") and "other" labels are skipped.
+    """
+    root = Path(root)
+    audio = {}
+    for f in root.rglob("*"):
+        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS and not f.name.startswith("._"):
+            audio[f.name.split(" ")[0]] = f
+    items = []
+    for f in sorted(root.rglob("*.txt")):
+        if f.name.startswith("._"):  # macOS resource forks in the zips
+            continue
+        label = f.read_text().strip()
+        key = parse_key(label) if re.fullmatch(r"[A-Ga-g][#b]? (major|minor)", label) else None
+        sid = f.name.split(" ")[0]
+        if key is None or not sid.isdigit() or sid not in audio:
+            continue
+        items.append(Item(id=f"bp-key-{sid}", path=str(audio[sid]), truth=Truth(tonic=key[0], mode=key[1])))
+    return items
+
+
 def giantsteps_tempo(root: str | Path) -> list[Item]:
     """GiantSteps Tempo: 664 EDM previews with a global BPM.
 
@@ -241,6 +267,7 @@ DATASETS: dict[str, Callable[..., list[Item]]] = {
     "synth": synth,
     "giantsteps-key": giantsteps_key,
     "giantsteps-tempo": giantsteps_tempo,
+    "beatport-key": beatport_key,
     "harmonix": harmonix,
     "manifest": manifest,
 }

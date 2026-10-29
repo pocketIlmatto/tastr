@@ -69,6 +69,19 @@ def test_giantsteps_loaders(tmp_path):
     assert tempos[0].truth.bpm == 126.0
 
 
+def test_beatport_key_loader(tmp_path):
+    (tmp_path / "keys").mkdir()
+    (tmp_path / "audio").mkdir()
+    labels = {"201": "Bb minor", "202": "E minor | E major", "203": "X", "204": "F minor phrygian", "205": "D major"}
+    for sid, label in labels.items():
+        (tmp_path / "keys" / f"{sid} Artist - Title (Original Mix).txt").write_text(label)
+        (tmp_path / "audio" / f"{sid} Artist - Title (Original Mix).mp3").write_bytes(b"")
+    (tmp_path / "keys" / "._201 Artist - Title (Original Mix).txt").write_bytes(b"\x00")
+    (tmp_path / "audio" / "205 Artist - Title (Original Mix).mp3").unlink()  # no audio: skipped
+    keys = datasets.beatport_key(tmp_path)
+    assert [(i.id, i.truth.tonic, i.truth.mode) for i in keys] == [("bp-key-201", 10, "minor")]
+
+
 def test_harmonix_loader(tmp_path):
     ds = tmp_path / "dataset"
     (ds / "beats_and_downbeats").mkdir(parents=True)

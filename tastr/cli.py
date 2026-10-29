@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--port", type=int, default=8000)
 
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
-    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, harmonix or manifest")
+    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, harmonix or manifest")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
     b.add_argument("--stages", help="comma-separated stage names (default: core,sections)")
     b.add_argument("--limit", type=int, help="only the first N tracks")

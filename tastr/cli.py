@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr stages`, `tastr serve`, `tastr bench`."""
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stages`, `tastr serve`, `tastr bench`."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("track_id", type=int)
     q = sub.add_parser("query", help="run read-only SQL against the database")
     q.add_argument("sql")
+    sub.add_parser("retag", help="re-read file tags for analyzed tracks without re-analyzing")
     sub.add_parser("stages", help="list registered pipeline stages in run order")
     w = sub.add_parser("serve", help="run the web UI")
     w.add_argument("--host", default="127.0.0.1")
@@ -110,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"no track {args.track_id}", file=sys.stderr)
             return 1
         print(card.to_json(indent=2))
+        return 0
+
+    if args.cmd == "retag":
+        print(f"updated {db.refresh_file_meta(db.connect(args.db))} track(s)")
         return 0
 
     if args.cmd == "query":

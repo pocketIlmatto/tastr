@@ -12,8 +12,13 @@ from typing import Any
 
 try:
     import mutagen
+    import mutagen.mp3
+    import mutagen.mp4
 except ImportError:  # keep ingest working if the optional parse dependency is missing
     mutagen = None
+
+# Bump when the reader starts finding more (or different) fields, so `tastr serve` refreshes stored cards once.
+READER_VERSION = 2
 
 # Our field name -> keys to try in mutagen's "easy" tag mapping, in order.
 _TAG_KEYS = {
@@ -50,6 +55,10 @@ def _first(easy, keys: tuple[str, ...]) -> str | None:
 _ID3_FRAMES = {"title": "TIT2", "artist": "TPE1", "album": "TALB", "album_artist": "TPE2", "year": "TDRC", "genre": "TCON",
                "track": "TRCK", "label": "TPUB", "bpm": "TBPM", "key": "TKEY"}
 
+# Names of user-defined fields (ID3 TXXX, MP4 "----") that carry our fields, matched case-insensitively.
+_FREEFORM_NAMES = {"label": ("label", "organization", "publisher"), "key": ("initialkey", "key", "initial key"),
+                   "bpm": ("bpm",), "comment": ("comment", "description")}
+
 
 def _id3_tags(raw) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -61,6 +70,49 @@ def _id3_tags(raw) -> dict[str, str]:
         if f.text and str(f.text[0]).strip():
             out["comment"] = str(f.text[0]).strip()
             break
+    # Some taggers (ffmpeg among them) put these in user-defined TXXX frames instead.
+    txxx = {f.desc.lower(): str(f.text[0]).strip() for f in raw.getall("TXXX") if f.text and str(f.text[0]).strip()}
+    for name, descs in _FREEFORM_NAMES.items():
+        if name not in out:
+            v = next((txxx[d] for d in descs if d in txxx), None)
+            if v:
+                out[name] = v
+    return out
+
+
+# MP4/M4A atoms; the rest come from freeform ("----:mean:name") atoms.
+_MP4_ATOMS = {"title": "\xa9nam", "artist": "\xa9ART", "album": "\xa9alb", "album_artist": "aART", "year": "\xa9day",
+              "genre": "\xa9gen", "comment": "\xa9cmt"}
+
+
+def _mp4_text(v) -> str | None:
+    if isinstance(v, (bytes, bytearray)):
+        v = bytes(v).decode("utf-8", "replace")
+    v = str(v).strip().strip("\x00").strip()
+    return v or None
+
+
+def _mp4_tags(raw) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for name, atom in _MP4_ATOMS.items():
+        vals = raw.get(atom)
+        if vals and (v := _mp4_text(vals[0])):
+            out[name] = v
+    trkn = raw.get("trkn")
+    if trkn and trkn[0] and trkn[0][0]:
+        out["track"] = str(trkn[0][0])
+    tmpo = raw.get("tmpo")
+    if tmpo and tmpo[0]:
+        out["bpm"] = str(tmpo[0])
+    free = {k.split(":", 2)[-1].lower(): v for k, v in raw.items() if k.startswith("----")}
+    for name, names in _FREEFORM_NAMES.items():
+        if name in out:
+            continue
+        for n in names:
+            vals = free.get(n)
+            if vals and (v := _mp4_text(vals[0])):
+                out[name] = v
+                break
     return out
 
 
@@ -81,7 +133,19 @@ def read_file_meta(path: str | Path) -> tuple[dict[str, str], dict[str, Any]]:
         return tags, info
     if easy is None:
         return tags, info
-    if hasattr(easy.tags, "getall"):  # plain ID3 (WAV/AIFF): no easy mapping
+    if isinstance(easy, mutagen.mp4.MP4):  # easy mode hides most atoms, so read the raw ones
+        try:
+            easy = mutagen.mp4.MP4(p)
+        except Exception:
+            return tags, info
+        tags = _mp4_tags(easy.tags or {})
+    elif isinstance(easy, mutagen.mp3.MP3):  # EasyID3 has no comment/key mapping, so read the frames
+        try:
+            easy = mutagen.mp3.MP3(p)
+        except Exception:
+            return tags, info
+        tags = _id3_tags(easy.tags) if easy.tags is not None else {}
+    elif hasattr(easy.tags, "getall"):  # plain ID3 (WAV/AIFF): no easy mapping
         tags = _id3_tags(easy.tags)
     else:
         for name, keys in _TAG_KEYS.items():
@@ -89,12 +153,13 @@ def read_file_meta(path: str | Path) -> tuple[dict[str, str], dict[str, Any]]:
             if v:
                 tags[name] = v
     a = getattr(easy, "info", None)
+    lossy_mp4 = isinstance(easy, mutagen.mp4.MP4) and getattr(a, "codec", "") != "alac"
     if a is not None:
         info["format"] = _FORMATS.get(p.suffix.lower(), p.suffix.lstrip(".").upper() or None)
         for attr, key in (("sample_rate", "sample_rate"), ("channels", "channels"), ("bits_per_sample", "bit_depth"),
                           ("bitrate", "bitrate"), ("length", "duration")):
             v = getattr(a, attr, None)
-            if v:
+            if v and not (lossy_mp4 and key == "bit_depth"):  # AAC reports a nominal 16 that isn't real
                 info[key] = v
         codec = getattr(a, "codec_description", None) or getattr(a, "codec", None) or type(a).__module__.rsplit(".", 1)[-1].upper()
         info["codec"] = str(codec)

@@ -37,6 +37,7 @@ from the Quick start first (`source .venv/bin/activate`).
 tastr analyze ~/Music/some-track.wav ~/Music/folder/
 tastr list
 tastr show 1                     # full card as JSON
+tastr retag                      # re-read file tags for analyzed tracks (`tastr serve` does this once after the tag reader changes)
 tastr query "SELECT title, bpm, camelot FROM tracks ORDER BY bpm"
 tastr stages                     # pipeline stages in run order
 tastr serve --host 127.0.0.1 --port 8000   # web UI (defaults shown)

@@ -140,4 +140,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 def run(host: str = "127.0.0.1", port: int = 8000, db_path: str | None = None) -> None:
     import uvicorn
 
+    from .. import filemeta
+
+    if filemeta.mutagen is None:
+        print("Warning: mutagen is not installed, so file tags and audio info can't be read. Run: pip install -e .")
+    n = db.refresh_file_meta(db.connect(db_path), only_if_stale=True)  # once per tag reader change
+    if n:
+        print(f"Refreshed file tags for {n} track(s)")
     uvicorn.run(create_app(db_path), host=host, port=port)

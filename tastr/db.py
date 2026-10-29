@@ -231,3 +231,38 @@ def delete_track(conn: sqlite3.Connection, track_id: int) -> bool:
 
 def query(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def refresh_file_meta(conn: sqlite3.Connection, only_if_stale: bool = False) -> int:
+    """Re-read embedded tags and audio info for file tracks whose file is still on disk.
+
+    No audio analysis, so it fixes cards saved by an older tag reader. With
+    `only_if_stale`, it does nothing unless the tag reader changed since the last
+    refresh. Returns how many tracks changed.
+    """
+    from . import filemeta
+    from .filemeta import read_file_meta
+
+    stored = conn.execute("SELECT value FROM meta WHERE key = 'filemeta_version'").fetchone()
+    if only_if_stale and stored and stored[0] == str(filemeta.READER_VERSION):
+        return 0
+    changed = 0
+    rows = conn.execute("SELECT t.id, t.local_path FROM tracks t JOIN cards c ON c.track_id = t.id WHERE t.source_kind = 'file'").fetchall()
+    for track_id, local_path in rows:
+        if not local_path or not Path(local_path).is_file():
+            continue
+        card = load_card(conn, track_id)
+        tags, info = read_file_meta(local_path)
+        s = card.source
+        title = tags.get("title") or Path(local_path).stem
+        if (s.file_tags, s.audio_info, s.title, s.artist, s.album) == (tags, info, title, tags.get("artist"), tags.get("album")):
+            continue
+        s.file_tags, s.audio_info, s.title, s.artist, s.album = tags, info, title, tags.get("artist"), tags.get("album")
+        with conn:
+            conn.execute("UPDATE tracks SET title = ?, artist = ?, album = ? WHERE id = ?", (s.title, s.artist, s.album, track_id))
+            conn.execute("UPDATE cards SET json = ? WHERE track_id = ?", (card.to_json(), track_id))
+        changed += 1
+    if filemeta.mutagen is not None:  # without mutagen nothing was really read, so try again once it is installed
+        with conn:
+            conn.execute("INSERT OR REPLACE INTO meta VALUES ('filemeta_version', ?)", (str(filemeta.READER_VERSION),))
+    return changed

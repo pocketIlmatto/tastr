@@ -52,6 +52,40 @@ To run the tests:
 python -m pytest -q
 ```
 
+## Accuracy benchmark
+
+`tastr bench` runs the engine over tracks with known labels and scores BPM,
+key, beats, downbeats and sections, so analysis changes are judged by numbers.
+Details, metric definitions and dataset setup are in [docs/bench.md](docs/bench.md).
+
+Supported datasets:
+
+| Dataset | Labels |
+|---|---|
+| `giantsteps-key` | global key (audio from the Zenodo GiantSteps+ mirror, 599 of 604 tracks) |
+| `giantsteps-tempo` | global BPM (the mirror covers only 43 of 664 tracks) |
+| `harmonix` | BPM, beats, downbeats, sections |
+| `manifest` | your own tracks, from a CSV or JSON file |
+| `synth` | generated tracks; a smoke test that needs no data |
+
+Stage the data in a folder outside the repo and never commit audio; docs/bench.md
+shows the layout. Example commands:
+
+```bash
+tastr bench synth
+tastr bench giantsteps-key ~/data/giantsteps-key --limit 50               # quick check
+tastr bench giantsteps-key ~/data/giantsteps-key --jobs 2 --out key.json  # full run, about 46 min
+tastr bench giantsteps-key ~/data/giantsteps-key --jobs 2 --baseline key.json
+tastr bench manifest ~/music/labels.csv
+```
+
+`--limit N` takes the first N tracks, `--jobs` analyzes tracks in parallel (set
+`OMP_NUM_THREADS=1` with it), `--out` writes the JSON report, and `--baseline`
+compares against an earlier report.
+
+Current key baseline (GiantSteps, 599 tracks, `--stages core`): MIREX weighted
+score 0.650, exact 56.1%. There is no tempo baseline yet.
+
 ## Layout
 
 ```

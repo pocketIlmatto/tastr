@@ -23,7 +23,10 @@ class Source:
     local_path: str | None = None  # where the audio actually lives on disk
     title: str | None = None
     artist: str | None = None
+    album: str | None = None
     sha256: str | None = None  # content hash, used to dedupe re-analysis
+    file_tags: dict[str, str] = field(default_factory=dict)  # embedded tags as read: title, artist, album, year...
+    audio_info: dict[str, Any] = field(default_factory=dict)  # format, codec, bitrate (bps), sample_rate, channels, file_size...
 
 
 @dataclass

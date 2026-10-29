@@ -127,6 +127,7 @@ function renderCard(c) {
   root.replaceChildren();
   const head = h("div", { class: "card-head" },
     h("h2", {}, (c.source && (c.source.title || c.source.uri)) || `Track ${c.id}`),
+    h("p", { class: "card-sub" + (c.source.artist ? "" : " muted") }, [c.source.artist, c.source.album].filter(Boolean).join(" · ") || "No artist or album in the file tags"),
     stat(mmss(c.duration), "duration"),
     stat(isNum(core.bpm) ? core.bpm.toFixed(1) : "–", isNum(core.bpm_confidence) ? `BPM · ${Math.round(core.bpm_confidence * 100)}% conf` : "BPM"),
     stat(key ? `${keyName(key)}` : "–", key ? [key.camelot, key.scale].filter(Boolean).join(" · ") || "key" : "key")
@@ -140,42 +141,63 @@ function renderCard(c) {
   root.append(head);
   root.append(h("div", { class: "card-actions" }, h("button", { onclick: () => deleteTrack(c.id) }, "Delete track")));
 
+  if (c.metadata) root.append(metadataSection(c.metadata));
+
   const energy = c.series && c.series.energy;
   if (energy && energy.times && energy.times.length > 1 || (c.sections || []).length) {
-    root.append(h("h3", {}, "Energy & sections"), energyChart(energy, c.sections || [], c.duration));
+    root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration)]));
   }
 
   if ((c.tags || []).length) {
-    root.append(h("h3", {}, "Vibe"),
+    root.append(section("vibe", "Vibe", [
       h("div", { class: "chips" }, [...c.tags].sort((a, b) => b.score - a.score).map((t) =>
-        h("span", { class: "chip", tabindex: "0", style: `--s:${isNum(t.score) ? t.score : 0}`, "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`.trim() }, t.tag))));
+        h("span", { class: "chip", tabindex: "0", style: `--s:${isNum(t.score) ? t.score : 0}`, "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`.trim() }, t.tag))),
+    ]));
   }
 
   const sugs = c.suggestions || [];
   const grids = sugs.filter((s) => s.data && s.data.pattern && typeof s.data.pattern === "object");
-  if (grids.length) {
-    root.append(h("h3", {}, "Drum patterns"));
-    for (const s of grids) root.append(drumGrid(s));
-  }
+  if (grids.length) root.append(section("drums", "Drum patterns", grids.map(drumGrid)));
   if (sugs.length) {
     const pick = h("select", { class: "daw-pick", "aria-label": "Your DAW", onchange: (e) => {
       daw = e.target.value;
       try { localStorage.setItem("tastr-daw", daw); } catch (_) {}
       renderCard(c);
     } }, Object.entries(DAWS).map(([k, v]) => h("option", { value: k, ...(k === daw ? { selected: "" } : {}), ...(v.soon ? { disabled: "" } : {}) }, v.soon ? `${v.name} (coming soon)` : v.name)));
-    root.append(h("h3", { class: "try-head" }, "Try this in ", pick));
     const groups = {};
     for (const s of sugs) (groups[s.category || "other"] ||= []).push(s);
+    const body = [];
     for (const [cat, items] of Object.entries(groups)) {
-      root.append(h("h3", {}, cat));
-      for (const s of items) root.append(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, dawText(s))));
+      body.push(h("h3", {}, cat));
+      for (const s of items) body.push(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, dawText(s))));
     }
+    root.append(section("try", ["Try this in ", pick], body));
   }
 
   const errs = Object.entries(c.errors || {});
   if (errs.length) {
     root.append(h("div", { class: "errors" }, "Some stages failed: ", errs.map(([k, v]) => h("div", {}, `${k}: ${v}`))));
   }
+}
+
+// Card sections are <details>; which are open is remembered across tracks (Metadata starts closed).
+const openState = {};
+function section(key, title, body, defaultOpen = true) {
+  const open = key in openState ? openState[key] : defaultOpen;
+  const det = h("details", { class: "sec", ...(open ? { open: "" } : {}) }, h("summary", {}, title), h("div", { class: "sec-content" }, body));
+  det.addEventListener("toggle", () => { openState[key] = det.open; });
+  return det;
+}
+
+function metadataSection(meta) {
+  const body = [];
+  for (const [group, kv] of Object.entries(meta)) {
+    const rows = Object.entries(kv).filter(([, v]) => v != null && v !== "");
+    body.push(h("div", { class: "meta-group" }, h("h4", {}, group), rows.length
+      ? h("dl", { class: "kv" }, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))]))
+      : h("p", { class: "muted meta-empty" }, "None found. The title above came from the file name.")));
+  }
+  return section("meta", "Metadata", [h("div", { class: "meta-cols" }, body)], false);
 }
 
 // Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.

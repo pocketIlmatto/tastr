@@ -108,6 +108,7 @@ class YtDlpResolver:
                     local_path=str(path),
                     title=entry.get("title"),
                     artist=entry.get("artist") or entry.get("creator") or entry.get("uploader"),
+                    album=entry.get("album"),
                 )
             )
 

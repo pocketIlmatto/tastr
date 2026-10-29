@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import db, service
+from ..filemeta import describe
 from ..ingest import IngestError
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -65,9 +66,10 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def track(track_id: int):
         with closing(conn()) as c:
             card = db.load_card(c, track_id)
+            row = c.execute("SELECT analyzed_at FROM tracks WHERE id = ?", (track_id,)).fetchone()
         if card is None:
             raise HTTPException(404, "no such track")
-        return {"id": track_id, **card.to_dict()}
+        return {"id": track_id, **card.to_dict(), "metadata": describe(card, row[0] if row else None)}
 
     @app.delete("/api/tracks/{track_id}", status_code=204)
     def delete_track(track_id: int):

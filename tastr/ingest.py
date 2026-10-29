@@ -14,6 +14,7 @@ from typing import Protocol
 
 from .engine.audio import AUDIO_EXTENSIONS, load_audio  # noqa: F401  (re-exported)
 from .engine.card import Source
+from .filemeta import read_file_meta
 
 
 class IngestError(Exception):
@@ -60,7 +61,12 @@ def resolve_inputs(inputs: list[str], cache_dir: Path | None = None) -> list[Sou
 
 def _file_source(p: Path) -> Source:
     p = p.resolve()
-    return Source(kind="file", uri=str(p), local_path=str(p), title=p.stem)
+    tags, info = read_file_meta(p)
+    return Source(
+        kind="file", uri=str(p), local_path=str(p),
+        title=tags.get("title") or p.stem, artist=tags.get("artist"), album=tags.get("album"),
+        file_tags=tags, audio_info=info,
+    )
 
 
 def _resolve_url(url: str, cache_dir: Path) -> list[Source]:

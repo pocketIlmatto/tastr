@@ -72,3 +72,30 @@ def test_empty_card_serves(client, db_path):
     tid = db.save_card(conn, TrackCard(source=Source(kind="file", uri="/e.wav", sha256="e")))
     conn.close()
     assert client.get(f"/api/tracks/{tid}").status_code == 200
+
+
+def test_track_exposes_metadata_and_album(client, db_path):
+    from tastr.filemeta import describe  # noqa: F401
+
+    card = full_card()
+    card.source.album = "Night Shift EP"
+    card.source.file_tags = {"title": "x", "album": "Night Shift EP", "year": "2024"}
+    card.source.audio_info = {"format": "FLAC", "bitrate": 980000, "sample_rate": 44100, "channels": 2, "file_size": 5242880}
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, card)
+    assert conn.execute("SELECT album FROM tracks WHERE id = ?", (tid,)).fetchone()[0] == "Night Shift EP"
+    conn.close()
+    body = client.get(f"/api/tracks/{tid}").json()
+    assert body["source"]["album"] == "Night Shift EP"
+    meta = body["metadata"]
+    assert meta["File tags"] == {"Title": "x", "Album": "Night Shift EP", "Year": "2024"}
+    assert meta["Audio"]["Bitrate"] == "980 kbps" and meta["Audio"]["File size"] == "5.0 MB"
+    assert meta["Analysis"]["Analyzed at"]
+
+
+def test_ui_has_collapsible_sections():
+    from pathlib import Path
+
+    js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
+    for key in ("meta", "energy", "vibe", "drums", "try"):
+        assert f'section("{key}"' in js

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     local_path      TEXT,
     title           TEXT,
     artist          TEXT,
+    album           TEXT,
     duration        REAL,
     sample_rate     INTEGER,
     bpm             REAL,
@@ -126,6 +127,8 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
     else:
         conn = sqlite3.connect(path)
         conn.executescript(SCHEMA)
+        if "album" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
+            conn.execute("ALTER TABLE tracks ADD COLUMN album TEXT")  # databases created before album existed
         conn.execute("INSERT OR IGNORE INTO meta VALUES ('db_schema_version', ?)", (str(DB_SCHEMA_VERSION),))
         conn.commit()
     conn.row_factory = sqlite3.Row
@@ -144,6 +147,7 @@ def save_card(conn: sqlite3.Connection, card: TrackCard) -> int:
         "local_path": s.local_path,
         "title": s.title,
         "artist": s.artist,
+        "album": s.album,
         "duration": card.duration,
         "sample_rate": card.sample_rate,
         "bpm": c.bpm,

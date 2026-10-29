@@ -312,7 +312,8 @@ function renderCard(c) {
     const groups = {};
     for (const s of sugs) (groups[s.category || "other"] ||= []).push(s);
     const body = [];
-    for (const [cat, items] of Object.entries(groups)) {
+    if (DAWS[daw].code) body.push(strudelView(c));
+    else for (const [cat, items] of Object.entries(groups)) {
       body.push(h("h3", {}, cat));
       for (const s of items) body.push(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, dawText(s))));
     }
@@ -347,7 +348,7 @@ function metadataSection(meta) {
 }
 
 // Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.
-// Ableton Live is the only glossary so far. Other DAWs show in the picker but can't be selected.
+// Ableton Live is the only glossary so far; Strudel shows generated code instead. Other DAWs show in the picker but can't be selected.
 const DAWS = {
   ableton: {
     name: "Ableton Live",
@@ -371,6 +372,8 @@ const DAWS = {
   logic: { name: "Logic Pro", soon: true },
   fl: { name: "FL Studio", soon: true },
   bitwig: { name: "Bitwig Studio", soon: true },
+  // Not a DAW: shows the track as Strudel live-code (strudel.js) instead of DAW tips.
+  strudel: { name: "Strudel", code: true },
 };
 let daw = "ableton";
 try { const v = localStorage.getItem("tastr-daw"); if (DAWS[v] && !DAWS[v].soon) daw = v; } catch (_) {}
@@ -380,6 +383,20 @@ function dawText(s) {
   if (!tpl) return s.body;
   const tokens = DAWS[daw].tokens || {};
   return tpl.replace(/\{(\w+)\}/g, (m, k) => (tokens[k] ? tokens[k](s.data) : m));
+}
+
+function strudelView(c) {
+  const code = strudelCode(c);
+  const say = h("span", { class: "muted st-say", role: "status", "aria-live": "polite" });
+  const copy = h("button", { type: "button", onclick: async () => {
+    try { await navigator.clipboard.writeText(code); say.textContent = "Copied"; } catch (_) { say.textContent = "Couldn't copy here"; }
+    setTimeout(() => (say.textContent = ""), 2500);
+  } }, "Copy code");
+  return h("div", { class: "strudel" },
+    h("p", { class: "st-intro" }, "A sketch of this track as ", h("a", { href: "https://strudel.cc", target: "_blank", rel: "noopener" }, "Strudel"), " live-code: each section's drum pattern for its length, plus the chord loop, at this track's tempo. It won't sound like the original, but it follows its structure, so it's a starting point for remixes."),
+    h("div", { class: "st-actions" }, h("a", { class: "btn-link", href: strudelLink(code), target: "_blank", rel: "noopener" }, "Open in Strudel ↗"), copy, say),
+    h("pre", { class: "st-code", tabindex: "0", "aria-label": "Generated Strudel code" }, code),
+    h("p", { class: "muted st-note" }, "Opens strudel.cc in a new tab with this code loaded. Drum sounds load from Strudel's sample library the first time you play."));
 }
 
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];

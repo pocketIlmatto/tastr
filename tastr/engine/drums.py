@@ -18,6 +18,7 @@ Each hit is then sorted into a lane by a closer look:
     acts = lane_activations(ctx, frames)   # {lane: array shaped like frames}
 
 Activations are non-negative and comparable within a lane across a track.
+Design notes, what was tried and dropped, and known weaknesses: docs/drums.md.
 """
 
 from __future__ import annotations

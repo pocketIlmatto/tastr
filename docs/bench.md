@@ -106,7 +106,8 @@ Measured on GiantSteps Key (599 tracks, labels from the original dataset):
 ## Drum lanes
 
 The drum lanes behind the detected groove (kick, snare, clap, hat, open hat,
-tom, perc; see `tastr/engine/drums.py`) have their own benchmark:
+tom, perc; see `tastr/engine/drums.py`, and [drums.md](drums.md) for the design,
+what was tried and dropped, and known weaknesses) have their own benchmark:
 
 ```
 python -m tastr.engine.bench.drums synth                                  # generated loops, every lane

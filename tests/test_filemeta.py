@@ -178,3 +178,23 @@ def test_refresh_only_if_stale_runs_once_per_reader_version(tmp_path, db_path):
     conn.execute("UPDATE cards SET json = ? WHERE track_id = ?", (card.to_json(), track_id))
     assert db.refresh_file_meta(conn, only_if_stale=True) == 0  # reader unchanged: skipped
     assert db.refresh_file_meta(conn) == 1  # `tastr retag` always runs
+
+
+@needs_ffmpeg
+def test_retag_track_refreshes_only_that_track(tmp_path, db_path):
+    from tastr.engine.card import TrackCard
+
+    a, b = (_make(tmp_path, "m4a", name) for name in ("A.m4a", "B.m4a"))
+    conn = db.connect(db_path)
+    ids = []
+    for p in (a, b):
+        (source,) = resolve_inputs([str(p)])
+        source.file_tags, source.artist = {}, None  # what the old reader stored
+        ids.append(db.save_card(conn, TrackCard(source=source)))
+    assert db.retag_track(conn, ids[0]) == "changed"
+    assert db.load_card(conn, ids[0]).source.artist == "Okra Lane"
+    assert db.load_card(conn, ids[1]).source.artist is None  # the other track is untouched
+    assert db.retag_track(conn, ids[0]) == "unchanged"
+    a.unlink()
+    assert db.retag_track(conn, ids[0]) == "no_file"
+    assert db.retag_track(conn, 999) == "missing"

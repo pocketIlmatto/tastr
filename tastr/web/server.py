@@ -74,15 +74,32 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             r["tags"] = vibes.get(r["id"], [])
         return rows
 
-    @app.get("/api/tracks/{track_id}")
-    def track(track_id: int):
-        with closing(conn()) as c:
-            card = db.load_card(c, track_id)
-            row = c.execute("SELECT analyzed_at FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    def card_body(c: sqlite3.Connection, track_id: int) -> dict[str, Any]:
+        card = db.load_card(c, track_id)
+        row = c.execute("SELECT analyzed_at FROM tracks WHERE id = ?", (track_id,)).fetchone()
         if card is None:
             raise HTTPException(404, "no such track")
         card.source.title = _unprefixed(card.source.title, card.source.uri)
         return {"id": track_id, **card.to_dict(), "metadata": describe(card, row[0] if row else None)}
+
+    @app.get("/api/tracks/{track_id}")
+    def track(track_id: int):
+        with closing(conn()) as c:
+            return card_body(c, track_id)
+
+    @app.post("/api/tracks/{track_id}/retag")
+    def retag(track_id: int):
+        """Re-read one file track's embedded tags and audio info (`tastr retag` for one track)."""
+        with closing(conn()) as c:
+            result = db.retag_track(c, track_id)
+            if result == "missing":
+                raise HTTPException(404, "no such track")
+            if result == "not_file":
+                raise HTTPException(400, "Only uploaded files have tags to reload.")
+            if result == "no_file":
+                raise HTTPException(410, "The original file is no longer on disk.")
+            body = card_body(c, track_id)
+        return {"changed": result == "changed", "tags_found": bool(body["source"].get("file_tags")), "card": body}
 
     @app.delete("/api/tracks/{track_id}", status_code=204)
     def delete_track(track_id: int):

@@ -264,7 +264,7 @@ function renderCard(c) {
   const root = $("card");
   root.replaceChildren();
   const head = h("div", { class: "card-head" },
-    h("h2", {}, (c.source && (c.source.title || c.source.uri)) || `Track ${c.id}`),
+    h("div", { class: "title-row" }, h("h2", {}, (c.source && (c.source.title || c.source.uri)) || `Track ${c.id}`), trackMenu(c)),
     h("p", { class: "card-sub" + (c.source.artist ? "" : " muted") }, [c.source.artist, c.source.album].filter(Boolean).join(" · ") || "No artist or album in the file tags"),
     stat(mmss(c.duration), "duration"),
     stat(isNum(core.bpm) ? core.bpm.toFixed(1) : "–", isNum(core.bpm_confidence) ? `BPM · ${Math.round(core.bpm_confidence * 100)}% conf` : "BPM"),
@@ -277,7 +277,6 @@ function renderCard(c) {
   );
   head.append(en);
   root.append(head);
-  root.append(h("div", { class: "card-actions" }, h("button", { onclick: () => deleteTrack(c.id) }, "Delete track")));
 
   if (c.metadata) root.append(metadataSection(c.metadata));
 
@@ -765,12 +764,84 @@ function drumGrid(s, card) {
   return wrap;
 }
 
-async function deleteTrack(id) {
-  if (!confirm("Delete this track?")) return;
-  await api(`/api/tracks/${id}`, { method: "DELETE" });
-  currentId = null;
-  $("card").replaceChildren(h("p", { class: "muted" }, "Select a track."));
-  await refresh();
+// ---------- track menu ----------
+function trackSummary(c) {
+  const core = c.core || {}, k = core.key, src = c.source || {};
+  const facts = [isNum(core.bpm) ? `${core.bpm.toFixed(1)} BPM` : null, k ? `${keyName(k)}${k.camelot ? ` (${k.camelot})` : ""}` : null, mmss(c.duration)];
+  const vibes = [...(c.tags || [])].sort((a, b) => b.score - a.score).map((t) => t.tag);
+  return [`${src.title || src.uri || `Track ${c.id}`}${src.artist ? " by " + src.artist : ""}`, facts.filter(Boolean).join(" · "), vibes.length ? `Vibe: ${vibes.join(", ")}` : null].filter(Boolean).join("\n");
+}
+// A status the menu shows once its card is drawn again (reloading metadata re-renders the card).
+let menuNote = null;
+function trackMenu(c) {
+  const btn = h("button", { type: "button", class: "menu-btn", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": "Track actions" }, "⋯");
+  const pop = h("div", { class: "menu-pop", role: "menu", hidden: "" });
+  const say = h("span", { class: "menu-say muted", role: "status", "aria-live": "polite" });
+  const wrap = h("div", { class: "menu-wrap" }, say, btn, pop);
+  let sayTimer;
+  const tell = (msg, isErr, busy) => {
+    clearTimeout(sayTimer);
+    say.className = "menu-say " + (isErr ? "error" : "muted");
+    say.replaceChildren(...(busy ? [h("span", { class: "spin", "aria-hidden": "true" })] : []), msg);
+    if (!busy) sayTimer = setTimeout(() => say.replaceChildren(), isErr ? 6000 : 3000);
+  };
+  if (menuNote && menuNote.id === c.id) { const n = menuNote; menuNote = null; tell(n.msg, n.isErr); setTimeout(() => btn.focus()); }
+  const close = (refocus) => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); document.removeEventListener("pointerdown", outside, true); if (refocus) btn.focus(); };
+  const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
+  const item = (label, o = {}) => h("button", { type: "button", role: "menuitem", class: "menu-item" + (o.danger ? " danger" : ""), onclick: o.onclick }, label);
+  const items = () => [...pop.querySelectorAll("[role=menuitem], .menu-confirm button")];
+  const copy = async () => {
+    close(true);
+    try { await navigator.clipboard.writeText(trackSummary(c)); tell("Copied"); } catch (e) { tell("Couldn't copy here"); }
+  };
+  const reload = async () => {
+    close(true);
+    tell("Reloading metadata…", false, true);
+    try {
+      const r = await api(`/api/tracks/${c.id}/retag`, { method: "POST" });
+      menuNote = { id: c.id, msg: !r.tags_found ? "No tags found in the file" : r.changed ? "Metadata reloaded" : "Metadata already up to date" };
+      if (currentId === c.id) renderCard(r.card); else menuNote = null;
+      try { await loadTracks(); renderList(); } catch (_) {}
+    } catch (e) { tell(e.message, true); }
+  };
+  const remove = async () => {
+    try {
+      await api(`/api/tracks/${c.id}`, { method: "DELETE" });
+    } catch (e) { close(true); tell(e.message, true); return; }
+    currentId = null;
+    $("card").replaceChildren(h("p", { class: "muted" }, "Select a track."));
+    await refresh();
+  };
+  const showMain = () => {
+    const isFile = !c.source || c.source.kind !== "url"; // links have no file to re-read
+    pop.replaceChildren(
+      item("Copy track summary", { onclick: copy }),
+      isFile ? item("Reload metadata", { onclick: reload }) : null,
+      h("hr", { class: "menu-sep" }),
+      item("Delete track…", { danger: true, onclick: showConfirm }));
+  };
+  const showConfirm = () => {
+    const name = (c.source && (c.source.title || c.source.uri)) || `Track ${c.id}`;
+    pop.replaceChildren(h("div", { class: "menu-confirm", role: "group", "aria-label": "Confirm delete" },
+      h("p", {}, h("b", {}, `Delete “${name}”?`), h("br"), h("span", { class: "muted" }, "This removes the track and its analysis from your library.")),
+      h("div", { class: "menu-confirm-btns" },
+        h("button", { type: "button", onclick: () => { showMain(); items()[0].focus(); } }, "Cancel"),
+        h("button", { type: "button", class: "danger-solid", onclick: remove }, "Delete"))));
+    pop.querySelector("button").focus();
+  };
+  btn.onclick = () => {
+    if (!pop.hidden) { close(true); return; }
+    showMain(); pop.hidden = false; btn.setAttribute("aria-expanded", "true"); items()[0].focus();
+    document.addEventListener("pointerdown", outside, true);
+  };
+  pop.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); close(true); return; }
+    const list = items(), i = list.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") { e.preventDefault(); list[(i + 1) % list.length].focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); list[(i - 1 + list.length) % list.length].focus(); }
+    else if (e.key === "Tab") close(false);
+  });
+  return wrap;
 }
 
 // ---------- upload ----------

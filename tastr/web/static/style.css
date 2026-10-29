@@ -45,7 +45,21 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 .stat span { color: var(--muted); font-size: 12px; }
 .meter { width: 120px; height: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-top: 8px; }
 .meter > i { display: block; height: 100%; background: var(--accent); }
-.card-actions { margin-top: 8px; }
+.title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-basis: 100%; }
+.card-head .title-row h2 { flex: 1; min-width: 0; }
+.menu-wrap { position: relative; display: flex; align-items: center; gap: 8px; flex: none; }
+.menu-btn { font-size: 18px; line-height: 1; padding: 2px 10px 6px; }
+.menu-say { font-size: 12px; }
+.menu-pop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 220px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 4px; box-shadow: 0 6px 20px rgb(0 0 0 / .2); }
+.menu-pop[hidden] { display: none; }
+.menu-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; background: none; border-radius: 6px; padding: 7px 10px; font-size: 14px; }
+.menu-item:hover, .menu-item:focus-visible { background: var(--accent-soft); }
+.menu-item.danger { color: var(--warn); }
+.menu-sep { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.menu-confirm { padding: 8px; max-width: 260px; font-size: 14px; }
+.menu-confirm p { margin: 0 0 10px; overflow-wrap: anywhere; }
+.menu-confirm-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.danger-solid { background: var(--warn); border-color: var(--warn); color: var(--bg); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { position: relative; cursor: help; }
 .chip:hover::after, .chip:focus-visible::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 3; width: max-content; max-width: min(260px, 70vw); background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; line-height: 1.35; box-shadow: 0 2px 8px rgb(0 0 0 / .18); }

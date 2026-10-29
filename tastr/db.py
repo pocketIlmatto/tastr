@@ -241,28 +241,42 @@ def refresh_file_meta(conn: sqlite3.Connection, only_if_stale: bool = False) -> 
     refresh. Returns how many tracks changed.
     """
     from . import filemeta
-    from .filemeta import read_file_meta
 
     stored = conn.execute("SELECT value FROM meta WHERE key = 'filemeta_version'").fetchone()
     if only_if_stale and stored and stored[0] == str(filemeta.READER_VERSION):
         return 0
-    changed = 0
-    rows = conn.execute("SELECT t.id, t.local_path FROM tracks t JOIN cards c ON c.track_id = t.id WHERE t.source_kind = 'file'").fetchall()
-    for track_id, local_path in rows:
-        if not local_path or not Path(local_path).is_file():
-            continue
-        card = load_card(conn, track_id)
-        tags, info = read_file_meta(local_path)
-        s = card.source
-        title = tags.get("title") or Path(local_path).stem
-        if (s.file_tags, s.audio_info, s.title, s.artist, s.album) == (tags, info, title, tags.get("artist"), tags.get("album")):
-            continue
-        s.file_tags, s.audio_info, s.title, s.artist, s.album = tags, info, title, tags.get("artist"), tags.get("album")
-        with conn:
-            conn.execute("UPDATE tracks SET title = ?, artist = ?, album = ? WHERE id = ?", (s.title, s.artist, s.album, track_id))
-            conn.execute("UPDATE cards SET json = ? WHERE track_id = ?", (card.to_json(), track_id))
-        changed += 1
+    rows = conn.execute("SELECT t.id FROM tracks t JOIN cards c ON c.track_id = t.id WHERE t.source_kind = 'file'").fetchall()
+    changed = sum(retag_track(conn, track_id) == "changed" for (track_id,) in rows)
     if filemeta.mutagen is not None:  # without mutagen nothing was really read, so try again once it is installed
         with conn:
             conn.execute("INSERT OR REPLACE INTO meta VALUES ('filemeta_version', ?)", (str(filemeta.READER_VERSION),))
     return changed
+
+
+def retag_track(conn: sqlite3.Connection, track_id: int) -> str:
+    """Re-read one track's embedded tags and audio info, without re-analyzing.
+
+    Returns "changed", "unchanged", "missing" (no card), "not_file" (a link
+    track, nothing to re-read) or "no_file" (the file is no longer on disk).
+    """
+    from .filemeta import read_file_meta
+
+    row = conn.execute("SELECT t.source_kind, t.local_path FROM tracks t JOIN cards c ON c.track_id = t.id WHERE t.id = ?", (track_id,)).fetchone()
+    if row is None:
+        return "missing"
+    kind, local_path = row
+    if kind != "file":
+        return "not_file"
+    if not local_path or not Path(local_path).is_file():
+        return "no_file"
+    card = load_card(conn, track_id)
+    tags, info = read_file_meta(local_path)
+    s = card.source
+    title = tags.get("title") or Path(local_path).stem
+    if (s.file_tags, s.audio_info, s.title, s.artist, s.album) == (tags, info, title, tags.get("artist"), tags.get("album")):
+        return "unchanged"
+    s.file_tags, s.audio_info, s.title, s.artist, s.album = tags, info, title, tags.get("artist"), tags.get("album")
+    with conn:
+        conn.execute("UPDATE tracks SET title = ?, artist = ?, album = ? WHERE id = ?", (s.title, s.artist, s.album, track_id))
+        conn.execute("UPDATE cards SET json = ? WHERE track_id = ?", (card.to_json(), track_id))
+    return "changed"

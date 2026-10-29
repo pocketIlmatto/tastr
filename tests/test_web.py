@@ -175,3 +175,36 @@ def test_track_list_has_artist_and_vibes_for_the_library_filters(client, db_path
     row = client.get("/api/tracks").json()[0]
     assert row["artist"] == "Okra Lane"
     assert row["tags"] == ["dark", "driving"]  # strongest first
+
+
+def test_retag_endpoint(client, db_path, synth_wav):
+    path, _ = synth_wav
+    conn = db.connect(db_path)
+    card = full_card()
+    card.source = Source(kind="file", uri=str(path), local_path=str(path), title="old title", sha256="retag")
+    tid = db.save_card(conn, card)
+    gone = db.save_card(conn, full_card())  # points at /x.wav, which isn't there
+    link = full_card()
+    link.source = Source(kind="url", uri="https://example.com/t", title="link", sha256="link")
+    lid = db.save_card(conn, link)
+    conn.close()
+
+    body = client.post(f"/api/tracks/{tid}/retag").json()
+    assert body["changed"] and body["card"]["source"]["title"] == "synth_124_Am"  # no title tag: falls back to the file name
+    assert body["card"]["metadata"]["Audio"]
+    assert not body["tags_found"]
+    assert not client.post(f"/api/tracks/{tid}/retag").json()["changed"]
+    assert {t["id"]: t["title"] for t in client.get("/api/tracks").json()}[tid] == "synth_124_Am"
+
+    r = client.post(f"/api/tracks/{gone}/retag")
+    assert r.status_code == 410 and "no longer on disk" in r.json()["detail"]
+    assert client.post(f"/api/tracks/{lid}/retag").status_code == 400
+    assert client.post("/api/tracks/999/retag").status_code == 404
+
+
+def test_ui_has_track_actions_menu():
+    from tastr.web.server import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text()
+    assert "Track actions" in js and "/retag" in js and "Copy track summary" in js
+    assert "confirm(" not in js  # deleting confirms inside the menu, not with a browser dialog

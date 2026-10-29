@@ -188,6 +188,9 @@ function shortError(err) {
 }
 function renderList() {
   const ul = $("track-list"), top = ul.scrollTop;
+  // Rows are rebuilt while bulk jobs run, so put keyboard focus back on the same track afterwards.
+  const focused = ul.contains(document.activeElement) && document.activeElement.closest("li.trk");
+  const focusId = focused ? focused.dataset.id : null;
   ul.replaceChildren();
   const shown = visibleTracks();
   $("lib-total").textContent = tracks.length ? `(${tracks.length})` : "";
@@ -219,6 +222,7 @@ function renderList() {
             h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` }))))));
   }
   ul.scrollTop = top;
+  if (focusId) { const li = ul.querySelector(`li.trk[data-id="${focusId}"]`); if (li) li.focus({ preventScroll: true }); }
   renderBulk(shown);
 }
 
@@ -280,6 +284,21 @@ const BULK = {
   reanalyze: { label: "Re-analyze", doing: "Re-analyzing…", fail: "Couldn't re-analyze",
     done: (n) => `Re-analyzed ${plural(n)}.`,
     run: async (id) => (await api(`/api/tracks/${id}/reanalyze`, { method: "POST" })).card },
+  stems: { label: "Separate stems", note: "slow", doing: "Separating stems…", fail: "Couldn't separate stems",
+    done: (n) => `Stems ready for ${plural(n)}.`,
+    // The server separates in the background; wait for this track before starting the next one.
+    run: async (id, say) => {
+      let st = await api(`/api/tracks/${id}/stems`, { method: "POST" });
+      setStems(id, st);
+      while (stemsBusy(st)) {
+        say(stemsLabel(st));
+        await new Promise((r) => setTimeout(r, 2500));
+        st = await api(`/api/tracks/${id}/stems`);
+        setStems(id, st);
+      }
+      if (st.state !== "ready") throw new Error(st.error || "Stem separation failed");
+      return null;
+    } },
 };
 function bulkMenu() {
   const n = sel.size;
@@ -331,7 +350,12 @@ async function runBulk(kind, ids) {
     sayBulk(`${b.doing.replace("…", "")} ${i + 1} of ${ids.length}…`);
     renderList();
     try {
-      const card = await b.run(id);
+      const card = await b.run(id, (text) => {
+        jobs.set(id, { text, active: true });
+        // Update the row in place so a periodic progress update doesn't steal focus from the list.
+        const el = $("track-list").querySelector(`li.trk[data-id="${id}"] .s.job`);
+        if (el) el.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), text); else renderList();
+      });
       jobs.delete(id);
       if (card && currentId === id) renderCard(card);
     } catch (e) {

@@ -17,11 +17,16 @@ from ..pipeline import AnalysisContext, register_stage
 MIN_BPM = 70.0
 MAX_BPM = 180.0
 MIN_BEATS = 8
+# Switch to 1.5x the tracked tempo when the onset periodicity there is at least this strong relative
+# to the tracked tempo. Drum & bass (~174 BPM) gets tracked at 2/3 tempo (~117) because the tracker
+# prefers tempos near 120; a straight 4/4 track has little periodicity at 1.5x its beat. Measured on
+# the 43 GiantSteps tempo tracks with audio, where 0.85-0.9 scored best; see docs/bench.md.
+THREE_TWO_RATIO = 0.9
 
 
 class CoreStage:
     name = "core"
-    version = "0.1.1"
+    version = "0.1.2"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -145,6 +150,11 @@ def _tempo_and_beats(ctx: AnalysisContext, onset_env: np.ndarray, low_flux: np.n
         frames = np.arange(0, n_frames, 60.0 / tempo * ctx.sr / ctx.hop)
     spb = np.median(np.diff(frames)) * ctx.hop / ctx.sr  # seconds per beat
     bpm = 60.0 / spb
+    if bpm * 1.5 < MAX_BPM and _periodicity(ctx, onset_env, bpm * 1.5) >= THREE_TWO_RATIO * _periodicity(ctx, onset_env, bpm):
+        _, faster = librosa.beat.beat_track(onset_envelope=onset_env, sr=ctx.sr, hop_length=ctx.hop, bpm=bpm * 1.5)
+        if faster.size >= MIN_BEATS:
+            frames = np.asarray(faster, dtype=float)
+            bpm = 60.0 / (np.median(np.diff(frames)) * ctx.hop / ctx.sr)
 
     # Fold the tempo into a sensible range, keeping the beat grid consistent with it.
     while bpm < MIN_BPM:
@@ -164,6 +174,19 @@ def _tempo_and_beats(ctx: AnalysisContext, onset_env: np.ndarray, low_flux: np.n
     idx = np.clip(np.round(frames).astype(int), 0, n_frames - 1)
     pulse = float(np.clip((onset_env[idx].mean() / (onset_env.mean() + 1e-9) - 1.0) / 1.5, 0, 1))
     return bpm, frames, 0.5 * stability + 0.5 * pulse, stability, pulse
+
+
+def _periodicity(ctx: AnalysisContext, onset_env: np.ndarray, bpm: float) -> float:
+    """Mean tempogram strength at `bpm` (best of the nearest three lags), cached per track."""
+    import librosa
+
+    def tempogram(c):
+        ac = librosa.feature.tempogram(onset_envelope=onset_env, sr=c.sr, hop_length=c.hop, win_length=384).mean(axis=1)
+        return ac, librosa.tempo_frequencies(ac.size, sr=c.sr, hop_length=c.hop)
+
+    ac, bpms = ctx.get("core.tempogram", tempogram)
+    i = int(np.argmin(np.abs(bpms[1:] - bpm))) + 1
+    return float(ac[max(i - 1, 1) : i + 2].max())
 
 
 def _regularize(frames: np.ndarray, n_frames: int) -> np.ndarray:

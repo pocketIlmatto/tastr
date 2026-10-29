@@ -106,6 +106,21 @@ Measured on GiantSteps Key (599 tracks, labels from the original dataset):
 - Environment: librosa 1.0 with numba 0.68 and numpy 2.5 segfaults in `onset_detect`. These worked:
   numpy<2.3, numba 0.61.2, llvmlite 0.44.0, librosa 0.11.0, scipy<1.16.
 
+## Tempo notes
+
+Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror (`annotations_v2`),
+`--stages core`. With 43 tracks one track is 2.3 points, so only large effects are evidence.
+
+- Baseline: BPM within 4% 0.488, incl. x2/half 0.605. Tracks at 165 BPM or faster (drum & bass) were right
+  on 1 of 16, usually reported at 2/3 tempo (117 for 174) because the beat tracker prefers tempos near 120.
+- Fix: when the onset tempogram is at least `core.THREE_TWO_RATIO` (0.9) as strong at 1.5x the tracked tempo,
+  re-track at 1.5x. Straight 4/4 tracks have little periodicity at 1.5x their beat (ratio mostly 0.3 to 0.8),
+  2/3-tempo drum & bass mostly 0.9 to 1.1. After: 0.698 / 0.861; fast tracks 9 of 16, slower tracks 21 of 27
+  (two gained, one 121 BPM track lost to 161). 0.85 to 0.9 scored best; the threshold was picked on these
+  same 43 tracks, so recheck it when more tempo-labeled audio is available.
+- Still open: drum & bass reported at half tempo (86 for 174) and half-time tracks labeled ~86 reported at 172.
+  The tempogram does not separate these, and the labels themselves are a judgment call.
+
 ## Drum lanes
 
 The drum lanes behind the detected groove (kick, snare, clap, hat, open hat,

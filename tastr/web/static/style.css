@@ -134,3 +134,17 @@ details.sec[open] > summary::after { content: "Hide"; }
 .origin { display: inline-block; font-size: 12px; border-radius: 999px; padding: 1px 8px; margin: 2px 0 4px; border: 1px solid var(--line); border-style: dashed; color: var(--muted); }
 .term { position: relative; cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; color: var(--fg); }
 .term:hover::after, .term:focus-visible::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 3; width: max-content; max-width: min(300px, 70vw); background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; line-height: 1.35; box-shadow: 0 2px 8px rgb(0 0 0 / .18); white-space: normal; text-decoration: none; }
+.seq-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 10px 0 8px; }
+.seq-tools button { font-size: 13px; padding: 5px 11px; position: relative; }
+.seq-tools button[hidden] { display: none; }
+.seq-tools button[data-tip]:hover::after, .seq-tools button[data-tip]:focus-visible::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 3; width: max-content; max-width: min(260px, 70vw); background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; line-height: 1.35; text-align: left; box-shadow: 0 2px 8px rgb(0 0 0 / .18); white-space: normal; }
+.seq-play[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.seq-tempo { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); }
+.seq-bpm { width: 62px; padding: 4px 6px; font-size: 13px; }
+.seq-hint, .seq-status { font-size: 12px; }
+.seq-status { flex-basis: 100%; }
+.seq-status:empty { display: none; }
+.drum-grid i[role="button"] { cursor: pointer; }
+.drum-grid i[role="button"]:hover { border-color: var(--fg); }
+.drum-grid i[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.drum-grid i.now { box-shadow: 0 0 0 2px var(--fg); }

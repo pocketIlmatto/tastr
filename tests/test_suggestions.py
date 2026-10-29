@@ -95,3 +95,8 @@ def test_template_suggestions_carry_bpm_and_style_key(card):
     for s in templates:
         assert s.data["style_key"] in {"four_floor", "dnb", "halftime", "hiphop", "generic"}
         assert s.data["bpm"] == round(card.core.bpm)
+
+
+def test_detected_groove_carries_bpm(card):
+    groove = next(s for s in card.suggestions if s.data.get("origin") == "detected")
+    assert groove.data["bpm"] == round(card.core.bpm)

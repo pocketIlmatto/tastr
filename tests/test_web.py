@@ -105,5 +105,5 @@ def test_ui_hides_template_grids_until_requested():
     from pathlib import Path
 
     js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
-    for needle in ('origin === "template"', "ideasShown", "Suggest pattern ideas", "Hide pattern ideas", "Strong", "beat-group", "STYLE_INFO", "sec-link"):
+    for needle in ('origin === "template"', "ideasShown", "Suggest pattern ideas", "Hide pattern ideas", "Strong", "beat-group", "STYLE_INFO", "sec-link", "midiBytes", "startPlayer", "Export MIDI", "Copy as text", "Reset edits"):
         assert needle in js

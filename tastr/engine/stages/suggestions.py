@@ -287,7 +287,7 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
     detected = {k: v["pattern"] for k, v in drums.items() if v["detected"]}
     if detected:
         rows = "; ".join(f"{k} on steps {', '.join(map(str, _step_list(p))) or 'none'}" for k, p in detected.items())
-        data = {"pattern": detected, "pads": DRUM_RACK, "origin": "detected",
+        data = {"pattern": detected, "pads": DRUM_RACK, "origin": "detected", "bpm": round(bpm) if bpm else None,
                 "template": "Measured per section, since drums change between sections. Averaged over the busiest "
                             f"bars the whole track reads as {rows}. Program it on {{drumrack}}{{pads}} and vary the "
                             "last bar of every 4."}

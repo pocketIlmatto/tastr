@@ -121,6 +121,7 @@ function stat(value, label) {
 let sectionBus = new EventTarget();
 
 function renderCard(c) {
+  stopAllPlayback();
   sectionBus = new EventTarget();
   const core = c.core || {};
   const key = core.key;
@@ -163,7 +164,7 @@ function renderCard(c) {
   const sugs = (c.suggestions || []).filter((s) => shown || !isTemplate(s));
   const grids = sugs.filter((s) => s.data && s.data.pattern && typeof s.data.pattern === "object");
   if (grids.length || templates.length) {
-    const body = grids.map(drumGrid);
+    const body = grids.map((g) => drumGrid(g, c));
     if (templates.length) {
       body.push(h("div", { class: "ideas-bar" },
         h("button", { type: "button", "data-tip": "Starting points picked by this track's tempo.", onclick: () => { if (shown) ideasShown.delete(c.id); else ideasShown.add(c.id); renderCard(c); } }, shown ? "Hide pattern ideas" : "Suggest pattern ideas")));
@@ -396,19 +397,105 @@ const LANE_HELP = {
 const laneHelp = (lane, measured) => (measured && LANE_HELP[lane]) || "Part of a template pattern, not measured from the audio.";
 
 // One lane per instrument; the 16 steps sit in four tinted beat groups, with beat numbers above the first lane.
-function laneRows(pattern, prev, measured) {
+const STEP_NAMES = { x: "strong", o: "softer", ".": "empty" };
+function laneRows(pattern, prev, measured, onToggle) {
   const rows = [];
   for (const [lane, pat] of Object.entries(pattern)) {
     if (typeof pat !== "string") continue;
     const cells = [...pat.slice(0, 16)].map((ch, i) => {
       const changed = prev && prev[lane] && prev[lane][i] !== ch;
-      return h("i", { class: [ch === "x" ? "full" : ch === "o" ? "half" : "", changed ? "chg" : ""].join(" ").trim() });
+      return h("i", { class: [ch === "x" ? "full" : ch === "o" ? "half" : "", changed ? "chg" : ""].join(" ").trim(),
+        "data-step": i, "data-lane": lane, tabindex: onToggle ? "0" : null, role: onToggle ? "button" : null,
+        "aria-label": onToggle ? `${lane}, step ${i + 1}: ${STEP_NAMES[ch] || "empty"}. Press to change.` : null,
+        onclick: onToggle ? () => onToggle(lane, i) : null,
+        onkeydown: onToggle ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(lane, i); } } : null });
     });
     const beats = [0, 1, 2, 3].map((b) => h("div", { class: "beat-group" }, cells.slice(b * 4, b * 4 + 4)));
     rows.push(h("div", { class: "drum-lane" }, h("span", { class: "name", tabindex: "0", "data-tip": laneHelp(lane, measured) }, lane), h("div", { class: "drum-grid" }, beats)));
   }
   if (rows.length) rows.unshift(h("div", { class: "drum-lane beat-nums", "aria-hidden": "true" }, h("span", { class: "name" }), h("div", { class: "drum-grid" }, [1, 2, 3, 4].map((n) => h("span", {}, n)))));
   return rows;
+}
+
+// ---------- sequencer (WebAudio, no samples) and MIDI export ----------
+let actx = null, noiseBuf = null, player = null;
+function audioCtx() {
+  if (!actx) {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  return actx;
+}
+function stopAllPlayback() { if (player) player.stop(); }
+const isOpenHat = (l) => l.includes("hat") && l.includes("open");
+function voice(ctx, lane, t, vel) {
+  const out = ctx.createGain(); out.connect(ctx.destination);
+  const noise = (type, freq, dur, q) => {
+    const n = ctx.createBufferSource(); n.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; if (q) f.Q.value = q;
+    n.connect(f); f.connect(out); n.start(t, Math.random() * 0.5); n.stop(t + dur + 0.02);
+  };
+  const tone = (type, f0, f1, dur) => {
+    const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.6); o.connect(out); o.start(t); o.stop(t + dur + 0.02);
+  };
+  const env = (peak, dur) => { out.gain.setValueAtTime(peak * vel, t); out.gain.exponentialRampToValueAtTime(0.001, t + dur); };
+  const l = lane.toLowerCase();
+  if (l.includes("kick")) { env(0.9, 0.35); tone("sine", 150, 45, 0.35); }
+  else if (l.includes("snare")) { env(0.5, 0.2); noise("highpass", 1800, 0.2); tone("triangle", 190, 150, 0.12); }
+  else if (l.includes("clap")) { env(0.5, 0.25); noise("bandpass", 1500, 0.25, 1.2); }
+  else if (isOpenHat(l)) { env(0.25, 0.22); noise("highpass", 7000, 0.22); }
+  else if (l.includes("hat")) { env(0.25, 0.045); noise("highpass", 7000, 0.045); }
+  else { env(0.4, 0.12); tone("sine", 800, 700, 0.12); }
+}
+// Lookahead scheduler: a 25 ms timer queues every step starting within the next 150 ms. getPat/getBpm are read per step, so edits apply live.
+function startPlayer(getPat, getBpm, onStep, onEnd) {
+  stopAllPlayback();
+  const ctx = audioCtx(); if (ctx.state === "suspended") ctx.resume();
+  let step = 0, next = ctx.currentTime + 0.06, alive = true, timers = [];
+  const tick = () => {
+    while (next < ctx.currentTime + 0.15) {
+      const t = next, st = step, pat = getPat();
+      for (const [lane, p] of Object.entries(pat)) if (typeof p === "string" && p[st] && p[st] !== ".") voice(ctx, lane, t, p[st] === "x" ? 1 : 0.55);
+      timers.push(setTimeout(() => alive && onStep(st), Math.max(0, (t - ctx.currentTime) * 1000)));
+      if (timers.length > 64) timers = timers.slice(-32);
+      next += 60 / getBpm() / 4; step = (step + 1) % 16;
+    }
+  };
+  const iv = setInterval(tick, 25); tick();
+  const me = { stop() { if (!alive) return; alive = false; clearInterval(iv); timers.forEach(clearTimeout); if (player === me) player = null; onEnd(); } };
+  return (player = me);
+}
+// General MIDI drum map (channel 10): kick 36, snare 38, clap 39, closed hat 42, open hat 46, anything else 37.
+const GM_NOTE = (lane) => { const l = lane.toLowerCase(); return l.includes("kick") ? 36 : l.includes("snare") ? 38 : l.includes("clap") ? 39 : isOpenHat(l) ? 46 : l.includes("hat") ? 42 : 37; };
+// Format 0, 480 PPQN, one 4/4 bar (1920 ticks), 120 ticks per 16th step, notes 60 ticks long.
+function midiBytes(pattern, bpm, name) {
+  const vlq = (n) => { const o = [n & 127]; while ((n >>= 7)) o.unshift((n & 127) | 128); return o; };
+  const ev = [];
+  for (const [lane, p] of Object.entries(pattern)) {
+    if (typeof p !== "string") continue;
+    [...p.slice(0, 16)].forEach((ch, i) => {
+      if (ch === ".") return;
+      const note = GM_NOTE(lane), vel = ch === "x" ? 110 : 70;
+      ev.push([i * 120, 1, [0x99, note, vel]], [i * 120 + 60, 0, [0x89, note, 0]]);
+    });
+  }
+  ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const us = Math.round(60e6 / bpm), nm = [...name].map((ch) => ch.charCodeAt(0) & 127);
+  const tr = [0, 0xff, 0x03, nm.length, ...nm, 0, 0xff, 0x51, 3, us >> 16 & 255, us >> 8 & 255, us & 255, 0, 0xff, 0x58, 4, 4, 2, 24, 8];
+  let last = 0;
+  ev.forEach(([t, , bytes]) => { tr.push(...vlq(t - last), ...bytes); last = t; });
+  tr.push(...vlq(1920 - last), 0xff, 0x2f, 0);
+  const len = tr.length;
+  return new Uint8Array([0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 1, 0xe0, 0x4d, 0x54, 0x72, 0x6b, len >> 24 & 255, len >> 16 & 255, len >> 8 & 255, len & 255, ...tr]);
+}
+function downloadBytes(bytes, fileName, type) {
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const a = h("a", { href: url, download: fileName });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function diffText(pattern, prev) {
@@ -442,29 +529,80 @@ const styleTip = (d) => {
   return `${what} Chosen only because this track is ${d.bpm} BPM and ${range} maps to this style. The track's actual rhythm was not checked.`.trim();
 };
 
-function drumGrid(s) {
+function drumGrid(s, card) {
   const det = s.data.origin === "detected";
   const wrap = h("div", { class: "sug" }, det
       ? h("b", { class: "tip-title", tabindex: "0", "data-tip": "Measured from the audio. For each bar in the section, the app takes the jump in loudness at each of 16 steps within each lane's frequency band, then averages across the section's bars." }, s.title)
       : h("b", {}, s.title),
     det || !s.data.origin ? null : h("span", { class: "origin tpl" }, "Template for ", h("span", { class: "term", tabindex: "0", "data-tip": styleTip(s.data) }, s.data.style || "this tempo")));
-  const measured = det;
-  const secs = s.data.by_section;
-  if (!secs || !secs.length) { wrap.append(...laneRows(s.data.pattern, null, measured), h("div", { class: "grid-foot" }, legend(measured))); return wrap; }
-  const letters = [...new Set(secs.map((x) => x.letter || x.label))];
+  const secs = s.data.by_section && s.data.by_section.length ? s.data.by_section : null;
+  const letters = secs ? [...new Set(secs.map((x) => x.letter || x.label))] : [];
   const bus = sectionBus;
-  let sel = secs.reduce((best, x, k) => ((x.energy || 0) > (secs[best].energy || 0) ? k : best), 0), showChg = true;
+  let sel = secs ? secs.reduce((best, x, k) => ((x.energy || 0) > (secs[best].energy || 0) ? k : best), 0) : 0, showChg = true, nowStep = -1;
+  const edits = {}; // per-section copies of the pattern; the originals stay untouched and nothing is saved
+  const cur = () => edits[sel] || (secs ? secs[sel].pattern : s.data.pattern);
   const colorOf = (x) => SEC_COLORS[letters.indexOf(x.letter || x.label) % SEC_COLORS.length];
   const name = (x) => `${cap(x.label)} ${x.letter || ""}`.trim();
-  const tabs = h("div", { class: "sec-tabs", role: "tablist", "aria-label": "Section" });
+  const secName = () => (secs ? name(secs[sel]) : "");
+  const trackBpm = Math.round(s.data.bpm || (card.core && card.core.bpm) || 120);
+
+  // tools row
+  const status = h("span", { class: "seq-status muted", role: "status", "aria-live": "polite" });
+  const say = (m) => { status.textContent = m; };
+  const playBtn = h("button", { type: "button", class: "seq-play", "aria-pressed": "false" }, "▶ Play");
+  const bpmIn = h("input", { type: "number", min: "40", max: "240", step: "1", value: String(trackBpm), "aria-label": "Playback tempo in BPM", class: "seq-bpm" });
+  const bpmVal = () => Math.max(40, Math.min(240, +bpmIn.value || trackBpm));
+  const resetBtn = h("button", { type: "button", class: "seq-reset", hidden: "" }, "Reset edits");
+  const setNow = (st) => {
+    nowStep = st;
+    wrap.querySelectorAll(".drum-grid i.now").forEach((el) => el.classList.remove("now"));
+    if (st >= 0) wrap.querySelectorAll(`.drum-grid i[data-step="${st}"]`).forEach((el) => el.classList.add("now"));
+  };
+  const ui = (on) => { playBtn.textContent = on ? "■ Stop" : "▶ Play"; playBtn.setAttribute("aria-pressed", String(on)); if (!on) setNow(-1); };
+  playBtn.onclick = () => {
+    if (playBtn.getAttribute("aria-pressed") === "true") { stopAllPlayback(); return; }
+    try { startPlayer(cur, bpmVal, setNow, () => ui(false)); ui(true); say(""); }
+    catch (e) { say("Audio isn't available in this browser."); }
+  };
+  resetBtn.onclick = () => { delete edits[sel]; paint(true); say("Edits reset."); };
+  const fileName = () => `${(card.source.title || "Pattern").replace(/[^\w\- ().]+/g, "").trim() || "Pattern"}${secs ? " - " + secName() : ""}.mid`;
+  const exportBtn = h("button", { type: "button", "data-tip": "Saves a one-bar MIDI file. Kick, snare, hat and so on use General MIDI drum notes, so it loads into any DAW or sequencer." }, "Export MIDI");
+  exportBtn.onclick = () => {
+    const file = fileName(), bytes = midiBytes(cur(), bpmVal(), file.replace(/\.mid$/, ""));
+    downloadBytes(bytes, file, "audio/midi");
+    say(`Saved "${file}" (${bpmVal()} BPM, 1 bar).`);
+  };
+  const textOf = () => {
+    const pat = cur(), lanes = Object.entries(pat).filter(([, v]) => typeof v === "string"), w = Math.max(...lanes.map(([k]) => k.length));
+    return [`${card.source.title || "Pattern"}${secs ? " · " + secName() : ""} · ${bpmVal()} BPM`, ...lanes.map(([k, v]) => `${k.padEnd(w)}  ${v}`), "x = strong, o = softer, . = none"].join("\n");
+  };
+  const copyBtn = h("button", { type: "button", "data-tip": "Copies the pattern as plain text, for notes or a chat." }, "Copy as text");
+  copyBtn.onclick = async () => {
+    try { await navigator.clipboard.writeText(textOf()); say("Copied the pattern as text."); }
+    catch (e) { say("Couldn't copy to the clipboard from here."); }
+  };
+  const tools = h("div", { class: "seq-tools" }, playBtn,
+    h("label", { class: "seq-tempo" }, bpmIn, h("span", {}, "BPM")),
+    exportBtn, copyBtn, resetBtn, h("span", { class: "muted seq-hint" }, "Click any step to edit"), status);
+
   const body = h("div", { class: "sec-body" });
+  const toggleStep = (lane, i) => {
+    const src = cur(), ch = src[lane][i];
+    edits[sel] = { ...src, [lane]: src[lane].slice(0, i) + (ch === "." ? "x" : ch === "x" ? "o" : ".") + src[lane].slice(i + 1) };
+    paint(true);
+    const el = wrap.querySelector(`.drum-grid i[data-lane="${lane}"][data-step="${i}"]`); if (el) el.focus();
+  };
+  const tabs = h("div", { class: "sec-tabs", role: "tablist", "aria-label": "Section" });
   const note = h("div", { class: "sec-note" });
   const toggle = h("input", { type: "checkbox", checked: "" });
   toggle.addEventListener("change", () => { showChg = toggle.checked; paint(true); });
   function paint(quiet) {
+    resetBtn.hidden = !edits[sel];
+    if (!secs) { body.replaceChildren(...laneRows(cur(), null, det, toggleStep)); setNow(nowStep); return; }
     [...tabs.children].forEach((b, k) => b.setAttribute("aria-selected", String(k === sel)));
     const sec = secs[sel], before = sel > 0 ? secs[sel - 1] : null;
-    body.replaceChildren(...laneRows(sec.pattern, before && showChg ? before.pattern : null, true));
+    body.replaceChildren(...laneRows(cur(), before && showChg ? before.pattern : null, true, toggleStep));
+    setNow(nowStep);
     note.replaceChildren(
       h("b", {}, name(sec)), h("span", { class: "muted" }, ` · bars ${sec.start_bar}-${sec.end_bar}`),
       h("div", { class: "muted sec-diff" }, before
@@ -472,6 +610,7 @@ function drumGrid(s) {
         : "First section, nothing before it to compare with"));
     if (quiet !== true) bus.dispatchEvent(new CustomEvent("section", { detail: { idx: sec.idx, from: "tabs" } }));
   }
+  if (!secs) { wrap.append(tools, body, h("div", { class: "grid-foot" }, legend(det))); paint(true); return wrap; }
   bus.addEventListener("section", (e) => {
     if (e.detail.from !== "chart") return;
     const k = secs.findIndex((x) => x.idx === e.detail.idx);
@@ -481,7 +620,7 @@ function drumGrid(s) {
     type: "button", role: "tab", class: "sec-tab", style: `--c:${colorOf(x)}`,
     onclick: () => { sel = k; paint(); },
   }, name(x))));
-  wrap.append(tabs, note, body, h("div", { class: "grid-foot" }, legend(true), h("label", { class: "chg-toggle" }, toggle, "Outline steps that changed")));
+  wrap.append(tabs, note, tools, body, h("div", { class: "grid-foot" }, legend(true), h("label", { class: "chg-toggle" }, toggle, "Outline steps that changed")));
   paint(true);
   return wrap;
 }

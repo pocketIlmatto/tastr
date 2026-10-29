@@ -51,6 +51,8 @@ redistributing its labels or audio.
 GiantSteps is the closest match to dance music libraries and is the main key
 and tempo benchmark. Harmonix is the one with sections and downbeats.
 
+Other public datasets worth adding, ranked, are in [datasets.md](datasets.md).
+
 ### Getting the GiantSteps audio
 
 The datasets' `audio_dl.sh` scripts no longer work: the JKU mirror is gone from most networks and

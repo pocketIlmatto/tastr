@@ -156,3 +156,12 @@ def test_every_vibe_the_engine_can_produce_has_a_ui_group():
     missing = {t for t in engine if t not in mapped and not (has_tempo_group and t.endswith("tempo"))}
     assert not missing, f"vibes with no group in VIBE_GROUPS: {sorted(missing)}"
     assert len(engine) >= 14
+
+
+def test_ui_walks_dropped_folders():
+    from pathlib import Path
+
+    static = Path(__file__).parents[1] / "tastr" / "web" / "static"
+    js = (static / "app.js").read_text()
+    assert "webkitGetAsEntry" in js and "createReader" in js
+    assert "webkitdirectory" in (static / "index.html").read_text()

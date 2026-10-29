@@ -759,8 +759,46 @@ function uploadFiles(files) {
 const drop = $("drop");
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", (e) => uploadFiles([...e.dataTransfer.files]));
+// Dropped folders are walked recursively; only audio files inside them are analyzed (files dropped directly are always sent).
+const AUDIO_EXT = /\.(mp3|wav|flac|ogg|oga|opus|m4a|aac|aif|aiff|wma)$/i;
+const isAudio = (f) => (f.type || "").startsWith("audio/") || AUDIO_EXT.test(f.name);
+const readBatch = (reader) => new Promise((res, rej) => reader.readEntries(res, rej));
+const entryFile = (entry) => new Promise((res, rej) => entry.file(res, rej));
+async function walkEntry(entry, out, nested) {
+  if (entry.isFile) {
+    if (entry.name.startsWith(".")) return;
+    const f = await entryFile(entry);
+    if (!nested || isAudio(f)) out.push(f);
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    // readEntries returns at most ~100 entries per call, so keep reading until it comes back empty.
+    for (let batch = await readBatch(reader); batch.length; batch = await readBatch(reader)) {
+      for (const child of batch) await walkEntry(child, out, true);
+    }
+  }
+}
+async function collectDropped(dt) {
+  // The entries must be taken synchronously; the DataTransfer is emptied once the event handler returns.
+  const entries = [...(dt.items || [])].map((i) => (i.kind === "file" && i.webkitGetAsEntry ? i.webkitGetAsEntry() : null));
+  if (!entries.length || entries.some((en) => !en)) return [...dt.files];
+  const files = [];
+  for (const en of entries) await walkEntry(en, files, false);
+  return files;
+}
+async function uploadDropped(dt) {
+  const hadFolder = [...(dt.items || [])].some((i) => i.webkitGetAsEntry && i.webkitGetAsEntry()?.isDirectory);
+  let files;
+  try { files = await collectDropped(dt); } catch (_) { files = [...dt.files]; }
+  if (!files.length && hadFolder) setStatus("No audio files found in the dropped folder(s).", true);
+  else uploadFiles(files);
+}
+drop.addEventListener("drop", (e) => { uploadDropped(e.dataTransfer); });
 $("file-input").addEventListener("change", (e) => { uploadFiles([...e.target.files]); e.target.value = ""; });
+$("folder-input").addEventListener("change", (e) => {
+  const files = [...e.target.files].filter((f) => isAudio(f) && !f.name.startsWith("."));
+  if (files.length) uploadFiles(files); else setStatus("No audio files found in that folder.", true);
+  e.target.value = "";
+});
 $("url-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const url = $("url-input").value.trim();

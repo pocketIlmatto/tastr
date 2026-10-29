@@ -60,17 +60,17 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
 
         remote.stems(audio_path, out_dir, progress)
         return
-    import librosa
     import numpy as np
     import soundfile as sf
     import torch
     from demucs import apply as demucs_apply
     from demucs.pretrained import get_model
 
+    from .engine.audio import load_audio
+
     model = get_model(MODEL)  # downloads the weights (about 80 MB) the first time
     model.eval()
-    wav, _ = librosa.load(str(audio_path), sr=model.samplerate, mono=False)
-    wav = np.atleast_2d(wav)
+    wav = load_audio(audio_path, model.samplerate, mono=False)  # (channels, n); m4a/aac go through ffmpeg
     if wav.shape[0] < model.audio_channels:
         wav = np.repeat(wav[:1], model.audio_channels, axis=0)
     mix = torch.from_numpy(np.ascontiguousarray(wav[: model.audio_channels], dtype=np.float32))

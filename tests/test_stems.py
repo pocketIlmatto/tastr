@@ -195,3 +195,17 @@ def test_ui_has_stems_menu_item_and_strudel_picker():
     for needle in ('"Separate stems"', '"Stems ready"', "/stems`", '"Full mix"', '"Stems"', "STRUDEL_STEMS", "pip install 'tastr[stems]'"):
         assert needle in js
     assert 'new Set(["vocals", "bass", "other"])' in js  # drums off by default
+
+
+@pytest.mark.skipif(__import__("shutil").which("ffmpeg") is None, reason="ffmpeg is not installed")
+def test_stereo_decode_reads_m4a_through_ffmpeg(tmp_path):
+    """Separation needs all channels; libsndfile can't open m4a, so it must fall back to ffmpeg like analysis does."""
+    import subprocess
+
+    from tastr.engine.audio import load_audio
+
+    m4a = tmp_path / "tone.m4a"
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=440:d=2", "-ac", "2", str(m4a)], check=True)
+    y = load_audio(m4a, 44100, mono=False)
+    assert y.shape[0] == 2 and abs(y.shape[1] - 2 * 44100) < 4096
+    assert load_audio(m4a, 22050).ndim == 1

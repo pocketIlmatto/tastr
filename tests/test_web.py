@@ -240,3 +240,33 @@ def test_ui_has_audio_views_and_transport():
     for needle in ("/audio`", "/views`", "decodeAudioData", '"Waveform"', '"Spectrogram"', "chartMode", "scrubStart", "spectrogramLevels",
                    "downbeat_times", 'aria-label": "Seek"', "Preparing audio preview", "player = me"):
         assert needle in js
+
+
+def test_audio_allows_strudel_cc_and_no_other_origin(client, db_path, tmp_path):
+    """The Strudel sketch loads the original audio from strudel.cc, so that origin (only) gets CORS."""
+    audio = tmp_path / "x.wav"
+    audio.write_bytes(b"RIFF" + bytes(100))
+    card = full_card()
+    card.source.local_path = str(audio)
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, card)
+    conn.close()
+    url = f"/api/tracks/{tid}/audio"
+
+    ok = client.get(url, headers={"Origin": "https://strudel.cc"})
+    assert ok.status_code == 200 and ok.headers["access-control-allow-origin"] == "https://strudel.cc"
+    ranged = client.get(url, headers={"Origin": "https://strudel.cc", "Range": "bytes=0-9"})
+    assert ranged.status_code == 206 and ranged.headers["access-control-allow-origin"] == "https://strudel.cc"
+    pre = client.options(url, headers={"Origin": "https://strudel.cc", "Access-Control-Request-Method": "GET",
+                                       "Access-Control-Request-Private-Network": "true"})
+    assert pre.status_code == 204
+    assert pre.headers["access-control-allow-origin"] == "https://strudel.cc"
+    assert pre.headers["access-control-allow-private-network"] == "true"
+
+    for origin in ("https://evil.example", "https://strudel.cc.evil.example", None):
+        headers = {"Origin": origin} if origin else {}
+        res = client.get(url, headers=headers)
+        assert res.status_code == 200 and "access-control-allow-origin" not in res.headers
+        assert client.options(url, headers=headers).status_code == 403
+    # other endpoints stay same-origin only
+    assert "access-control-allow-origin" not in client.get(f"/api/tracks/{tid}", headers={"Origin": "https://strudel.cc"}).headers

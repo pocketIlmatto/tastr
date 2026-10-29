@@ -385,18 +385,33 @@ function dawText(s) {
   return tpl.replace(/\{(\w+)\}/g, (m, k) => (tokens[k] ? tokens[k](s.data) : m));
 }
 
+let strudelAudio = true; // "Include the original audio", remembered for the session
 function strudelView(c) {
-  const code = strudelCode(c);
   const say = h("span", { class: "muted st-say", role: "status", "aria-live": "polite" });
+  const pre = h("pre", { class: "st-code", tabindex: "0", "aria-label": "Generated Strudel code" });
+  const open = h("a", { class: "btn-link", target: "_blank", rel: "noopener" }, "Open in Strudel ↗");
+  const note = h("p", { class: "muted st-note" });
+  let code = "";
+  const paint = () => {
+    const audio = c.has_audio && strudelAudio;
+    code = strudelCode(c, audio ? `${location.origin}/api/tracks/${c.id}/audio` : null);
+    pre.textContent = code;
+    open.href = strudelLink(code);
+    note.textContent = "Opens strudel.cc in a new tab with this code loaded. Drum sounds load from Strudel's sample library the first time you play." +
+      (audio ? " The original audio streams from your Tastr server, so keep it running; the first time, your browser may ask to allow strudel.cc to reach your local network." : "");
+  };
+  const box = h("input", { type: "checkbox", id: "st-audio", ...(strudelAudio ? { checked: "" } : {}) });
+  box.addEventListener("change", () => { strudelAudio = box.checked; paint(); });
   const copy = h("button", { type: "button", onclick: async () => {
     try { await navigator.clipboard.writeText(code); say.textContent = "Copied"; } catch (_) { say.textContent = "Couldn't copy here"; }
     setTimeout(() => (say.textContent = ""), 2500);
   } }, "Copy code");
+  paint();
   return h("div", { class: "strudel" },
-    h("p", { class: "st-intro" }, "A sketch of this track as ", h("a", { href: "https://strudel.cc", target: "_blank", rel: "noopener" }, "Strudel"), " live-code: each section's drum pattern for its length, plus the chord loop, at this track's tempo. It won't sound like the original, but it follows its structure, so it's a starting point for remixes."),
-    h("div", { class: "st-actions" }, h("a", { class: "btn-link", href: strudelLink(code), target: "_blank", rel: "noopener" }, "Open in Strudel ↗"), copy, say),
-    h("pre", { class: "st-code", tabindex: "0", "aria-label": "Generated Strudel code" }, code),
-    h("p", { class: "muted st-note" }, "Opens strudel.cc in a new tab with this code loaded. Drum sounds load from Strudel's sample library the first time you play."));
+    h("p", { class: "st-intro" }, "A sketch of this track as ", h("a", { href: "https://strudel.cc", target: "_blank", rel: "noopener" }, "Strudel"), " live-code: each section's drum pattern for its length, plus the chord loop, at this track's tempo.",
+      c.has_audio ? " Add the original audio, cut into bars, to remix the real thing." : " It won't sound like the original, but it follows its structure, so it's a starting point for remixes."),
+    c.has_audio ? h("label", { class: "st-opt", for: "st-audio" }, box, " Include the original audio, cut into bars") : null,
+    h("div", { class: "st-actions" }, open, copy, say), pre, note);
 }
 
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];

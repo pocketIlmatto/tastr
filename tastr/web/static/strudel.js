@@ -20,7 +20,9 @@ function strudelLane(lane, p) {
   return line;
 }
 
-function strudelCode(c) {
+// audioUrl: where strudel.cc can fetch the original file (the track's /audio endpoint). When given, the sketch
+// adds the original audio cut into bars at the detected downbeats, layered under the drums.
+function strudelCode(c, audioUrl = null) {
   const core = c.core || {}, key = core.key || {}, sugs = c.suggestions || [];
   const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
   // by_section idx is the section's index in card.sections; sections without bars can't be arranged.
@@ -32,16 +34,20 @@ function strudelCode(c) {
   const prog = harm ? harm.data.progression.filter((n) => n && n !== "N") : [];
   const hasBpm = typeof core.bpm === "number" && isFinite(core.bpm);
   const bpm = hasBpm ? Math.round(core.bpm * 10) / 10 : 120;
+  // The tempo comes from the bar grid when there is one, so the sketch and the original audio don't drift apart.
+  const dbs = core.downbeat_times || [], gridBar = dbs.length > 1 ? (dbs[dbs.length - 1] - dbs[0]) / (dbs.length - 1) : null;
+  const cpmBpm = gridBar ? Math.round((240 / gridBar) * 1000) / 1000 : bpm;
+  const withAudio = Boolean(audioUrl) && typeof c.duration === "number" && c.duration > 0;
   const hasKey = typeof key.tonic === "number";
   const keyStr = hasKey ? `${STRUDEL_NOTES[key.tonic % 12]} ${key.mode || "major"}` : "unknown key";
   const title = (c.source && c.source.title) || "Untitled", artist = c.source && c.source.artist;
   const out = [
     `// ${title}${artist ? " by " + artist : ""}`,
-    `// Sketched by Tastr: ${hasBpm ? bpm + " BPM" : "tempo unknown, using 120 BPM"}, ${keyStr}. Not the original audio: the detected`,
-    `// drum pattern for each section, played for that section's length, plus the chord loop.`,
+    `// Sketched by Tastr: ${hasBpm ? bpm + " BPM" : "tempo unknown, using 120 BPM"}, ${keyStr}. ${withAudio ? "The original audio cut into bars, layered" : "Not the original audio: the detected"}`,
+    withAudio ? "// with the detected drum pattern for each section and the chord loop." : "// drum pattern for each section, played for that section's length, plus the chord loop.",
     `// Press Ctrl+Enter (Cmd+Enter on a Mac) to play, Ctrl+. to stop. Change anything and re-run.`,
     "",
-    `setcpm(${bpm}/4) // 1 cycle = 1 bar`,
+    `setcpm(${cpmBpm}/4) // 1 cycle = 1 bar${cpmBpm !== bpm ? " (tempo from the detected bar grid)" : ""}`,
     "",
   ];
 
@@ -86,9 +92,31 @@ function strudelCode(c) {
     out.push(`const bass = note("<${chordsArr.map(rootNote).join(" ")}>").struct("[~ x]*4").s("sawtooth").lpf(320).gain(.5)`, "");
     parts.push("bass", "chords");
   }
-  out.push(`stack(${parts.join(", ")})`, "",
-    "// Ideas: mute a part by deleting it from stack(), swap parts in arrange(),",
-    "// try .bank(\"RolandTR808\"), or add .fast(2) to the hats for double time.");
+  if (withAudio) {
+    const bar = gridBar || 240 / bpm, first = dbs.length ? dbs[0] : 0;
+    const spans = secs.length ? secs.map((sec) => [sec.start_bar, sec.end_bar != null ? sec.end_bar : sec.start_bar, [cap(sec.label), sec.letter].filter(Boolean).join(" ")])
+      : [[1, Math.max(1, Math.floor((c.duration - first) / bar)), "Whole track"]];
+    out.push("// --- The original track, cut into bars at the detected downbeats ---",
+      "// Tastr serves the file from your computer, so keep `tastr serve` running. The first time,",
+      "// your browser may ask whether strudel.cc may reach your local network: allow it.",
+      `samples({ orig: '${audioUrl.replace(/'/g, "%27")}' }) // single quotes: in Strudel, double quotes mean a pattern`,
+      `const len = ${c.duration.toFixed(3)}, bar = ${bar.toFixed(4)}, first = ${first.toFixed(3)} // seconds: track, one bar, first downbeat`,
+      "// orig(a, b): bars a to b of the original, one bar per cycle",
+      "const orig = (a, b) => {",
+      "  const k = run(b - a + 1).slow(b - a + 1).add(a - 1)",
+      "  return s(\"orig\").begin(k.mul(bar).add(first).div(len)).end(k.add(1).mul(bar).add(first).div(len)).clip(1)",
+      "}",
+      "const original = arrange(");
+    spans.forEach(([a, b, name], i) => out.push(`  [${b - a + 1}, orig(${a}, ${b})]${i < spans.length - 1 ? "," : ""} // ${name}`));
+    const drop = secs.find((x) => x.label === "drop") || secs[0], at = drop ? drop.start_bar : 1;
+    out.push(")", "", `stack(original, drums.gain(.5)${parts.length > 1 ? " /*, bass, chords */" : ""})`, "",
+      `// Ideas: loop the ${drop && drop.label === "drop" ? "first drop" : "opening bars"} with orig(${at}, ${at + 3}), reorder the lines in arrange(),`,
+      "// add bass and chords back into stack(), or load a second track as another sample for a mash-up.");
+  } else {
+    out.push(`stack(${parts.join(", ")})`, "",
+      "// Ideas: mute a part by deleting it from stack(), swap parts in arrange(),",
+      "// try .bank(\"RolandTR808\"), or add .fast(2) to the hats for double time.");
+  }
   return out.join("\n");
 }
 

@@ -11,7 +11,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -25,6 +25,21 @@ STATIC_DIR = Path(__file__).parent / "static"
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
                ".ogg": "audio/ogg", ".aif": "audio/aiff", ".aiff": "audio/aiff", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
 MAX_QUERY_ROWS = 5000
+# The Strudel sketch ("Try this in Strudel") loads the original audio from strudel.cc, so only the audio
+# endpoint answers CORS, and only for that origin.
+STRUDEL_ORIGINS = ("https://strudel.cc",)
+
+
+def _strudel_cors(origin: str | None, preflight: bool = False) -> dict[str, str]:
+    if origin not in STRUDEL_ORIGINS:
+        return {"Vary": "Origin"}
+    headers = {"Access-Control-Allow-Origin": origin, "Vary": "Origin",
+               "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges"}
+    if preflight:
+        # Chrome's Private Network Access preflight asks before a public page reaches localhost.
+        headers |= {"Access-Control-Allow-Methods": "GET, HEAD", "Access-Control-Allow-Headers": "Range",
+                    "Access-Control-Allow-Private-Network": "true", "Access-Control-Max-Age": "600"}
+    return headers
 
 
 class UrlBody(BaseModel):
@@ -101,8 +116,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             return card_body(c, track_id)
 
     @app.get("/api/tracks/{track_id}/audio")
-    def track_audio(track_id: int):
-        """The original audio file, with Range support so the browser can seek."""
+    def track_audio(track_id: int, origin: str | None = Header(None)):
+        """The original audio file, with Range support so the browser can seek. strudel.cc may fetch it too."""
         with closing(conn()) as c:
             card = db.load_card(c, track_id)
         if card is None:
@@ -111,7 +126,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         if path is None:
             raise HTTPException(404, "The original audio file is not on disk.")
         media = AUDIO_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        return FileResponse(path, media_type=media)
+        return FileResponse(path, media_type=media, headers=_strudel_cors(origin))
+
+    @app.options("/api/tracks/{track_id}/audio", include_in_schema=False)
+    def track_audio_preflight(track_id: int, origin: str | None = Header(None)):
+        if origin not in STRUDEL_ORIGINS:
+            return Response(status_code=403, headers=_strudel_cors(origin))
+        return Response(status_code=204, headers=_strudel_cors(origin, preflight=True))
 
     @app.get("/api/tracks/{track_id}/views")
     def track_views(track_id: int):

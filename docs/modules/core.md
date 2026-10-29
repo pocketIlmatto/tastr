@@ -21,7 +21,7 @@ beats, downbeats, key, energy and the shared scalar features.
 | `core.bpm_confidence` | 0..1 | mean of tempo stability (1 - 4·std/mean of IBIs, clipped) and `pulse_clarity` |
 | `core.beat_times` | list[float] s | beat tracker output; if fewer than 8 beats, synthesize a grid from the tempo |
 | `core.downbeat_times` | list[float] s | every 4th beat starting at the phase (0..3) whose beats have the most low-band (<150 Hz) onset energy; stay on phase 0 unless another phase wins by >10% |
-| `core.key` | `Key` | `music.estimate_key(chroma.mean(axis=1))` → tonic/mode/confidence; `scale = music.refine_mode(...)`; `camelot = music.camelot(tonic, mode)` |
+| `core.key` | `Key` | `music.estimate_key(music.key_profile(chroma))`, the learned key model (`key_model.py`, see docs/bench.md) → tonic/mode; confidence = top key probability minus the runner-up's; `scale = music.refine_mode(...)`; `camelot = music.camelot(tonic, mode)` |
 | `core.loudness_db` | float | already done in the stub (RMS dBFS) |
 | `core.energy` | 0..1 | 0.35·clip((loudness_db+30)/22) + 0.25·clip(onset_rate/6) + 0.20·brightness + 0.20·clip(percussiveness/0.5) |
 | `series["energy"]` | `Series` | one point per bar: time = downbeat, value = min-max normalised (5th-95th percentile) mean RMS dB of the bar, 0..1 |

@@ -165,3 +165,68 @@ def test_bench_cli_errors(tmp_path):
     assert main(["bench", "nope"]) == 2
     assert main(["bench", "giantsteps-key"]) == 2
     assert main(["bench", "giantsteps-key", str(tmp_path)]) == 2  # nothing found
+
+
+def _scale_tracks(rng, n):
+    """Noisy major/minor scale profiles in random keys, shaped like cached key features."""
+    import numpy as np
+
+    out = []
+    for i in range(n):
+        mode = "minor" if i % 2 else "major"
+        base = np.full(12, 0.02)
+        base[[0, 2, 4, 5, 7, 9, 11] if mode == "major" else [0, 2, 3, 5, 7, 8, 10]] = 0.1
+        base[[0, 7]] = [0.2, 0.16]
+        tonic = int(rng.integers(12))
+        p = np.roll(base + rng.random(12) * 0.03, tonic)
+        out.append({"profile": p / p.sum(), "tonic": tonic, "mode": mode, "silent": False, "label_conf": -1})
+    return out
+
+
+def test_trained_key_module_reproduces_its_fit(tmp_path):
+    import importlib.util
+
+    import numpy as np
+
+    from tastr.engine import music
+    from tastr.engine.bench import train_key
+
+    tracks = _scale_tracks(np.random.default_rng(1), 40)
+    weights, bias = train_key.fit(tracks)
+    assert weights.shape == (24, 12) and bias.shape == (24,)
+    assert train_key.score(tracks, weights, bias)["exact"] == 1.0
+
+    path = tmp_path / "key_model.py"
+    path.write_text(train_key.module_source(weights, bias, {"synth": len(tracks)}))
+    spec = importlib.util.spec_from_file_location("key_model_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert np.array_equal(mod.WEIGHTS, weights) and np.array_equal(mod.BIAS, bias)  # repr round-trips exactly
+    p = tracks[0]["profile"]
+    assert np.array_equal(music.key_probabilities(p, mod.WEIGHTS, mod.BIAS), music.key_probabilities(p, weights, bias))
+
+
+def test_numpy_key_model_matches_sklearn():
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+
+    from tastr.engine import music
+    from tastr.engine.bench import train_key
+
+    tracks = _scale_tracks(np.random.default_rng(2), 30)
+    X = np.array([music.KEY_INPUT_SCALE * np.roll(t["profile"], s) for t in tracks for s in range(12)])
+    y = np.array([((t["tonic"] + s) % 12) * 2 + (t["mode"] == "minor") for t in tracks for s in range(12)])
+    clf = LogisticRegression(C=train_key.C, max_iter=2000).fit(X, y)
+    ours = np.array([music.key_probabilities(x / music.KEY_INPUT_SCALE, clf.coef_, clf.intercept_) for x in X])
+    assert np.array_equal(ours.argmax(axis=1), clf.predict(X))
+    assert np.allclose(ours, clf.predict_proba(X), atol=1e-12)
+
+
+def test_unsure_labels_are_left_out_of_training():
+    import numpy as np
+
+    from tastr.engine.bench import train_key
+
+    t = {"profile": np.full(12, 1 / 12), "silent": False}
+    tracks = [t | {"label_conf": c} for c in (-1, 0, 1, 2)] + [t | {"label_conf": 2, "silent": True}]
+    assert [x["label_conf"] for x in train_key.usable(tracks)] == [-1, 2]

@@ -33,11 +33,13 @@ def _hat(sr=SR, rng=np.random.default_rng(0)):
     return 0.15 * noise * np.exp(-np.arange(n) / sr * 80)
 
 
-def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per_section=(8, 16, 8), sr: int = SR):
+def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per_section=(8, 16, 8), sr: int = SR,
+               progression: list[tuple[int, int]] | None = None):
     """Kick on every beat, off-beat hats, a triad progression in the key.
 
     Sections: an intro with no drums, a full section, and a quiet outro, each
-    `bars_per_section[i]` bars long. Returns (audio, ground_truth).
+    `bars_per_section[i]` bars long. `progression` overrides the chords: four
+    (root, third) pairs in semitones from the tonic, one per bar. Returns (audio, ground_truth).
     """
     beat = 60.0 / bpm
     bar = 4 * beat
@@ -46,6 +48,7 @@ def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per
     third = 3 if mode == "minor" else 4
     # i - VI - III - VII in minor, I - V - vi - IV in major (semitones from tonic)
     prog = [(0, third), (8, 4), (3, 4), (10, 4)] if mode == "minor" else [(0, 4), (7, 4), (9, 3), (5, 4)]
+    prog = progression or prog
 
     def add(sig, t0, gain=1.0):
         i = int(t0 * sr)

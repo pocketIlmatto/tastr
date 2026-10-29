@@ -6,10 +6,6 @@ import numpy as np
 
 NOTE_NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
 
-# Krumhansl-Kessler key profiles, index 0 = tonic.
-KK_MAJOR = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
-KK_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
-
 # Semitone offsets of each mode, and Ableton Live 12's name for that scale.
 MODES = {
     "Major": [0, 2, 4, 5, 7, 9, 11],
@@ -37,11 +33,9 @@ def camelot(tonic: int, mode: str) -> str:
     return f"{number}{'B' if mode == 'major' else 'A'}"
 
 
-# Added to every minor key's correlation. Dance music is mostly minor (about 85% of GiantSteps), and
-# the mean chroma of a minor track often leans major (a prominent bass or lead third, an
-# unresolved breakdown), which a flat prior turns into parallel-mode errors. Anything from 0.08 to
-# 0.25 scored about the same on GiantSteps; see docs/bench.md.
-MINOR_PRIOR = 0.10
+# The key model's input is KEY_INPUT_SCALE * key_profile(chroma): the profile sums to about 1, so this
+# puts each bin near 1 for the fitted weights (tastr.engine.bench.train_key uses the same scale).
+KEY_INPUT_SCALE = 12.0
 
 
 def key_profile(chroma: np.ndarray) -> np.ndarray:
@@ -50,29 +44,42 @@ def key_profile(chroma: np.ndarray) -> np.ndarray:
     return (chroma / (chroma.sum(axis=0, keepdims=True) + 1e-9)).mean(axis=1)
 
 
-def estimate_key(chroma_profile: np.ndarray) -> dict:
-    """Correlate a 12-bin chroma profile against all 24 Krumhansl-Kessler keys, favoring minor slightly."""
+def key_probabilities(chroma_profile: np.ndarray, weights: np.ndarray | None = None,
+                      bias: np.ndarray | None = None) -> np.ndarray:
+    """Probability of each of the 24 keys (index tonic * 2 + 1 for minor) from a 12-bin key profile.
+
+    A softmax over the learned key model (key_model.py, fitted on GiantSteps Key and Beatport EDM Key
+    by tastr.engine.bench.train_key); pass `weights`/`bias` to try other fitted constants.
+    """
+    if weights is None or bias is None:
+        from . import key_model
+
+        weights, bias = key_model.WEIGHTS, key_model.BIAS
+    z = weights @ (KEY_INPUT_SCALE * np.asarray(chroma_profile, dtype=float)) + bias
+    p = np.exp(z - z.max())
+    return p / p.sum()
+
+
+def _key_name(index: int) -> str:
+    return f"{note_name(index // 2)} {'minor' if index % 2 else 'major'}"
+
+
+def estimate_key(chroma_profile: np.ndarray, weights: np.ndarray | None = None,
+                 bias: np.ndarray | None = None) -> dict:
+    """Most likely key of a 12-bin key profile under the learned key model, with the next three as alternatives."""
     profile = np.asarray(chroma_profile, dtype=float)
     if not np.any(profile > 0):
-        return {"tonic": 0, "mode": "major", "confidence": 0.0, "scores": {}}
-    scores = []
-    for tonic in range(12):
-        for mode, template in (("major", KK_MAJOR), ("minor", KK_MINOR)):
-            r = np.corrcoef(np.roll(template, tonic), profile)[0, 1]
-            r = float(np.nan_to_num(r)) + (MINOR_PRIOR if mode == "minor" else 0.0)
-            scores.append((r, tonic, mode))
-    scores.sort(reverse=True)
-    best, second = scores[0], scores[1]
-    # Gap between the top two candidates, scaled so ~0.15 of separation reads as "sure".
-    confidence = float(np.clip((best[0] - second[0]) / 0.15, 0.0, 1.0) * np.clip(best[0], 0, 1))
+        return {"tonic": 0, "mode": "major", "probability": 0.0, "confidence": 0.0, "alternatives": []}
+    p = key_probabilities(profile, weights, bias)
+    order = np.argsort(-p)
+    best, second = int(order[0]), int(order[1])
     return {
-        "tonic": best[1],
-        "mode": best[2],
-        "correlation": best[0],
-        "confidence": round(confidence, 3),
-        "alternatives": [
-            {"key": f"{note_name(t)} {m}", "correlation": round(s, 3)} for s, t, m in scores[1:4]
-        ],
+        "tonic": best // 2,
+        "mode": "minor" if best % 2 else "major",
+        "probability": round(float(p[best]), 3),
+        # How far the best key is ahead of the runner-up, 0 (a coin flip) to 1 (no contest).
+        "confidence": round(float(p[best] - p[second]), 3),
+        "alternatives": [{"key": _key_name(int(i)), "probability": round(float(p[i]), 3)} for i in order[1:4]],
     }
 
 

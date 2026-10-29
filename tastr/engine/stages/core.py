@@ -26,7 +26,7 @@ THREE_TWO_RATIO = 0.9
 
 class CoreStage:
     name = "core"
-    version = "0.1.2"
+    version = "0.1.3"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:

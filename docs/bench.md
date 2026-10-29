@@ -98,6 +98,9 @@ Measured on GiantSteps Key (599 tracks, labels from the original dataset):
   chroma (power 0.35 to 0.7), a bonus for tonic energy or for tonic+fifth+third energy, and a minor prior above
   0.10 (which just fits GiantSteps' 85% minor labels). Subset scores for the current method range from 0.605
   to 0.655, so differences under about 0.03 on 200 tracks are not evidence.
+- Overtone-suppressed chroma (subtract the lower-octave and 3rd-harmonic contributions from a tuned 96-bin CQT
+  of the harmonic part, weights 0.3 to 0.6) did not help on the 200-track subset: fifths 28 -> 25 to 30, MIREX
+  0.581 -> 0.568 to 0.581 against the same CQT without suppression.
 - Iterating quickly: extract the chroma once per track (`signals.chroma`) to `.npz`, then score `estimate_key`
   variants offline in seconds; run the full bench only for a candidate that wins on both subsets.
 - Environment: librosa 1.0 with numba 0.68 and numpy 2.5 segfaults in `onset_detect`. These worked:

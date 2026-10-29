@@ -223,7 +223,7 @@ const DAWS = {
       drumrack: () => "a Drum Rack",
       pads: (d) => {
         const lanes = Object.keys(d.pattern || {}).filter((l) => d.pads && d.pads[l]);
-        return lanes.length ? ` (${lanes.map((l) => `${l} ${d.pads[l]}`).join(", ")})` : "";
+        return lanes.length ? ` (${lanes.map((l) => `${laneName(l)} ${d.pads[l]}`).join(", ")})` : "";
       },
       swing: (d) => `The off-beat 16ths sit late. Drag 'Swing 16ths' from the Groove Pool (Core Library > Swing) onto your drum clip and start around ${d.swing_percent}%, or use a Groove with Timing at about ${Math.round((d.swing_percent - 50) * 4)}%.`,
       sidechain: (d) => `Put a Compressor on the bass, enable Sidechain from the kick, ratio 4:1, attack 0.1 ms, release about ${Math.round(d.release_ms * 0.6)}-${d.release_ms} ms (an 8th note at this tempo is ${d.release_ms} ms). Or use Live 12's Shaper/Envelope Follower for a drawn ducking curve.`,
@@ -389,16 +389,22 @@ function energyChart(series, sections, duration) {
   return wrap;
 }
 
+// The engine sends what each measured lane means (data.lane_help); this covers cards analyzed before it did.
 const LANE_HELP = {
-  kick: "Kick: measured from energy between 20 and 150 Hz.",
-  snare: "Snare: measured from energy between 180 Hz and 2.5 kHz. Can pick up some hi-hat bleed.",
-  hat: "Hi-hat: measured from energy above 6 kHz.",
+  kick: "Kick: low hits whose energy sits below about 120 Hz.",
+  snare: "Snare: noisy mid hits (400 Hz to 5 kHz), usually with some body around 200 Hz.",
+  hat: "Hi-hat: short hits above 6 kHz.",
 };
-const laneHelp = (lane, measured) => (measured && LANE_HELP[lane]) || "Part of a template pattern, not measured from the audio.";
+const laneName = (lane) => lane.replace(/_/g, " ");
+const laneHelp = (lane, measured, help) => {
+  if (!measured) return "Part of a template pattern, not measured from the audio.";
+  const text = help && help[lane];
+  return text ? `${cap(laneName(lane))}: ${text.charAt(0).toLowerCase()}${text.slice(1)}` : LANE_HELP[lane] || "Measured from the audio.";
+};
 
 // One lane per instrument; the 16 steps sit in four tinted beat groups, with beat numbers above the first lane.
 const STEP_NAMES = { x: "strong", o: "softer", ".": "empty" };
-function laneRows(pattern, prev, measured, onToggle) {
+function laneRows(pattern, prev, measured, onToggle, help) {
   const rows = [];
   for (const [lane, pat] of Object.entries(pattern)) {
     if (typeof pat !== "string") continue;
@@ -406,12 +412,12 @@ function laneRows(pattern, prev, measured, onToggle) {
       const changed = prev && prev[lane] && prev[lane][i] !== ch;
       return h("i", { class: [ch === "x" ? "full" : ch === "o" ? "half" : "", changed ? "chg" : ""].join(" ").trim(),
         "data-step": i, "data-lane": lane, tabindex: onToggle ? "0" : null, role: onToggle ? "button" : null,
-        "aria-label": onToggle ? `${lane}, step ${i + 1}: ${STEP_NAMES[ch] || "empty"}. Press to change.` : null,
+        "aria-label": onToggle ? `${laneName(lane)}, step ${i + 1}: ${STEP_NAMES[ch] || "empty"}. Press to change.` : null,
         onclick: onToggle ? () => onToggle(lane, i) : null,
         onkeydown: onToggle ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(lane, i); } } : null });
     });
     const beats = [0, 1, 2, 3].map((b) => h("div", { class: "beat-group" }, cells.slice(b * 4, b * 4 + 4)));
-    rows.push(h("div", { class: "drum-lane" }, h("span", { class: "name", tabindex: "0", "data-tip": laneHelp(lane, measured) }, lane), h("div", { class: "drum-grid" }, beats)));
+    rows.push(h("div", { class: "drum-lane" }, h("span", { class: "name", tabindex: "0", "data-tip": laneHelp(lane, measured, help) }, laneName(lane)), h("div", { class: "drum-grid" }, beats)));
   }
   if (rows.length) rows.unshift(h("div", { class: "drum-lane beat-nums", "aria-hidden": "true" }, h("span", { class: "name" }), h("div", { class: "drum-grid" }, [1, 2, 3, 4].map((n) => h("span", {}, n)))));
   return rows;
@@ -448,6 +454,7 @@ function voice(ctx, lane, t, vel) {
   else if (l.includes("clap")) { env(0.5, 0.25); noise("bandpass", 1500, 0.25, 1.2); }
   else if (isOpenHat(l)) { env(0.25, 0.22); noise("highpass", 7000, 0.22); }
   else if (l.includes("hat")) { env(0.25, 0.045); noise("highpass", 7000, 0.045); }
+  else if (l.includes("tom")) { env(0.6, 0.3); tone("sine", 170, 120, 0.3); }
   else { env(0.4, 0.12); tone("sine", 800, 700, 0.12); }
 }
 // Lookahead scheduler: a 25 ms timer queues every step starting within the next 150 ms. getPat/getBpm are read per step, so edits apply live.
@@ -468,8 +475,8 @@ function startPlayer(getPat, getBpm, onStep, onEnd) {
   const me = { stop() { if (!alive) return; alive = false; clearInterval(iv); timers.forEach(clearTimeout); if (player === me) player = null; onEnd(); } };
   return (player = me);
 }
-// General MIDI drum map (channel 10): kick 36, snare 38, clap 39, closed hat 42, open hat 46, anything else 37.
-const GM_NOTE = (lane) => { const l = lane.toLowerCase(); return l.includes("kick") ? 36 : l.includes("snare") ? 38 : l.includes("clap") ? 39 : isOpenHat(l) ? 46 : l.includes("hat") ? 42 : 37; };
+// General MIDI drum map (channel 10): kick 36, snare 38, clap 39, closed hat 42, open hat 46, low tom 45, perc (cowbell) 56, anything else 37.
+const GM_NOTE = (lane) => { const l = lane.toLowerCase(); return l.includes("kick") ? 36 : l.includes("snare") ? 38 : l.includes("clap") ? 39 : isOpenHat(l) ? 46 : l.includes("hat") ? 42 : l.includes("tom") ? 45 : l.includes("perc") ? 56 : 37; };
 // Format 0, 480 PPQN, one 4/4 bar (1920 ticks), 120 ticks per 16th step, notes 60 ticks long.
 function midiBytes(pattern, bpm, name) {
   const vlq = (n) => { const o = [n & 127]; while ((n >>= 7)) o.unshift((n & 127) | 128); return o; };
@@ -504,7 +511,7 @@ function diffText(pattern, prev) {
     if (!prev || typeof prev[lane] !== "string") continue;
     let add = 0, drop = 0;
     [...pattern[lane]].forEach((ch, i) => { const was = prev[lane][i] !== "."; const is = ch !== "."; if (is && !was) add++; if (!is && was) drop++; });
-    if (add || drop) parts.push(`${lane} ${[add ? "+" + add : "", drop ? "−" + drop : ""].filter(Boolean).join(" ")}`);
+    if (add || drop) parts.push(`${laneName(lane)} ${[add ? "+" + add : "", drop ? "−" + drop : ""].filter(Boolean).join(" ")}`);
   }
   return parts.length ? parts.join(", ") : "same as previous section";
 }
@@ -598,10 +605,10 @@ function drumGrid(s, card) {
   toggle.addEventListener("change", () => { showChg = toggle.checked; paint(true); });
   function paint(quiet) {
     resetBtn.hidden = !edits[sel];
-    if (!secs) { body.replaceChildren(...laneRows(cur(), null, det, toggleStep)); setNow(nowStep); return; }
+    if (!secs) { body.replaceChildren(...laneRows(cur(), null, det, toggleStep, s.data.lane_help)); setNow(nowStep); return; }
     [...tabs.children].forEach((b, k) => b.setAttribute("aria-selected", String(k === sel)));
     const sec = secs[sel], before = sel > 0 ? secs[sel - 1] : null;
-    body.replaceChildren(...laneRows(cur(), before && showChg ? before.pattern : null, true, toggleStep));
+    body.replaceChildren(...laneRows(cur(), before && showChg ? before.pattern : null, true, toggleStep, s.data.lane_help));
     setNow(nowStep);
     note.replaceChildren(
       h("b", {}, name(sec)), h("span", { class: "muted" }, ` · bars ${sec.start_bar}-${sec.end_bar}`),

@@ -92,3 +92,33 @@ Measured on GiantSteps Key (599 tracks, labels from the original dataset):
   major-key music, lower it.
 - Tried and dropped (no gain on GiantSteps): bass-weighted chroma, band-split chroma with learned profiles,
   tuning-corrected 36-bin CQT chroma, 10 s windowed voting, Temperley profiles, learned per-mode profiles.
+
+## Drum lanes
+
+The drum lanes behind the detected groove (kick, snare, clap, hat, open hat,
+tom, perc; see `tastr/engine/drums.py`) have their own benchmark:
+
+```
+python -m tastr.engine.bench.drums synth                                  # generated loops, every lane
+python -m tastr.engine.bench.drums idmt ~/data/IDMT-SMT-DRUMS-V2 --limit 20 # quick check while tuning
+python -m tastr.engine.bench.drums idmt ~/data/IDMT-SMT-DRUMS-V2 --out drums.json
+```
+
+`idmt` is [IDMT-SMT-Drums](https://zenodo.org/records/7544164) (95 loops from
+real, sampled and techno kits, CC BY-NC-ND): kick, snare and hi-hat onsets,
+scored within 50 ms. Snare counts snare or clap hits, hat counts closed or open.
+It has no toms or percussion, so it also reports how often those lanes fire
+anyway. `synth` scores every lane step by step on generated loops, which is
+exact but uses one synthetic kit. Iterate with `--limit`, run the full set
+before keeping a change.
+
+Scores on 2026-10-29 (onset F-measure; before is the old three-band split):
+
+| | Kick | Snare | Hat |
+|---|---|---|---|
+| IDMT, before | 0.74 | 0.48 | 0.89 |
+| IDMT, now | 0.96 | 0.94 | 0.90 |
+
+Synth, now: kick 1.00, clap 1.00, hat 0.91, snare 0.75, open hat 0.69, tom
+0.67, perc 0.64. Toms and percussion are found when they play alone but missed
+when they land with a kick or snare; IDMT kits fire them on about 3 in 100 hits.

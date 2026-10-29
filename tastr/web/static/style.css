@@ -55,7 +55,7 @@ svg text { fill: var(--muted); font-size: 11px; }
 svg text.lbl { fill: var(--fg); }
 svg text.band { fill: var(--bg); font-weight: 600; }
 .drum-lane { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-.drum-lane .name { width: 56px; font-size: 12px; color: var(--muted); flex: none; }
+.drum-lane .name { width: 60px; font-size: 12px; color: var(--muted); flex: none; }
 .drum-grid i { aspect-ratio: 1; max-height: 22px; border-radius: 3px; background: var(--panel); border: 1px solid var(--line); }
 .drum-grid i.full { background: var(--accent); border-color: var(--accent); }
 .drum-grid i.half { background: color-mix(in srgb, var(--accent) 45%, var(--panel)); }

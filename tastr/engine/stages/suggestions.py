@@ -11,14 +11,17 @@ from collections import Counter
 
 import numpy as np
 
-from .. import music, signals
+from .. import drums, music, signals
 from ..card import Suggestion
 from ..pipeline import AnalysisContext, register_stage
 
 STEPS = 16
 
 # Default Drum Rack pad notes in Live.
-DRUM_RACK = {"kick": "C1", "snare": "D1", "clap": "D#1", "hat": "F#1", "open_hat": "A#1", "perc": "G#1"}
+DRUM_RACK = {"kick": "C1", "snare": "D1", "clap": "D#1", "hat": "F#1", "open_hat": "A#1", "tom": "A1", "perc": "G#1"}
+
+# Lanes that are reported whenever they have a clear pattern; the rest also need to be loud enough.
+CORE_LANES = ("kick", "snare", "hat")
 
 VARIATIONS = {
     "four_floor": [
@@ -68,6 +71,10 @@ def _step_list(pattern: str) -> list[int]:
 
 def _pattern(profile: np.ndarray) -> str:
     return "".join("x" if v >= 0.72 else "o" if v >= 0.5 else "." for v in profile)
+
+
+def _lane_help(pattern: dict) -> dict:
+    return {k: drums.LANE_HELP[k] for k in pattern if k in drums.LANE_HELP}
 
 
 def _title(text: str) -> str:
@@ -122,30 +129,46 @@ def _bar_energy(ctx: AnalysisContext, step_frames: np.ndarray) -> np.ndarray:
     return np.array([rms[a:max(b, a + 1)].mean() for a, b in zip(step_frames[:, 0], ends)])
 
 
-DRUM_BANDS = {"kick": (20, 150), "snare": (180, 2500), "hat": (6000, None)}
-
-
 def _drum_grid(ctx: AnalysisContext, step_frames: np.ndarray) -> dict:
-    mel, freqs = ctx.get("mel_percussive", signals.mel_percussive)
     energies = _bar_energy(ctx, step_frames)
     busy = energies >= np.median(energies)
     if busy.sum() < 2:
         busy = np.ones(len(energies), dtype=bool)
+    bpm = ctx.card.core.bpm
+    step_s = 15.0 / bpm if bpm else None
+    acts = drums.lane_activations(ctx, step_frames, step_seconds=step_s)
+    # Noise floor: the same measure halfway between 16ths, where a played pattern has no hits.
+    between = (step_frames + np.roll(step_frames, -1, axis=1)) // 2
+    between[:, -1] = step_frames[:, -1] + (step_frames[:, -1] - step_frames[:, -2]) // 2 if STEPS > 1 else step_frames[:, -1]
+    floor_acts = drums.lane_activations(ctx, between, step_seconds=step_s, slop=0)
     grid = {}
-    for lane, (lo, hi) in DRUM_BANDS.items():
-        # sqrt compresses flux toward perceived loudness so a slightly weaker hit still reads as a hit
-        steps = np.sqrt(_sample(_band_flux(mel, freqs, lo, hi or ctx.sr / 2), step_frames))
+    for lane in drums.LANES:
+        # sqrt compresses activation toward perceived loudness so a slightly weaker hit still reads as a hit
+        steps = np.sqrt(acts[lane])
         profile = steps[busy].mean(axis=0)
+        floor = float(np.sqrt(floor_acts[lane])[busy].mean())
         peak = float(profile.max())
         norm = profile / peak if peak > 0 else profile
-        contrast = peak / (float(np.median(profile)) + 1e-9) if peak > 0 else 0.0
         grid[lane] = {
             "pattern": _pattern(norm),
             "velocity": [round(float(v), 3) for v in norm],
-            "detected": bool(contrast >= 1.4 and peak > 0.05),
+            "detected": bool(peak > 0 and peak >= 3.0 * floor),
             "_steps": steps,
             "_peak": peak,
         }
+    # A lane far quieter than the loudest one is most likely another drum misread.
+    top = max(g["_peak"] for g in grid.values())
+    for lane, g in grid.items():
+        if lane not in CORE_LANES and g["_peak"] < 0.2 * top:
+            g["detected"] = False
+    # A mid lane that is a faint copy of the kick (same steps, much quieter) is the kick leaking through.
+    kick = grid["kick"]
+    for lane in ("snare", "clap", "perc"):
+        g = grid[lane]
+        if g["detected"] and kick["_peak"] > 0 and g["_peak"] < 0.35 * kick["_peak"]:
+            a, b = np.asarray(g["velocity"]), np.asarray(kick["velocity"])
+            if a.std() > 0 and b.std() > 0 and float(np.corrcoef(a, b)[0, 1]) > 0.9:
+                g["detected"] = False
     return grid
 
 
@@ -246,7 +269,7 @@ def _harmony_summary(ctx: AnalysisContext, step_frames: np.ndarray, tonic: int, 
 # --- Suggestion rules ------------------------------------------------------------
 
 
-def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_section: list[dict] | None = None) -> list[Suggestion]:
+def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_section: list[dict] | None = None) -> list[Suggestion]:
     card = ctx.card
     core, f = card.core, card.features
     bpm, key = core.bpm, core.key
@@ -284,10 +307,12 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
             "The off-beat 16ths sit late. Drag 'Swing 16ths' from the Groove Pool (Core Library > Swing) onto "
             f"your drum clip and start around {amount}%, or use a Groove with Timing at about {int((amount - 50) * 4)}%.",
             {"swing_percent": amount, "template": "{swing}"})
-    detected = {k: v["pattern"] for k, v in drums.items() if v["detected"]}
+    detected = {k: v["pattern"] for k, v in grid.items() if v["detected"]}
     if detected:
         rows = "; ".join(f"{k} on steps {', '.join(map(str, _step_list(p))) or 'none'}" for k, p in detected.items())
+        pads = ", ".join(f"{k.replace('_', ' ')} {DRUM_RACK[k]}" for k in detected if k in DRUM_RACK)
         data = {"pattern": detected, "pads": DRUM_RACK, "origin": "detected", "bpm": round(bpm) if bpm else None,
+                "lane_help": _lane_help(detected),
                 "template": "Measured per section, since drums change between sections. Averaged over the busiest "
                             f"bars the whole track reads as {rows}. Program it on {{drumrack}}{{pads}} and vary the "
                             "last bar of every 4."}
@@ -296,13 +321,13 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
                                   for sec in by_section]
         add("drums", "Detected groove",
             f"Measured per section, since drums change between sections. Averaged over the busiest bars the whole "
-            f"track reads as {rows}. Program it on a Drum Rack (kick {DRUM_RACK['kick']}, snare {DRUM_RACK['snare']}, "
-            f"hat {DRUM_RACK['hat']}) and vary the last bar of every 4.", data)
+            f"track reads as {rows}. Program it on a Drum Rack ({pads}) and vary the last bar of every 4.", data)
     for name, pattern in VARIATIONS[style] if style else []:
         add("drums", f"Pattern idea: {name}",
             f"A {name.lower()} pattern that sits at this tempo. Lanes map to default Drum Rack pads.",
             {"pattern": pattern, "pads": DRUM_RACK, "origin": "template", "style": STYLE_LABELS[style],
              "style_key": style, "bpm": round(bpm),
+             "lane_help": _lane_help(pattern),
              "template": f"A {name.lower()} pattern that sits at this tempo. Lanes map to the default {{drumrack}} pads."})
 
     # --- Bass ---
@@ -387,25 +412,25 @@ class SuggestionsStage:
         key = card.core.key
         tonic = key.tonic if key else None
         scale = (key.scale or ("Minor" if key.mode == "minor" else "Major")) if key else "Major"
-        drums, bass, harm = {}, {}, {}
+        grid, bass, harm = {}, {}, {}
         n_frames = 1 + len(ctx.y) // ctx.hop
         step_frames = _step_grid(ctx, n_frames)
         if step_frames.shape[0]:
-            drums = _drum_grid(ctx, step_frames)
+            grid = _drum_grid(ctx, step_frames)
             bass = _bass_summary(ctx, step_frames, tonic, scale)
             if tonic is not None:
                 harm = _harmony_summary(ctx, step_frames, tonic, scale)
         by_section = []
-        if drums:
+        if grid:
             secs = [(i, x) for i, x in enumerate(card.sections) if x.start_bar is not None]
             if len(secs) > 1:
-                by_section = _section_grooves(drums, _bar_energy(ctx, step_frames), secs)
-            card.extras["suggestions.drum_grid"] = {k: {f: v for f, v in g.items() if not f.startswith("_")} for k, g in drums.items()}
+                by_section = _section_grooves(grid, _bar_energy(ctx, step_frames), secs)
+            card.extras["suggestions.drum_grid"] = {k: {f: v for f, v in g.items() if not f.startswith("_")} for k, g in grid.items()}
         if bass:
             card.extras["suggestions.bass"] = bass
         if harm:
             card.extras["suggestions.harmony"] = harm
-        card.suggestions = _suggest(ctx, drums, bass, harm, by_section)
+        card.suggestions = _suggest(ctx, grid, bass, harm, by_section)
 
 
 register_stage(SuggestionsStage())

@@ -116,9 +116,14 @@ def run(items: list[Item], stages: list[str] | None = None, jobs: int = 1, limit
     work = [(it, stages) for it in items]
     rows: list[dict] = []
     t0 = time.time()
-    if jobs > 1:
+    if jobs > 1 and work:
+        # Analyze one track here first so librosa's numba kernels are compiled and cached before the
+        # workers start; workers compiling into the shared cache at once corrupted it (segfaults later).
+        rows.append(_work(work[0]))
+        if progress:
+            progress(len(rows), len(items), rows[-1])
         with ProcessPoolExecutor(jobs) as pool:
-            for row in pool.map(_work, work):
+            for row in pool.map(_work, work[1:]):
                 rows.append(row)
                 if progress:
                     progress(len(rows), len(items), row)

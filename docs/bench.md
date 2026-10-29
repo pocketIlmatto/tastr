@@ -106,8 +106,16 @@ Measured on GiantSteps Key (599 tracks, labels from the original dataset):
   0.581 -> 0.568 to 0.581 against the same CQT without suppression.
 - Iterating quickly: extract the chroma once per track (`signals.chroma`) to `.npz`, then score `estimate_key`
   variants offline in seconds; run the full bench only for a candidate that wins on both subsets.
+- Held-out check on Beatport EDM Key (first 200 of the 1,275 scored tracks, `--stages core`, 2026-10-29):
+  MIREX 0.499, exact 40% (80/200); fifth 23, relative 7, parallel 31, other 59. That is well below GiantSteps
+  (0.605 to 0.655 on 200-track subsets), so the current method partly fits GiantSteps. Parallel-mode misses
+  lead, and only 70% of these labels are minor against 85% on GiantSteps, so check the minor prior here first.
+  "Other" misses (30%) are the next biggest group.
 - Environment: librosa 1.0 with numba 0.68 and numpy 2.5 segfaults in `onset_detect`. These worked:
   numpy<2.3, numba 0.61.2, llvmlite 0.44.0, librosa 0.11.0, scipy<1.16.
+  A segfault in `beat_track` with matching versions came from a numba cache corrupted when parallel workers
+  compiled into it at once. `--jobs` now analyzes one track before starting workers; if a cache is already
+  broken, delete the `.nbi`/`.nbc` files under librosa's `__pycache__` or point `NUMBA_CACHE_DIR` at a fresh folder.
 
 ## Tempo notes
 

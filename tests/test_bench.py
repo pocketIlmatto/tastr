@@ -118,6 +118,31 @@ def test_review_queue_puts_confident_mistakes_first():
     assert [r["id"] for r in runner.review_queue(rows)] == ["wrong-sure", "wrong-unsure", "ok-unsure", "ok-sure"]
 
 
+def test_parallel_run_warms_up_in_parent(monkeypatch):
+    calls = []
+
+    class FakePool:
+        def __init__(self, jobs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def map(self, fn, work):
+            calls.append([w[0].id for w in work])
+            return map(fn, work)
+
+    monkeypatch.setattr(runner, "ProcessPoolExecutor", FakePool)
+    monkeypatch.setattr(runner, "_work", lambda w: {"id": w[0].id})
+    items = [datasets.Item(id=f"t{i}", truth=datasets.Truth()) for i in range(3)]
+    report = runner.run(items, jobs=2)
+    assert calls == [["t1", "t2"]]  # t0 ran in the parent first
+    assert [r["id"] for r in report["rows"]] == ["t0", "t1", "t2"]
+
+
 @pytest.mark.audio
 def test_bench_cli_on_manifest(tmp_path, capsys):
     y, truth = make_track(bpm=124, tonic=9, mode="minor", bars_per_section=(2, 4, 2))

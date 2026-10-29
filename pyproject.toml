@@ -23,6 +23,8 @@ dependencies = [
 links = ["yt-dlp"]
 # Stem separation (`tastr stems`, "Separate stems" in the UI). Pulls in PyTorch, about 2 GB.
 stems = ["demucs>=4.0.1"]
+# Benchmarks and stem separation on Modal (docs/cloud.md).
+cloud = ["modal>=1.0"]
 dev = ["pytest>=8", "pytest-xdist>=3.5", "httpx>=0.27"]
 
 [project.scripts]

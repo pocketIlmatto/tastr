@@ -12,7 +12,8 @@ tastr bench manifest ~/music/labels.csv             # your own tracks
 ```
 
 By default only the `core` and `sections` stages run (`--stages` to change).
-`--limit N` takes the first N tracks for a quick check.
+`--limit N` takes the first N tracks for a quick check. `--remote` runs it on Modal
+with the datasets in an R2 bucket instead of on this machine (see [cloud.md](cloud.md)).
 
 ## What gets scored
 

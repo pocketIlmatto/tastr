@@ -6,7 +6,8 @@ them `available()` is False and the API answers 501 with that install hint. Stem
 deleted with the track.
 
 The web server runs one separation at a time in a background thread (`Jobs`); `tastr stems ID`
-runs the same `separate_track` in the foreground.
+runs the same `separate_track` in the foreground. With `TASTR_STEMS_BACKEND=modal`, Demucs runs on a
+Modal GPU instead (`tastr[cloud]`, docs/cloud.md) and only the stems come back here.
 """
 
 from __future__ import annotations
@@ -27,8 +28,12 @@ INSTALL_HINT = "Stem separation needs Demucs, an optional install (about 2 GB wi
 Progress = Callable[[float], None]
 
 
+def backend() -> str:
+    return os.environ.get("TASTR_STEMS_BACKEND", "local")
+
+
 def available() -> bool:
-    return importlib.util.find_spec("demucs") is not None
+    return importlib.util.find_spec("modal" if backend() == "modal" else "demucs") is not None
 
 
 def stems_dir(sha256: str | None, track_id: int) -> Path:
@@ -50,6 +55,11 @@ def remove(folder: Path) -> None:
 
 def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None) -> None:
     """Split one file into STEM_NAMES FLAC files in `out_dir` with Demucs. Tests replace this."""
+    if backend() == "modal":
+        from .cloud import remote
+
+        remote.stems(audio_path, out_dir, progress)
+        return
     import librosa
     import numpy as np
     import soundfile as sf

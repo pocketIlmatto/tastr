@@ -42,8 +42,28 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel")
     b.add_argument("--out", help="write the full JSON report here")
     b.add_argument("--baseline", help="earlier report to compare against")
+    b.add_argument("--remote", action="store_true",
+                   help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
 
     args = p.parse_args(argv)
+
+    if args.cmd == "bench" and args.remote:
+        from .cloud import remote
+        from .engine.bench import runner
+
+        print(f"running {args.dataset} on Modal...", file=sys.stderr)
+        stages = args.stages.split(",") if args.stages else None
+        try:
+            report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
+                                  jobs=args.jobs if args.jobs > 1 else None)
+        except (remote.RemoteError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        baseline = runner.load_report(args.baseline) if args.baseline else None
+        print(runner.format_summary(report, baseline))
+        if args.out:
+            runner.save(report, args.out)
+        return 0
 
     if args.cmd == "bench":
         from .engine import bench

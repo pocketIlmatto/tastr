@@ -265,7 +265,7 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
         warp = "Beats" if (perc or 0) > 0.3 else "Complex Pro"
         title = f"Set the project to {bpm:.0f} BPM" + (f", {root} {scale}" if key else "")
         body = f"Set the tempo to {bpm:.1f} (half/double: {bpm / 2:.0f}/{bpm * 2:.0f}). "
-        data = {"bpm": bpm, "warp_mode": warp}
+        data = {"bpm": bpm, "warp_mode": warp, "template": "{setup}"}
         if key:
             body += (f"Turn on Scale in the Control Bar with root {root} and scale {scale} so MIDI devices and "
                      f"the piano roll follow it.{f' Camelot {key.camelot} if you are mixing it.' if key.camelot else ''} ")
@@ -274,7 +274,7 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
         add("setup", title, body, data)
     elif key:
         add("setup", f"Set Scale to {root} {scale}",
-            f"Turn on Scale in the Control Bar with root {root} and scale {scale}.", {"root": root, "scale": scale})
+            f"Turn on Scale in the Control Bar with root {root} and scale {scale}.", {"root": root, "scale": scale, "template": "{setup}"})
 
     # --- Drums ---
     swing_conf, swing_pct = f.get("swing_confidence"), f.get("swing_percent")
@@ -283,11 +283,14 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
         add("drums", f"Swing your 16ths to about {amount}%",
             "The off-beat 16ths sit late. Drag 'Swing 16ths' from the Groove Pool (Core Library > Swing) onto "
             f"your drum clip and start around {amount}%, or use a Groove with Timing at about {int((amount - 50) * 4)}%.",
-            {"swing_percent": amount})
+            {"swing_percent": amount, "template": "{swing}"})
     detected = {k: v["pattern"] for k, v in drums.items() if v["detected"]}
     if detected:
         rows = "; ".join(f"{k} on steps {', '.join(map(str, _step_list(p))) or 'none'}" for k, p in detected.items())
-        data = {"pattern": detected, "pads": DRUM_RACK, "origin": "detected"}
+        data = {"pattern": detected, "pads": DRUM_RACK, "origin": "detected",
+                "template": "Measured per section, since drums change between sections. Averaged over the busiest "
+                            f"bars the whole track reads as {rows}. Program it on {{drumrack}}{{pads}} and vary the "
+                            "last bar of every 4."}
         if by_section:
             data["by_section"] = [{**sec, "pattern": {k: v for k, v in sec["pattern"].items() if k in detected}}
                                   for sec in by_section]
@@ -298,7 +301,8 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
     for name, pattern in VARIATIONS[style] if style else []:
         add("drums", f"Pattern idea: {name}",
             f"A {name.lower()} pattern that sits at this tempo. Lanes map to default Drum Rack pads.",
-            {"pattern": pattern, "pads": DRUM_RACK, "origin": "template", "style": STYLE_LABELS[style]})
+            {"pattern": pattern, "pads": DRUM_RACK, "origin": "template", "style": STYLE_LABELS[style],
+             "template": f"A {name.lower()} pattern that sits at this tempo. Lanes map to the default {{drumrack}} pads."})
 
     # --- Bass ---
     if bass.get("loop"):
@@ -324,7 +328,7 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
             "Put a Compressor on the bass, enable Sidechain from the kick, ratio 4:1, attack 0.1 ms, release "
             f"about {eighth * 0.6:.0f}-{eighth:.0f} ms (an 8th note at this tempo is {eighth:.0f} ms). Or use "
             "Live 12's Shaper/Envelope Follower for a drawn ducking curve.",
-            {"release_ms": round(eighth)})
+            {"release_ms": round(eighth), "template": "{sidechain}"})
 
     # --- Harmony ---
     if harm.get("progression"):

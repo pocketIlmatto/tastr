@@ -158,12 +158,17 @@ function renderCard(c) {
     for (const s of grids) root.append(drumGrid(s));
   }
   if (sugs.length) {
-    root.append(h("h3", {}, "Try this in Ableton"));
+    const pick = h("select", { class: "daw-pick", "aria-label": "Your DAW", onchange: (e) => {
+      daw = e.target.value;
+      try { localStorage.setItem("tastr-daw", daw); } catch (_) {}
+      renderCard(c);
+    } }, Object.entries(DAWS).map(([k, v]) => h("option", { value: k, ...(k === daw ? { selected: "" } : {}), ...(v.soon ? { disabled: "" } : {}) }, v.soon ? `${v.name} (coming soon)` : v.name)));
+    root.append(h("h3", { class: "try-head" }, "Try this in ", pick));
     const groups = {};
     for (const s of sugs) (groups[s.category || "other"] ||= []).push(s);
     for (const [cat, items] of Object.entries(groups)) {
       root.append(h("h3", {}, cat));
-      for (const s of items) root.append(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, s.body)));
+      for (const s of items) root.append(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, dawText(s))));
     }
   }
 
@@ -171,6 +176,42 @@ function renderCard(c) {
   if (errs.length) {
     root.append(h("div", { class: "errors" }, "Some stages failed: ", errs.map(([k, v]) => h("div", {}, `${k}: ${v}`))));
   }
+}
+
+// Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.
+// Ableton Live is the only glossary so far. Other DAWs show in the picker but can't be selected.
+const DAWS = {
+  ableton: {
+    name: "Ableton Live",
+    tokens: {
+      drumrack: () => "a Drum Rack",
+      pads: (d) => {
+        const lanes = Object.keys(d.pattern || {}).filter((l) => d.pads && d.pads[l]);
+        return lanes.length ? ` (${lanes.map((l) => `${l} ${d.pads[l]}`).join(", ")})` : "";
+      },
+      swing: (d) => `The off-beat 16ths sit late. Drag 'Swing 16ths' from the Groove Pool (Core Library > Swing) onto your drum clip and start around ${d.swing_percent}%, or use a Groove with Timing at about ${Math.round((d.swing_percent - 50) * 4)}%.`,
+      sidechain: (d) => `Put a Compressor on the bass, enable Sidechain from the kick, ratio 4:1, attack 0.1 ms, release about ${Math.round(d.release_ms * 0.6)}-${d.release_ms} ms (an 8th note at this tempo is ${d.release_ms} ms). Or use Live 12's Shaper/Envelope Follower for a drawn ducking curve.`,
+      setup: (d) => {
+        const scale = d.root ? `Turn on Scale in the Control Bar with root ${d.root} and scale ${d.scale}` : "";
+        if (!isNum(d.bpm)) return `${scale}.`;
+        const key = d.root ? `${scale} so MIDI devices and the piano roll follow it.${d.camelot ? ` Camelot ${d.camelot} if you are mixing it.` : ""} ` : "";
+        return `Set the tempo to ${d.bpm.toFixed(1)} (half/double: ${(d.bpm / 2).toFixed(0)}/${(d.bpm * 2).toFixed(0)}). ${key}If you drop the audio in, warp it in ${d.warp_mode} mode.`;
+      },
+    },
+  },
+  // Placeholders so the picker and switching work; add a glossary (and drop `soon`) to enable one.
+  logic: { name: "Logic Pro", soon: true },
+  fl: { name: "FL Studio", soon: true },
+  bitwig: { name: "Bitwig Studio", soon: true },
+};
+let daw = "ableton";
+try { const v = localStorage.getItem("tastr-daw"); if (DAWS[v] && !DAWS[v].soon) daw = v; } catch (_) {}
+
+function dawText(s) {
+  const tpl = s.data && s.data.template;
+  if (!tpl) return s.body;
+  const tokens = DAWS[daw].tokens || {};
+  return tpl.replace(/\{(\w+)\}/g, (m, k) => (tokens[k] ? tokens[k](s.data) : m));
 }
 
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];

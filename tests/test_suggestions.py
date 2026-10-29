@@ -74,3 +74,12 @@ def test_detected_groove_by_section(synth_wav, truth_core):
     assert by[0]["pattern"]["kick"][0] == "x"
     assert all(groove.data["pattern"][k] for k in ("kick", "hat"))
     json.dumps(groove.data)
+
+
+def test_daw_specific_text_is_templated(card):
+    templated = {s.title.split(":")[0]: s.data["template"] for s in card.suggestions if "template" in s.data}
+    assert "Set the project to" in " ".join(s.title for s in card.suggestions if "template" in s.data and s.category == "setup")
+    assert all("{" in t for t in templated.values())
+    for s in card.suggestions:
+        if "template" in s.data:
+            assert s.body  # rendered Ableton wording stays available to non-UI consumers

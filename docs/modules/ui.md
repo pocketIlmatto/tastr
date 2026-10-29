@@ -16,7 +16,7 @@ across the library.
 | GET | `/api/health` | | `{"ok": true}` (exists) |
 | GET | `/api/tracks` | | list of `db.list_tracks` rows (exists) |
 | GET | `/api/tracks/{id}` | | `{"id": ..., **card}` (exists) |
-| POST | `/api/analyze` | multipart `files[]` | `{"results": [{"track_id", "title", "error"}]}`; saves uploads under `$TASTR_HOME/uploads/` then calls `service.analyze_inputs` |
+| POST | `/api/analyze` | multipart `files[]` | `{"results": [{"track_id", "title", "error"}]}`; saves each upload as `$TASTR_HOME/uploads/<random id>/<original name>` then calls `service.analyze_inputs` |
 | POST | `/api/analyze-url` | `{"url": "..."}` | same shape; `IngestError` → 400 with the message |
 | DELETE | `/api/tracks/{id}` | | 204 / 404 |
 | POST | `/api/query` | `{"sql": "..."}` | `{"columns": [...], "rows": [[...]]}`; opens the DB with `db.connect(path, readonly=True)` so writes fail; 400 on SQL error |

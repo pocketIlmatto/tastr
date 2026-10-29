@@ -147,6 +147,16 @@ details.sec[open] > summary::after { content: "Hide"; }
 .drum-grid i[role="button"]:hover { border-color: var(--fg); }
 .drum-grid i[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .drum-grid i.now { box-shadow: 0 0 0 2px var(--fg); }
+#track-list li.pending { cursor: default; background: var(--panel); }
+#track-list li.pending .t { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+#track-list li.failed .s { color: var(--warn); }
+#track-list li.failed .why { cursor: help; }
+.spin { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+#track-list .spin { margin-right: 0; }
+.spin.idle { animation: none; border-color: var(--line); }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; border-top-color: var(--line); background: radial-gradient(circle, var(--accent) 30%, transparent 35%); } }
+.linklike { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; font-size: inherit; cursor: pointer; }
 .vibe-group { display: flex; align-items: center; gap: 10px; margin: 4px 0; }
 .vibe-glabel { flex: 0 0 56px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .vibe-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--g); margin-right: 6px; }

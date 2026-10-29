@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import db, service
-from ..filemeta import describe
+from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import IngestError
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -47,6 +47,10 @@ def _results(results) -> dict[str, Any]:
     }
 
 
+def _unprefixed(title: str | None, uri: str | None) -> str | None:
+    return title.removeprefix(legacy_upload_prefix(uri)) if title and uri else title
+
+
 def create_app(db_path: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="Tastr")
 
@@ -60,7 +64,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/api/tracks")
     def tracks():
         with closing(conn()) as c:
-            return db.list_tracks(c)
+            rows = db.list_tracks(c)
+            uris = dict(c.execute("SELECT id, source_uri FROM tracks").fetchall())
+        for r in rows:  # tracks uploaded before the hash moved into a folder still have it in their title
+            r["title"] = _unprefixed(r["title"], uris.get(r["id"]))
+        return rows
 
     @app.get("/api/tracks/{track_id}")
     def track(track_id: int):
@@ -69,6 +77,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             row = c.execute("SELECT analyzed_at FROM tracks WHERE id = ?", (track_id,)).fetchone()
         if card is None:
             raise HTTPException(404, "no such track")
+        card.source.title = _unprefixed(card.source.title, card.source.uri)
         return {"id": track_id, **card.to_dict(), "metadata": describe(card, row[0] if row else None)}
 
     @app.delete("/api/tracks/{track_id}", status_code=204)
@@ -85,7 +94,9 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         paths: list[str] = []
         for f in files:
             name = re.sub(r"[^\w.\- ]", "_", Path(f.filename or "upload").name) or "upload"
-            dest = upload_dir() / f"{uuid.uuid4().hex[:8]}_{name}"
+            # The unique part is a folder, so the stored file keeps the name the user gave it (that is what the title falls back to).
+            dest = upload_dir() / uuid.uuid4().hex[:8] / name
+            dest.parent.mkdir()
             with open(dest, "wb") as out:
                 while chunk := f.file.read(1 << 20):
                     out.write(chunk)

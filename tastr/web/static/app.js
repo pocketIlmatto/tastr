@@ -141,10 +141,30 @@ async function refresh(selectId) {
   else if (currentId != null && tracks.some((t) => t.id === currentId)) renderList();
 }
 
+// Placeholder rows for files being analyzed (or that failed), shown above the saved tracks.
+const pending = [];
+const cleanName = (n) => String(n || "").replace(/\.[a-z0-9]+$/i, "").replace(/^https?:\/\/(www\.)?/, "").slice(0, 48) || "Untitled";
+// The server's error can be a multi-line ffmpeg dump with its own file paths; show a short version and keep the full text in a tooltip.
+function shortError(err) {
+  if (!err) return "";
+  if (/^DecodeError/.test(err)) return "It couldn't be decoded as audio.";
+  const line = err.split("\n")[0].replace(/\S*[\\/]uploads[\\/]\w{8}_/g, "");
+  return line.length > 120 ? line.slice(0, 117) + "…" : line;
+}
 function renderList() {
   const ul = $("track-list");
   ul.replaceChildren();
-  if (!tracks.length) ul.append(h("li", { class: "muted" }, "No tracks yet."));
+  if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted" }, "No tracks yet."));
+  for (const p of pending) {
+    ul.append(p.failed
+      ? h("li", { class: "pending failed", "aria-label": `${cleanName(p.name)}: could not be analyzed` },
+          h("div", { class: "t" }, cleanName(p.name)),
+          h("div", { class: "s" }, "Couldn't analyze this file. ", h("button", { type: "button", class: "linklike", onclick: () => { pending.splice(pending.indexOf(p), 1); renderList(); } }, "Dismiss")),
+          p.error ? h("div", { class: "s why", title: p.error }, shortError(p.error)) : null)
+      : h("li", { class: "pending", "aria-busy": "true" },
+          h("div", { class: "t" }, h("span", { class: "spin" + (p.active ? "" : " idle"), "aria-hidden": "true" }), cleanName(p.name)),
+          h("div", { class: "s" }, p.active ? "Analyzing…" : "Waiting…")));
+  }
   for (const t of tracks) {
     ul.append(
       h("li", { class: t.id === currentId ? "active" : "", onclick: () => openTrack(t.id) },
@@ -693,43 +713,60 @@ async function deleteTrack(id) {
 }
 
 // ---------- upload ----------
-function setStatus(msg, isErr) {
+function setStatus(msg, isErr, busy) {
   const el = $("status");
-  el.textContent = msg;
+  el.replaceChildren(...(busy ? [h("span", { class: "spin", "aria-hidden": "true" })] : []), msg);
   el.className = isErr ? "error" : "muted";
 }
-function report(res) {
-  const results = res.results || [];
-  const errs = results.filter((r) => r.error);
-  setStatus(errs.length ? errs.map((r) => `${r.title}: ${r.error}`).join("; ") : `Analyzed ${results.length} track(s).`, errs.length > 0);
-  const ok = results.filter((r) => r.track_id != null);
-  return ok.length ? ok[ok.length - 1].track_id : null;
+// The server analyzes one request's files one after another, so send one request per file:
+// each placeholder can then turn into a track (or a failure) as soon as its own file is done.
+let queue = Promise.resolve();
+function analyzeBatch(items) {
+  if (!items.length) return;
+  const rows = items.map((it) => ({ name: it.name, active: false }));
+  pending.unshift(...rows);
+  renderList();
+  queue = queue.then(() => runBatch(items, rows));
 }
-async function uploadFiles(files) {
-  if (!files.length) return;
-  setStatus(`Analyzing ${files.length} file(s)… this can take a while.`);
-  const fd = new FormData();
-  for (const f of files) fd.append("files", f);
-  try {
-    const id = report(await api("/api/analyze", { method: "POST", body: fd }));
-    await refresh(id);
-  } catch (e) { setStatus(e.message, true); }
+async function runBatch(items, rows) {
+  let done = 0, failed = 0, lastId = null;
+  for (let i = 0; i < items.length; i++) {
+    const row = rows[i];
+    row.active = true;
+    setStatus(`Analyzing ${items.length} file(s)… this can take a while.`, false, true);
+    renderList();
+    let results;
+    try { results = (await items[i].send()).results || []; }
+    catch (e) { results = [{ track_id: null, title: row.name, error: e.message }]; }
+    const bad = results.filter((r) => r.error);
+    const ok = results.filter((r) => r.track_id != null);
+    done += ok.length; failed += bad.length;
+    if (ok.length) lastId = ok[ok.length - 1].track_id;
+    // Keep a failed row only for what failed; a single result keeps the name the user gave (the server's title carries a hash prefix).
+    pending.splice(pending.indexOf(row), 1, ...bad.map((r) => ({ name: results.length === 1 ? row.name : r.title, failed: true, error: r.error })));
+    try { tracks = await api("/api/tracks"); } catch (_) {}
+    renderList();
+  }
+  setStatus(`Analyzed ${done} track(s)` + (failed ? `, ${failed} failed` : "") + ".", failed > 0);
+  if (lastId != null) await refresh(lastId);
+}
+function uploadFiles(files) {
+  analyzeBatch(files.map((f) => ({
+    name: f.name,
+    send: () => { const fd = new FormData(); fd.append("files", f); return api("/api/analyze", { method: "POST", body: fd }); },
+  })));
 }
 const drop = $("drop");
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", (e) => uploadFiles([...e.dataTransfer.files]));
 $("file-input").addEventListener("change", (e) => { uploadFiles([...e.target.files]); e.target.value = ""; });
-$("url-form").addEventListener("submit", async (e) => {
+$("url-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const url = $("url-input").value.trim();
   if (!url) return;
-  setStatus("Fetching and analyzing…");
-  try {
-    const id = report(await api("/api/analyze-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) }));
-    $("url-input").value = "";
-    await refresh(id);
-  } catch (err) { setStatus(err.message, true); }
+  analyzeBatch([{ name: url, send: () => api("/api/analyze-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) }) }]);
+  $("url-input").value = "";
 });
 
 // ---------- explore ----------

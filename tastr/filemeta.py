@@ -6,6 +6,7 @@ yields empty dicts rather than an error, and the caller falls back to the file n
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,13 @@ def _size(n: int) -> str:
     return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{n / 1024:.0f} KB"
 
 
+def legacy_upload_prefix(uri: str) -> str:
+    """The "ab12cd34_" prefix older uploads carry in their stored file name ("" for anything else)."""
+    p = Path(uri)
+    m = re.match(r"[0-9a-f]{8}_", p.name)
+    return m.group(0) if m and p.parent.name == "uploads" else ""
+
+
 def describe(card, analyzed_at: str | None = None) -> dict[str, dict[str, str]]:
     """The card's metadata as display-ready groups: File tags, Audio, Source, Analysis.
 
@@ -140,7 +148,7 @@ def describe(card, analyzed_at: str | None = None) -> dict[str, dict[str, str]]:
     if info.get("file_size"):
         audio["File size"] = _size(info["file_size"])
 
-    source = {"Kind": s.kind, ("URL" if s.kind == "url" else "File"): s.uri if s.kind == "url" else Path(s.uri).name}
+    source = {"Kind": s.kind, ("URL" if s.kind == "url" else "File"): s.uri if s.kind == "url" else Path(s.uri).name.removeprefix(legacy_upload_prefix(s.uri))}
     if s.sha256:
         source["SHA256"] = s.sha256
     analysis: dict[str, str] = {}

@@ -109,6 +109,36 @@ def test_ui_hides_template_grids_until_requested():
         assert needle in js
 
 
+def test_upload_keeps_the_file_name_without_a_hash(client, synth_wav):
+    path, _ = synth_wav
+    with open(path, "rb") as f:
+        res = client.post("/api/analyze", files=[("files", (path.name, f, "audio/wav"))]).json()["results"][0]
+    assert res["title"] == path.stem
+    assert client.get("/api/tracks").json()[0]["title"] == path.stem
+    card = client.get(f"/api/tracks/{res['track_id']}").json()
+    assert card["source"]["title"] == path.stem
+    assert card["metadata"]["Source"]["File"] == path.name
+
+
+def test_tracks_uploaded_before_the_move_display_without_the_hash(client, db_path, tmp_path):
+    card = full_card()
+    card.source.uri = str(tmp_path / "uploads" / "d4defa41_Night Shift.wav")
+    card.source.title = "d4defa41_Night Shift"
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, card)
+    conn.close()
+    assert client.get("/api/tracks").json()[0]["title"] == "Night Shift"
+    body = client.get(f"/api/tracks/{tid}").json()
+    assert body["source"]["title"] == "Night Shift"
+    assert body["metadata"]["Source"]["File"] == "Night Shift.wav"
+    # a name that merely looks hashed, outside the uploads folder, is left alone
+    card2 = full_card()
+    card2.source.uri, card2.source.title = "/music/deadbeef_remix.wav", "deadbeef_remix"
+    card2.source.sha256 = "other"
+    conn = db.connect(db_path)
+    db.save_card(conn, card2)
+    conn.close()
+    assert "deadbeef_remix" in [t["title"] for t in client.get("/api/tracks").json()]
 def test_every_vibe_the_engine_can_produce_has_a_ui_group():
     """Fails when a vibe is added to the engine but not to VIBE_GROUPS in app.js."""
     import re

@@ -136,3 +136,10 @@ Scores on 2026-10-29 (onset F-measure; before is the old three-band split):
 Synth, now: kick 1.00, clap 1.00, hat 0.91, snare 0.75, open hat 0.69, tom
 0.67, perc 0.64. Toms and percussion are found when they play alone but missed
 when they land with a kick or snare; IDMT kits fire them on about 3 in 100 hits.
+
+## Downbeats
+
+`python -m tastr.engine.bench.downbeats <folder> --dataset gtzan [--limit N]`
+scores which beat core picks as bar 1, on labeled beats, from the Beat This!
+spectrogram release. See [rhythm.md](rhythm.md) for the data, scores and
+design notes.

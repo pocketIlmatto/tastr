@@ -86,3 +86,16 @@ def low_band_flux(ctx: AnalysisContext, lo: float = 20.0, hi: float = 150.0) -> 
     log_s = librosa.power_to_db(mel[mask] + 1e-10)
     flux = np.maximum(0.0, np.diff(log_s, axis=1, prepend=log_s[:, :1]))
     return flux.mean(axis=0)
+
+
+def log_mel(ctx: AnalysisContext) -> tuple[np.ndarray, np.ndarray]:
+    """(128 x frames log-compressed mel magnitude of the full mix, 30 Hz-11 kHz; band centre frequencies).
+
+    Same layout as the Beat This! spectrograms (log1p(1000 * magnitude)), so
+    rhythm logic tuned on their labeled sets carries over.
+    """
+    import librosa
+
+    mel = librosa.feature.melspectrogram(y=ctx.y, sr=ctx.sr, hop_length=ctx.hop, n_mels=128, fmin=30,
+                                         fmax=min(11000, ctx.sr / 2))
+    return np.log1p(1000 * np.sqrt(mel)), librosa.mel_frequencies(n_mels=130, fmin=30, fmax=min(11000, ctx.sr / 2))[1:-1]

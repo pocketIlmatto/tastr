@@ -143,3 +143,32 @@ def test_estimate_key_leans_minor_when_major_and_minor_tie():
     # Halfway between C major and its parallel minor: the minor prior should settle it.
     profile = (music.KK_MAJOR + music.KK_MINOR) / 2
     assert music.estimate_key(profile)["mode"] == "minor"
+
+
+def test_downbeats_land_on_bar_starts(default_card):
+    card, truth = default_card
+    bar = truth["bar_seconds"]
+    off = (np.array(card.core.downbeat_times) / bar) % 1.0
+    assert np.mean(np.minimum(off, 1 - off) < 0.06) > 0.8
+
+
+@pytest.mark.parametrize("start", [0, 1, 2, 3])
+def test_downbeat_phase_finds_bar_one(start):
+    """Kick on every beat, snare on 2 and 4, a new chord each bar; the clip starts on beat `start + 1`."""
+    from tastr.engine.stages.core import _downbeat_phase
+
+    freqs = np.geomspace(30, 11000, 128)
+    fpb, n_beats = 20, 64
+    log_mel = np.full((128, fpb * n_beats), 0.1)
+    rng = np.random.default_rng(0)
+    chords = rng.random((n_beats // 4 + 2, 128)) * (freqs > 200) * (freqs < 2000)
+    for i in range(n_beats):
+        pos = (start + i) % 4  # 0 = beat 1
+        bar = (start + i) // 4
+        seg = slice(i * fpb, (i + 1) * fpb)
+        log_mel[:, seg] += chords[bar][:, None]
+        log_mel[freqs < 120, i * fpb:i * fpb + 3] += 3.0  # kick
+        if pos in (1, 3):
+            log_mel[(freqs > 300) & (freqs < 2500), i * fpb:i * fpb + 3] += 2.0  # snare
+    want = (4 - start) % 4
+    assert _downbeat_phase(np.arange(n_beats) * fpb, log_mel, freqs) == want

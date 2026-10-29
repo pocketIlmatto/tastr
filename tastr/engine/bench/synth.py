@@ -97,8 +97,8 @@ class TruthCoreStage:
         self.energy = energy
 
     def run(self, ctx) -> None:
-        from tastr.card import Key
-        from tastr.music import camelot
+        from tastr.engine.card import Key
+        from tastr.engine.music import camelot
 
         t = self.truth
         beat = 60.0 / t["bpm"]

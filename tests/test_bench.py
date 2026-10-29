@@ -3,7 +3,7 @@ import json
 import pytest
 
 from synth import make_track, write_wav
-from tastr.bench import datasets, metrics, runner
+from tastr.engine.bench import datasets, metrics, runner
 from tastr.cli import main
 
 

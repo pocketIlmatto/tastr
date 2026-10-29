@@ -3,10 +3,10 @@ import json
 import numpy as np
 import pytest
 
-from tastr.card import Core, Source, TrackCard
+from tastr.engine.card import Core, Source, TrackCard
 from tastr.ingest import load_audio
-from tastr.pipeline import SR, AnalysisContext, run_pipeline
-from tastr.stages.suggestions import SuggestionsStage
+from tastr.engine.pipeline import SR, AnalysisContext, run_pipeline
+from tastr.engine.stages.suggestions import SuggestionsStage
 
 CATEGORIES = {"setup", "drums", "bass", "harmony", "arrangement", "sound"}
 
@@ -51,7 +51,7 @@ def test_empty_core_does_not_raise():
 
 
 def test_detected_groove_by_section(synth_wav, truth_core):
-    from tastr.card import Section
+    from tastr.engine.card import Section
 
     y = load_audio(str(synth_wav[0]), SR)
     base = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x")), stages=["suggestions"])

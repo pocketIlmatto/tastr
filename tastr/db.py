@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .card import TrackCard
+from .engine.card import TrackCard
 
 DB_SCHEMA_VERSION = 1
 

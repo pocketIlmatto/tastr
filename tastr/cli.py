@@ -7,7 +7,7 @@ import json
 import sys
 
 from . import db
-from .pipeline import registered_stages, resolve_order
+from .engine.pipeline import registered_stages, resolve_order
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -42,8 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     if args.cmd == "bench":
-        from . import bench
-        from .bench import runner
+        from .engine import bench
+        from .engine.bench import runner
 
         try:
             items = bench.load(args.dataset, args.path)

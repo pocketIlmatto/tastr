@@ -10,9 +10,9 @@ import sqlite3
 from dataclasses import dataclass
 
 from . import db
-from .card import Source, TrackCard
-from .ingest import file_sha256, load_audio, resolve_inputs
-from .pipeline import SR, run_pipeline
+from .engine import analyze_file
+from .engine.card import Source, TrackCard
+from .ingest import file_sha256, resolve_inputs
 
 log = logging.getLogger(__name__)
 
@@ -30,8 +30,7 @@ def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] |
         if not source.local_path:
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
-        y = load_audio(source.local_path, SR)
-        card = run_pipeline(y, SR, TrackCard(source=source), stages=stages)
+        card = analyze_file(source.local_path, stages, source=source)
         return AnalyzeResult(source, db.save_card(conn, card), card)
     except Exception as e:
         log.warning("failed to analyze %s: %s", source.uri, e)

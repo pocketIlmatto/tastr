@@ -1,13 +1,13 @@
 # Module: section detection
 
 ## Goal
-Replace the stub in `tastr/stages/sections.py` with rough, bar-snapped
+Replace the stub in `tastr/engine/stages/sections.py` with rough, bar-snapped
 section boundaries and labels (intro / verse / build / drop / chorus /
 breakdown / outro).
 
 ## Files
-- Edit: `tastr/stages/sections.py` (keep class `SectionsStage`, `name = "sections"`, `requires = ("core",)`).
-- Append-only: `tastr/signals.py`.
+- Edit: `tastr/engine/stages/sections.py` (keep class `SectionsStage`, `name = "sections"`, `requires = ("core",)`).
+- Append-only: `tastr/engine/signals.py`.
 - New: `tests/test_sections.py`.
 
 ## Inputs

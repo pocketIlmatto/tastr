@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tastr import db
-from tastr.card import Source, TrackCard
+from tastr.engine.card import Source, TrackCard
 from tastr.web.server import create_app
 from test_foundation import full_card
 

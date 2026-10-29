@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 from synth import SR, make_track
 
-from tastr.card import Source, TrackCard
-from tastr.pipeline import run_pipeline
-from tastr.stages.core import _swing
+from tastr.engine.card import Source, TrackCard
+from tastr.engine.pipeline import run_pipeline
+from tastr.engine.stages.core import _swing
 
 SHORT = (4, 8, 4)  # 16 bars is plenty for tempo and key
 

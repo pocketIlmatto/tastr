@@ -34,7 +34,7 @@ def truth_core(synth_wav):
     """Swap the core stage for one that reports the synth track's ground truth."""
     from synth import TruthCoreStage
 
-    from tastr.pipeline import register_stage, registered_stages
+    from tastr.engine.pipeline import register_stage, registered_stages
 
     original = registered_stages()["core"]
     register_stage(TruthCoreStage(synth_wav[1]), replace=True)

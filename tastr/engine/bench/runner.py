@@ -29,7 +29,7 @@ def analyze_item(item: Item, stages: list[str] | None = None) -> TrackCard:
     if item.synth is not None:
         y = item.synth()
     else:
-        from ..ingest import load_audio
+        from ..audio import load_audio
 
         y = load_audio(item.path, SR)
     card = TrackCard(source=Source(kind="file", uri=item.path or item.id, local_path=item.path, title=item.id))
@@ -129,7 +129,7 @@ def run(items: list[Item], stages: list[str] | None = None, jobs: int = 1, limit
                 progress(len(rows), len(items), rows[-1])
     versions = {name: st.version for name, st in registered_stages().items()}
     return {
-        "tastr_version": __version__,
+        "engine_version": __version__,
         "stage_versions": versions,
         "stages": stages or DEFAULT_STAGES,
         "seconds": round(time.time() - t0, 1),

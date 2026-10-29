@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 
 from tastr import db
-from tastr.card import Core, Key, Section, Series, Source, Suggestion, Tag, TrackCard
+from tastr.engine.card import Core, Key, Section, Series, Source, Suggestion, Tag, TrackCard
 from tastr.cli import main
 from tastr.ingest import IngestError, resolve_inputs
-from tastr.pipeline import AnalysisContext, register_stage, resolve_order, run_pipeline, unregister_stage
+from tastr.engine.pipeline import AnalysisContext, register_stage, resolve_order, run_pipeline, unregister_stage
 
 
 def full_card() -> TrackCard:

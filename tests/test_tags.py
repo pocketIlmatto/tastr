@@ -1,6 +1,6 @@
-from tastr.card import Core, Key, Source, TrackCard
-from tastr.pipeline import AnalysisContext
-from tastr.stages.tags import TagsStage
+from tastr.engine.card import Core, Key, Source, TrackCard
+from tastr.engine.pipeline import AnalysisContext
+from tastr.engine.stages.tags import TagsStage
 
 import numpy as np
 

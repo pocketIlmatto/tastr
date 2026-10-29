@@ -13,7 +13,7 @@ import re
 from dataclasses import asdict
 from pathlib import Path
 
-from ..card import Source
+from ..engine.card import Source
 from ..ingest import IngestError, register_url_resolver
 from .streaming import streaming_service
 

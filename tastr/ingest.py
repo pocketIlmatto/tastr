@@ -9,17 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 from typing import Protocol
 
-import numpy as np
-
-from .card import Source
-
-AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".aiff", ".aif", ".m4a", ".aac", ".opus"}
+from .engine.audio import AUDIO_EXTENSIONS, load_audio  # noqa: F401  (re-exported)
+from .engine.card import Source
 
 
 class IngestError(Exception):
@@ -90,25 +84,3 @@ def file_sha256(path: str | os.PathLike) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def load_audio(path: str | os.PathLike, sr: int) -> np.ndarray:
-    """Decode to mono float32 at `sr`, falling back to ffmpeg for formats libsndfile can't read."""
-    import librosa
-
-    try:
-        y, _ = librosa.load(path, sr=sr, mono=True)
-        return y
-    except Exception as first_error:
-        if not shutil.which("ffmpeg"):
-            raise IngestError(f"Could not decode {path}: {first_error}") from first_error
-        with tempfile.TemporaryDirectory() as tmp:
-            wav = os.path.join(tmp, "decoded.wav")
-            proc = subprocess.run(
-                ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(path), "-ac", "1", "-ar", str(sr), wav],
-                capture_output=True,
-            )
-            if proc.returncode != 0:
-                raise IngestError(f"ffmpeg could not decode {path}: {proc.stderr.decode(errors='replace')[:300]}")
-            y, _ = librosa.load(wav, sr=sr, mono=True)
-            return y

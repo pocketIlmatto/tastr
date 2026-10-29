@@ -2,9 +2,9 @@ import numpy as np
 import pytest
 from synth import make_track
 
-from tastr.card import Core, Series, Source, TrackCard
-from tastr.pipeline import AnalysisContext, run_pipeline
-from tastr.stages.sections import SectionsStage
+from tastr.engine.card import Core, Series, Source, TrackCard
+from tastr.engine.pipeline import AnalysisContext, run_pipeline
+from tastr.engine.stages.sections import SectionsStage
 
 
 pytestmark = pytest.mark.audio
@@ -99,7 +99,7 @@ def test_uses_core_energy_series_when_present(synth):
 def test_through_pipeline_with_truth_core(synth_wav, truth_core):
     import soundfile as sf
 
-    from tastr.card import Source
+    from tastr.engine.card import Source
 
     path, truth = synth_wav
     y, sr = sf.read(str(path), dtype="float32")

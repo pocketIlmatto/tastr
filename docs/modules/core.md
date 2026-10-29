@@ -1,12 +1,12 @@
 # Module: core features (BPM, key, energy, beat grid)
 
 ## Goal
-Replace the stub in `tastr/stages/core.py` with real estimators for tempo,
+Replace the stub in `tastr/engine/stages/core.py` with real estimators for tempo,
 beats, downbeats, key, energy and the shared scalar features.
 
 ## Files
-- Edit: `tastr/stages/core.py` (keep class `CoreStage`, `name = "core"`, `requires = ()`).
-- Append-only: `tastr/signals.py` (shared intermediates), `tastr/music.py` (theory helpers).
+- Edit: `tastr/engine/stages/core.py` (keep class `CoreStage`, `name = "core"`, `requires = ()`).
+- Append-only: `tastr/engine/signals.py` (shared intermediates), `tastr/engine/music.py` (theory helpers).
 - New: `tests/test_core.py`.
 
 ## Inputs

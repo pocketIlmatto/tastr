@@ -4,9 +4,9 @@ Two stages, one spec. Tags is pure rules over numbers (small model friendly);
 suggestions also analyses audio for drum grids, bass notes and chords.
 
 ## Files
-- Edit: `tastr/stages/tags.py` (`TagsStage`, `requires = ("core", "sections")`).
-- Edit: `tastr/stages/suggestions.py` (`SuggestionsStage`, `requires = ("core", "sections", "tags")`).
-- Append-only: `tastr/music.py`, `tastr/signals.py`.
+- Edit: `tastr/engine/stages/tags.py` (`TagsStage`, `requires = ("core", "sections")`).
+- Edit: `tastr/engine/stages/suggestions.py` (`SuggestionsStage`, `requires = ("core", "sections", "tags")`).
+- Append-only: `tastr/engine/music.py`, `tastr/engine/signals.py`.
 - New: `tests/test_tags.py`, `tests/test_suggestions.py`.
 
 ## Part 1: tags

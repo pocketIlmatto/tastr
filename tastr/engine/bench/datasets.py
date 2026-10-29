@@ -20,7 +20,7 @@ from typing import Callable
 
 import numpy as np
 
-from ..ingest import AUDIO_EXTENSIONS
+from ..audio import AUDIO_EXTENSIONS
 from ..music import NOTE_NAMES
 
 

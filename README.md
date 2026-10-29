@@ -55,18 +55,25 @@ python -m pytest -q
 ## Layout
 
 ```
-tastr/card.py        TrackCard dataclasses: the contract between modules
-tastr/pipeline.py    stage registry, dependency ordering, run_pipeline()
-tastr/signals.py     shared intermediates (HPSS, onset envelope, chroma, RMS)
-tastr/stages/        core, sections, tags, suggestions (one module each)
-tastr/ingest.py      files/folders -> Sources, audio decoding, URL resolver registry
-tastr/resolvers/     link/playlist resolvers
-tastr/db.py          SQLite schema and save/load/query
-tastr/service.py     inputs -> pipeline -> DB, used by the CLI and web app
-tastr/web/           FastAPI app and UI
-tastr/bench/         accuracy benchmark: dataset loaders, metrics, runner
-tastr/bench/synth.py synthetic tracks with known BPM/key/sections (tests/synth.py re-exports it)
+tastr/engine/               the analysis engine; imports nothing else from tastr
+  card.py                   TrackCard dataclasses: the contract between modules
+  pipeline.py               stage registry, dependency ordering, run_pipeline()
+  audio.py                  decoding files to mono audio (librosa, ffmpeg fallback)
+  signals.py                shared intermediates (HPSS, onset envelope, chroma, RMS)
+  music.py                  key profiles, scales, chords, Camelot
+  stages/                   core, sections, tags, suggestions (one module each)
+  bench/                    accuracy benchmark: dataset loaders, metrics, runner
+  bench/synth.py            synthetic tracks with known BPM/key/sections (tests/synth.py re-exports it)
+tastr/ingest.py             files/folders/links -> Sources, URL resolver registry
+tastr/resolvers/            link/playlist resolvers
+tastr/db.py                 SQLite schema and save/load/query
+tastr/service.py            inputs -> engine -> DB, used by the CLI and web app
+tastr/web/                  FastAPI app and UI
 ```
+
+The engine is kept self-contained so it can be split into its own library
+later; `tests/test_engine.py` fails if it starts importing app code. Use it
+directly with `from tastr.engine import analyze_file`.
 
 Read `docs/ARCHITECTURE.md` for the data flow, card fields, feature names and
 DB tables, and `docs/modules/` for per-module specs.

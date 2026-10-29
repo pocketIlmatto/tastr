@@ -6,9 +6,9 @@ smaller models.
 
 | Spec | Owns | Depends on (at runtime) | Suggested model / effort |
 |---|---|---|---|
-| [core.md](core.md) | `tastr/stages/core.py`, `tastr/signals.py` (append) | nothing | Sonnet, medium (DSP judgment) |
-| [sections.md](sections.md) | `tastr/stages/sections.py` | core's `downbeat_times` (fake it in tests) | Sonnet, medium |
-| [tags-suggestions.md](tags-suggestions.md) | `tastr/stages/tags.py`, `tastr/stages/suggestions.py` | core, sections (fake in tests) | Sonnet, low-medium; tags part alone is fine for Haiku |
+| [core.md](core.md) | `tastr/engine/stages/core.py`, `tastr/engine/signals.py` (append) | nothing | Sonnet, medium (DSP judgment) |
+| [sections.md](sections.md) | `tastr/engine/stages/sections.py` | core's `downbeat_times` (fake it in tests) | Sonnet, medium |
+| [tags-suggestions.md](tags-suggestions.md) | `tastr/engine/stages/tags.py`, `tastr/engine/stages/suggestions.py` | core, sections (fake in tests) | Sonnet, low-medium; tags part alone is fine for Haiku |
 | [links.md](links.md) | `tastr/resolvers/` | nothing | Haiku or Sonnet, low |
 | [ui.md](ui.md) | `tastr/web/` | the card + DB as they are now | Sonnet, medium |
 
@@ -17,7 +17,7 @@ smaller models.
 1. **Only edit the files you own** plus new test files named `tests/test_<module>.py`.
    If you need a change elsewhere (a new card field, a shared helper), say so in
    your PR description instead of making it. Exception: appending a new function
-   to `tastr/signals.py` or `tastr/music.py` is fine.
+   to `tastr/engine/signals.py` or `tastr/engine/music.py` is fine.
 2. **Don't wait on other modules.** Write to the interfaces in `docs/ARCHITECTURE.md`.
    In tests, use `tests/synth.py` (`make_track()` gives audio with known BPM/key/sections)
    and the `truth_core` fixture (replaces the core stage with ground truth) or build a

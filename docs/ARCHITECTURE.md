@@ -4,19 +4,19 @@
 inputs (files, folders, links)
    │  tastr/ingest.py          resolve_inputs() -> [Source]   (links: tastr/resolvers/*)
    ▼
-decoded mono audio @ 22050 Hz   ingest.load_audio()
-   │  tastr/pipeline.py         run_pipeline(): stages in dependency order
+decoded mono audio @ 22050 Hz   engine.audio.load_audio()
+   │  tastr/engine/pipeline.py  run_pipeline(): stages in dependency order
    ▼
-core ──► sections ──► tags ──► suggestions        tastr/stages/*.py
+core ──► sections ──► tags ──► suggestions        tastr/engine/stages/*.py
    │
    ▼
-TrackCard (tastr/card.py)  ──►  SQLite (tastr/db.py)  ──►  CLI (tastr/cli.py) / web (tastr/web/)
+TrackCard (tastr/engine/card.py)  ──►  SQLite (tastr/db.py)  ──►  CLI (tastr/cli.py) / web (tastr/web/)
 ```
 
 `tastr/service.py` wires these together; CLIs and web handlers call
 `service.analyze_inputs()` / `service.analyze_source()`.
 
-## The track card (`tastr/card.py`)
+## The track card (`tastr/engine/card.py`)
 
 The single contract between modules. Every stage writes only its own part:
 
@@ -58,14 +58,14 @@ being missing (a stage can fail or be a stub).
 
 Series: `energy` (per bar, 0..1, written by core) is the one the UI draws.
 
-## Pipeline (`tastr/pipeline.py`)
+## Pipeline (`tastr/engine/pipeline.py`)
 
 A stage is any object with `name`, `version`, `requires` (tuple of stage
 names) and `run(ctx)`. `register_stage(obj)` at import time of a module in
-`tastr/stages/` makes it part of the default pipeline. `ctx` gives the audio
+`tastr/engine/stages/` makes it part of the default pipeline. `ctx` gives the audio
 (`ctx.y`, `ctx.sr`, `ctx.hop`), the card (`ctx.card`) and a per-track cache
 (`ctx.get(name, fn)`). Shared intermediates (HPSS, onset envelope, chroma,
-RMS) live in `tastr/signals.py`; use them so they are computed once.
+RMS) live in `tastr/engine/signals.py`; use them so they are computed once.
 
 ## Storage (`tastr/db.py`)
 

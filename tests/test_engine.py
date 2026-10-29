@@ -1,0 +1,38 @@
+import ast
+import subprocess
+import sys
+from pathlib import Path
+
+import tastr.engine
+from tastr.engine import analyze_file
+
+ENGINE = Path(tastr.engine.__file__).parent
+
+
+def test_engine_imports_nothing_from_the_rest_of_tastr():
+    """The engine should stay liftable into its own library."""
+    bad = []
+    for f in ENGINE.rglob("*.py"):
+        depth = len(f.relative_to(ENGINE).parts) - 1  # package levels below tastr/engine
+        for node in ast.walk(ast.parse(f.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                if node.level > depth + 1 or (node.level == 0 and mod.startswith("tastr") and not mod.startswith("tastr.engine")):
+                    bad.append(f"{f.relative_to(ENGINE)}:{node.lineno}")
+            elif isinstance(node, ast.Import):
+                bad += [f"{f.relative_to(ENGINE)}:{node.lineno}" for a in node.names
+                        if a.name.startswith("tastr") and not a.name.startswith("tastr.engine")]
+    assert not bad
+
+
+def test_engine_import_does_not_load_app_modules():
+    code = "import sys, tastr.engine, tastr.engine.bench; print(sorted(m for m in sys.modules if m.startswith('tastr') and not m.startswith('tastr.engine')))"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
+    assert out.strip() == "['tastr']"
+
+
+def test_analyze_file(synth_wav):
+    card = analyze_file(synth_wav[0], ["core"])
+    assert card.source.title == "synth_124_Am"
+    assert abs(card.core.bpm - 124) < 1
+    assert card.stages_run.keys() == {"core"}

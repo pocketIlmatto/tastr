@@ -20,9 +20,13 @@ function strudelLane(lane, p) {
   return line;
 }
 
+const STRUDEL_STEMS = ["vocals", "bass", "other", "drums"];
+
 // audioUrl: where strudel.cc can fetch the original file (the track's /audio endpoint). When given, the sketch
 // adds the original audio cut into bars at the detected downbeats, layered under the drums.
-function strudelCode(c, audioUrl = null) {
+// stems: with audioUrl, the separated stems to play (names from STRUDEL_STEMS, served next to /audio at
+// /stems/<name>); every stem gets a line in stack(), and the ones not listed start commented out.
+function strudelCode(c, audioUrl = null, stems = null) {
   const core = c.core || {}, key = core.key || {}, sugs = c.suggestions || [];
   const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
   // by_section idx is the section's index in card.sections; sections without bars can't be arranged.
@@ -96,6 +100,30 @@ function strudelCode(c, audioUrl = null) {
     const bar = gridBar || 240 / bpm, first = dbs.length ? dbs[0] : 0;
     const spans = secs.length ? secs.map((sec) => [sec.start_bar, sec.end_bar != null ? sec.end_bar : sec.start_bar, [cap(sec.label), sec.letter].filter(Boolean).join(" ")])
       : [[1, Math.max(1, Math.floor((c.duration - first) / bar)), "Whole track"]];
+    if (stems) {
+      const drumsOn = stems.includes("drums"), stemUrl = (n) => audioUrl.replace(/\/audio$/, `/stems/${n}`).replace(/'/g, "%27");
+      out.push("// --- The original track as stems, cut into bars at the detected downbeats ---",
+        "// Tastr serves the audio from your computer, so keep `tastr serve` running. The first time,",
+        "// your browser may ask whether strudel.cc may reach your local network: allow it.",
+        "// Single quotes on purpose: in Strudel, double quotes mean a pattern.",
+        "samples({", ...STRUDEL_STEMS.map((n) => `  ${n}: '${stemUrl(n)}',`), "})",
+        `const len = ${c.duration.toFixed(3)}, bar = ${bar.toFixed(4)}, first = ${first.toFixed(3)} // seconds: track, one bar, first downbeat`,
+        "// orig(name, a, b): bars a to b of a stem, one bar per cycle",
+        "const orig = (name, a, b) => {",
+        "  const k = run(b - a + 1).slow(b - a + 1).add(a - 1)",
+        "  return s(name).begin(k.mul(bar).add(first).div(len)).end(k.add(1).mul(bar).add(first).div(len)).clip(1)",
+        "}",
+        "// part(name): one stem across the whole track, section by section",
+        "const part = (name) => arrange(");
+      spans.forEach(([a, b, name], i) => out.push(`  [${b - a + 1}, orig(name, ${a}, ${b})]${i < spans.length - 1 ? "," : ""} // ${name}`));
+      out.push(")", "", "// Comment a line out (//) to mute it, or remove the // to bring it in.", "stack(",
+        ...STRUDEL_STEMS.map((n) => `  ${stems.includes(n) ? "" : "// "}part("${n}"),${n === "drums" && !drumsOn ? " // the sketch drums below play instead" : ""}`),
+        `  drums.gain(${drumsOn ? ".5" : ".8"}),`, ...(parts.length > 1 ? ["  // bass, chords,"] : []), ")");
+      const drop = secs.find((x) => x.label === "drop") || secs[0], at = drop ? drop.start_bar : 1;
+      out.push("", `// Ideas: loop the ${drop && drop.label === "drop" ? "first drop" : "opening bars"} of the vocals with orig("vocals", ${at}, ${at + 3}), reorder the lines in arrange(),`,
+        "// bring in bass and chords, or load a second track as another sample for a mash-up.");
+      return out.join("\n");
+    }
     out.push("// --- The original track, cut into bars at the detected downbeats ---",
       "// Tastr serves the file from your computer, so keep `tastr serve` running. The first time,",
       "// your browser may ask whether strudel.cc may reach your local network: allow it.",
@@ -128,4 +156,4 @@ function strudelLink(code) {
   return `https://strudel.cc/#${encodeURIComponent(btoa(bin))}`;
 }
 
-if (typeof module !== "undefined") module.exports = { strudelCode, strudelLink, strudelLane };
+if (typeof module !== "undefined") module.exports = { strudelCode, strudelLink, strudelLane, STRUDEL_STEMS };

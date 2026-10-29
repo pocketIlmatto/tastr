@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stages`, `tastr serve`, `tastr bench`."""
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`."""
 
 from __future__ import annotations
 
@@ -26,6 +26,9 @@ def main(argv: list[str] | None = None) -> int:
     q = sub.add_parser("query", help="run read-only SQL against the database")
     q.add_argument("sql")
     sub.add_parser("retag", help="re-read file tags for analyzed tracks without re-analyzing")
+    st = sub.add_parser("stems", help="separate one track into vocals, bass, other and drums (needs tastr[stems])")
+    st.add_argument("track_id", type=int)
+    st.add_argument("--force", action="store_true", help="separate again even if stems exist")
     sub.add_parser("stages", help="list registered pipeline stages in run order")
     w = sub.add_parser("serve", help="run the web UI")
     w.add_argument("--host", default="127.0.0.1")
@@ -115,6 +118,9 @@ def main(argv: list[str] | None = None) -> int:
         print(card.to_json(indent=2))
         return 0
 
+    if args.cmd == "stems":
+        return _stems(args)
+
     if args.cmd == "retag":
         print(f"updated {db.refresh_file_meta(db.connect(args.db))} track(s)")
         return 0
@@ -126,6 +132,33 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(r, default=str))
         return 0
     return 2
+
+
+def _stems(args) -> int:
+    from pathlib import Path
+
+    from . import stems
+
+    card = db.load_card(db.connect(args.db), args.track_id)
+    if card is None:
+        print(f"no track {args.track_id}", file=sys.stderr)
+        return 1
+    path = card.source.local_path
+    if not path or not Path(path).is_file():
+        print("error: the original audio file is not on disk, so there is nothing to separate", file=sys.stderr)
+        return 1
+    folder = stems.stems_dir(card.source.sha256, args.track_id)
+    if stems.is_ready(folder) and not args.force:
+        print(f"Stems already in {folder} (use --force to separate again)")
+        return 0
+    if not stems.available():
+        print(f"error: {stems.INSTALL_HINT}", file=sys.stderr)
+        return 2
+    print(f"Separating {card.source.title or path} (a few minutes on a CPU)...", file=sys.stderr)
+    stems.separate_track(path, folder, lambda p: print(f"\r{p:4.0%}", end="", file=sys.stderr, flush=True))
+    print(file=sys.stderr)
+    print(f"Stems in {folder}: {', '.join(stems.STEM_NAMES)}")
+    return 0
 
 
 def _summary_line(track_id, card) -> str:

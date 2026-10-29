@@ -37,6 +37,7 @@ from the Quick start first (`source .venv/bin/activate`).
 tastr analyze ~/Music/some-track.wav ~/Music/folder/
 tastr list
 tastr show 1                     # full card as JSON
+tastr stems 1                    # split track 1 into vocals, bass, other and drums (needs the stems extra, below)
 tastr retag                      # re-read file tags for analyzed tracks (`tastr serve` does this once after the tag reader changes)
 tastr query "SELECT title, bpm, camelot FROM tracks ORDER BY bpm"
 tastr stages                     # pipeline stages in run order
@@ -46,6 +47,23 @@ tastr bench synth                # score the engine on labeled tracks (docs/benc
 
 The database lives at `~/.tastr/tastr.db`. Override it with `--db` or the
 `TASTR_DB` environment variable. The web UI reads the same database.
+
+### Stems (optional)
+
+"Separate stems" in a track's ⋯ menu (or `tastr stems ID`) splits one track into
+vocals, bass, other and drums with [Demucs](https://github.com/facebookresearch/demucs)
+(`htdemucs`, MIT). The Strudel sketch can then play the stems you pick instead of the
+full mix. Demucs needs PyTorch, about 2 GB, so it is an optional install:
+
+```bash
+python -m pip install -e '.[stems]'
+```
+
+The model weights (about 80 MB) download the first time you separate a track. It
+takes under a minute for a 2-minute track on a recent Mac CPU, and about half that on
+its GPU, which is used automatically (as is a CUDA GPU); set `TASTR_STEMS_DEVICE`
+to `cpu`, `mps` or `cuda` to choose. Stems are FLAC files in `~/.tastr/stems/` and are
+deleted with the track.
 
 To run the tests:
 

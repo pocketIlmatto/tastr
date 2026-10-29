@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .. import db, service
+from .. import db, service, stems
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import IngestError
 
@@ -25,8 +25,8 @@ STATIC_DIR = Path(__file__).parent / "static"
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
                ".ogg": "audio/ogg", ".aif": "audio/aiff", ".aiff": "audio/aiff", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
 MAX_QUERY_ROWS = 5000
-# The Strudel sketch ("Try this in Strudel") loads the original audio from strudel.cc, so only the audio
-# endpoint answers CORS, and only for that origin.
+# The Strudel sketch ("Try this in Strudel") loads the original audio and its stems from strudel.cc, so only
+# those endpoints answer CORS, and only for that origin.
 STRUDEL_ORIGINS = ("https://strudel.cc",)
 
 
@@ -72,6 +72,7 @@ def _unprefixed(title: str | None, uri: str | None) -> str | None:
 
 def create_app(db_path: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="Tastr")
+    jobs = stems.Jobs()
 
     def conn() -> sqlite3.Connection:
         return db.connect(db_path)
@@ -104,7 +105,19 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         views = body["extras"].pop("views", None)
         body["has_views"] = views is not None
         body["has_audio"] = _audio_path(card) is not None
+        body["stems_available"] = stems.available()
+        body["stems_state"] = jobs.status(_stems_dir(card, track_id))["state"]
         return body
+
+    def _stems_dir(card, track_id: int) -> Path:
+        return stems.stems_dir(card.source.sha256, track_id)
+
+    def _card_or_404(track_id: int):
+        with closing(conn()) as c:
+            card = db.load_card(c, track_id)
+        if card is None:
+            raise HTTPException(404, "no such track")
+        return card
 
     def _audio_path(card) -> Path | None:
         p = card.source.local_path
@@ -128,11 +141,50 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         media = AUDIO_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         return FileResponse(path, media_type=media, headers=_strudel_cors(origin))
 
-    @app.options("/api/tracks/{track_id}/audio", include_in_schema=False)
-    def track_audio_preflight(track_id: int, origin: str | None = Header(None)):
+    def _preflight(origin: str | None) -> Response:
         if origin not in STRUDEL_ORIGINS:
             return Response(status_code=403, headers=_strudel_cors(origin))
         return Response(status_code=204, headers=_strudel_cors(origin, preflight=True))
+
+    @app.options("/api/tracks/{track_id}/audio", include_in_schema=False)
+    def track_audio_preflight(track_id: int, origin: str | None = Header(None)):
+        return _preflight(origin)
+
+    @app.options("/api/tracks/{track_id}/stems/{name}", include_in_schema=False)
+    def track_stem_preflight(track_id: int, name: str, origin: str | None = Header(None)):
+        return _preflight(origin)
+
+    def _stems_status(card, track_id: int) -> dict[str, Any]:
+        return {**jobs.status(_stems_dir(card, track_id)), "available": stems.available()}
+
+    @app.get("/api/tracks/{track_id}/stems")
+    def track_stems(track_id: int):
+        """Separation state: none, queued, running (with progress 0-1), ready (with the stem names) or error."""
+        return _stems_status(_card_or_404(track_id), track_id)
+
+    @app.post("/api/tracks/{track_id}/stems", status_code=202)
+    def separate_stems(track_id: int):
+        """Start separating one track into stems in the background (one track at a time; others queue)."""
+        card = _card_or_404(track_id)
+        path = _audio_path(card)
+        if path is None:
+            raise HTTPException(404, "The original audio file is not on disk, so there is nothing to separate.")
+        if not stems.available():
+            raise HTTPException(501, stems.INSTALL_HINT)
+        folder = _stems_dir(card, track_id)
+        if not stems.is_ready(folder):
+            jobs.start(path, folder)
+        return _stems_status(card, track_id)
+
+    @app.get("/api/tracks/{track_id}/stems/{name}")
+    def track_stem(track_id: int, name: str, origin: str | None = Header(None)):
+        """One stem as FLAC, like /audio: Range support, and strudel.cc may fetch it."""
+        if name not in stems.STEM_NAMES:
+            raise HTTPException(404, f"Stems are {', '.join(stems.STEM_NAMES)}.")
+        path = stems.stem_path(_stems_dir(_card_or_404(track_id), track_id), name)
+        if not path.is_file():
+            raise HTTPException(404, "This track has not been separated into stems.")
+        return FileResponse(path, media_type="audio/flac", headers=_strudel_cors(origin))
 
     @app.get("/api/tracks/{track_id}/views")
     def track_views(track_id: int):
@@ -177,8 +229,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.delete("/api/tracks/{track_id}", status_code=204)
     def delete_track(track_id: int):
         with closing(conn()) as c:
+            card = db.load_card(c, track_id)
             if not db.delete_track(c, track_id):
                 raise HTTPException(404, "no such track")
+        if card is not None:
+            folder = _stems_dir(card, track_id)
+            jobs.forget(folder)
+            stems.remove(folder)
         return Response(status_code=204)
 
     # Plain `def` endpoints below run in FastAPI's threadpool, so slow analysis

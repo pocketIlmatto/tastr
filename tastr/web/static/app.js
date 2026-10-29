@@ -258,6 +258,7 @@ let sectionBus = new EventTarget();
 
 function renderCard(c) {
   stopAllPlayback();
+  if (c.stems_state && !stemsBusy(stemStatus.get(c.id) || {})) { stemStatus.set(c.id, { state: c.stems_state }); pollStems(); } // a fresh card knows best
   sectionBus = new EventTarget();
   const core = c.core || {};
   const key = core.key;
@@ -386,20 +387,60 @@ function dawText(s) {
 }
 
 let strudelAudio = true; // "Include the original audio", remembered for the session
+let strudelMix = "full"; // "full" or "stems"
+const strudelStems = new Set(["vocals", "bass", "other"]); // Drums off: the sketch drums replace the original ones
 function strudelView(c) {
   const say = h("span", { class: "muted st-say", role: "status", "aria-live": "polite" });
   const pre = h("pre", { class: "st-code", tabindex: "0", "aria-label": "Generated Strudel code" });
   const open = h("a", { class: "btn-link", target: "_blank", rel: "noopener" }, "Open in Strudel ↗");
   const note = h("p", { class: "muted st-note" });
+  const stemsRow = h("div", { class: "st-stems" });
   let code = "";
   const paint = () => {
-    const audio = c.has_audio && strudelAudio;
-    code = strudelCode(c, audio ? `${location.origin}/api/tracks/${c.id}/audio` : null);
+    const audio = c.has_audio && strudelAudio, st = stemsOf(c);
+    const useStems = audio && strudelMix === "stems" && st.state === "ready";
+    code = strudelCode(c, audio ? `${location.origin}/api/tracks/${c.id}/audio` : null, useStems ? STRUDEL_STEMS.filter((n) => strudelStems.has(n)) : null);
     pre.textContent = code;
     open.href = strudelLink(code);
+    paintStems(audio, st);
     note.textContent = "Opens strudel.cc in a new tab with this code loaded. Drum sounds load from Strudel's sample library the first time you play." +
-      (audio ? " The original audio streams from your Tastr server, so keep it running; the first time, your browser may ask to allow strudel.cc to reach your local network." : "");
+      (audio ? ` The original ${useStems ? "stems stream" : "audio streams"} from your Tastr server, so keep it running; the first time, your browser may ask to allow strudel.cc to reach your local network.` : "");
   };
+  // Full mix / Stems, under the audio checkbox. Stems need a separation first; the code uses the full mix until it is done.
+  const paintStems = (audio, st) => {
+    stemsRow.hidden = !audio;
+    if (!audio) return;
+    const radio = (val, label) => {
+      const r = h("input", { type: "radio", name: "st-mix", value: val, ...(strudelMix === val ? { checked: "" } : {}) });
+      r.addEventListener("change", () => { strudelMix = val; paint(); });
+      return h("label", { class: "st-opt" }, r, " " + label);
+    };
+    const kids = [radio("full", "Full mix"), radio("stems", "Stems")];
+    const busy = st.state === "running" || st.state === "queued";
+    if (strudelMix === "stems" && st.state === "ready") {
+      kids.push(h("div", { class: "st-stem-picks", role: "group", "aria-label": "Stems to play" }, STRUDEL_STEMS.map((n) => {
+        const cb = h("input", { type: "checkbox", ...(strudelStems.has(n) ? { checked: "" } : {}) });
+        cb.addEventListener("change", () => { if (cb.checked) strudelStems.add(n); else strudelStems.delete(n); paint(); });
+        return h("label", { class: "st-chip" }, cb, " " + cap(n));
+      })));
+    } else if (strudelMix === "stems" && !c.stems_available && !busy) {
+      kids.push(h("div", { class: "st-stem-go" }, h("span", { class: "muted st-say" }, "Stem separation needs Demucs, an optional install (about 2 GB): ",
+        h("code", {}, "pip install 'tastr[stems]'"), ", then restart ", h("code", {}, "tastr serve"), ". The code uses the full mix.")));
+    } else if (strudelMix === "stems") {
+      const go = h("button", { type: "button", ...(busy ? { disabled: "" } : {}) },
+        ...(busy ? [h("span", { class: "spin", "aria-hidden": "true" }), stemsLabel(st)] : ["Separate stems"]));
+      const say = h("span", { class: "muted st-say", role: "status" }, busy ? "A few minutes per track. The code uses the full mix until then."
+        : "Splits this track into vocals, bass, other and drums, once (a few minutes). The code uses the full mix until then.");
+      go.onclick = async () => {
+        go.disabled = true;
+        try { await startStems(c); } catch (e) { go.disabled = false; say.className = "error st-say"; say.textContent = e.message; }
+      };
+      kids.push(h("div", { class: "st-stem-go" }, go, say));
+      if (st.state === "error") kids.push(h("div", { class: "st-stem-go error st-say" }, st.error ? `The last separation failed: ${st.error}` : "The last separation failed."));
+    }
+    stemsRow.replaceChildren(...kids);
+  };
+  onStems(stemsRow, c.id, paint);
   const box = h("input", { type: "checkbox", id: "st-audio", ...(strudelAudio ? { checked: "" } : {}) });
   box.addEventListener("change", () => { strudelAudio = box.checked; paint(); });
   const copy = h("button", { type: "button", onclick: async () => {
@@ -411,6 +452,7 @@ function strudelView(c) {
     h("p", { class: "st-intro" }, "A sketch of this track as ", h("a", { href: "https://strudel.cc", target: "_blank", rel: "noopener" }, "Strudel"), " live-code: each section's drum pattern for its length, plus the chord loop, at this track's tempo.",
       c.has_audio ? " Add the original audio, cut into bars, to remix the real thing." : " It won't sound like the original, but it follows its structure, so it's a starting point for remixes."),
     c.has_audio ? h("label", { class: "st-opt", for: "st-audio" }, box, " Include the original audio, cut into bars") : null,
+    stemsRow,
     h("div", { class: "st-actions" }, open, copy, say), pre, note);
 }
 
@@ -1115,6 +1157,43 @@ function trackSummary(c) {
   return [`${src.title || src.uri || `Track ${c.id}`}${src.artist ? " by " + src.artist : ""}`, facts.filter(Boolean).join(" · "), vibes.length ? `Vibe: ${vibes.join(", ")}` : null].filter(Boolean).join("\n");
 }
 // A status the menu shows once its card is drawn again (reloading metadata re-renders the card).
+// ---------- stems: on-demand separation (tastr/stems.py), shared by the track menu and the Strudel view ----------
+const stemStatus = new Map(); // track id -> latest {state: none|queued|running|ready|error, progress?, error?}
+const stemListeners = new Set();
+let stemTimer = null;
+function stemsOf(c) {
+  if (!stemStatus.has(c.id)) { stemStatus.set(c.id, { state: c.stems_state || "none" }); pollStems(); }
+  return stemStatus.get(c.id);
+}
+const stemsBusy = (st) => st.state === "running" || st.state === "queued";
+const stemsLabel = (st) => st.state === "queued" ? "Waiting for another separation…"
+  : `Separating stems…${isNum(st.progress) && st.progress > 0 ? ` ${Math.round(st.progress * 100)}%` : ""}`;
+function setStems(id, st) {
+  const was = stemStatus.get(id);
+  stemStatus.set(id, st);
+  for (const l of [...stemListeners]) {
+    if (!l.el.isConnected) stemListeners.delete(l);
+    else if (l.id === id) l.fn(st, was);
+  }
+}
+// Calls fn(status, previous) whenever this track's stems status changes, for as long as el is on the page.
+function onStems(el, id, fn) { stemListeners.add({ el, id, fn }); }
+function pollStems() {
+  if (stemTimer || ![...stemStatus.values()].some(stemsBusy)) return;
+  stemTimer = setTimeout(async () => {
+    for (const [id, st] of [...stemStatus]) {
+      if (!stemsBusy(st)) continue;
+      try { setStems(id, await api(`/api/tracks/${id}/stems`)); } catch (_) { stemStatus.delete(id); }
+    }
+    stemTimer = null;
+    pollStems();
+  }, 2500);
+}
+async function startStems(c) {
+  setStems(c.id, await api(`/api/tracks/${c.id}/stems`, { method: "POST" }));
+  pollStems();
+}
+
 let menuNote = null;
 function trackMenu(c) {
   const btn = h("button", { type: "button", class: "menu-btn", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": "Track actions" }, "⋯");
@@ -1131,8 +1210,9 @@ function trackMenu(c) {
   if (menuNote && menuNote.id === c.id) { const n = menuNote; menuNote = null; tell(n.msg, n.isErr); setTimeout(() => btn.focus()); }
   const close = (refocus) => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); document.removeEventListener("pointerdown", outside, true); if (refocus) btn.focus(); };
   const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
-  const item = (label, o = {}) => h("button", { type: "button", role: "menuitem", class: "menu-item" + (o.danger ? " danger" : ""), onclick: o.onclick }, label);
-  const items = () => [...pop.querySelectorAll("[role=menuitem], .menu-confirm button")];
+  const item = (label, o = {}) => h("button", { type: "button", role: "menuitem", class: "menu-item" + (o.danger ? " danger" : ""), onclick: o.onclick,
+    ...(o.disabled ? { disabled: "", title: o.title || "" } : {}) }, label);
+  const items = () => [...pop.querySelectorAll("[role=menuitem]:not([disabled]), .menu-confirm button")];
   const copy = async () => {
     close(true);
     try { await navigator.clipboard.writeText(trackSummary(c)); tell("Copied"); } catch (e) { tell("Couldn't copy here"); }
@@ -1158,11 +1238,32 @@ function trackMenu(c) {
       try { await loadTracks(); renderList(); } catch (_) {}
     } catch (e) { tell(e.message, true); }
   };
+  const separate = async () => {
+    close(true);
+    try { await startStems(c); } catch (e) { tell(e.message, true); }
+  };
+  const stemsButton = () => {
+    const st = stemsOf(c);
+    if (st.state === "ready") return item("Stems ready", { disabled: true, title: "Pick stems under Try this in → Strudel" });
+    if (stemsBusy(st)) return item(stemsLabel(st), { disabled: true, title: "A few minutes per track" });
+    if (!c.has_audio) return item("Separate stems", { disabled: true, title: "The original audio file is not on disk" });
+    if (!c.stems_available) return item("Separate stems", { disabled: true, title: "Needs Demucs, an optional install: pip install 'tastr[stems]'" });
+    return item(st.state === "error" ? "Separate stems (try again)" : "Separate stems", { onclick: separate });
+  };
+  const stemsItem = () => { const b = stemsButton(); b.dataset.stems = ""; return b; };
+  onStems(wrap, c.id, (st, was) => {
+    if (stemsBusy(st)) tell(stemsLabel(st), false, true);
+    else if (was && stemsBusy(was)) tell(st.state === "ready" ? "Stems ready" : st.state === "error" ? `Stem separation failed${st.error ? `: ${st.error}` : ""}` : "", st.state === "error");
+    const old = pop.querySelector("[data-stems]");
+    if (old) { const fresh = stemsItem(), had = document.activeElement === old; old.replaceWith(fresh); if (had) (fresh.disabled ? items()[0] : fresh).focus(); }
+  });
+  if (stemsBusy(stemsOf(c))) tell(stemsLabel(stemsOf(c)), false, true);
   const remove = async () => {
     try {
       await api(`/api/tracks/${c.id}`, { method: "DELETE" });
     } catch (e) { close(true); tell(e.message, true); return; }
     currentId = null;
+    stemStatus.delete(c.id);
     $("card").replaceChildren(h("p", { class: "muted" }, "Select a track."));
     await refresh();
   };
@@ -1172,6 +1273,7 @@ function trackMenu(c) {
       item("Copy track summary", { onclick: copy }),
       isFile ? item("Reload metadata", { onclick: reload }) : null,
       c.has_audio ? item("Re-analyze", { onclick: reanalyze }) : null, // needs the original audio on disk
+      stemsItem(),
       h("hr", { class: "menu-sep" }),
       item("Delete track…", { danger: true, onclick: showConfirm }));
   };

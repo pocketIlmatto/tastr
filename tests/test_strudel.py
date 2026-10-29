@@ -140,3 +140,32 @@ def test_ui_offers_strudel_in_the_picker():
     assert "Include the original audio, cut into bars" in js and "c.has_audio" in js
     html = (static / "index.html").read_text()
     assert html.index("/static/strudel.js") < html.index("/static/app.js")
+
+
+def run_js_stems(card: dict, audio_url: str, stems: list[str]) -> str:
+    script = f"""
+const {{ strudelCode }} = require({json.dumps(str(STRUDEL_JS))});
+console.log(JSON.stringify(strudelCode({json.dumps(card)}, {json.dumps(audio_url)}, {json.dumps(stems)})));
+"""
+    return json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+
+
+def test_stems_replace_the_full_mix_and_unticked_stems_are_commented_out():
+    code = run_js_stems(with_grid(card(["Am", "F", "C", "G"]), first=0.5, bar=2.0), AUDIO, ["vocals", "bass", "other"])
+    assert "orig: '" not in code
+    for n in ("vocals", "bass", "other", "drums"):
+        assert f"  {n}: 'http://127.0.0.1:8000/api/tracks/7/stems/{n}'," in code
+    assert "const orig = (name, a, b) => {" in code
+    start = code.index("const part = (name) => arrange(")
+    part = code[start:code.index("stack(\n", start)]
+    assert "[16, orig(name, 1, 16)], // Intro A" in part and "[8, orig(name, 49, 56)] // Intro A" in part
+    tail = code[code.index("stack(\n", start):]
+    assert '  part("vocals"),\n  part("bass"),\n  part("other"),\n  // part("drums"), // the sketch drums below play instead\n' in tail
+    assert "  drums.gain(.8),\n  // bass, chords,\n)" in tail
+    assert 'orig("vocals", 17, 20)' in code
+
+
+def test_original_drums_stem_turns_the_sketch_drums_down():
+    code = run_js_stems(with_grid(card()), AUDIO, ["drums"])
+    assert '  // part("vocals"),\n' in code and '  part("drums"),\n' in code
+    assert "drums.gain(.5)" in code and "the sketch drums below play instead" not in code

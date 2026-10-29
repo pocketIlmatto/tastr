@@ -302,6 +302,7 @@ def _suggest(ctx: AnalysisContext, drums: dict, bass: dict, harm: dict, by_secti
         add("drums", f"Pattern idea: {name}",
             f"A {name.lower()} pattern that sits at this tempo. Lanes map to default Drum Rack pads.",
             {"pattern": pattern, "pads": DRUM_RACK, "origin": "template", "style": STYLE_LABELS[style],
+             "style_key": style, "bpm": round(bpm),
              "template": f"A {name.lower()} pattern that sits at this tempo. Lanes map to the default {{drumrack}} pads."})
 
     # --- Bass ---

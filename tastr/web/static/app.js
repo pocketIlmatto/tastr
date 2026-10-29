@@ -166,10 +166,7 @@ function renderCard(c) {
     const body = grids.map(drumGrid);
     if (templates.length) {
       body.push(h("div", { class: "ideas-bar" },
-        h("button", { type: "button", onclick: () => { if (shown) ideasShown.delete(c.id); else ideasShown.add(c.id); renderCard(c); } }, shown ? "Hide pattern ideas" : "Suggest pattern ideas"),
-        h("span", { class: "muted" }, shown
-          ? "Templates chosen by tempo, not measured from this track."
-          : `Starting points${templates[0].data.style ? ` for ${templates[0].data.style}` : ""}, picked by tempo. Not measured from this track.`)));
+        h("button", { type: "button", "data-tip": "Starting points picked by this track's tempo.", onclick: () => { if (shown) ideasShown.delete(c.id); else ideasShown.add(c.id); renderCard(c); } }, shown ? "Hide pattern ideas" : "Suggest pattern ideas")));
     }
     root.append(section("drums", "Drum patterns", body));
   }
@@ -391,16 +388,26 @@ function energyChart(series, sections, duration) {
   return wrap;
 }
 
-function laneRows(pattern, prev) {
+const LANE_HELP = {
+  kick: "Kick: measured from energy between 20 and 150 Hz.",
+  snare: "Snare: measured from energy between 180 Hz and 2.5 kHz. Can pick up some hi-hat bleed.",
+  hat: "Hi-hat: measured from energy above 6 kHz.",
+};
+const laneHelp = (lane, measured) => (measured && LANE_HELP[lane]) || "Part of a template pattern, not measured from the audio.";
+
+// One lane per instrument; the 16 steps sit in four tinted beat groups, with beat numbers above the first lane.
+function laneRows(pattern, prev, measured) {
   const rows = [];
   for (const [lane, pat] of Object.entries(pattern)) {
     if (typeof pat !== "string") continue;
     const cells = [...pat.slice(0, 16)].map((ch, i) => {
       const changed = prev && prev[lane] && prev[lane][i] !== ch;
-      return h("i", { class: [i % 4 === 0 && i ? "beat" : "", ch === "x" ? "full" : ch === "o" ? "half" : "", changed ? "chg" : ""].join(" ").trim() });
+      return h("i", { class: [ch === "x" ? "full" : ch === "o" ? "half" : "", changed ? "chg" : ""].join(" ").trim() });
     });
-    rows.push(h("div", { class: "drum-lane" }, h("span", { class: "name" }, lane), h("div", { class: "drum-grid" }, cells)));
+    const beats = [0, 1, 2, 3].map((b) => h("div", { class: "beat-group" }, cells.slice(b * 4, b * 4 + 4)));
+    rows.push(h("div", { class: "drum-lane" }, h("span", { class: "name", tabindex: "0", "data-tip": laneHelp(lane, measured) }, lane), h("div", { class: "drum-grid" }, beats)));
   }
+  if (rows.length) rows.unshift(h("div", { class: "drum-lane beat-nums", "aria-hidden": "true" }, h("span", { class: "name" }), h("div", { class: "drum-grid" }, [1, 2, 3, 4].map((n) => h("span", {}, n)))));
   return rows;
 }
 
@@ -415,32 +422,54 @@ function diffText(pattern, prev) {
   return parts.length ? parts.join(", ") : "same as previous section";
 }
 
-const legend = () => h("p", { class: "muted grid-legend" },
-  h("i", { class: "sw full" }), " Strong hit ", h("i", { class: "sw half" }), " Softer hit ", h("i", { class: "sw" }), " No hit. 16 steps = one bar of 16th notes.");
+const TPL_TIPS = ["A hit on this step in the template.", "A lighter hit in the template, such as an accent or open hat.", "No hit on this step."];
+const legend = (measured = true) => h("div", { class: "grid-legend" },
+  h("span", { tabindex: "0", "data-tip": !measured ? TPL_TIPS[0] : "Strong: at least 72% of the loudest hit in this lane." }, h("i", { class: "sw full" }), measured ? "Strong" : "Hit"),
+  h("span", { tabindex: "0", "data-tip": !measured ? TPL_TIPS[1] : "Softer: 50% to 72% of the loudest hit in this lane. Often a ghost note, a quieter hat, or a hit that only lands in some bars." }, h("i", { class: "sw half" }), measured ? "Softer" : "Lighter"),
+  h("span", { tabindex: "0", "data-tip": !measured ? TPL_TIPS[2] : "None: under 50% of the loudest hit in this lane, so treated as silence." }, h("i", { class: "sw" }), "None"),
+  h("span", { tabindex: "0", "data-tip": "The grid covers one typical bar of the music, split into 16 equal steps from left to right. Every group of 4 steps is one beat. Each lane (kick, snare, hat) shows which of those steps it plays on." }, "1 bar, 16 steps"));
+
+// Mirrors _style() in the suggestions stage: which tempo range picks which template style.
+const STYLE_INFO = {
+  four_floor: ["118-136 BPM", "Four on the floor means a kick on every beat, typical of house and techno."],
+  dnb: ["160-185 BPM", "Drum and bass leans on a fast, syncopated kick and snare."],
+  halftime: ["136-152 BPM with a percussive track", "Halftime puts the snare on beat 3 so the groove feels half as fast."],
+  hiphop: ["80-105 BPM", "Hip-hop grooves sit on a laid-back kick and backbeat snare."],
+  generic: ["any other tempo", "A plain backbeat: kick on 1, snare on 2 and 4."],
+};
+const styleTip = (d) => {
+  const [range, what] = STYLE_INFO[d.style_key] || ["", ""];
+  return `${what} Chosen only because this track is ${d.bpm} BPM and ${range} maps to this style. The track's actual rhythm was not checked.`.trim();
+};
 
 function drumGrid(s) {
   const det = s.data.origin === "detected";
-  const wrap = h("div", { class: "sug" }, h("b", {}, s.title));
-  if (s.data.origin) {
-    wrap.append(h("span", { class: "origin " + (det ? "det" : "tpl") },
-      det ? "Measured from this track" : `Template for ${s.data.style || "this tempo"}, not from the audio`));
-  }
+  const wrap = h("div", { class: "sug" }, det
+      ? h("b", { class: "tip-title", tabindex: "0", "data-tip": "Measured from the audio. For each bar in the section, the app takes the jump in loudness at each of 16 steps within each lane's frequency band, then averages across the section's bars." }, s.title)
+      : h("b", {}, s.title),
+    det || !s.data.origin ? null : h("span", { class: "origin tpl" }, "Template for ", h("span", { class: "term", tabindex: "0", "data-tip": styleTip(s.data) }, s.data.style || "this tempo")));
+  const measured = det;
   const secs = s.data.by_section;
-  if (!secs || !secs.length) { wrap.append(...laneRows(s.data.pattern), legend()); return wrap; }
+  if (!secs || !secs.length) { wrap.append(...laneRows(s.data.pattern, null, measured), h("div", { class: "grid-foot" }, legend(measured))); return wrap; }
   const letters = [...new Set(secs.map((x) => x.letter || x.label))];
   const bus = sectionBus;
   let sel = secs.reduce((best, x, k) => ((x.energy || 0) > (secs[best].energy || 0) ? k : best), 0), showChg = true;
+  const colorOf = (x) => SEC_COLORS[letters.indexOf(x.letter || x.label) % SEC_COLORS.length];
+  const name = (x) => `${cap(x.label)} ${x.letter || ""}`.trim();
   const tabs = h("div", { class: "sec-tabs", role: "tablist", "aria-label": "Section" });
   const body = h("div", { class: "sec-body" });
-  const note = h("p", { class: "muted sec-note" });
+  const note = h("div", { class: "sec-note" });
   const toggle = h("input", { type: "checkbox", checked: "" });
   toggle.addEventListener("change", () => { showChg = toggle.checked; paint(true); });
   function paint(quiet) {
     [...tabs.children].forEach((b, k) => b.setAttribute("aria-selected", String(k === sel)));
     const sec = secs[sel], before = sel > 0 ? secs[sel - 1] : null;
-    body.replaceChildren(...laneRows(sec.pattern, before && showChg ? before.pattern : null));
-    const name = (x) => `${cap(x.label)} ${x.letter || ""}`.trim();
-    note.textContent = `${name(sec)}, bars ${sec.start_bar}-${sec.end_bar}. ` + (before ? `Versus ${name(before)}: ${diffText(sec.pattern, before.pattern)}.` : "First section.");
+    body.replaceChildren(...laneRows(sec.pattern, before && showChg ? before.pattern : null, true));
+    note.replaceChildren(
+      h("b", {}, name(sec)), h("span", { class: "muted" }, ` · bars ${sec.start_bar}-${sec.end_bar}`),
+      h("div", { class: "muted sec-diff" }, before
+        ? ["Compared with ", h("button", { type: "button", class: "sec-link", title: "Go to this section", style: `--c:${colorOf(before)}`, onclick: () => { sel -= 1; paint(); } }, name(before)), `: ${diffText(sec.pattern, before.pattern)}`]
+        : "First section, nothing before it to compare with"));
     if (quiet !== true) bus.dispatchEvent(new CustomEvent("section", { detail: { idx: sec.idx, from: "tabs" } }));
   }
   bus.addEventListener("section", (e) => {
@@ -449,10 +478,10 @@ function drumGrid(s) {
     if (k >= 0) { sel = k; paint(true); }
   });
   secs.forEach((x, k) => tabs.append(h("button", {
-    type: "button", role: "tab", class: "sec-tab", style: `--c:${SEC_COLORS[letters.indexOf(x.letter || x.label) % SEC_COLORS.length]}`,
+    type: "button", role: "tab", class: "sec-tab", style: `--c:${colorOf(x)}`,
     onclick: () => { sel = k; paint(); },
-  }, `${cap(x.label)} ${x.letter || ""}`.trim())));
-  wrap.append(tabs, body, legend(), note, h("label", { class: "chg-toggle muted" }, toggle, " Outline steps that changed from the previous section"));
+  }, name(x))));
+  wrap.append(tabs, note, body, h("div", { class: "grid-foot" }, legend(true), h("label", { class: "chg-toggle" }, toggle, "Outline steps that changed")));
   paint(true);
   return wrap;
 }

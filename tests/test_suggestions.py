@@ -87,3 +87,11 @@ def test_daw_specific_text_is_templated(card):
     for s in card.suggestions:
         if "template" in s.data:
             assert s.body  # rendered Ableton wording stays available to non-UI consumers
+
+
+def test_template_suggestions_carry_bpm_and_style_key(card):
+    templates = [s for s in card.suggestions if s.data.get("origin") == "template"]
+    assert templates
+    for s in templates:
+        assert s.data["style_key"] in {"four_floor", "dnb", "halftime", "hiphop", "generic"}
+        assert s.data["bpm"] == round(card.core.bpm)

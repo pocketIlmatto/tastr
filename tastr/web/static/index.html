@@ -32,6 +32,7 @@
         <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>Move to the previous or next track</dd>
         <dt><kbd>Enter</kbd> / <kbd>Space</kbd></dt><dd>Open the track</dd>
         <dt><kbd>Ctrl</kbd>/<kbd>⌘</kbd> click</dt><dd>Start selecting, with that track picked</dd>
+        <dt>Click <b>«</b> / <b>»</b></dt><dd>Hide or show the track list (or click anywhere on the folded rail)</dd>
       </dl>
     </section>
     <section>
@@ -83,6 +84,9 @@
     </div>
     <div class="split">
       <aside id="lib">
+        <div class="lib-head"><span class="lib-title">Tracks <span id="lib-total" class="muted"></span></span>
+          <button type="button" id="lib-collapse" aria-expanded="true" aria-controls="lib-body" title="Hide the track list">«</button></div>
+        <div id="lib-body">
         <div id="lib-tools">
           <input id="lib-q" type="search" placeholder="Search title or artist" aria-label="Search tracks">
           <div class="lib-row">
@@ -101,6 +105,7 @@
           <div id="lib-bulk" hidden></div>
         </div>
         <ul id="track-list" aria-label="Tracks"></ul>
+        </div>
       </aside>
       <article id="card"><p class="muted">Select a track.</p></article>
     </div>

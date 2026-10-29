@@ -190,6 +190,7 @@ function renderList() {
   const ul = $("track-list"), top = ul.scrollTop;
   ul.replaceChildren();
   const shown = visibleTracks();
+  $("lib-total").textContent = tracks.length ? `(${tracks.length})` : "";
   $("lib-n").textContent = libActive() ? `${shown.length} of ${tracks.length} tracks` : `${tracks.length} track${tracks.length === 1 ? "" : "s"}`;
   $("lib-clear").hidden = !libActive();
   $("lib-tools").hidden = !tracks.length;
@@ -361,6 +362,22 @@ async function deleteBulk(ids) {
   await refresh();
 }
 $("lib-sel").addEventListener("click", () => setSelecting(!selecting));
+// Collapsible sidebar: a 36px rail on desktop, a folded header on phones. Remembered across reloads.
+let libCollapsed = false;
+try { libCollapsed = localStorage.getItem("tastr-lib-collapsed") === "1"; } catch (_) {}
+function setLibCollapsed(on) {
+  libCollapsed = on;
+  document.querySelector(".split").classList.toggle("lib-collapsed", on);
+  $("lib-body").hidden = on;
+  const b = $("lib-collapse");
+  const narrow = matchMedia("(max-width: 700px)").matches;
+  b.setAttribute("aria-expanded", String(!on)); b.textContent = narrow ? (on ? "▸" : "▾") : on ? "»" : "«"; b.title = on ? "Show the track list" : "Hide the track list";
+  try { localStorage.setItem("tastr-lib-collapsed", on ? "1" : "0"); } catch (_) {}
+}
+$("lib-collapse").addEventListener("click", () => setLibCollapsed(!libCollapsed));
+document.querySelector(".lib-head").addEventListener("click", (e) => { if (libCollapsed && e.target.id !== "lib-collapse") setLibCollapsed(false); });
+setLibCollapsed(libCollapsed);
+matchMedia("(max-width: 700px)").addEventListener("change", () => setLibCollapsed(libCollapsed));
 $("lib-q").addEventListener("input", (e) => { lib.q = e.target.value; renderList(); });
 $("lib-sort").addEventListener("change", (e) => { lib.sort = e.target.value; renderList(); });
 $("lib-vibe").addEventListener("change", (e) => { lib.vibe = e.target.value; renderList(); });

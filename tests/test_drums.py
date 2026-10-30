@@ -200,3 +200,27 @@ def test_kit_split_holds_out_half_the_kits(tmp_path):
     held = bench_drums.stemgmd_items(root, kits="test")
     assert {i.split("/")[0] for i, _, _ in held} == {"kit_b"}
     assert all(np.array_equal(y, full[i]) for i, y, _ in held)  # same audio as in the full set
+
+
+def test_bench_pool_spawns_its_workers(monkeypatch):
+    """Forked workers hang once the first track has started PyTorch (the drum model) on Linux."""
+    seen = {}
+
+    class Pool:
+        def __init__(self, jobs, mp_context=None):
+            seen["method"] = mp_context.get_start_method() if mp_context else None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def map(self, fn, work):
+            return [fn(w) for w in work]
+
+    monkeypatch.setattr(bench_drums, "ProcessPoolExecutor", Pool)
+    monkeypatch.setattr(bench_drums, "_work", lambda job: {"id": job[0], "seconds": 1.0, "counts": {}, "fp_at": {},
+                                                           "split": {}, "excused": 0, "unlabeled": {}})
+    bench_drums.run_onsets("x", [("a", None, {}), ("b", None, {})], {}, jobs=2)
+    assert seen["method"] == "spawn"

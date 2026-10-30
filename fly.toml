@@ -1,6 +1,6 @@
 # Fly.io config for a hosted Tastr (docs/deploy.md). `app` is the name you picked with `fly apps create`;
 # the Access settings, Modal token and R2 keys are Fly secrets, never in this file.
-app = "tastr"
+app = "tastr-frienz"
 primary_region = "sjc"
 
 [env]

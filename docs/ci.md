@@ -56,3 +56,15 @@ well inside the quota.
 - **New workflows** (for example the Modal/R2 benchmark): never run heavy benchmarks on
   GitHub runners. Trigger them with `workflow_dispatch` or a schedule, add `timeout-minutes`,
   a `concurrency` group, and keep the job a thin client that hands work to Modal.
+
+## README screenshots workflow
+
+`.github/workflows/readme-shots.yml` retakes the README screenshots with
+`scripts/readme_shots.py`. It runs only after a PR labeled `readme-shots` merges, or by hand
+(`workflow_dispatch`), takes about 3 minutes, and opens a PR with the new images when they
+changed. Two things to know:
+
+- GitHub has to allow it to open PRs: Settings → Actions → General → Workflow permissions →
+  "Allow GitHub Actions to create and approve pull requests".
+- PRs opened with the workflow's token don't start other workflows, so `tests` won't run on
+  them. They only change `docs/images/`, which `tests` skips anyway.

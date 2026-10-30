@@ -8,7 +8,7 @@ SQLite database you can search, chart and query with SQL.
 It runs on your own machine. Heavy jobs (stem separation, benchmarks) can
 optionally run on a cloud GPU.
 
-![The Tastr library and a track card with its energy chart and sections](docs/images/library.png)
+<img src="docs/images/library.png" width="720" alt="The Tastr library and a track card with its energy chart and sections">
 
 ## What it does
 
@@ -27,7 +27,7 @@ optionally run on a cloud GPU.
 
 ### Drums, bass and chords
 
-![Drum grid, bass piano roll and chord cards for one section](docs/images/drums-bass-chords.png)
+<img src="docs/images/drums-bass-chords.png" width="560" alt="Drum grid, bass piano roll and chord cards for one section">
 
 - **Drum lanes** for kick, snare, clap, hat, open hat, tom and perc, as a
   16-step grid per section. Template patterns that fit the tempo are one click
@@ -50,7 +50,7 @@ optionally run on a cloud GPU.
   and the original audio cut into bars, either the full mix or separated stems.
   "Open in Strudel" opens it in strudel.cc, ready to play and remix.
 
-![A generated Strudel sketch with the original audio](docs/images/strudel.png)
+<img src="docs/images/strudel.png" width="560" alt="A generated Strudel sketch with the original audio">
 
 ### Listen and explore
 
@@ -65,7 +65,7 @@ optionally run on a cloud GPU.
 - **Explore tab** for running SQL against your library in the browser.
 - **Keyboard shortcuts** for most things; press `?` for the list.
 
-![Spectrogram view with sections and playback](docs/images/spectrogram.png)
+<img src="docs/images/spectrogram.png" width="560" alt="Spectrogram view with sections and playback">
 
 ### Measured, not guessed
 
@@ -192,6 +192,13 @@ Stem separation and benchmarks can run on [Modal](https://modal.com), with
 benchmark datasets in a Cloudflare R2 bucket (`python -m pip install -e '.[cloud]'`).
 The web app and everyday analysis stay local. Setup and costs are in
 [docs/cloud.md](docs/cloud.md).
+
+### README screenshots
+
+The images in `docs/images/` are generated, so they follow the UI. Add the `readme-shots`
+label to a PR that changes how the UI looks; after it merges, a workflow retakes them and
+opens a PR with the new images. To retake them yourself, run `python scripts/readme_shots.py`
+(it needs node and the playwright npm package; see the script).
 
 ## Layout
 

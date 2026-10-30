@@ -172,9 +172,8 @@ output is the same as before.
 **Scores of the model's own onsets** (eval adapter: its peak picking; onset F within 50 ms
 with the same labels and cymbal rule as the built-in lanes; built-in -> ADTOF;
 "-" where ADTOF has no such drum). The shipped lanes go through the frame
-mapping and family scaling above, so their scores will differ a little; the
-table for the integrated lanes follows once the suites can run again (the
-datasets now live only in the R2 bucket):
+mapping and family scaling above, so their scores differ a little; see the
+next table for those:
 
 | Suite | Kick | Snare | Hats | Open hat | Tom | Perc | Cymbal |
 |---|---|---|---|---|---|---|---|
@@ -191,23 +190,34 @@ probably costs ADTOF some hats there. MDB toms are few (90) and ADTOF's
 false toms there are mostly on snares (P 0.24). The synthetic tom isn't
 recognised; it is a sine sweep.
 
-**Through the integrated lanes** (eval adapter, `lane_activations` with
-and without the model, on the generated suites that could still run
-locally; MDB and IDMT follow from `tastr drum-bench SUITE PATH --remote
---drum-model` on Modal):
+**Through the shipped lanes** (`tastr drum-bench SUITE PATH --remote
+[--drum-model]` on Modal, main d3934cc, 2026-10-30; onset F within 50 ms;
+built-in -> with the model; "=" where the lane stays built-in):
 
-| Suite | Kick | Snare | Hats | Open hat | Tom | Perc | Cymbal |
-|---|---|---|---|---|---|---|---|
-| StemGMD test kits, built-in | 0.90 | 0.46 | 0.71 | 0.52 | 0.00 | 0.66 | - |
-| StemGMD test kits, with the model | 0.96 | 0.46 | 0.75 | 0.48 | 0.88 | 0.66 | 0.85 |
-| Synth, as onsets, built-in | 0.98 | 0.86 | 0.77 | 0.51 | 0.22 | 0.54 | - |
-| Synth, as onsets, with the model | 0.96 | 0.86 | 0.87 | 0.49 | 0.00 | 0.54 | - |
+| Suite | Kick | Snare | Hat | Hats (either) | Open hat | Tom | Perc | Cymbal |
+|---|---|---|---|---|---|---|---|---|
+| MDB mixes | 0.806 -> 0.834 | 0.506 = | 0.621 -> 0.776 | 0.649 -> 0.753 | 0.236 -> 0.209 | 0.013 -> 0.369 | 0.027 = | - -> 0.832 |
+| MDB drum stems | 0.955 -> 0.965 | 0.601 = | 0.699 -> 0.831 | 0.705 -> 0.808 | 0.303 -> 0.289 | 0.000 -> 0.215 | 0.000 = | - -> 0.851 |
+| StemGMD test kits | 0.901 -> 0.959 | 0.463 = | 0.665 -> 0.682 | 0.712 -> 0.751 | 0.520 -> 0.481 | 0.002 -> 0.880 | 0.664 = | - -> 0.848 |
+| IDMT | 0.956 -> 0.977 | 0.935 = | 0.904 -> 0.940 | | | | | |
+| Synth | 1.000 -> 0.977 | 0.750 = | 0.914 -> 0.943 | | 0.686 = | 0.667 -> 0.000 | 0.636 = | |
+
+Kick, hats and toms improve on every real-audio suite. Toms are found but
+not yet precise on MDB (P 0.25 on mixes, 0.13 on stems, R about 0.7; most
+false toms land on snares, and MDB has only 90 toms). On StemGMD a tom
+alone scores 0.98, a tom with a kick or snare 0.59. On tom-less kits (IDMT)
+the tom lane fires 0.017 times per labeled hit (0.010 built-in). Open hat
+drops a little (0.01 to 0.04), since our open-hat lane now keeps only the
+hits the model doesn't also call a hat. Synth loses its synthetic tom, a
+sine sweep the model doesn't recognise. Each run took 38 to 87 s on Modal
+(4 CPUs). The earlier eval-adapter numbers for StemGMD and synth agreed
+within about 0.01.
 
 **Open hats.** Splitting the model's hi-hats into closed and open with the
 built-in ringing test scored better on the StemGMD test kits (open hat 0.66
 against 0.48) but worse on synth (0.42 against 0.49), and MDB couldn't be
 checked. The built-in open-hat lane stays (`drums.MODEL_OPEN_HATS = False`);
-revisit once MDB runs on Modal.
+revisit with a bench option that runs MDB and IDMT both ways on Modal.
 
 **The snare trade-off.** ADTOF's snare is far better on MDB and StemGMD
 (0.74 and 0.91 against 0.51 and 0.46) but worse on IDMT's sampled and

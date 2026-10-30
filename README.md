@@ -175,8 +175,8 @@ deleted with the track.
 
 With PyTorch installed, the kick, hat and tom lanes come from ADTOF's pretrained
 drum transcription model (Zehren et al.), which also adds a cymbal lane. On real
-mixes it finds toms (onset F 0.33 against 0.01 on MDB Drums, from the model's own
-onsets) and scores higher on kick and hats; snare, clap, perc and open hats stay with the built-in detector. Details and
+mixes it finds toms (onset F 0.37 against 0.01 on MDB Drums mixes, 0.88 against
+0.00 on unseen StemGMD kits) and scores higher on kick and hats; snare, clap, perc and open hats stay with the built-in detector. Details and
 scores are in [docs/drums.md](docs/drums.md#pretrained-drum-model-adtof).
 
 ```bash

@@ -254,7 +254,11 @@ def run_onsets(suite: str, items: list, labels: dict, excused: dict | None = Non
         # One track here first so librosa's numba kernels are compiled and cached before the workers start
         # (see runner.run).
         rows = [_work(work[0])]
-        with ProcessPoolExecutor(jobs) as pool:
+        # Spawned, not forked: that first track may have started PyTorch's threads (the drum model), and
+        # forked workers then hang in them (Linux forks by default; it hung every drum-model run on Modal).
+        import multiprocessing
+
+        with ProcessPoolExecutor(jobs, mp_context=multiprocessing.get_context("spawn")) as pool:
             rows += list(pool.map(_work, work[1:]))
     else:
         rows = [_work(w) for w in work]

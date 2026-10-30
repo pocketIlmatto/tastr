@@ -15,7 +15,9 @@ TrackCard (tastr/engine/card.py)  ──►  SQLite (tastr/db.py)  ──►  CL
 ```
 
 `tastr/service.py` wires these together; CLIs and web handlers call
-`service.analyze_inputs()` / `service.analyze_source()`.
+`service.analyze_inputs()` / `service.analyze_source()`. With `TASTR_ANALYSIS_BACKEND=modal` (a hosted server,
+docs/deploy.md) `analyze_source()` sends the audio to the `analyze` function on Modal
+(`tastr/cloud/modal_web.py`) and stores the card that comes back.
 
 ## The track card (`tastr/engine/card.py`)
 

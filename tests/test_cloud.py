@@ -13,16 +13,27 @@ from tastr.cloud import jobs
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_modal_image_deps_match_pyproject():
+def _consts(name: str) -> dict:
+    # The Modal apps need Modal (and modal_app.py deploy-time settings) to import, so read them from the source.
+    tree = ast.parse((ROOT / "tastr/cloud" / name).read_text())
+    return {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body
+            if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id.endswith(("_DEPS", "PINS"))}
+
+
+@pytest.mark.parametrize("name", ["modal_app.py", "modal_web.py"])
+def test_modal_image_deps_match_pyproject(name):
     tomllib = pytest.importorskip("tomllib")  # Python 3.11+
-    # modal_app.py needs Modal and deploy-time settings to import, so read its ENGINE_DEPS from the source.
-    tree = ast.parse((ROOT / "tastr/cloud/modal_app.py").read_text())
-    consts = {n.targets[0].id: n.value for n in tree.body
-              if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id.endswith("_DEPS")}
+    consts = _consts(name)
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
     web = ("fastapi", "uvicorn", "python-multipart")
-    assert sorted(ast.literal_eval(consts["ENGINE_DEPS"])) == sorted(d for d in project["dependencies"] if not d.startswith(web))
-    assert ast.literal_eval(consts["STEMS_DEPS"]) == project["optional-dependencies"]["stems"]
+    assert sorted(consts["ENGINE_DEPS"]) == sorted(d for d in project["dependencies"] if not d.startswith(web))
+    assert consts["STEMS_DEPS"] == project["optional-dependencies"]["stems"]
+    assert consts["PINS"] == _consts("modal_app.py")["PINS"]
+
+
+def test_docker_image_uses_the_engine_pins():
+    pins = _consts("modal_app.py")["PINS"]
+    assert all(f'"{p}"' in (ROOT / "Dockerfile").read_text() for p in pins)
 
 
 @pytest.mark.audio
@@ -299,3 +310,74 @@ def test_modal_images_add_local_files_last(monkeypatch):
     importlib.import_module("tastr.cloud.modal_app")
     sys.modules.pop("tastr.cloud.modal_app", None)
     assert images and all(i.local for i in images)  # every function's image ships the tastr source
+
+
+def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
+    """Like modal_app: a build step after add_local_python_source fails a deploy unless the source is copied."""
+    class Image:
+        def __init__(self, local=False, copied=False):
+            self.local, self.copied = local, copied
+
+        def _step(self, *a, **kw):
+            assert not self.local or self.copied, "a build step after add_local_python_source"
+            return Image(self.local, self.copied)
+
+        apt_install = pip_install = run_commands = run_function = env = _step
+
+        def add_local_python_source(self, *a, copy=False, **kw):
+            assert not self.local
+            return Image(local=True, copied=copy)
+
+    images = []
+
+    class App:
+        def __init__(self, name):
+            assert name == "tastr-web"
+
+        def function(self, image, **kw):
+            images.append(image)
+            return lambda f: f
+
+    fake = types.SimpleNamespace(Image=types.SimpleNamespace(debian_slim=lambda **kw: Image()), App=App)
+    monkeypatch.setitem(sys.modules, "modal", fake)
+    import importlib
+
+    sys.modules.pop("tastr.cloud.modal_web", None)
+    importlib.import_module("tastr.cloud.modal_web")
+    sys.modules.pop("tastr.cloud.modal_web", None)
+    assert len(images) == 2 and all(i.local for i in images)
+
+
+def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):
+    """A hosted server sends the audio to the `analyze` function of the app TASTR_MODAL_APP names."""
+    from tastr import db, service
+    from tastr.engine.card import Source
+    from test_foundation import full_card
+
+    remote_card = full_card()
+    remote_card.source = Source(kind="file", uri="/tmp/x/track.mp3", local_path="/tmp/x/track.mp3")
+    apps = []
+    calls = fake_modal(monkeypatch, remote_card.to_dict())
+    fn = sys.modules["modal"].Function
+    real = fn.from_name
+    fn.from_name = lambda app, name: apps.append(app) or real(app, name)
+    monkeypatch.setenv("TASTR_ANALYSIS_BACKEND", "modal")
+    monkeypatch.setenv("TASTR_MODAL_APP", "tastr-web")
+    monkeypatch.setenv("TASTR_LOOKUP", "")
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"mp3 bytes")
+    src = Source(kind="file", uri=str(song), local_path=str(song), title="song")
+    r = service.analyze_source(db.connect(db_path), src, ["core"], {"beats_per_bar": 3}, owner="a@b.c")
+    assert r.error is None and apps == ["tastr-web"]
+    assert calls == [("analyze", (b"mp3 bytes", ".mp3", ["core"], {"beats_per_bar": 3}), {})]
+    assert r.card.source is src and r.card.core.bpm == 124.0
+    assert db.load_card(db.connect(db_path), r.track_id).source.local_path == str(song)
+
+
+@pytest.mark.audio
+def test_run_analyze_returns_a_card(synth_wav):
+    from tastr.engine.card import TrackCard
+
+    path, _ = synth_wav
+    card = TrackCard.from_dict(jobs.run_analyze(path.read_bytes(), ".wav", ["core"]))
+    assert card.duration and card.core.bpm

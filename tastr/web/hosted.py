@@ -9,7 +9,10 @@
   person per day, and how many analyses run at once;
 - hides error details that could name server paths, and sends security headers (CSP, no framing);
 - gives each person their own library: tracks carry the uploader's email, and every /api/tracks/{id}
-  request for someone else's track answers 404. TASTR_ADMIN_EMAILS may open /api/admin/usage.
+  request for someone else's track answers 404. TASTR_ADMIN_EMAILS may open /api/admin/usage;
+- hands out signed links that work for a week under /pub/, so strudel.cc (which can't pass the login)
+  can fetch a track's audio and stems for "Try this in Strudel" (`LinkSigner`);
+- deletes uploaded audio and stems after TASTR_AUDIO_DAYS (cards stay; admins' audio is kept).
 
 Settings come from environment variables (see `Settings.from_env` and docs/hosting.md).
 """
@@ -18,15 +21,20 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import os
 import re
+import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 HEALTH_PATH = "/api/health"
 TOKEN_HEADER = "cf-access-jwt-assertion"
+PUBLIC_PREFIX = "/pub/"  # signed links; Cloudflare Access lets these through (docs/hosting.md)
+LINK_DAYS = 7
 
 
 class ConfigError(ValueError):
@@ -45,6 +53,8 @@ class Settings:
     max_analyses: int = 2
     daily_stems: int = 10
     admins: tuple[str, ...] = ()  # emails that may open the admin view
+    audio_days: float = 30  # uploaded audio and stems are deleted after this; 0 keeps them
+    link_secret: str = ""  # signs the /pub/ links; without it they stop working when the server restarts
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -61,6 +71,8 @@ class Settings:
             max_analyses=int(env.get("TASTR_MAX_ANALYSES", cls.max_analyses)),
             daily_stems=int(env.get("TASTR_DAILY_STEMS", cls.daily_stems)),
             admins=tuple(e.strip().lower() for e in env.get("TASTR_ADMIN_EMAILS", "").split(",") if e.strip()),
+            audio_days=float(env.get("TASTR_AUDIO_DAYS", cls.audio_days)),
+            link_secret=env.get("TASTR_LINK_SECRET", "").strip(),
         )
         if hosted and not (s.access_team_domain and s.access_aud):
             # Fail closed: a hosted server that can't check logins must not start.
@@ -73,7 +85,8 @@ class Settings:
 
     def limits(self) -> dict:
         return {"max_upload_mb": self.max_upload_mb, "max_files": self.max_files, "daily_tracks": self.daily_tracks,
-                "daily_stems": self.daily_stems, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses}
+                "daily_stems": self.daily_stems, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses,
+                "audio_days": self.audio_days}
 
 
 class AccessVerifier:
@@ -95,6 +108,58 @@ class AccessVerifier:
         if not email:
             raise ValueError("token has no email")  # service tokens carry no email; friends always do
         return email.lower()
+
+
+class LinkSigner:
+    """Links to one track's audio and stems that work without the login for `days`, for strudel.cc.
+
+    The token is `<expiry>.<HMAC of track id and expiry>`, so it can't be moved to another track or extended.
+    """
+
+    def __init__(self, secret: str | bytes, days: float = LINK_DAYS):
+        self.key = secret.encode() if isinstance(secret, str) else secret
+        self.ttl = int(days * 86400)
+
+    def _sig(self, track_id: int, exp: int) -> str:
+        mac = hmac.new(self.key, f"{track_id}:{exp}".encode(), hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(mac[:18]).decode()
+
+    def token(self, track_id: int, now: float | None = None) -> str:
+        exp = int((now or time.time()) + self.ttl)
+        return f"{exp}.{self._sig(track_id, exp)}"
+
+    def check(self, token: str, track_id: int, now: float | None = None) -> bool:
+        exp, _, sig = token.partition(".")
+        if not exp.isdigit() or int(exp) < (now or time.time()):
+            return False
+        return hmac.compare_digest(sig, self._sig(track_id, int(exp)))
+
+
+def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[str, ...] = (),
+                 now: float | None = None) -> list[int]:
+    """Delete uploaded audio under `root` older than `days`, except tracks owned by `keep` (the admins).
+
+    Cards stay, so the track still shows everything but playback. Stems go too, unless another track
+    still has the same file. Returns the ids of tracks whose audio went.
+    """
+    from .. import stems
+
+    cutoff = (now or time.time()) - days * 86400
+    root = root.resolve()
+    gone = []
+    for tid, owner, path, sha in conn.execute("SELECT id, owner, local_path, sha256 FROM tracks WHERE local_path IS NOT NULL").fetchall():
+        p = Path(path).resolve()
+        if owner in keep or root not in p.parents or not p.is_file() or p.stat().st_mtime >= cutoff:
+            continue
+        p.unlink()
+        if p.parent != root and not any(p.parent.iterdir()):
+            p.parent.rmdir()
+        gone.append((tid, sha))
+    for tid, sha in gone:
+        paths = conn.execute("SELECT local_path FROM tracks WHERE sha256 = ? AND local_path IS NOT NULL", (sha,)).fetchall()
+        if not any(Path(lp).is_file() for (lp,) in paths):
+            stems.remove(stems.stems_dir(sha, tid))
+    return [tid for tid, _ in gone]
 
 
 def today() -> str:

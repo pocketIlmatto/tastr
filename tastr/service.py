@@ -6,6 +6,7 @@ This is the entry point CLIs and web handlers should call.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,13 +34,24 @@ def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] |
         if not source.local_path:
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
-        card = analyze_file(source.local_path, stages, source=source, options=options)
+        card = _analyze(source, stages, options)
         track_id = db.save_card(conn, card, owner)
         _lookup(conn, track_id, card)
         return AnalyzeResult(source, track_id, card)
     except Exception as e:
         log.warning("failed to analyze %s: %s", source.uri, e)
         return AnalyzeResult(source, None, None, f"{type(e).__name__}: {e}")
+
+
+def _analyze(source: Source, stages: list[str] | None, options: dict | None):
+    """The engine, here or (TASTR_ANALYSIS_BACKEND=modal, a hosted server) on Modal, where only the audio goes."""
+    if os.environ.get("TASTR_ANALYSIS_BACKEND", "local") == "modal":
+        from .cloud import remote
+
+        card = remote.analyze(source.local_path, stages, options)
+        card.source = source
+        return card
+    return analyze_file(source.local_path, stages, source=source, options=options)
 
 
 def _lookup(conn: sqlite3.Connection, track_id: int, card: TrackCard) -> None:

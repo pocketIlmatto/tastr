@@ -1,0 +1,33 @@
+name: deploy
+# Deploys the hosted Tastr (docs/deploy.md): the Modal functions (analysis and stems) first, then the web
+# server on Fly.io, so both run the same engine. Manual only: Actions > deploy > Run workflow. Needs the
+# FLY_API_TOKEN, MODAL_TOKEN_ID and MODAL_TOKEN_SECRET repository secrets.
+on:
+  workflow_dispatch:
+# One deploy at a time; a second one waits rather than cancelling a half-done deploy.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Just the Modal client and the tastr source, which the Modal images upload; the engine installs there.
+      - run: pip install "modal>=1.0" && pip install --no-deps -e .
+      - name: Deploy analysis and stems to Modal
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal deploy --env friends tastr/cloud/modal_web.py
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy the web server to Fly.io
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only

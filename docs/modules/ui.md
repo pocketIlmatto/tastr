@@ -17,11 +17,12 @@ across the library.
 | GET | `/api/tracks` | | list of `db.list_tracks` rows (exists) |
 | GET | `/api/tracks/{id}` | | `{"id": ..., **card, "has_audio", "has_views"}`; `extras.views` is left out (exists) |
 | GET | `/api/tracks/{id}/audio` | | the original file, with HTTP Range support; 404 when it isn't on disk |
+| GET | `/api/tracks/{id}/strudel-link` | | `{"audio", "days"}`: where strudel.cc can fetch the audio (stems at `.../stems/<name>` next to it). Locally `/api/tracks/{id}/audio`; hosted, a signed `/pub/<token>/tracks/{id}/audio` that works for `days` days without the login (docs/hosting.md) |
 | GET | `/api/tracks/{id}/views` | | `extras["views"]` (waveform + spectrogram data); 404 for cards analyzed before the `views` stage, where the UI computes both from the decoded audio |
 | POST | `/api/analyze` | multipart `files[]` | `{"results": [{"track_id", "title", "error"}]}`; saves each upload as `$TASTR_HOME/uploads/<random id>/<original name>` then calls `service.analyze_inputs` |
 | POST | `/api/analyze-url` | `{"url": "..."}` | same shape; `IngestError` → 400 with the message; anything but an `http(s)` link (a server path) → 400; 403 in hosted mode |
 | GET | `/api/config` | | `{"hosted", "links", "query", "user", "admin", "limits"}`: what this server allows, so the UI hides link analysis and the SQL box when they're off (docs/hosting.md) |
-| GET | `/api/admin/usage` | | hosted mode, `TASTR_ADMIN_EMAILS` only (404 otherwise): `{"today", "users": [{"email", "tracks", "audio_bytes", "stems_bytes", "last_upload", "last_seen", "today": {"tracks", "stems", "visits"}}], "history": [{"day", "user", "kind", "n"}], "admins", "limits", "storage": {"used_bytes", "cap_bytes"}, "active_stem_jobs"}`; `email` is null for tracks with no owner |
+| GET | `/api/admin/usage` | | hosted mode, `TASTR_ADMIN_EMAILS` only (404 otherwise): `{"today", "users": [{"email", "tracks", "audio_bytes", "stems_bytes", "last_upload", "last_seen", "today": {"tracks", "stems", "visits"}}], "history": [{"day", "user", "kind", "n"}], "admins", "limits", "storage": {"used_bytes", "cap_bytes"}, "active_stem_jobs", "analyses": {"running", "waiting", "max"}}`; `email` is null for tracks with no owner |
 | DELETE | `/api/tracks/{id}` | | 204 / 404; also deletes the track's edits and versions |
 | GET / PUT | `/api/tracks/{id}/edits` | PUT: the whole edits object | the current, autosaved edits to the drums, bass and chords, `{drums\|bass\|chords\|drumsrc: {section idx or "all": value}}`, or `{}`; PUT returns 204 (an object with no edited section clears them) |
 | GET / POST | `/api/tracks/{id}/edit-versions` | POST: `{"name", "edits"}` | saved versions, newest first: `[{"id", "name", "created_at", "sections"}]`; POST returns the new one (201) |

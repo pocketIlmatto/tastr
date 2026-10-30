@@ -285,3 +285,12 @@ def test_three_four_bars_play_in_three():
     assert '.struct("[x ~ ~ ~] [x ~ ~ ~] [~ ~ ~ ~]")' in code
     with_audio = run_js(c, "http://localhost:8000/api/tracks/1/audio")["code"]
     assert "bar = 2.0000" in with_audio
+
+
+def test_shared_server_links_carry_their_token_to_the_stems():
+    signed = "https://tastr.example.com/pub/1767225600.abc_-XYZ/tracks/7/audio"
+    code = run_js_stems(with_grid(card(["Am", "F", "C", "G"]), first=0.5, bar=2.0), signed, ["vocals"])
+    assert "  vocals: 'https://tastr.example.com/pub/1767225600.abc_-XYZ/tracks/7/stems/vocals'," in code
+    assert "private link that works for a week" in code and "tastr serve" not in code
+    local = run_js(with_grid(card(["Am", "F", "C", "G"]), first=0.5, bar=2.0), AUDIO)["code"]
+    assert "keep `tastr serve` running" in local and "private link" not in local

@@ -2,7 +2,8 @@
 
 Benchmarks and stem separation can run on [Modal](https://modal.com) instead of your machine; benchmarks
 read their datasets from a Cloudflare [R2](https://developers.cloudflare.com/r2/) bucket. The web app and everyday analysis still run
-locally. This is option C of the cloud plan; moving the app itself (option B) is tracked separately.
+locally. A hosted server for friends uses a separate Modal app, `tastr-web` (`tastr/cloud/modal_web.py`), for its
+analysis and stems; see [deploy.md](deploy.md).
 
 ```
 tastr bench beatport-key beatport-key --remote --limit 200 --out bp-200.json

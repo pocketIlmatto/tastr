@@ -1,0 +1,12 @@
+# Litestream (https://litestream.io) backs up the library database to the private R2 bucket.
+# The values come from Fly secrets (docs/deploy.md).
+dbs:
+  - path: ${TASTR_HOME}/tastr.db
+    replicas:
+      - type: s3
+        endpoint: ${LITESTREAM_ENDPOINT}
+        bucket: ${LITESTREAM_BUCKET}
+        path: tastr.db
+        region: auto
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}

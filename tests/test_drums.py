@@ -12,6 +12,12 @@ from tastr.engine.stages.suggestions import _drum_grid, _step_grid
 pytestmark = pytest.mark.audio
 
 
+@pytest.fixture(autouse=True)
+def built_in_lanes(monkeypatch):
+    """These tests check the built-in detector; the optional drum model has its own (test_drum_model.py)."""
+    monkeypatch.setenv("TASTR_DRUM_MODEL", "off")
+
+
 def grid_for(patterns, bpm=120):
     y, _ = make_drum_track(patterns, bpm=bpm)
     ctx = _synth_ctx(y, bpm)
@@ -183,3 +189,14 @@ def test_onset_suites_score_fake_folders(tmp_path):
     assert "rows" in report and json.dumps(report)
     assert bench_drums.run("idmt", idmt_folder(tmp_path / "idmt"))["summary"]["kick"]["n"] == 2
     assert "tom" in bench_drums.run("idmt", tmp_path / "idmt")["unlabeled_onsets_per_ref"]
+
+
+def test_kit_split_holds_out_half_the_kits(tmp_path):
+    names = [f"k{i}" for i in range(10)]
+    train, test = bench_drums.kit_split(names, "train"), bench_drums.kit_split(names, "test")
+    assert len(train) == len(test) == 5 and not set(train) & set(test)
+    root = stemgmd_folder(tmp_path / "sg")  # kits kit_a (train) and kit_b (test)
+    full = {i: y for i, y, _ in bench_drums.stemgmd_items(root)}
+    held = bench_drums.stemgmd_items(root, kits="test")
+    assert {i.split("/")[0] for i, _, _ in held} == {"kit_b"}
+    assert all(np.array_equal(y, full[i]) for i, y, _ in held)  # same audio as in the full set

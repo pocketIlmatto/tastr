@@ -19,6 +19,7 @@ STEPS = 16
 
 # Default Drum Rack pad notes in Live.
 DRUM_RACK = {"kick": "C1", "snare": "D1", "clap": "D#1", "hat": "F#1", "open_hat": "A#1", "tom": "A1", "perc": "G#1"}
+MODEL_PADS = {"cymbal": "C#2"}  # lanes only the optional drum model finds (GM crash)
 
 # Bass: bins of the bass CQT (from C1, 12 per octave) that count toward a bar's bass level, and the levels,
 # relative to the track's bassy bars (90th percentile), under which a bar has no bass (-7 dB) and under which
@@ -86,8 +87,9 @@ def _pattern(profile: np.ndarray) -> str:
     return "".join("x" if v >= 0.72 else "o" if v >= 0.5 else "." for v in profile)
 
 
-def _lane_help(pattern: dict) -> dict:
-    return {k: drums.LANE_HELP[k] for k in pattern if k in drums.LANE_HELP}
+def _lane_help(pattern: dict, model: bool = False) -> dict:
+    help_ = drums.LANE_HELP | (drums.MODEL_LANE_HELP if model else {})
+    return {k: help_[k] for k in pattern if k in help_}
 
 
 def _title(text: str) -> str:
@@ -155,7 +157,7 @@ def _drum_grid(ctx: AnalysisContext, step_frames: np.ndarray) -> dict:
     between[:, -1] = step_frames[:, -1] + (step_frames[:, -1] - step_frames[:, -2]) // 2 if STEPS > 1 else step_frames[:, -1]
     floor_acts = drums.lane_activations(ctx, between, step_seconds=step_s, slop=0)
     grid = {}
-    for lane in drums.LANES:
+    for lane in acts:  # drums.LANES, plus cymbal with the drum model
         # sqrt compresses activation toward perceived loudness so a slightly weaker hit still reads as a hit
         steps = np.sqrt(acts[lane])
         profile = steps[busy].mean(axis=0)
@@ -398,9 +400,11 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
     detected = {k: v["pattern"] for k, v in grid.items() if v["detected"]}
     if detected:
         rows = "; ".join(f"{k} on steps {', '.join(map(str, _step_list(p))) or 'none'}" for k, p in detected.items())
-        pads = ", ".join(f"{k.replace('_', ' ')} {DRUM_RACK[k]}" for k in detected if k in DRUM_RACK)
-        data = {"pattern": detected, "pads": DRUM_RACK, "origin": "detected", "bpm": round(bpm) if bpm else None,
-                "lane_help": _lane_help(detected),
+        model = ctx.cache.get("drum_model") is not None
+        rack = DRUM_RACK | ({k: v for k, v in MODEL_PADS.items() if k in grid} if model else {})
+        pads = ", ".join(f"{k.replace('_', ' ')} {rack[k]}" for k in detected if k in rack)
+        data = {"pattern": detected, "pads": rack, "origin": "detected", "bpm": round(bpm) if bpm else None,
+                "lane_help": _lane_help(detected, model),
                 "template": "Measured per section, since drums change between sections. Averaged over the busiest "
                             f"bars the whole track reads as {rows}. Program it on {{drumrack}}{{pads}} and vary the "
                             "last bar of every 4."}
@@ -494,7 +498,7 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
 
 class SuggestionsStage:
     name = "suggestions"
-    version = "0.2.1"
+    version = "0.3.0"  # 0.3: the optional drum model (tastr[drums]) supplies kick, hat, tom and cymbal
     requires = ("core", "sections", "tags")
 
     def run(self, ctx: AnalysisContext) -> None:

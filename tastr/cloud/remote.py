@@ -35,8 +35,9 @@ def key_profiles(dataset: str, path: str, limit: int | None = None) -> dict:
     return _call("key_profiles", dataset, path, limit)
 
 
-def drum_bench(suite: str, path: str | None, limit: int | None = None, drums_only: bool = False) -> dict:
-    return _call("drum_bench", suite, path, limit, drums_only)
+def drum_bench(suite: str, path: str | None, limit: int | None = None, drums_only: bool = False,
+               kits: str = "all", model: bool = False) -> dict:
+    return _call("drum_bench_model" if model else "drum_bench", suite, path, limit, drums_only, kits)
 
 
 def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:

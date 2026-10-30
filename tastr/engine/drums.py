@@ -23,12 +23,19 @@ Design notes, what was tried and dropped, and known weaknesses: docs/drums.md.
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 import numpy as np
 
 from . import signals
 from .pipeline import AnalysisContext
 
 LANES = ("kick", "snare", "clap", "hat", "open_hat", "tom", "perc")
+# With the optional drum model (tastr[drums], adt.py): which lanes it supplies, and the lane it adds.
+MODEL_LANES = ("kick", "hat", "tom", "cymbal")
+MODEL_OPEN_HATS = False  # True: split the model's hi-hats into closed and open with the ringing test below
+log = logging.getLogger(__name__)
 
 # What each lane measures, for UI tooltips and docs.
 LANE_HELP = {
@@ -39,6 +46,13 @@ LANE_HELP = {
     "open_hat": "Hits above 6 kHz that keep ringing (open hi-hat, ride, crash).",
     "tom": "Low hits pitched above about 120 Hz, higher than a kick.",
     "perc": "Pitched mid hits without body (cowbell, rim, conga, wood block).",
+}
+# The same, for lanes the drum model finds (it learned them from annotated real music).
+MODEL_LANE_HELP = {
+    "kick": "Kick drum hits, found by the ADTOF drum model.",
+    "hat": "Hi-hat hits, found by the ADTOF drum model.",
+    "tom": "Tom hits (high, mid and floor toms), found by the ADTOF drum model.",
+    "cymbal": "Crash and ride cymbal hits, found by the ADTOF drum model.",
 }
 
 # Spectral templates as (centre Hz, width in octaves, weight) bumps, in mel magnitude.
@@ -209,7 +223,8 @@ def lane_activations(ctx: AnalysisContext, frames: np.ndarray, step_seconds: flo
     """Strength of each drum lane at each frame index in `frames` (any shape), allowing `slop` frames of timing error."""
     frames = np.asarray(frames, dtype=int)
     flat = frames.reshape(-1)
-    out = {lane: np.zeros(flat.size) for lane in LANES}
+    model = ctx.get("drum_model", model_lanes)
+    out = {lane: np.zeros(flat.size) for lane in LANES + (("cymbal",) if model else ())}
     nov = ctx.get("drum_onsets", onsets)
     n = next(iter(nov.values())).size
     if n < 3 or flat.size == 0:
@@ -257,4 +272,53 @@ def lane_activations(ctx: AnalysisContext, frames: np.ndarray, step_seconds: flo
             ring = _ringing(env["air"], i, sr, gap)
             out["hat"][k] = s["hat"] * (1 - ring)
             out["open_hat"][k] = s["hat"] * ring
+        if model:
+            m = {lane: float(v[a:b].max()) for lane, v in model.items()}
+            out["kick"][k], out["tom"][k], out["cymbal"][k] = m["kick"], m["tom"], m["cymbal"]
+            if MODEL_OPEN_HATS:
+                t = a + int(np.argmax(model["hat"][a:b]))
+                ring = _ringing(env["air"], int(t * hop), sr, gap) if m["hat"] > 0 else 0.0
+                out["hat"][k], out["open_hat"][k] = m["hat"] * (1 - ring), m["hat"] * ring
+            else:
+                # Our open-hat lane stays; the model's hi-hats replace the closed ones.
+                out["hat"][k] = m["hat"] * (1 - _ramp(out["open_hat"][k] / (s["hat"] + 1e-12), 0.5, 0.9)) if s["hat"] > 0 else m["hat"]
     return {k: v.reshape(frames.shape) for k, v in out.items()}
+
+
+def _full_rate_audio(ctx: AnalysisContext) -> tuple[np.ndarray, int]:
+    """The original file at the drum model's rate when it is on disk (the analysis signal stops at 11 kHz)."""
+    from . import adt
+
+    path = ctx.card.source.local_path
+    if path and Path(path).is_file():
+        import librosa
+
+        y, _ = librosa.load(path, sr=adt.SR, mono=True)
+        return y, adt.SR
+    return ctx.y, ctx.sr
+
+
+def model_lanes(ctx: AnalysisContext) -> dict[str, np.ndarray] | None:
+    """The drum model's hits per lane on the analysis frames, or None without tastr[drums] (or offline on
+    first use). Each hit is its confidence (0.5 to 1) times the level of that drum family's own part, so the
+    model's lanes sit on the same scale as the built-in ones."""
+    from . import adt
+
+    if not adt.available():
+        return None
+    try:
+        hits = adt.onsets(*_full_rate_audio(ctx))
+    except Exception as e:  # e.g. no network for the first download
+        log.warning("drum model unavailable, using the built-in lanes: %s", e)
+        return None
+    nov = ctx.get("drum_onsets", onsets)
+    n = next(iter(nov.values())).size
+    level = {fam: float(np.percentile(nov[part], 99.5)) or 1.0 for fam, part in (("low", "kick"), ("high", "hat"))}
+    out = {}
+    for lane, fam in (("kick", "low"), ("tom", "low"), ("hat", "high"), ("cymbal", "high")):
+        x = np.zeros(n)
+        t, conf = hits[lane]
+        f = np.clip(np.round(t * ctx.sr / ctx.hop).astype(int), 0, n - 1)
+        np.maximum.at(x, f, conf * level[fam])
+        out[lane] = x
+    return out

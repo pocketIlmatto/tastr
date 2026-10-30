@@ -35,7 +35,10 @@ optionally run on a cloud GPU.
 
 - **Drum lanes** for kick, snare, clap, hat, open hat, tom and perc, as a
   16-step grid per section. Template patterns that fit the tempo are one click
-  away.
+  away. With the optional drum model (below), kick, hat and tom come from
+  [ADTOF](https://github.com/MZehren/ADTOF), a network trained on annotated
+  real music that finds toms the built-in detector misses, and a cymbal lane
+  (crash and ride) is added.
 - **Per-section bass and chords:** the bass note and rhythm for each bar, the
   chord loop with Roman numerals, and what changed from the previous section
   (marked Δ).
@@ -168,6 +171,26 @@ its GPU, which is used automatically (as is a CUDA GPU); set `TASTR_STEMS_DEVICE
 to `cpu`, `mps` or `cuda` to choose. Stems are FLAC files in `~/.tastr/stems/` and are
 deleted with the track.
 
+### Drum model (optional)
+
+With PyTorch installed, the kick, hat and tom lanes come from ADTOF's pretrained
+drum transcription model (Zehren et al.), which also adds a cymbal lane. On real
+mixes it finds toms (onset F 0.33 against 0.01 on MDB Drums, from the model's own
+onsets) and scores higher on kick and hats; snare, clap, perc and open hats stay with the built-in detector. Details and
+scores are in [docs/drums.md](docs/drums.md#pretrained-drum-model-adtof).
+
+```bash
+python -m pip install -e '.[drums]'   # PyTorch only; shared with .[stems]
+tastr drum-model fetch                 # shows the license, downloads the weights
+```
+
+**The weights are CC BY-NC-SA 4.0: non-commercial use only, and share-alike.** They
+are not part of Tastr's repository, so the model is opt-in even with PyTorch installed:
+`tastr drum-model fetch` downloads them (about 5 MB, from a pinned commit of ADTOF's
+GitHub repository, checked by SHA-256) into `~/.tastr/models/`, and from then on the
+model is used. `TASTR_DRUM_MODEL=adtof` does the same on first use; `TASTR_DRUM_MODEL=off`
+switches it off. Without it, Tastr uses the built-in lanes exactly as before.
+
 To run the tests:
 
 ```bash
@@ -294,6 +317,13 @@ Third-party pieces it uses or links to:
   requires a link back wherever its data is shown, which the card does. FreqBlog's API
   allows storing results only on paid plans, so Tastr keeps them only with
   `FREQBLOG_PLAN=paid`. See [docs/lookup.md](docs/lookup.md).
+- **ADTOF** (optional drum model): its code and model weights are **CC BY-NC-SA
+  4.0, non-commercial and share-alike**. Tastr doesn't include either. The weights
+  download on first use from the ADTOF repository; the network and preprocessing
+  that run them are Tastr's own code, written from the paper's architecture.
+  [ADTOF](https://github.com/MZehren/ADTOF): M. Zehren, M. Alunno, P. Bientinesi,
+  "High-Quality and Reproducible Automatic Drum Transcription from Crowdsourced
+  Data", Signals 4(4), 2023.
 - **Benchmark datasets** each have their own license, listed in
   [docs/datasets.md](docs/datasets.md). Some don't allow redistribution, so
   audio and labels are never committed to this repo.

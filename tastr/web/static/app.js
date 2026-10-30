@@ -1172,6 +1172,7 @@ const LANE_HELP = {
   kick: "Kick: low hits whose energy sits below about 120 Hz.",
   snare: "Snare: noisy mid hits (400 Hz to 5 kHz), usually with some body around 200 Hz.",
   hat: "Hi-hat: short hits above 6 kHz.",
+  cymbal: "Cymbal: crash and ride hits, found by the optional drum model.",
 };
 const laneName = (lane) => lane.replace(/_/g, " ");
 const laneHelp = (lane, measured, help) => {
@@ -1236,6 +1237,7 @@ function voice(ctx, lane, t, vel) {
   else if (isOpenHat(l)) { env(0.25, 0.22); noise("highpass", 7000, 0.22); }
   else if (l.includes("hat")) { env(0.25, 0.045); noise("highpass", 7000, 0.045); }
   else if (l.includes("tom")) { env(0.6, 0.3); tone("sine", 170, 120, 0.3); }
+  else if (l.includes("cymbal")) { env(0.2, 0.8); noise("highpass", 5000, 0.8); }
   else { env(0.4, 0.12); tone("sine", 800, 700, 0.12); }
 }
 // Lookahead scheduler: a 25 ms timer queues every 16th starting within the next 150 ms, looping `steps` 16ths.
@@ -1271,7 +1273,7 @@ function padVoice(ctx, midis, t, dur) {
   for (const m of midis) for (const det of [-6, 6]) { const o = ctx.createOscillator(); o.type = "sawtooth"; o.detune.value = det; o.frequency.value = 440 * 2 ** ((m - 69) / 12); o.connect(f); o.start(t); o.stop(t + dur + 0.02); }
 }
 // General MIDI drum map (channel 10): kick 36, snare 38, clap 39, closed hat 42, open hat 46, low tom 45, perc (cowbell) 56, anything else 37.
-const GM_NOTE = (lane) => { const l = lane.toLowerCase(); return l.includes("kick") ? 36 : l.includes("snare") ? 38 : l.includes("clap") ? 39 : isOpenHat(l) ? 46 : l.includes("hat") ? 42 : l.includes("tom") ? 45 : l.includes("perc") ? 56 : 37; };
+const GM_NOTE = (lane) => { const l = lane.toLowerCase(); return l.includes("kick") ? 36 : l.includes("snare") ? 38 : l.includes("clap") ? 39 : isOpenHat(l) ? 46 : l.includes("hat") ? 42 : l.includes("tom") ? 45 : l.includes("perc") ? 56 : l.includes("cymbal") ? 49 : 37; };
 // Format 1, 480 PPQN (1920 ticks per 4/4 bar): a tempo track, then one track per part, as [name, channel, events {t, d, note, vel}].
 function midiMulti(tracks, bpm, ticks) {
   const vlq = (n) => { const o = [n & 127]; while ((n >>= 7)) o.unshift((n & 127) | 128); return o; };

@@ -55,7 +55,8 @@ from .synth import DRUM_PATTERNS, _fade, drum_sounds, make_drum_track
 SUITES = ("synth", "idmt", "mdb", "stemgmd-mix")
 TOL = 0.05  # seconds: an onset within this of a labeled one counts
 WITH_TOL = 0.03  # a tom or perc hit with a kick or snare this close "lands with" it
-FAMILY = {"kick": "low", "tom": "low", "snare": "mid", "clap": "mid", "perc": "mid", "hat": "high", "open_hat": "high"}
+FAMILY = {"kick": "low", "tom": "low", "snare": "mid", "clap": "mid", "perc": "mid", "hat": "high", "open_hat": "high",
+          "cymbal": "high"}
 
 # label -> (reference classes, lanes whose onsets count as finding it)
 IDMT_LABELS = {"kick": (("KD",), ("kick",)), "snare": (("SD",), ("snare", "clap")), "hat": (("HH",), ("hat", "open_hat"))}
@@ -72,6 +73,7 @@ LANE_LABELS = {  # mdb and stemgmd-mix
     "hats": (("hat", "open_hat"), ("hat", "open_hat")),  # either hat lane, as IDMT scores it
     "tom": (("tom",), ("tom",)),
     "perc": (("perc",), ("perc",)),
+    "cymbal": (("cymbal",), ("cymbal",)),  # scored only when the drum model supplies a cymbal lane
 }
 # Hits on these classes don't count against these labels: a ride or crash has no lane of its own and
 # reads as a hat.
@@ -138,7 +140,7 @@ def _peaks(x: np.ndarray, thr: float, wait: int = 3) -> np.ndarray:
 def lane_onsets(acts: dict[str, np.ndarray], lanes, rel: float = 0.4) -> np.ndarray:
     """Onset frames of `lanes` together: peaks above `rel` x the 99.5th percentile of their families' total."""
     fam = {FAMILY[lane] for lane in lanes}
-    total = sum(acts[lane] for lane in drums.LANES if FAMILY[lane] in fam)
+    total = sum(v for lane, v in acts.items() if FAMILY[lane] in fam)
     return _peaks(sum(acts[lane] for lane in lanes), rel * float(np.percentile(total, 99.5)))
 
 
@@ -168,15 +170,28 @@ def _nearest(t: float, ref: dict[str, list[float]], skip=()) -> str:
     return name
 
 
-def score_track(acts: dict[str, np.ndarray], ref: dict[str, list[float]], labels: dict, excused: dict | None = None,
-                spare=("tom", "perc", "clap"), hop: int = 512, sr: int = SR) -> dict:
+def _merged(onsets: dict[str, list[float]], lanes, gap: float = 0.03) -> np.ndarray:
+    """The onsets of `lanes` together, one per hit: onsets of different lanes closer than `gap` count once."""
+    times = sorted(t for lane in lanes for t in onsets.get(lane, []))
+    keep: list[float] = []
+    for t in times:
+        if not keep or t - keep[-1] > gap:
+            keep.append(t)
+    return np.asarray(keep, dtype=float)
+
+
+def score_track(acts: dict[str, np.ndarray] | None, ref: dict[str, list[float]], labels: dict, excused: dict | None = None,
+                spare=("tom", "perc", "clap"), hop: int = 512, sr: int = SR, onsets: dict | None = None) -> dict:
     """Counts for one track: per label tp/fp/fn, where its false positives landed, tom/perc recall alone vs
-    with a kick or snare, and onsets of the `spare` lanes the dataset has no labels for (it has none of them)."""
+    with a kick or snare, and onsets of the `spare` lanes the dataset has no labels for (it has none of them).
+    `onsets` ({lane: seconds}, e.g. from another drum transcriber) replaces the lane activations."""
     excused = excused or {}
     out = {"counts": {}, "fp_at": {}, "split": {}, "excused": 0, "unlabeled": {}}
     for label, (classes, lanes) in labels.items():
+        if onsets is None and not all(lane in acts for lane in lanes):
+            continue  # e.g. cymbal without the drum model
         want = sorted(t for c in classes for t in ref.get(c, []))
-        est = lane_onsets(acts, lanes) * hop / sr
+        est = _merged(onsets, lanes) if onsets is not None else lane_onsets(acts, lanes) * hop / sr
         hit_e, hit_r = _match(est, want)
         ok = [t for c in excused.get(label, ()) for t in ref.get(c, [])]
         fps = [e for e, h in zip(est, hit_e) if not h and not _near(e, ok, TOL)]
@@ -184,12 +199,15 @@ def score_track(acts: dict[str, np.ndarray], ref: dict[str, list[float]], labels
             out["excused"] = int((~hit_e).sum()) - len(fps)
         out["counts"][label] = [int(hit_r.sum()), len(fps), int((~hit_r).sum())]
         out["fp_at"][label] = dict(Counter(_nearest(e, ref, classes) for e in fps))
-        if label in ("tom", "perc"):
+        if label in ("tom", "perc") and onsets is None:
             # Lenient: against the lane's own loudest moment, not its family's. Tells a lane that ranks its
             # hits right but too quietly (it would rarely show in the groove) from one that misses them.
             x = sum(acts[lane] for lane in lanes)
             le, lr = _match(_peaks(x, 0.4 * float(x.max())) * hop / sr if x.max() > 0 else [], want)
             out["lenient"] = out.get("lenient", {}) | {label: [int(lr.sum()), int((~le).sum()), int((~lr).sum())]}
+        elif label in ("tom", "perc"):
+            out["lenient"] = out.get("lenient", {}) | {label: out["counts"][label]}  # nothing laxer to try
+        if label in ("tom", "perc"):
             others = [t for c in ("kick", "snare", "KD", "SD") for t in ref.get(c, [])]
             split = {"alone": [0, 0], "with": [0, 0]}  # [found, labeled]
             for t, h in zip(want, hit_r):
@@ -200,29 +218,37 @@ def score_track(acts: dict[str, np.ndarray], ref: dict[str, list[float]], labels
     labeled = {c for classes, _ in labels.values() for c in classes}
     for lane in spare:
         if lane not in labeled:  # e.g. clap on MDB, which labels none; it still counts towards snare above
-            out["unlabeled"][lane] = len(lane_onsets(acts, (lane,)))
+            out["unlabeled"][lane] = len(onsets.get(lane, [])) if onsets is not None else len(lane_onsets(acts, (lane,)))
     return out
 
 
-def _activations(y: np.ndarray, uri: str) -> tuple[dict[str, np.ndarray], int]:
-    ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri=uri)))
+def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int]:
+    ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri=uri, local_path=path)))
     return drums.lane_activations(ctx, np.arange(1 + len(y) // ctx.hop), slop=0), ctx.hop
 
 
 def _work(job) -> dict:
-    """One item: (id, audio path or samples at SR, ref, labels, excused) -> its score_track counts."""
-    item_id, audio, ref, labels, excused = job
+    """One item: (id, audio path or samples at SR, ref, labels, excused[, onsets]) -> its score_track counts.
+    With `onsets` (another transcriber's {lane: seconds}) the audio isn't analyzed."""
+    item_id, audio, ref, labels, excused, *given = job
+    if given:
+        return {"id": item_id, "seconds": given[0].get("_duration", 0.0)} | score_track(
+            None, ref, labels, excused, onsets={k: v for k, v in given[0].items() if not k.startswith("_")})
     if isinstance(audio, (str, Path)):
         import librosa
 
-        audio, _ = librosa.load(str(audio), sr=SR, mono=True)
-    acts, hop = _activations(np.asarray(audio, dtype=np.float32), item_id)
+        path = str(audio)
+        audio, _ = librosa.load(path, sr=SR, mono=True)
+    else:
+        path = None
+    acts, hop = _activations(np.asarray(audio, dtype=np.float32), item_id, path)
     return {"id": item_id, "seconds": round(len(audio) / SR, 1)} | score_track(acts, ref, labels, excused, hop=hop)
 
 
 def run_onsets(suite: str, items: list, labels: dict, excused: dict | None = None, jobs: int = 1) -> dict:
-    """Score `items` [(id, audio path or samples, {class: onset seconds})] and pool the counts per label."""
-    work = [(i, a, ref, labels, excused) for i, a, ref in items]
+    """Score `items` [(id, audio path or samples, {class: onset seconds}[, {lane: onsets}])] and pool the
+    counts per label."""
+    work = [(it[0], it[1], it[2], labels, excused, *it[3:]) for it in items]
     t0 = time.time()
     if jobs > 1 and len(work) > 1:
         # One track here first so librosa's numba kernels are compiled and cached before the workers start
@@ -232,9 +258,10 @@ def run_onsets(suite: str, items: list, labels: dict, excused: dict | None = Non
             rows += list(pool.map(_work, work[1:]))
     else:
         rows = [_work(w) for w in work]
-    counts = {label: np.zeros(3, dtype=int) for label in labels}
+    seen = {label for r in rows for label in r["counts"]}  # labels whose lanes this run produced
+    counts = {label: np.zeros(3, dtype=int) for label in labels if label in seen}
     split = {label: {"alone": [0, 0], "with": [0, 0]} for label in ("tom", "perc") if label in labels}
-    fp_at: dict[str, Counter] = {label: Counter() for label in labels}
+    fp_at: dict[str, Counter] = {label: Counter() for label in counts}
     unlabeled: Counter = Counter()
     lenient = {label: np.zeros(3, dtype=int) for label in split}
     for r in rows:
@@ -448,24 +475,109 @@ def make_groove(kit: dict[str, list[np.ndarray]], groove: dict, bpm: float, seed
     return y.astype(np.float32), {k: sorted(v) for k, v in ref.items()}
 
 
-def stemgmd_items(root: str | Path, limit: int | None = None):
+KIT_SPLITS = ("all", "train", "test")
+
+
+def kit_split(kits, split: str = "all") -> list[str]:
+    """Kits in `split`: alternate kits in name order, so tuning on "train" leaves "test" unseen."""
+    if split not in KIT_SPLITS:
+        raise ValueError(f"unknown kit split {split!r}; choose from {', '.join(KIT_SPLITS)}")
+    names = sorted(kits)
+    return names if split == "all" else names[(split == "test")::2]
+
+
+def stemgmd_items(root: str | Path, limit: int | None = None, kits: str = "all"):
     """(id, audio, {class: onset seconds}) for every kit x groove x tempo, in a fixed order that spreads
-    a --limit over grooves and kits."""
+    a --limit over grooves and kits. A groove sounds the same whichever split it is drawn in."""
     root = Path(root).expanduser()
-    kits = _stemgmd_hits(root)
+    hits = _stemgmd_hits(root)
+    keep = set(kit_split(hits, kits))
     perc = drum_sounds(SR)["perc"].astype(np.float32)
-    combos = [(bpm, kit, g) for bpm in GROOVE_BPMS for k, kit in enumerate(sorted(kits))
-              for g in list(GROOVES)[k % len(GROOVES):] + list(GROOVES)[:k % len(GROOVES)]]
+    combos = [(n, bpm, kit, g) for n, (bpm, kit, g) in enumerate(
+        (bpm, kit, g) for bpm in GROOVE_BPMS for k, kit in enumerate(sorted(hits))
+        for g in list(GROOVES)[k % len(GROOVES):] + list(GROOVES)[:k % len(GROOVES)]) if kit in keep]
     items = []
-    for n, (bpm, kit, g) in enumerate(combos[:limit or None]):
-        y, ref = make_groove(kits[kit], GROOVES[g], bpm, seed=n, perc=perc)
+    for n, bpm, kit, g in combos[:limit or None]:
+        y, ref = make_groove(hits[kit], GROOVES[g], bpm, seed=n, perc=perc)
         items.append((f"{kit}/{g}/{bpm}", y, ref))
     return items
 
 
-def run_stemgmd(root: str | Path, limit: int | None = None, jobs: int = 1) -> dict:
-    report = run_onsets("stemgmd-mix", stemgmd_items(root, limit), LANE_LABELS, EXCUSED, jobs)
+def run_stemgmd(root: str | Path, limit: int | None = None, jobs: int = 1, kits: str = "all") -> dict:
+    report = run_onsets("stemgmd-mix", stemgmd_items(root, limit, kits), LANE_LABELS, EXCUSED, jobs)
+    report["kits"] = kits
     report["note"] = "perc is the synthetic cowbell from bench/synth.py layered over the real kits"
+    return report
+
+
+# --- other drum transcribers ----------------------------------------------------------------------
+# A model that runs elsewhere (its own virtualenv) reads `export`'s manifest, writes {id: {lane: onset seconds,
+# "_seconds": analysis time}} and `score_external` scores that like the lanes, with the same matcher.
+
+EXTERNAL_LABELS = LANE_LABELS
+
+
+def synth_onset_items(bpms=(100, 128, 174)):
+    """The synth suite's loops with their hits as onset times, so it can be scored like the onset suites."""
+    items = []
+    for name, pats in DRUM_PATTERNS.items():
+        for bpm in bpms:
+            y, truth = make_drum_track(pats, bpm=bpm)
+            step = truth["bar_seconds"] / 16
+            bars = int(round((len(y) / SR - 1.0) / truth["bar_seconds"]))
+            ref = {lane: [round((b * 16 + i) * step, 4) for b in range(bars) for i, c in enumerate(p) if c == "x"]
+                   for lane, p in pats.items()}
+            items.append((f"{name}/{bpm}", y, ref))
+    return items
+
+
+SYNTH_LABELS = LANE_LABELS | {"snare": (("snare", "clap"), ("snare", "clap")), "clap": (("clap",), ("clap",))}
+
+
+def suite_items(suite: str, root=None, limit=None, drums_only=False, kits="all"):
+    """(items, labels, excused) of an onset suite; "synth-onsets" is the synth loops scored as onsets."""
+    if suite == "synth-onsets":
+        return synth_onset_items()[:limit or None], SYNTH_LABELS, {}
+    if suite == "idmt":
+        return [(i, str(p), r) for i, p, r in idmt_items(root, limit)], IDMT_LABELS, {}
+    if suite == "mdb":
+        return [(i, str(p), r) for i, p, r in mdb_items(root, limit, drums_only)], LANE_LABELS, EXCUSED
+    if suite == "stemgmd-mix":
+        return stemgmd_items(root, limit, kits), LANE_LABELS, EXCUSED
+    raise ValueError(f"{suite} isn't an onset suite")
+
+
+def export(suite: str, out: str | Path, root=None, limit=None, drums_only=False, kits="all") -> Path:
+    """Write `out`/manifest.json [{id, audio, ref}] for another transcriber; generated audio goes to `out`/audio."""
+    import soundfile as sf
+
+    out = Path(out).expanduser()
+    (out / "audio").mkdir(parents=True, exist_ok=True)
+    items, _, _ = suite_items(suite, root, limit, drums_only, kits)
+    rows = []
+    for item_id, audio, ref in items:
+        if not isinstance(audio, str):
+            path = out / "audio" / (item_id.replace("/", "__") + ".wav")
+            sf.write(str(path), np.asarray(audio, dtype=np.float32), SR)
+            audio = str(path)
+        rows.append({"id": item_id, "audio": audio, "ref": ref})
+    path = out / "manifest.json"
+    path.write_text(json.dumps({"suite": suite, "kits": kits, "drums_only": drums_only, "items": rows}))
+    return path
+
+
+def score_external(manifest: str | Path, onsets: str | Path, name: str = "external") -> dict:
+    """Score another transcriber's onsets ({id: {lane: seconds}}) on an exported manifest, like the lanes."""
+    m = json.loads(Path(manifest).read_text())
+    got = json.loads(Path(onsets).read_text())
+    _, labels, excused = suite_items(m["suite"], limit=0) if m["suite"] == "synth-onsets" else (None, *{
+        "idmt": (IDMT_LABELS, {}), "mdb": (LANE_LABELS, EXCUSED), "stemgmd-mix": (LANE_LABELS, EXCUSED)}[m["suite"]])
+    if m["suite"] != "idmt":
+        labels = labels | {"cymbal": EXTERNAL_LABELS["cymbal"]}
+    items = [(r["id"], r["audio"], r["ref"], got[r["id"]]) for r in m["items"] if r["id"] in got]
+    report = run_onsets(m["suite"], items, labels, excused)
+    report["transcriber"] = name
+    report["seconds"] = round(sum(got[r[0]].get("_seconds", 0.0) for r in items), 1)
     return report
 
 
@@ -488,7 +600,7 @@ def write_bundle(suite: str, root: str | Path) -> Path:
 
 
 def run(suite: str, root: str | Path | None = None, limit: int | None = None, jobs: int = 1,
-        drums_only: bool = False) -> dict:
+        drums_only: bool = False, kits: str = "all") -> dict:
     if suite == "synth":
         return run_synth()
     if root is None:
@@ -498,7 +610,7 @@ def run(suite: str, root: str | Path | None = None, limit: int | None = None, jo
     if suite == "mdb":
         return run_mdb(root, limit, jobs, drums_only)
     if suite == "stemgmd-mix":
-        return run_stemgmd(root, limit, jobs)
+        return run_stemgmd(root, limit, jobs, kits)
     raise ValueError(f"unknown drum suite {suite!r}; choose from {', '.join(SUITES)}")
 
 
@@ -529,6 +641,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--limit", type=int, help="first N tracks only")
     ap.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel")
     ap.add_argument("--drums-only", action="store_true", help="mdb: score the drum stems instead of the full mixes")
+    ap.add_argument("--kits", choices=KIT_SPLITS, default="all", help="stemgmd-mix: all kits, or the train / test half")
     ap.add_argument("--write-bundle", action="store_true", help="save the file a remote run reads, next to the data")
     ap.add_argument("--out", help="write the full report as JSON")
     args = ap.parse_args(argv)
@@ -537,7 +650,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.write_bundle:
         print(f"wrote {write_bundle(args.suite, args.path)}")
         return 0
-    report = run(args.suite, args.path, args.limit, args.jobs, args.drums_only)
+    report = run(args.suite, args.path, args.limit, args.jobs, args.drums_only, args.kits)
     print(format_report(report))
     if args.out:
         Path(args.out).write_text(json.dumps(report, indent=1))

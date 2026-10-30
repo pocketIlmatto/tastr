@@ -83,10 +83,23 @@ def key_profiles(dataset: str, path: str, limit: int | None = None) -> dict:
 
 
 @app.function(image=image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
-def drum_bench(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False) -> dict:
+def drum_bench(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False,
+               kits: str = "all") -> dict:
     from tastr.cloud.jobs import run_drum_bench
 
-    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only)
+    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits)
+
+
+# The drum bench with the pretrained drum model (tastr[drums]): the stems image already has PyTorch. The
+# model's weights download into the container's /tmp on first use (about 5 MB, docs/drums.md). One torch
+# thread per bench worker, since the 4 workers already share the CPUs.
+@app.function(image=stems_image.env({"TASTR_HOME": "/tmp/tastr", "TASTR_DRUM_MODEL": "adtof", "OMP_NUM_THREADS": "1"}), cpu=4, memory=8192, timeout=3600,
+              volumes={DATA: datasets})
+def drum_bench_model(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False,
+                     kits: str = "all") -> dict:
+    from tastr.cloud.jobs import run_drum_bench
+
+    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits)
 
 
 @app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3600, volumes={DATA: datasets})

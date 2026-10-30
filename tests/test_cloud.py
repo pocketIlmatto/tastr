@@ -230,7 +230,7 @@ def test_drum_bench_remote(monkeypatch, tmp_path, capsys):
     calls = fake_modal(monkeypatch, report)
     out = tmp_path / "r.json"
     assert main(["drum-bench", "mdb", "mdb-drums", "--limit", "3", "--remote", "--out", str(out)]) == 0
-    assert calls == [("drum_bench", ("mdb", "mdb-drums", 3, False), {})]
+    assert calls == [("drum_bench", ("mdb", "mdb-drums", 3, False, "all"), {})]
     assert "R alone 1.00 (n=2)" in capsys.readouterr().out
     assert json.loads(out.read_text())["tracks"] == 2
     assert main(["drum-bench", "idmt"]) == 2
@@ -242,3 +242,18 @@ def test_drum_bench_write_bundle(tmp_path):
     root = mdb_folder(tmp_path / "mdb")
     assert main(["drum-bench", "mdb", str(root), "--write-bundle"]) == 0
     assert "Song" in json.loads((root / "mdb-annotations.json").read_text())
+
+
+def test_drum_bench_remote_with_the_drum_model(monkeypatch, tmp_path):
+    report = {"suite": "idmt", "tracks": 1, "seconds": 1.0, "audio_seconds": 10.0, "fp_at": {}, "excused_cymbal_onsets": 0,
+              "unlabeled_onsets_per_ref": {}, "timing": {"seconds": 2.0, "jobs": 4},
+              "summary": {"kick": {"f": 1.0, "p": 1.0, "r": 1.0, "n": 2}}}
+    calls = fake_modal(monkeypatch, report)
+    assert main(["drum-bench", "idmt", "idmt-smt-drums", "--remote", "--drum-model"]) == 0
+    assert calls == [("drum_bench_model", ("idmt", "idmt-smt-drums", None, False, "all"), {})]
+
+
+def test_drums_extra_shares_pytorch():
+    tomllib = pytest.importorskip("tomllib")
+    extras = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]
+    assert any(d.startswith("torch") for d in extras["drums"])

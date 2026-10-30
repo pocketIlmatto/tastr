@@ -119,14 +119,14 @@ def run_spec_bench(bench: str, dataset: str, folder: str | Path, limit: int | No
 
 
 def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = None, jobs: int = 1,
-                   drums_only: bool = False) -> dict:
+                   drums_only: bool = False, kits: str = "all") -> dict:
     """A drum lane suite (`python -m tastr.engine.bench.drums`) on `folder`; returns its report."""
     from ..engine.bench import drums
 
     if suite not in drums.SUITES:
         raise ValueError(f"unknown drum suite {suite!r}; choose from {', '.join(drums.SUITES)}")
     t0 = time.time()
-    report = drums.run(suite, folder, limit, jobs, drums_only)
+    report = drums.run(suite, folder, limit, jobs, drums_only, kits)
     report["timing"] = {"seconds": round(time.time() - t0, 1), "jobs": jobs}
     return report
 

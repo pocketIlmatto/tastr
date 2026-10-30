@@ -176,6 +176,7 @@ rclone copy ~/Development/tastr-data/stemgmd-single-hits r2:tastr-data/stemgmd-s
   --include "StemGMD_single_hits/**" --include "stemgmd-hits.npz"
 tastr drum-bench mdb mdb-drums --remote
 tastr drum-bench synth --remote          # needs no dataset
+tastr drum-bench mdb mdb-drums --remote --drum-model   # with the pretrained drum model (stems image)
 ```
 
 With the bundle, a track's audio is read only when it is scored, so `--limit` reads only what it

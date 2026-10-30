@@ -7,7 +7,7 @@ const STRUDEL_NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#
 const STRUDEL_SOUND = (lane) => {
   const l = lane.toLowerCase();
   return l.includes("kick") ? "bd" : l.includes("snare") ? "sd" : l.includes("clap") ? "cp" : l.includes("open") ? "oh"
-    : l.includes("hat") ? "hh" : l.includes("tom") ? "lt" : "rim";
+    : l.includes("hat") ? "hh" : l.includes("tom") ? "lt" : l.includes("cymbal") ? "cr" : "rim";
 };
 const byBeat = (cells) => [0, 1, 2, 3].map((b) => `[${cells.slice(b * 4, b * 4 + 4).join(" ")}]`).join(" ");
 

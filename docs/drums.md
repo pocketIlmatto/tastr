@@ -67,11 +67,14 @@ open hat 0.69, tom 0.67, perc 0.64.
   time between 16ths to see a hat keep ringing.
 - **Clap vs snare** relies on the burst pattern. Layered or heavily processed
   claps may read as snare.
-- **Real toms are missed.** MDB Drums and grooves built from StemGMD single
-  hits now check toms, perc and open hats on real kits (bench.md, "Real
-  kits"): real tom F is about 0.02, because a tom barely moves the low part.
-  Clap is still checked only on the synthetic kit. These lanes were tuned on
-  the synthetic kit, so treat their thresholds as provisional.
+- **Real toms are missed by the built-in detector.** MDB Drums and grooves
+  built from StemGMD single hits check toms, perc and open hats on real kits
+  (bench.md, "Real kits"): real tom F is about 0.02. Real toms pitch at 70 to
+  140 Hz (a low tom sits where a kick does) and mostly land in the snare part,
+  whose hits are never sorted into toms. The optional drum model (below) fixes
+  most of this. Clap is still checked only on the synthetic kit, and perc only
+  on a synthetic cowbell: MDB's perc is tambourine and side stick, which the
+  pitched-mid test isn't designed to find.
 - **Grid phase comes from core.** In a full-pipeline check on a synthetic
   loop, the bar grid started half a bar late. The lanes were right but
   shifted by 8 steps. That is the core downbeat estimate, not drum detection.
@@ -102,6 +105,120 @@ Measured on a 20-loop IDMT slice (`--limit 20`) and the synthetic suite.
   kick (house). 20th it is.
 - **2.5 ms envelope smoothing for clap bursts**: snare noise alone produced 5
   "bursts". 4 ms with 6 dB prominence separates them.
+
+### Tom and perc variants (2026-10-30)
+
+Tuned on 5 StemGMD kits (stemgmd-mix `--kits train`), held out on the other 5,
+MDB mixes and MDB drum stems; guardrails were IDMT (kick, snare and hat may
+drop at most 0.01) and synth. Tom F (P / R):
+
+| Variant | Test kits | MDB stems | MDB mixes | IDMT kick / snare / hat | Synth tom / perc |
+|---|---|---|---|---|---|
+| Built-in (pitch rule) | 0.00 (0.25 / 0.00) | 0.00 | 0.01 | 0.956 / 0.935 / 0.904 | 0.67 / 0.64 |
+| Low-band share + decay rule instead of pitch | 0.16 (0.71 / 0.09) | 0.20 | 0.04 | 0.92 kick | 0.00 / 0.57 |
+| The rule as well as pitch, kick untouched | 0.11 (0.66 / 0.06) | 0.20 | 0.03 | 0.942 / 0.938 / 0.904 | 0.55 / 0.57 |
+| Logistic per-hit tom model (C=0.1) | 0.27 (0.58 / 0.17) | 0.02 | 0.01 | 0.88 kick | 0.12 / 0.64 |
+| The same, C=0.01, gated at p 0.8 to 0.97 | 0.17 (0.70 / 0.10) | 0.04 | 0.02 | 0.943 kick, toms on 12% of IDMT hits | 0.25 / 0.64 |
+| The model, with the tom's share taken out of the snare | 0.27 | 0.02 | 0.01 | snare 0.66 | |
+| The rule as well as pitch, times the model | 0.11 (0.76 / 0.06) | 0.21 | 0.03 | 0.951 / 0.938 / 0.904 | 0.55 / 0.64 |
+
+Only the last stayed inside the guardrails, and its gain was small. Two
+things capped all of them: toms are about 1% of the hits in real songs
+(34% in the training grooves), so even a good ranking (AUC 0.88 on MDB
+stems) gives poor precision; and StemGMD toms peak about 9 dB under the
+kicks, below the bench's 0.4 x family threshold. A per-hit look at the
+low-band share (about 0.2 of 30 to 500 Hz energy below 100 Hz, against 0.07
+for snares and 0.65 for kicks) is what separates a solo tom best. A 4th NMF
+part for toms wasn't retried (see the separate templates above). The
+pretrained model replaced all of this.
+
+Perc: a stricter pitched-mid test cut false perc on MDB snares from 195 to
+as few as 35, but MDB perc F stayed at 0.02 to 0.03 while the cowbell's
+recall and the synth snare fell. Kept as is.
+
+## Pretrained drum model (ADTOF)
+
+With `tastr[drums]` (PyTorch) installed, `adt.py` runs ADTOF's Frame_RNN
+(Zehren et al., https://github.com/MZehren/ADTOF): two convolution blocks and
+three bidirectional GRUs over a 12-bands-per-octave log spectrogram at 100
+frames a second, with one output each for kick, snare, toms, hi-hat and
+cymbals (crash and ride). The released weights (`Frame_RNN_adtofAll_0`) are
+trained on ADTOF-RGW and ADTOF-YT only: about 360 hours of commercial music
+annotated from rhythm-game charts. None of our benchmark sets (MDB Drums,
+IDMT-SMT-Drums, StemGMD, ENST) is in its training data, so its scores below
+are held out. A MedleyDB song could in principle appear in a game chart;
+that can't be checked track by track, and is unlikely.
+
+**License.** ADTOF's code and weights are CC BY-NC-SA 4.0: non-commercial,
+share-alike. Tastr doesn't include them. The first analysis downloads the
+two checkpoint files (about 5 MB) from a pinned commit of the ADTOF
+repository into `$TASTR_HOME/models/`, checks their SHA-256, and reads the
+TensorFlow checkpoint without TensorFlow (`tf_checkpoint.py`). The network,
+the madmom-style spectrogram and the peak picking in `adt.py` are written
+from ADTOF's published architecture and settings, not copied.
+
+**What it replaces.** The model supplies the kick, hat and tom lanes and
+adds a cymbal lane. Each hit is placed on the analysis frames with its
+confidence (ADTOF's per-drum threshold maps to 0.5) times the level of the
+built-in part for that family, so the groove's "20% of the loudest lane"
+rule still compares like with like. Snare, clap, perc and open hat stay
+with the built-in detector (the model's hi-hats replace only the hits our
+ringing test calls closed). Because of the license it is opt-in: it runs
+once `tastr drum-model fetch` has cached the weights, or with
+`TASTR_DRUM_MODEL=adtof`. Without PyTorch, with `TASTR_DRUM_MODEL=off`, or
+offline before the first download, the built-in lanes are used and the
+output is the same as before.
+
+**Scores of the model's own onsets** (eval adapter: its peak picking; onset F within 50 ms
+with the same labels and cymbal rule as the built-in lanes; built-in -> ADTOF;
+"-" where ADTOF has no such drum). The shipped lanes go through the frame
+mapping and family scaling above, so their scores will differ a little; the
+table for the integrated lanes follows once the suites can run again (the
+datasets now live only in the R2 bucket):
+
+| Suite | Kick | Snare | Hats | Open hat | Tom | Perc | Cymbal |
+|---|---|---|---|---|---|---|---|
+| MDB mixes | 0.81 -> 0.83 | 0.51 -> 0.74 | 0.65 -> 0.85 | 0.24 -> - | 0.01 -> 0.33 | 0.03 -> - | - -> 0.83 |
+| MDB drum stems | 0.95 -> 0.96 | 0.60 -> 0.80 | 0.70 -> 0.87 | 0.30 -> - | 0.00 -> 0.32 | 0.00 -> - | - -> 0.87 |
+| StemGMD test kits | 0.90 -> 0.96 | 0.46 -> 0.91 | 0.71 -> 0.74 | 0.52 -> - | 0.00 -> 0.89 | (cowbell) | - -> 0.86 |
+| IDMT | 0.956 -> 0.970 | 0.935 -> 0.880 | 0.904 -> 0.946 | | | | |
+| Synth, as onsets | 0.98 -> 0.97 | 0.86 -> 0.89 | 0.77 -> 0.86 | 0.51 -> - | 0.22 -> 0.00 | 0.54 -> - | |
+
+MDB mixes are from `adt.py`; the other rows from the same weights through
+the ADTOF-pytorch port, within about 0.02 of `adt.py` on MDB. On StemGMD
+and synth the audio stops at 11 kHz (it is generated at 22.05 kHz), which
+probably costs ADTOF some hats there. MDB toms are few (90) and ADTOF's
+false toms there are mostly on snares (P 0.24). The synthetic tom isn't
+recognised; it is a sine sweep.
+
+**Through the integrated lanes** (eval adapter, `lane_activations` with
+and without the model, on the generated suites that could still run
+locally; MDB and IDMT follow from `tastr drum-bench SUITE PATH --remote
+--drum-model` on Modal):
+
+| Suite | Kick | Snare | Hats | Open hat | Tom | Perc | Cymbal |
+|---|---|---|---|---|---|---|---|
+| StemGMD test kits, built-in | 0.90 | 0.46 | 0.71 | 0.52 | 0.00 | 0.66 | - |
+| StemGMD test kits, with the model | 0.96 | 0.46 | 0.75 | 0.48 | 0.88 | 0.66 | 0.85 |
+| Synth, as onsets, built-in | 0.98 | 0.86 | 0.77 | 0.51 | 0.22 | 0.54 | - |
+| Synth, as onsets, with the model | 0.96 | 0.86 | 0.87 | 0.49 | 0.00 | 0.54 | - |
+
+**Open hats.** Splitting the model's hi-hats into closed and open with the
+built-in ringing test scored better on the StemGMD test kits (open hat 0.66
+against 0.48) but worse on synth (0.42 against 0.49), and MDB couldn't be
+checked. The built-in open-hat lane stays (`drums.MODEL_OPEN_HATS = False`);
+revisit once MDB runs on Modal.
+
+**The snare trade-off.** ADTOF's snare is far better on MDB and StemGMD
+(0.74 and 0.91 against 0.51 and 0.46) but worse on IDMT's sampled and
+techno kits (0.88 against 0.94; 338 false snares on hi-hats). The built-in
+snare is kept for now. Keeping ADTOF's snares only where the built-in snare
+also has an onset (eval adapter) is precise but loses ADTOF's recall:
+StemGMD test kits F 0.63 (P 0.98, R 0.46) against 0.46 built-in and 0.91
+ADTOF; synth 0.82 against 0.86 and 0.89. MDB and IDMT still to measure.
+
+**Speed.** About 0.6 s per minute of audio on one CPU thread once loaded,
+against about 2.5 s for the built-in lanes in the bench.
 
 ## Staging the dataset
 

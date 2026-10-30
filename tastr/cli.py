@@ -66,12 +66,20 @@ def main(argv: list[str] | None = None) -> int:
     kp.add_argument("--from-cache", metavar="FEATURES",
                     help="read a local key_features cache instead of decoding audio")
 
+    dm = sub.add_parser("drum-model", help="the optional pretrained drum model (ADTOF, CC BY-NC-SA 4.0): status or fetch")
+    dm.add_argument("action", choices=["status", "fetch"])
+
     db_ = sub.add_parser("drum-bench", help="drum lane benches (synth, idmt, mdb, stemgmd-mix), locally or on Modal")
     db_.add_argument("suite", choices=["synth", "idmt", "mdb", "stemgmd-mix"])
     db_.add_argument("path", nargs="?", help="dataset folder (a bucket folder with --remote); not for synth")
     db_.add_argument("--limit", type=int, help="first N tracks")
     db_.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel (locally)")
     db_.add_argument("--drums-only", action="store_true", help="mdb: score the drum stems instead of the full mixes")
+    db_.add_argument("--kits", choices=["all", "train", "test"], default="all",
+                     help="stemgmd-mix: all kits, or the half tuned on (train) or held out (test)")
+    db_.add_argument("--drum-model", action="store_true",
+                     help="with --remote: run where the pretrained drum model is installed (locally it is used "
+                          "whenever tastr[drums] is; TASTR_DRUM_MODEL=off turns it off)")
     db_.add_argument("--out", help="write the JSON report here")
     db_.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
     db_.add_argument("--write-bundle", action="store_true",
@@ -119,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         return _key_profiles(args)
     if args.cmd == "drum-bench":
         return _drum_bench(args)
+    if args.cmd == "drum-model":
+        return _drum_model(args)
     if args.cmd == "vibe-bench":
         return _vibe_bench(args)
     if args.cmd == "vibe-fit":
@@ -385,6 +395,27 @@ def _key_profiles(args) -> int:
     return 1 if failed else 0
 
 
+def _drum_model(args) -> int:
+    import importlib.util
+
+    from .engine import adt
+
+    print(f"ADTOF drum model (https://github.com/MZehren/ADTOF): weights {adt.LICENSE}, non-commercial use only, "
+          "share-alike. Not part of Tastr.")
+    if importlib.util.find_spec("torch") is None:
+        print(f"error: {adt.INSTALL_HINT}", file=sys.stderr)
+        return 2
+    if args.action == "fetch":
+        try:
+            print(f"weights in {adt.fetch().parent} (checksums match)")
+        except (OSError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+    state = "on" if adt.available() else "off (TASTR_DRUM_MODEL=off)" if adt.cached() else "off: run `tastr drum-model fetch`"
+    print(f"drum model: {state}")
+    return 0
+
+
 def _drum_bench(args) -> int:
     from pathlib import Path
 
@@ -401,11 +432,11 @@ def _drum_bench(args) -> int:
         if args.remote:
             print(f"running {args.suite} on Modal...", file=sys.stderr)
             t0 = time.time()
-            report = remote.drum_bench(args.suite, args.path, args.limit, args.drums_only)
+            report = remote.drum_bench(args.suite, args.path, args.limit, args.drums_only, args.kits, args.drum_model)
             print(f"wall {time.time() - t0:.0f} s, of which the bench {report.get('timing', {}).get('seconds', 0):.0f} s",
                   file=sys.stderr)
         else:
-            report = jobs.run_drum_bench(args.suite, args.path, args.limit, args.jobs, args.drums_only)
+            report = jobs.run_drum_bench(args.suite, args.path, args.limit, args.jobs, args.drums_only, args.kits)
     except (remote.RemoteError, ValueError, FileNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

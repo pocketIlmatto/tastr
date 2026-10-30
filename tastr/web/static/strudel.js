@@ -26,7 +26,12 @@ const STRUDEL_STEMS = ["vocals", "bass", "other", "drums"];
 // adds the original audio cut into bars at the detected downbeats, layered under the drums.
 // stems: with audioUrl, the separated stems to play (names from STRUDEL_STEMS, served next to /audio at
 // /stems/<name>); every stem gets a line in stack(), and the ones not listed start commented out.
-function strudelCode(c, audioUrl = null, stems = null) {
+// edits: the user's edits from the "Drums, bass & chords" view, {drums|bass|chords: {section idx or "all": …}}.
+// Edited sections use them (drums: a pattern; bass: {notes, rhythm}; chords: {chords}); the rest use the detected data.
+//
+// One object per section type holds its drums (and chords and bass), and one `song` list of
+// [bars, part, first bar] drives every layer, so commenting out a line skips that section everywhere.
+function strudelCode(c, audioUrl = null, stems = null, edits = null) {
   const core = c.core || {}, key = core.key || {}, sugs = c.suggestions || [];
   const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
   // by_section idx is the section's index in card.sections; sections without bars can't be arranged.
@@ -41,59 +46,45 @@ function strudelCode(c, audioUrl = null, stems = null) {
   const harmSecs = {}, bassSecs = {};
   if (harm && Array.isArray(harm.data.by_section)) harm.data.by_section.forEach((x) => (harmSecs[x.idx] = x));
   if (bassSug && Array.isArray(bassSug.data.by_section)) bassSug.data.by_section.forEach((x) => (bassSecs[x.idx] = x));
-  const perSection = secs.length > 0 && secs.some((s) => harmSecs[s.idx] || bassSecs[s.idx]);
   const hasBpm = typeof core.bpm === "number" && isFinite(core.bpm);
   const bpm = hasBpm ? Math.round(core.bpm * 10) / 10 : 120;
   // The tempo comes from the bar grid when there is one, so the sketch and the original audio don't drift apart.
   const dbs = core.downbeat_times || [], gridBar = dbs.length > 1 ? (dbs[dbs.length - 1] - dbs[0]) / (dbs.length - 1) : null;
   const cpmBpm = gridBar ? Math.round((240 / gridBar) * 1000) / 1000 : bpm;
   const withAudio = Boolean(audioUrl) && typeof c.duration === "number" && c.duration > 0;
+  const bar = gridBar || 240 / bpm, first = dbs.length ? dbs[0] : 0;
+  // Without sections with bars, the whole track is one part.
+  const song = secs.length ? secs : [{ idx: "all", label: "track", letter: "", start_bar: 1,
+    end_bar: withAudio ? Math.max(1, Math.floor((c.duration - first) / bar)) : 1, whole: true }];
+  const E = (part) => (edits && edits[part]) || {}, mine = (part, sec) => E(part)[sec.idx] || E(part).all;
+  for (const sec of song) {
+    const ec = mine("chords", sec), eb = mine("bass", sec);
+    if (ec) harmSecs[sec.idx] = { progression: ec.chords || [] };
+    if (eb) bassSecs[sec.idx] = { loop: eb.notes || [], rhythm: eb.rhythm || null };
+  }
+  const editedSecs = song.filter((sec) => ["drums", "bass", "chords"].some((p) => mine(p, sec)));
+  const perSection = song.some((s) => harmSecs[s.idx] || bassSecs[s.idx]);
   const hasKey = typeof key.tonic === "number";
   const keyStr = hasKey ? `${STRUDEL_NOTES[key.tonic % 12]} ${key.mode || "major"}` : "unknown key";
   const title = (c.source && c.source.title) || "Untitled", artist = c.source && c.source.artist;
+  const secName = (sec) => (sec.whole ? "Whole track" : [cap(sec.label), sec.letter].filter(Boolean).join(" "));
+  const detected = editedSecs.length ? "" : "detected ";
   const out = [
     `// ${title}${artist ? " by " + artist : ""}`,
-    `// Sketched by Tastr: ${hasBpm ? bpm + " BPM" : "tempo unknown, using 120 BPM"}, ${keyStr}. ${withAudio ? "The original audio cut into bars, layered" : "Not the original audio: the detected"}`,
-    withAudio ? `// with the detected ${perSection ? "drums, bass and chords for each section." : "drum pattern for each section and the chord loop."}`
+    `// Sketched by Tastr: ${hasBpm ? bpm + " BPM" : "tempo unknown, using 120 BPM"}, ${keyStr}. ${withAudio ? "The original audio cut into bars, layered" : `Not the original audio: the ${detected}`.trimEnd()}`,
+    withAudio ? `// with the ${detected}${perSection ? "drums, bass and chords for each section." : "drum pattern for each section and the chord loop."}`
       : perSection ? "// drums, bass and chords for each section, played for that section's length."
       : "// drum pattern for each section, played for that section's length, plus the chord loop.",
+    ...(editedSecs.length ? [`// With your edits in: ${[...new Set(editedSecs.map(secName))].join(", ")}.`] : []),
     `// Press Ctrl+Enter (Cmd+Enter on a Mac) to play, Ctrl+. to stop. Change anything and re-run.`,
     "",
     `setcpm(${cpmBpm}/4) // 1 cycle = 1 bar${cpmBpm !== bpm ? " (tempo from the detected bar grid)" : ""}`,
     "",
   ];
 
-  let sectionVar = null;
-  const partOf = (pat) => {
-    const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string").map(([lane, p]) => strudelLane(lane, p)).filter(Boolean);
-    return lanes.length ? `stack(\n  ${lanes.join(",\n  ")}\n)` : "silence";
-  };
-  if (secs.length) {
-    out.push("// --- Drum parts (one per section type; same letter = same part) ---");
-    const varOf = (sec) => `${sec.label.replace(/[^a-z]/gi, "").toLowerCase() || "part"}${sec.letter || ""}`;
-    const seen = new Set();
-    for (const sec of secs) {
-      const v = varOf(sec);
-      if (seen.has(v)) continue;
-      seen.add(v);
-      out.push(`const ${v} = ${partOf(pats[sec.idx] || (det && det.data.pattern))}`);
-    }
-    out.push("", "// --- Arrangement: [bars, part] in the order they happen ---", "const drums = arrange(");
-    secs.forEach((sec, i) => {
-      const end = sec.end_bar != null ? sec.end_bar : sec.start_bar, name = [cap(sec.label), sec.letter].filter(Boolean).join(" ");
-      out.push(`  [${end - sec.start_bar + 1}, ${varOf(sec)}]${i < secs.length - 1 ? "," : ""} // ${name}, bars ${sec.start_bar}-${end}`);
-    });
-    out.push(`).bank("RolandTR909")`, "");
-    sectionVar = varOf;
-  } else {
-    out.push("// --- Drums: the detected groove, looped (no sections with bar numbers) ---",
-      `const drums = ${partOf(det && det.data.pattern)}.bank("RolandTR909")`, "");
-  }
-
   const minor = key.mode === "minor";
   const chordsArr = prog.length ? prog : !hasKey ? []
     : (minor ? [0, 8, 3, 10] : [0, 7, 9, 5]).map((d, i) => STRUDEL_NOTES[(key.tonic + d) % 12] + ((minor ? [1, 0, 0, 0] : [0, 0, 1, 0])[i] ? "m" : ""));
-  const parts = ["drums"];
   // Bass octave: 2 for C-E, 1 for F-B, so the roots stay in one low register. Unknown notes are rests.
   const rootNote = (name) => {
     const m = /^([A-G][#b]?)/.exec(name || "");
@@ -101,85 +92,83 @@ function strudelCode(c, audioUrl = null, stems = null) {
     const n = m[1], i = STRUDEL_NOTES.indexOf(n.replace(/^([A-G])b$/, (_, l) => STRUDEL_NOTES[(STRUDEL_NOTES.indexOf(l) + 11) % 12]));
     return `${n.toLowerCase()}${i >= 0 && i <= 4 ? 2 : 1}`;
   };
-  if (perSection) {
-    // One bass/chord part per section type, like the drums; a section with no chords or no bass is silence.
-    const okChord = (n) => (n && /^[A-G]/.test(n) ? n : "~");
-    const bassStruct = (r) => (r && /[xo]/.test(r) ? byBeat([...r.slice(0, 16).padEnd(16, ".")].map((ch) => (ch === "." ? "~" : "x"))) : "[~ x]*4");
-    out.push("// --- Bass and chords per section (one chord per bar, looping; same letter = same part) ---");
-    const done = new Set();
-    for (const sec of secs) {
-      const v = sectionVar(sec);
-      if (done.has(v)) continue;
-      done.add(v);
+  const okChord = (n) => (n && /^[A-G]/.test(n) ? n : "~");
+  const bassStruct = (r) => (r && /[xo]/.test(r) ? byBeat([...r.slice(0, 16).padEnd(16, ".")].map((ch) => (ch === "." ? "~" : "x"))) : "[~ x]*4");
+  const drumsOf = (pat) => {
+    const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string").map(([lane, p]) => strudelLane(lane, p)).filter(Boolean);
+    return lanes.length ? `stack(\n    ${lanes.join(",\n    ")}\n  )` : "silence";
+  };
+  // Same letter = same part, holding the first such section's drums (and chords and bass); a section with no chords or no bass is silence.
+  const varOf = (sec) => `${sec.label.replace(/[^a-z]/gi, "").toLowerCase() || "part"}${(sec.letter || "").replace(/[^a-z0-9]/gi, "")}`;
+  out.push(`// --- Parts: one per section type (same letter = same part): drums${perSection ? ", chords and bass" : ""} ---`);
+  // An edited section whose part differs from its letter's first section gets a part of its own, so the edit is heard.
+  const bodies = new Map(), partOf = new Map();
+  for (const sec of song) {
+    const lines = [`  drums: ${drumsOf(mine("drums", sec) || pats[sec.idx] || (det && det.data.pattern))},`];
+    if (perSection) {
       const hs = harmSecs[sec.idx], bs = bassSecs[sec.idx];
       const cp = hs ? (hs.progression || []).map(okChord) : chordsArr;
-      const ch = cp.some((n) => n !== "~") ? `chord("<${cp.join(" ")}>")` : "silence";
       const bl = bs ? (bs.loop || []).map(rootNote) : chordsArr.map(rootNote);
-      const bn = bl.some((n) => n !== "~") ? `note("<${bl.join(" ")}>").struct("${bassStruct(bs ? bs.rhythm : null)}")` : "silence";
-      out.push(`const ${v}_chords = ${ch}, ${v}_bass = ${bn}`);
+      lines.push(`  chords: ${cp.some((n) => n !== "~") ? `chord("<${cp.join(" ")}>")` : "silence"},`,
+        `  bass: ${bl.some((n) => n !== "~") ? `note("<${bl.join(" ")}>").struct("${bassStruct(bs ? bs.rhythm : null)}")` : "silence"},`);
     }
-    const arr = (suffix) => secs.map((sec, i) => {
-      const end = sec.end_bar != null ? sec.end_bar : sec.start_bar;
-      return `  [${end - sec.start_bar + 1}, ${sectionVar(sec)}_${suffix}]${i < secs.length - 1 ? "," : ""}`;
-    });
-    out.push("const chords = arrange(", ...arr("chords"), `).voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)`);
-    out.push("const bass = arrange(", ...arr("bass"), `).s("sawtooth").lpf(320).gain(.5)`, "");
+    const body = lines.join("\n");
+    let v = varOf(sec);
+    if (bodies.has(v) && bodies.get(v) !== body && editedSecs.includes(sec)) v = `${v}_bar${sec.start_bar}`;
+    partOf.set(sec, v);
+    if (bodies.has(v)) continue;
+    bodies.set(v, body);
+    out.push(`const ${v} = {`, ...lines, "}");
+  }
+  out.push("", "// --- Song: [bars, part, first bar] in the order they happen ---",
+    "// Comment a line out (//) to skip that section in every layer, or reorder lines to rearrange.", "const song = [");
+  for (const sec of song) {
+    const end = sec.end_bar != null ? sec.end_bar : sec.start_bar;
+    out.push(`  [${end - sec.start_bar + 1}, ${partOf.get(sec)}, ${sec.start_bar}], // ${secName(sec)}, bars ${sec.start_bar}-${end}`);
+  }
+  out.push("]", "", `const drums = arrange(...song.map(([bars, p]) => [bars, p.drums])).bank("RolandTR909")`);
+  const parts = ["drums"];
+  if (perSection) {
+    out.push(`const chords = arrange(...song.map(([bars, p]) => [bars, p.chords])).voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)`,
+      `const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(320).gain(.5)`);
     parts.push("bass", "chords");
   } else if (chordsArr.length) {
-    out.push(`// --- Harmony: ${prog.length ? "the detected chord loop" : `a common loop in ${keyStr} (no confident chord loop was detected)`}, one chord per bar ---`);
+    out.push("", `// --- Harmony: ${prog.length ? "the detected chord loop" : `a common loop in ${keyStr} (no confident chord loop was detected)`}, one chord per bar ---`);
     out.push(`const chords = chord("<${chordsArr.join(" ")}>").voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)`);
-    out.push(`const bass = note("<${chordsArr.map(rootNote).join(" ")}>").struct("[~ x]*4").s("sawtooth").lpf(320).gain(.5)`, "");
+    out.push(`const bass = note("<${chordsArr.map(rootNote).join(" ")}>").struct("[~ x]*4").s("sawtooth").lpf(320).gain(.5)`);
     parts.push("bass", "chords");
   }
-  if (withAudio) {
-    const bar = gridBar || 240 / bpm, first = dbs.length ? dbs[0] : 0;
-    const spans = secs.length ? secs.map((sec) => [sec.start_bar, sec.end_bar != null ? sec.end_bar : sec.start_bar, [cap(sec.label), sec.letter].filter(Boolean).join(" ")])
-      : [[1, Math.max(1, Math.floor((c.duration - first) / bar)), "Whole track"]];
-    if (stems) {
-      const drumsOn = stems.includes("drums"), stemUrl = (n) => audioUrl.replace(/\/audio$/, `/stems/${n}`).replace(/'/g, "%27");
-      out.push("// --- The original track as stems, cut into bars at the detected downbeats ---",
-        "// Tastr serves the audio from your computer, so keep `tastr serve` running. The first time,",
-        "// your browser may ask whether strudel.cc may reach your local network: allow it.",
-        "// Single quotes on purpose: in Strudel, double quotes mean a pattern.",
-        "samples({", ...STRUDEL_STEMS.map((n) => `  ${n}: '${stemUrl(n)}',`), "})",
-        `const len = ${c.duration.toFixed(3)}, bar = ${bar.toFixed(4)}, first = ${first.toFixed(3)} // seconds: track, one bar, first downbeat`,
-        "// orig(name, a, b): bars a to b of a stem, one bar per cycle",
-        "const orig = (name, a, b) => {",
-        "  const k = run(b - a + 1).slow(b - a + 1).add(a - 1)",
-        "  return s(name).begin(k.mul(bar).add(first).div(len)).end(k.add(1).mul(bar).add(first).div(len)).clip(1)",
-        "}",
-        "// part(name): one stem across the whole track, section by section",
-        "const part = (name) => arrange(");
-      spans.forEach(([a, b, name], i) => out.push(`  [${b - a + 1}, orig(name, ${a}, ${b})]${i < spans.length - 1 ? "," : ""} // ${name}`));
-      out.push(")", "", "// Comment a line out (//) to mute it, or remove the // to bring it in.", "stack(",
-        ...STRUDEL_STEMS.map((n) => `  ${stems.includes(n) ? "" : "// "}part("${n}"),${n === "drums" && !drumsOn ? " // the sketch drums below play instead" : ""}`),
-        `  drums.gain(${drumsOn ? ".5" : ".8"}),`, ...(parts.length > 1 ? ["  // bass, chords,"] : []), ")");
-      const drop = secs.find((x) => x.label === "drop") || secs[0], at = drop ? drop.start_bar : 1;
-      out.push("", `// Ideas: loop the ${drop && drop.label === "drop" ? "first drop" : "opening bars"} of the vocals with orig("vocals", ${at}, ${at + 3}), reorder the lines in arrange(),`,
-        "// bring in bass and chords, or load a second track as another sample for a mash-up.");
-      return out.join("\n");
-    }
-    out.push("// --- The original track, cut into bars at the detected downbeats ---",
-      "// Tastr serves the file from your computer, so keep `tastr serve` running. The first time,",
-      "// your browser may ask whether strudel.cc may reach your local network: allow it.",
-      `samples({ orig: '${audioUrl.replace(/'/g, "%27")}' }) // single quotes: in Strudel, double quotes mean a pattern`,
-      `const len = ${c.duration.toFixed(3)}, bar = ${bar.toFixed(4)}, first = ${first.toFixed(3)} // seconds: track, one bar, first downbeat`,
-      "// orig(a, b): bars a to b of the original, one bar per cycle",
-      "const orig = (a, b) => {",
-      "  const k = run(b - a + 1).slow(b - a + 1).add(a - 1)",
-      "  return s(\"orig\").begin(k.mul(bar).add(first).div(len)).end(k.add(1).mul(bar).add(first).div(len)).clip(1)",
-      "}",
-      "const original = arrange(");
-    spans.forEach(([a, b, name], i) => out.push(`  [${b - a + 1}, orig(${a}, ${b})]${i < spans.length - 1 ? "," : ""} // ${name}`));
-    const drop = secs.find((x) => x.label === "drop") || secs[0], at = drop ? drop.start_bar : 1;
-    out.push(")", "", `stack(original, drums.gain(.5)${parts.length > 1 ? " /*, bass, chords */" : ""})`, "",
-      `// Ideas: loop the ${drop && drop.label === "drop" ? "first drop" : "opening bars"} with orig(${at}, ${at + 3}), reorder the lines in arrange(),`,
-      "// add bass and chords back into stack(), or load a second track as another sample for a mash-up.");
-  } else {
+  out.push("");
+  const drop = secs.find((x) => x.label === "drop") || song[0], at = drop.start_bar;
+  const where = drop.label === "drop" ? "first drop" : "opening bars";
+  if (!withAudio) {
     out.push(`stack(${parts.join(", ")})`, "",
-      "// Ideas: mute a part by deleting it from stack(), swap parts in arrange(),",
+      "// Ideas: mute a layer by deleting it from stack(), skip or reorder lines in song,",
       "// try .bank(\"RolandTR808\"), or add .fast(2) to the hats for double time.");
+    return out.join("\n");
   }
+  const url = (n) => (n ? audioUrl.replace(/\/audio$/, `/stems/${n}`) : audioUrl).replace(/'/g, "%27");
+  out.push(stems ? "// --- The original track as stems, cut into bars at the detected downbeats ---" : "// --- The original track, cut into bars at the detected downbeats ---",
+    `// Tastr serves the ${stems ? "audio" : "file"} from your computer, so keep \`tastr serve\` running. The first time,`,
+    "// your browser may ask whether strudel.cc may reach your local network: allow it.",
+    "// Single quotes on purpose: in Strudel, double quotes mean a pattern.",
+    ...(stems ? ["samples({", ...STRUDEL_STEMS.map((n) => `  ${n}: '${url(n)}',`), "})"] : [`samples({ orig: '${url()}' })`]),
+    `const len = ${c.duration.toFixed(3)}, bar = ${bar.toFixed(4)}, first = ${first.toFixed(3)} // seconds: track, one bar, first downbeat`,
+    `// orig(name, a, b): bars a to b of ${stems ? "a stem" : "the original"}, one bar per cycle`,
+    "const orig = (name, a, b) => {",
+    "  const k = run(b - a + 1).slow(b - a + 1).add(a - 1)",
+    "  return s(name).begin(k.mul(bar).add(first).div(len)).end(k.add(1).mul(bar).add(first).div(len)).clip(1)",
+    "}",
+    `// part(name): ${stems ? "one stem" : "the original"}, following the song above`,
+    "const part = (name) => arrange(...song.map(([bars, p, from]) => [bars, orig(name, from, from + bars - 1)]))", "");
+  const origDrums = !stems || stems.includes("drums");
+  if (stems) out.push("// Comment a line out (//) to mute it, or remove the // to bring it in.");
+  out.push("stack(");
+  if (stems) STRUDEL_STEMS.forEach((n) => out.push(`  ${stems.includes(n) ? "" : "// "}part("${n}"),${n === "drums" && !origDrums ? " // the sketch drums below play instead" : ""}`));
+  else out.push(`  part("orig"),`);
+  out.push(`  drums.gain(${origDrums ? ".5" : ".8"}),`, ...(parts.length > 1 ? ["  // bass, chords,"] : []), ")", "",
+    `// Ideas: loop the ${where}${stems ? " of the vocals" : ""} with orig("${stems ? "vocals" : "orig"}", ${at}, ${at + 3}), skip or reorder lines in song,`,
+    "// bring in bass and chords, or load a second track as another sample for a mash-up.");
   return out.join("\n");
 }
 

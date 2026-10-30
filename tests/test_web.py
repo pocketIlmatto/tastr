@@ -217,7 +217,12 @@ def test_reanalyze_endpoint(client, db_path, synth_wav):
     gone = db.save_card(conn, full_card())  # points at /x.wav, which isn't there
     conn.close()
 
-    body = client.post(f"/api/tracks/{tid}/reanalyze").json()["card"]
+    client.put(f"/api/tracks/{tid}/edits", json={"drums": {"0": {"kick": "x..............."}, "all": {"kick": "x.x............."}}})
+    r = client.post(f"/api/tracks/{tid}/reanalyze").json()
+    body = r["card"]
+    # the stale card's sections had no bars, so the section edit can't be matched; "all" stays
+    assert r["edits_dropped"] == 1
+    assert client.get(f"/api/tracks/{tid}/edits").json()["drums"] == {"all": {"kick": "x.x............."}}
     assert body["id"] == tid and body["has_views"]
     assert body["source"]["title"] == "synth_124_Am"  # file tags re-read too
     assert body["core"]["bpm"] == pytest.approx(124, abs=2)
@@ -226,6 +231,20 @@ def test_reanalyze_endpoint(client, db_path, synth_wav):
     r = client.post(f"/api/tracks/{gone}/reanalyze")
     assert r.status_code == 410 and "no longer on disk" in r.json()["detail"]
     assert client.post("/api/tracks/999/reanalyze").status_code == 404
+
+
+def test_ui_saves_edits_and_versions():
+    from tastr.web.server import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text()
+    for needle in ("/edits`", "edit-versions", "Versions ▾", "Discard all edits (back to detected)", "Undo", "sec-tab", '"edited"',
+                   "edit-pill", "Revert", "Your edit", "flushEdits", "edits_dropped", "Some edits no longer match the new sections",
+                   'new CustomEvent("edits")', "Patterns:", "Detected", "Your edits ("):
+        assert needle in js, needle
+    css = (STATIC_DIR / "style.css").read_text()
+    assert "--edit: #a07c00" in css and "--edit: #f2cf4a" in css and ".sec-tab.edited::after" in css
+    html = (STATIC_DIR / "index.html").read_text()
+    assert "Save your edits as a version" in html and "Close the Versions popover" in html
 
 
 def test_ui_has_track_actions_menu():
@@ -316,3 +335,70 @@ def test_serve_log_level_shows_tastr_debug_lines(capsys):
     err = capsys.readouterr().err
     assert "DEBUG:    tastr.engine.pipeline: stage traceback here" in err
     assert "hidden at info" not in err and "WARNING:  tastr.service: failed to analyze x" in err
+
+
+EDITS = {"drums": {"1": {"kick": "x...x...x...x..."}}, "bass": {"0": {"notes": ["A", None, "C", "G"], "rhythm": "x.......x......."}},
+         "chords": {}, "drumsrc": {"1": "0"}}
+
+
+def test_edits_autosave_round_trip(client, seeded):
+    assert client.get(f"/api/tracks/{seeded}/edits").json() == {}
+    assert client.put(f"/api/tracks/{seeded}/edits", json=EDITS).status_code == 204
+    assert client.get(f"/api/tracks/{seeded}/edits").json() == EDITS
+    changed = {**EDITS, "chords": {"1": {"chords": ["Am", "F", "C", "G"]}}}
+    client.put(f"/api/tracks/{seeded}/edits", json=changed)
+    assert client.get(f"/api/tracks/{seeded}/edits").json() == changed
+    client.put(f"/api/tracks/{seeded}/edits", json={"drums": {}, "bass": {}})  # nothing edited: cleared
+    assert client.get(f"/api/tracks/{seeded}/edits").json() == {}
+
+
+def test_edit_versions_create_list_get_delete(client, seeded):
+    base = f"/api/tracks/{seeded}/edit-versions"
+    assert client.get(base).json() == []
+    r = client.post(base, json={"name": "Darker drop", "edits": EDITS})
+    assert r.status_code == 201
+    first = r.json()
+    assert first["name"] == "Darker drop" and first["sections"] == 2 and first["edits"] == EDITS
+    second = client.post(base, json={"name": "Version 2", "edits": {"drums": {"0": {"kick": "x..............."}}}}).json()
+    listed = client.get(base).json()
+    assert [v["name"] for v in listed] == ["Version 2", "Darker drop"]  # newest first
+    assert set(listed[0]) == {"id", "name", "created_at", "sections"}  # no edits in the list
+    assert client.get(f"{base}/{first['id']}").json()["edits"] == EDITS
+    assert client.get(f"/api/tracks/{seeded}/edits").json() == {}  # versions are not the current edits
+    assert client.delete(f"{base}/{first['id']}").status_code == 204
+    assert [v["id"] for v in client.get(base).json()] == [second["id"]]
+    assert client.get(f"{base}/{first['id']}").status_code == 404
+    assert client.delete(f"{base}/{first['id']}").status_code == 404
+    assert client.post(base, json={"name": "", "edits": {}}).status_code == 422
+
+
+def test_deleting_a_track_deletes_its_edits(client, seeded, db_path):
+    client.put(f"/api/tracks/{seeded}/edits", json=EDITS)
+    client.post(f"/api/tracks/{seeded}/edit-versions", json={"name": "v1", "edits": EDITS})
+    assert client.delete(f"/api/tracks/{seeded}").status_code == 204
+    conn = db.connect(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM track_edits").fetchone()[0] == 0
+    conn.close()
+
+
+def test_edits_of_unknown_track_are_404(client):
+    assert client.get("/api/tracks/999/edits").status_code == 404
+    assert client.put("/api/tracks/999/edits", json=EDITS).status_code == 404
+    assert client.get("/api/tracks/999/edit-versions").status_code == 404
+    assert client.post("/api/tracks/999/edit-versions", json={"name": "v", "edits": EDITS}).status_code == 404
+    assert client.get("/api/tracks/999/edit-versions/1").status_code == 404
+
+
+def test_reanalysis_moves_edits_to_the_section_with_the_same_bars(db_path):
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, full_card())
+    edits = {"drums": {"0": "intro", "1": "drop", "all": "x"}, "drumsrc": {"1": "2"}, "bass": {"2": "gone"}}
+    db.set_edits(conn, tid, edits)
+    db.add_edit_version(conn, tid, "v1", {"chords": {"1": "drop chords"}})
+    old = {0: (1, 8), 1: (9, 24), 2: (25, 32)}
+    new = {0: (1, 4), 1: (5, 8), 2: (9, 24)}  # the intro split in two; the drop kept its bars; bars 25-32 are gone
+    assert db.remap_edits(conn, tid, old, new) == 2  # the intro drums and the bass in bars 25-32
+    assert db.get_edits(conn, tid) == {"drums": {"2": "drop", "all": "x"}, "drumsrc": {"2": "2"}, "bass": {}}
+    vid = db.list_edit_versions(conn, tid)[0]["id"]
+    assert db.get_edit_version(conn, tid, vid)["edits"] == {"chords": {"2": "drop chords"}}
+    conn.close()

@@ -13,10 +13,10 @@ STRUDEL_JS = Path(__file__).parents[1] / "tastr" / "web" / "static" / "strudel.j
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
 
-def run_js(card: dict, audio_url: str | None = None) -> dict:
+def run_js(card: dict, audio_url: str | None = None, edits: dict | None = None) -> dict:
     script = f"""
 const {{ strudelCode, strudelLink }} = require({json.dumps(str(STRUDEL_JS))});
-const code = strudelCode({json.dumps(card)}, {json.dumps(audio_url)});
+const code = strudelCode({json.dumps(card)}, {json.dumps(audio_url)}, null, {json.dumps(edits)});
 console.log(JSON.stringify({{ code, link: strudelLink(code) }}));
 """
     out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
@@ -51,10 +51,13 @@ def test_sections_become_parts_arranged_by_bar_count():
     # one const per section type, the first occurrence's pattern
     assert code.count("const introA =") == 1 and code.count("const dropB =") == 1
     assert "tail" not in code
-    assert "[16, introA], // Intro A, bars 1-16" in code
-    assert "[32, dropB], // Drop B, bars 17-48" in code
-    assert "[8, introA] // Intro A, bars 49-56" in code
-    assert code.index('const drums = arrange(') < code.index('.bank("RolandTR909")')
+    # one song line per section, [bars, part, first bar]
+    song = code[code.index("const song = ["):code.index("const drums")]
+    assert "  [16, introA, 1], // Intro A, bars 1-16\n  [32, dropB, 17], // Drop B, bars 17-48\n  [8, introA, 49], // Intro A, bars 49-56\n]" in song
+    assert "Comment a line out (//) to skip that section in every layer" in code
+    # every layer is built from the song, using property access (double-quoted strings are patterns in Strudel)
+    assert 'const drums = arrange(...song.map(([bars, p]) => [bars, p.drums])).bank("RolandTR909")' in code
+    assert "p[" not in code
     assert 's("[bd ~ ~ ~] [bd ~ ~ ~] [bd ~ ~ ~] [bd ~ ~ ~]")' in code
     assert 's("[~ ~ ~ ~] [~ ~ oh ~] [~ ~ ~ ~] [~ ~ oh ~]")' in code
     assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)"
@@ -63,7 +66,7 @@ def test_sections_become_parts_arranged_by_bar_count():
 def test_gain_only_for_lanes_with_softer_steps():
     code = run_js(card())["code"]
     intro = code[code.index("const introA"):code.index("const dropB")]
-    drop = code[code.index("const dropB"):code.index("const drums")]
+    drop = code[code.index("const dropB"):code.index("const song")]
     assert ".gain(" not in intro
     assert drop.count(".gain(") == 1
     assert 's("[hh hh hh hh] [hh hh hh hh] [hh hh hh hh] [hh hh hh hh]").gain("[1 .55 1 .55] [1 .55 1 .55] [1 .55 1 .55] [1 .55 1 .55]")' in drop
@@ -88,7 +91,7 @@ def test_empty_part_is_silence_and_link_round_trips():
     c = card()
     c["suggestions"][0]["data"]["by_section"][0]["pattern"] = {"kick": "................"}
     out = run_js(c)
-    assert "const introA = silence" in out["code"]
+    assert "const introA = {\n  drums: silence,\n}" in out["code"]
     assert out["link"].startswith("https://strudel.cc/#")
     decoded = base64.b64decode(urllib.parse.unquote(out["link"].split("#", 1)[1])).decode("utf-8")
     assert decoded == out["code"]
@@ -113,15 +116,14 @@ def per_section_card():
 def test_bass_and_chords_get_one_part_per_section_type():
     code = run_js(per_section_card())["code"]
     assert "drums, bass and chords for each section" in code
-    assert code.count("const introA_chords =") == 1 and code.count("const dropB_chords =") == 1
+    assert code.count("const introA = {") == 1 and code.count("const dropB = {") == 1
     # null chords become rests; a section without bass is silence
-    assert 'const introA_chords = chord("<Am ~ C C>"), introA_bass = silence' in code
-    assert ('const dropB_chords = chord("<F G Am Am>"), dropB_bass = note("<f1 ~ a1 ab1>")'
-            '.struct("[~ ~ x ~] [~ ~ x ~] [~ ~ x ~] [~ ~ x ~]")') in code
-    chords = code[code.index("const chords = arrange("):code.index("const bass = arrange(")]
-    assert "  [16, introA_chords],\n  [32, dropB_chords],\n  [8, introA_chords]\n)" in chords
-    assert chords.rstrip().endswith('.voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)')
-    assert '  [8, introA_bass]\n).s("sawtooth").lpf(320).gain(.5)' in code
+    assert '  chords: chord("<Am ~ C C>"),\n  bass: silence,\n}' in code
+    assert ('  chords: chord("<F G Am Am>"),\n  bass: note("<f1 ~ a1 ab1>")'
+            '.struct("[~ ~ x ~] [~ ~ x ~] [~ ~ x ~] [~ ~ x ~]"),\n}') in code
+    assert ('const chords = arrange(...song.map(([bars, p]) => [bars, p.chords]))'
+            '.voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)') in code
+    assert 'const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(320).gain(.5)' in code
     assert "the detected chord loop" not in code
     assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)"
 
@@ -131,15 +133,16 @@ def test_section_without_entries_falls_back_to_the_track_loop():
     c["suggestions"][1]["data"]["by_section"] = [x for x in c["suggestions"][1]["data"]["by_section"] if x["idx"] == 1]
     c["suggestions"][2]["data"]["by_section"][1]["rhythm"] = None
     code = run_js(c)["code"]
-    assert 'const introA_chords = chord("<Am F C G>")' in code
+    assert 'const introA = {\n  drums: stack(' in code and '  chords: chord("<Am F C G>"),' in code
     assert '.struct("[~ x]*4")' in code
     c["suggestions"][1]["data"]["by_section"][0]["progression"] = []
-    assert "const dropB_chords = silence" in run_js(c)["code"]
+    drop = run_js(c)["code"].split("const dropB = {")[1]
+    assert drop.split("}")[0].count("chords: silence,") == 1
 
 
 def test_old_cards_keep_the_single_loop():
     code = run_js(card(["Am", "F", "C", "G"]))["code"]
-    assert "plus the chord loop" in code and "_chords" not in code and "_bass" not in code
+    assert "plus the chord loop" in code and "chords: " not in code and "bass: " not in code
     assert 'const chords = chord("<Am F C G>")' in code
 
 
@@ -147,9 +150,9 @@ def test_per_section_harmony_with_audio_and_stems():
     c = with_grid(per_section_card(), first=0.5, bar=2.0)
     code = run_js(c, AUDIO)["code"]
     assert "with the detected drums, bass and chords for each section." in code
-    assert "stack(original, drums.gain(.5) /*, bass, chords */)" in code
+    assert '  part("orig"),\n  drums.gain(.5),\n  // bass, chords,\n)' in code
     stems = run_js_stems(c, AUDIO, ["vocals"])
-    assert "const dropB_chords" in stems and "  // bass, chords,\n)" in stems
+    assert "  chords: chord(" in stems and "  // bass, chords,\n)" in stems
 
 
 AUDIO = "http://127.0.0.1:8000/api/tracks/7/audio"
@@ -173,13 +176,10 @@ def test_original_audio_is_cut_into_bars_per_section():
     assert f"samples({{ orig: '{AUDIO}' }})" in code  # single quotes: double quotes are patterns in Strudel
     assert f'"{AUDIO}"' not in code
     assert "const len = 114.500, bar = 2.0000, first = 0.500" in code
-    original = code[code.index("const original = arrange("):code.index("stack(original")]
-    assert "[16, orig(1, 16)], // Intro A" in original
-    assert "[32, orig(17, 48)], // Drop B" in original
-    assert "[8, orig(49, 56)] // Intro A" in original
-    assert original.count("orig(") == 3  # one per section with bars
-    assert "stack(original, drums.gain(.5) /*, bass, chords */)" in code
-    assert "loop the first drop with orig(17, 20)" in code
+    # the original follows the song too, from each section's first bar
+    assert "const part = (name) => arrange(...song.map(([bars, p, from]) => [bars, orig(name, from, from + bars - 1)]))" in code
+    assert '  part("orig"),\n  drums.gain(.5),\n  // bass, chords,\n)' in code
+    assert 'loop the first drop with orig("orig", 17, 20)' in code
     assert "stack(drums, bass, chords)" not in code
 
 
@@ -215,8 +215,7 @@ def test_stems_replace_the_full_mix_and_unticked_stems_are_commented_out():
         assert f"  {n}: 'http://127.0.0.1:8000/api/tracks/7/stems/{n}'," in code
     assert "const orig = (name, a, b) => {" in code
     start = code.index("const part = (name) => arrange(")
-    part = code[start:code.index("stack(\n", start)]
-    assert "[16, orig(name, 1, 16)], // Intro A" in part and "[8, orig(name, 49, 56)] // Intro A" in part
+    assert "orig(name, from, from + bars - 1)" in code[start:]
     tail = code[code.index("stack(\n", start):]
     assert '  part("vocals"),\n  part("bass"),\n  part("other"),\n  // part("drums"), // the sketch drums below play instead\n' in tail
     assert "  drums.gain(.8),\n  // bass, chords,\n)" in tail
@@ -227,3 +226,45 @@ def test_original_drums_stem_turns_the_sketch_drums_down():
     code = run_js_stems(with_grid(card()), AUDIO, ["drums"])
     assert '  // part("vocals"),\n' in code and '  part("drums"),\n' in code
     assert "drums.gain(.5)" in code and "the sketch drums below play instead" not in code
+
+
+EDITS = {
+    "drums": {"1": {"kick": "x.x.x.x.x.x.x.x."}},
+    "bass": {"1": {"notes": ["D", "D", "F", None], "rhythm": "x...x...x...x..."}},
+    "chords": {"1": {"chords": ["Dm", "F", "C", None]}},
+}
+
+
+def test_edited_section_uses_the_edits_and_the_rest_stay_detected():
+    code = run_js(per_section_card(), edits=EDITS)["code"]
+    drop = code.split("const dropB = {")[1].split("\n}")[0]
+    assert 's("[bd ~ bd ~] [bd ~ bd ~] [bd ~ bd ~] [bd ~ bd ~]")' in drop
+    assert 'chords: chord("<Dm F C ~>")' in drop
+    assert 'bass: note("<d2 d2 f1 ~>").struct("[x ~ ~ ~] [x ~ ~ ~] [x ~ ~ ~] [x ~ ~ ~]")' in drop
+    intro = code.split("const introA = {")[1].split("\n}")[0]
+    assert 'chords: chord("<Am ~ C C>")' in intro and "bass: silence" in intro
+
+
+def test_edits_header_only_with_edits():
+    plain = run_js(per_section_card())["code"]
+    assert "With your edits in" not in plain and "the detected" in plain
+    code = run_js(per_section_card(), edits=EDITS)["code"]
+    assert "// With your edits in: Drop B.\n" in code
+    assert "the detected" not in code.split("// Press")[0]
+    assert "With your edits in" not in run_js(per_section_card(), edits={"drums": {}, "bass": {}})["code"]
+
+
+def test_edit_in_a_repeated_section_gets_its_own_part():
+    code = run_js(card(["Am", "F", "C", "G"]), edits={"drums": {"2": {"kick": "xxxxxxxxxxxxxxxx"}}})["code"]
+    assert "// With your edits in: Intro A." in code
+    assert "const introA_bar49 = {" in code and "  [8, introA_bar49, 49], // Intro A, bars 49-56" in code
+    assert "  [16, introA, 1]," in code
+
+
+def test_whole_track_edits_on_cards_without_sections():
+    c = card(["Am", "F", "C", "G"])
+    c["sections"] = []
+    code = run_js(c, edits={"chords": {"all": {"chords": ["C", "G", "Am", "F"]}}})["code"]
+    assert "// With your edits in: Whole track." in code
+    assert "  [1, track, 1], // Whole track, bars 1-1" in code
+    assert 'chords: chord("<C G Am F>")' in code

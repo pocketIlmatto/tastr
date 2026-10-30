@@ -104,6 +104,19 @@ CREATE TABLE IF NOT EXISTS cards (
     json           TEXT NOT NULL
 );
 
+-- The user's edits to a track's drums, bass and chords (the "Drums, bass & chords" view). The row with
+-- name NULL is the current, autosaved state; named rows are versions saved to come back to. edits_json is
+-- {drums|bass|chords|drumsrc: {section idx or "all": value}}. Re-analyzing keeps them (see remap_edits).
+CREATE TABLE IF NOT EXISTS track_edits (
+    id         INTEGER PRIMARY KEY,
+    track_id   INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    name       TEXT,
+    edits_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_track_edits_current ON track_edits(track_id) WHERE name IS NULL;
+CREATE INDEX IF NOT EXISTS idx_track_edits_track ON track_edits(track_id);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
 CREATE INDEX IF NOT EXISTS idx_tracks_camelot ON tracks(camelot);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
@@ -227,6 +240,96 @@ def list_tracks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 def delete_track(conn: sqlite3.Connection, track_id: int) -> bool:
     with conn:
         return conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,)).rowcount > 0
+
+
+EDIT_PARTS = ("drums", "bass", "chords", "drumsrc")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def edited_sections(edits: dict[str, Any]) -> int:
+    """How many sections (or "all") have an edit in any part."""
+    return len({k for p in EDIT_PARTS for k in (edits.get(p) or {})})
+
+
+def get_edits(conn: sqlite3.Connection, track_id: int) -> dict[str, Any]:
+    r = conn.execute("SELECT edits_json FROM track_edits WHERE track_id = ? AND name IS NULL", (track_id,)).fetchone()
+    return json.loads(r[0]) if r else {}
+
+
+def set_edits(conn: sqlite3.Connection, track_id: int, edits: dict[str, Any]) -> None:
+    """Replace the track's current edits; an object with no edited section clears them."""
+    with conn:
+        conn.execute("DELETE FROM track_edits WHERE track_id = ? AND name IS NULL", (track_id,))
+        if edited_sections(edits):
+            conn.execute("INSERT INTO track_edits (track_id, name, edits_json, created_at) VALUES (?, NULL, ?, ?)",
+                         (track_id, json.dumps(edits), _now()))
+
+
+def _version(r: sqlite3.Row, with_edits: bool = False) -> dict[str, Any]:
+    edits = json.loads(r["edits_json"])
+    v = {"id": r["id"], "name": r["name"], "created_at": r["created_at"], "sections": edited_sections(edits)}
+    return {**v, "edits": edits} if with_edits else v
+
+
+def list_edit_versions(conn: sqlite3.Connection, track_id: int) -> list[dict[str, Any]]:
+    """Saved versions, newest first."""
+    rows = conn.execute("SELECT * FROM track_edits WHERE track_id = ? AND name IS NOT NULL ORDER BY id DESC", (track_id,))
+    return [_version(r) for r in rows]
+
+
+def add_edit_version(conn: sqlite3.Connection, track_id: int, name: str, edits: dict[str, Any]) -> dict[str, Any]:
+    with conn:
+        vid = conn.execute("INSERT INTO track_edits (track_id, name, edits_json, created_at) VALUES (?, ?, ?, ?)",
+                           (track_id, name, json.dumps(edits), _now())).lastrowid
+    return get_edit_version(conn, track_id, vid)
+
+
+def get_edit_version(conn: sqlite3.Connection, track_id: int, version_id: int) -> dict[str, Any] | None:
+    r = conn.execute("SELECT * FROM track_edits WHERE id = ? AND track_id = ? AND name IS NOT NULL", (version_id, track_id)).fetchone()
+    return _version(r, with_edits=True) if r else None
+
+
+def delete_edit_version(conn: sqlite3.Connection, track_id: int, version_id: int) -> bool:
+    with conn:
+        return conn.execute("DELETE FROM track_edits WHERE id = ? AND track_id = ? AND name IS NOT NULL",
+                            (version_id, track_id)).rowcount > 0
+
+
+def remap_edits(conn: sqlite3.Connection, track_id: int, old_bars: dict[int, tuple], new_bars: dict[int, tuple]) -> int:
+    """After a re-analysis, move edits (current and saved versions) to the new section with the same bars.
+
+    Edits are keyed by section index. `old_bars` and `new_bars` map index -> (start_bar, end_bar) before and
+    after. An edit whose section's bars no longer exist is dropped; "all" (cards without sections) is kept.
+    Returns how many section edits were dropped.
+    """
+    to_new = {bars: idx for idx, bars in new_bars.items()}
+    dropped = 0
+    rows = conn.execute("SELECT id, edits_json FROM track_edits WHERE track_id = ?", (track_id,)).fetchall()
+    with conn:
+        for row_id, raw in rows:
+            edits, out = json.loads(raw), {}
+            for part, by_key in edits.items():
+                if not isinstance(by_key, dict):
+                    continue
+                kept = {}
+                for k, v in by_key.items():
+                    if k == "all":
+                        kept[k] = v
+                        continue
+                    try:
+                        bars = old_bars.get(int(k))
+                    except ValueError:
+                        bars = None
+                    if bars is not None and bars in to_new:
+                        kept[str(to_new[bars])] = v
+                    elif part != "drumsrc":  # the template pick goes with the drums edit; count each section edit once
+                        dropped += 1
+                out[part] = kept
+            conn.execute("UPDATE track_edits SET edits_json = ? WHERE id = ?", (json.dumps(out), row_id))
+    return dropped
 
 
 def query(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict[str, Any]]:

@@ -24,6 +24,7 @@ class AnalyzeResult:
     track_id: int | None
     card: TrackCard | None
     error: str | None = None
+    edits_dropped: int = 0  # reanalyze_track: saved section edits whose section is gone
 
 
 def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] | None = None) -> AnalyzeResult:
@@ -48,6 +49,8 @@ def reanalyze_track(conn: sqlite3.Connection, track_id: int) -> AnalyzeResult | 
     Keeps the track's id and source (links stay links). File tracks also get their tags
     re-read. Returns None if there is no such track; raises FileNotFoundError if its
     audio file is no longer on disk. A failed analysis leaves the stored card as it was.
+    Saved edits follow their section to the new one with the same bars; the rest are dropped
+    (counted in `edits_dropped`).
     """
     card = db.load_card(conn, track_id)
     if card is None:
@@ -55,7 +58,14 @@ def reanalyze_track(conn: sqlite3.Connection, track_id: int) -> AnalyzeResult | 
     source = card.source
     if not source.local_path or not Path(source.local_path).is_file():
         raise FileNotFoundError(source.local_path or source.uri)
+    old_bars = _section_bars(card)
     result = analyze_source(conn, source)
-    if result.track_id is not None and source.kind == "file":
-        db.retag_track(conn, result.track_id)
+    if result.track_id is not None:
+        result.edits_dropped = db.remap_edits(conn, result.track_id, old_bars, _section_bars(result.card))
+        if source.kind == "file":
+            db.retag_track(conn, result.track_id)
     return result
+
+
+def _section_bars(card: TrackCard) -> dict[int, tuple[int, int]]:
+    return {i: (s.start_bar, s.end_bar) for i, s in enumerate(card.sections) if s.start_bar is not None}

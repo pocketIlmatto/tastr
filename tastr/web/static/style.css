@@ -1,12 +1,12 @@
 :root {
   --bg: #fff; --fg: #1d1d22; --muted: #6b6b76; --line: #e2e2e8; --panel: #f6f6f9;
-  --accent: #5b4bdb; --accent-soft: #e9e6fb; --warn: #b3261e;
+  --accent: #5b4bdb; --accent-soft: #e9e6fb; --warn: #b3261e; --edit: #a07c00;
   --other: #8a8a96; --sec0: #5b4bdb; --sec1: #1b8a6b; --sec2: #c2750a; --sec3: #b0306b; --sec4: #2b7bb9;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #14141a; --fg: #ececf1; --muted: #9a9aa8; --line: #2c2c36; --panel: #1c1c24;
-    --accent: #9d90ff; --accent-soft: #2b2850; --warn: #ff8a80;
+    --accent: #9d90ff; --accent-soft: #2b2850; --warn: #ff8a80; --edit: #f2cf4a;
     --other: #7a7a88; --sec0: #9d90ff; --sec1: #4cc9a4; --sec2: #f0a850; --sec3: #f07aa8; --sec4: #6fb7ee;
   }
 }
@@ -355,3 +355,36 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .mini-keys .on { fill: #a99ff5; }
 .mini-keys .on.root { fill: #5b4bdb; }
 @media (max-width: 700px) { .chord-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .groove .bar-picks { grid-template-columns: repeat(4, 1fr); } .groove .bar-picks::before { display: none; } .roll { grid-template-columns: 28px 1fr; } }
+
+/* Edits in Drums, bass & chords: --edit (gold) marks what the user changed; it is not a section color and not the "changed vs previous section" outline */
+.sec-tab.edited::after { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-left: 6px; vertical-align: middle; opacity: .8; }
+.drum-grid i.mine.full { background: var(--edit); border-color: var(--edit); }
+.drum-grid i.mine.half { background: color-mix(in srgb, var(--edit) 45%, var(--panel)); border-color: var(--edit); }
+.drum-grid i.mine:not(.full):not(.half) { border-color: transparent; outline: 2px dashed var(--edit); outline-offset: -2px; }
+.sw.mine { background: var(--edit); border-color: var(--edit); }
+.roll-note.mine { fill: var(--edit); }
+.bar-pick.mine select { border-color: var(--edit); box-shadow: inset 3px 0 0 var(--edit); }
+.chord-cell.mine { border-color: var(--edit); box-shadow: inset 0 3px 0 var(--edit); }
+.mine-tag { color: var(--edit); font-weight: 600; }
+.edit-pill { font-size: 12px; color: var(--edit); border: 1px solid color-mix(in srgb, var(--edit) 50%, transparent); border-radius: 999px; padding: 0 8px; margin-left: auto; }
+.edit-pill .linklike { color: var(--edit); font-size: 12px; }
+.part.has-edits { border-top-color: color-mix(in srgb, var(--edit) 60%, var(--line)); }
+/* Versions popover */
+.ver-wrap { position: relative; display: inline-block; }
+.ver-pop { position: absolute; z-index: 5; left: 0; top: calc(100% + 4px); width: min(340px, 86vw); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgb(0 0 0 / .18); padding: 10px; display: grid; gap: 8px; font-size: 13px; }
+.ver-pop[hidden] { display: none; }
+.ver-note { margin: 0; font-size: 12px; }
+.ver-save { display: flex; gap: 6px; }
+.ver-name { flex: 1; min-width: 0; font-size: 13px; padding: 4px 6px; }
+.ver-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow-y: auto; }
+.ver-list li { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--line); }
+.ver-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.ver-list button { font-size: 12px !important; padding: 2px 8px !important; }
+.ver-del { color: var(--warn); }
+.ver-discard { justify-self: start; font-size: 12px; color: var(--warn); }
+/* Strudel: Detected vs Your edits */
+.st-src { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-bottom: 6px; font-size: 13px; }
+.st-src[hidden] { display: none; }
+.st-src .st-opt { margin: 0; }
+.seq-tools .linklike { padding: 0; font-size: inherit; }
+.ver-save button { font-size: 13px; padding: 4px 10px; }

@@ -12,10 +12,10 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, Header, HTTPException, Response, UploadFile
+from fastapi import Body, FastAPI, File, Header, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import db, service, stems
 from ..filemeta import describe, legacy_upload_prefix
@@ -49,6 +49,11 @@ class UrlBody(BaseModel):
 
 class QueryBody(BaseModel):
     sql: str
+
+
+class VersionBody(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    edits: dict[str, Any]
 
 
 def upload_dir() -> Path:
@@ -225,7 +230,52 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(404, "no such track")
             if result.error:
                 raise HTTPException(422, f"Couldn't analyze the file: {result.error}")
-            return {"card": card_body(c, track_id)}
+            return {"card": card_body(c, track_id), "edits_dropped": result.edits_dropped}
+
+    # Edits to the drums, bass and chords: the current state autosaves; versions are named copies.
+    def _track_or_404(c: sqlite3.Connection, track_id: int) -> None:
+        if c.execute("SELECT 1 FROM tracks WHERE id = ?", (track_id,)).fetchone() is None:
+            raise HTTPException(404, "no such track")
+
+    @app.get("/api/tracks/{track_id}/edits")
+    def track_edits(track_id: int):
+        with closing(conn()) as c:
+            _track_or_404(c, track_id)
+            return db.get_edits(c, track_id)
+
+    @app.put("/api/tracks/{track_id}/edits", status_code=204)
+    def save_track_edits(track_id: int, edits: dict[str, Any] = Body(...)):
+        with closing(conn()) as c:
+            _track_or_404(c, track_id)
+            db.set_edits(c, track_id, edits)
+        return Response(status_code=204)
+
+    @app.get("/api/tracks/{track_id}/edit-versions")
+    def edit_versions(track_id: int):
+        with closing(conn()) as c:
+            _track_or_404(c, track_id)
+            return db.list_edit_versions(c, track_id)
+
+    @app.post("/api/tracks/{track_id}/edit-versions", status_code=201)
+    def add_edit_version(track_id: int, body: VersionBody):
+        with closing(conn()) as c:
+            _track_or_404(c, track_id)
+            return db.add_edit_version(c, track_id, body.name.strip() or "Version", body.edits)
+
+    @app.get("/api/tracks/{track_id}/edit-versions/{version_id}")
+    def edit_version(track_id: int, version_id: int):
+        with closing(conn()) as c:
+            v = db.get_edit_version(c, track_id, version_id)
+        if v is None:
+            raise HTTPException(404, "no such version")
+        return v
+
+    @app.delete("/api/tracks/{track_id}/edit-versions/{version_id}", status_code=204)
+    def delete_edit_version(track_id: int, version_id: int):
+        with closing(conn()) as c:
+            if not db.delete_edit_version(c, track_id, version_id):
+                raise HTTPException(404, "no such version")
+        return Response(status_code=204)
 
     @app.delete("/api/tracks/{track_id}", status_code=204)
     def delete_track(track_id: int):

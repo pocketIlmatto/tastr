@@ -1,14 +1,79 @@
 # Tastr
 
-Drop in audio files (or, soon, track/playlist links) and get a **track card**
-per track: BPM, estimated key, energy, rough section timestamps, vibe tags,
-and "Try this in Ableton" ideas (drum patterns, bass movement, chord-scale
-guesses). Results go into a SQLite database you can query, chart, or open in
-DuckDB.
+Drop in audio files, folders or track/playlist links and get a **track card**
+for each track: tempo, key, energy, sections, vibe, drums, bass and chords,
+plus ideas for rebuilding it in Ableton Live or Strudel. Every card lands in a
+SQLite database you can search, chart and query with SQL.
 
-> Status: foundation only. The pipeline, card schema, storage and CLI work end
-> to end, but the analysis stages are stubs. See `docs/modules/` for what each
-> module will do.
+It runs on your own machine. Heavy jobs (stem separation, benchmarks) can
+optionally run on a cloud GPU.
+
+![The Tastr library and a track card with its energy chart and sections](docs/images/library.png)
+
+## What it does
+
+### Track cards
+
+- **Tempo and key.** BPM with a confidence score, a beat and bar grid, and the
+  key from a small learned model trained on GiantSteps and Beatport (shown with
+  its Camelot code for mixing). Drum & bass is read at its real tempo, not
+  half or two thirds of it.
+- **Energy and sections.** An energy curve with rough section boundaries
+  (intro, build, drop, chorus, outro...). Sections that sound alike share a
+  letter, so `Drop B` and `Outro B` are the same part.
+- **Vibe tags.** Scored tags such as bass-heavy, dark or percussive, grouped by
+  kind (energy, mood, rhythm, sound...) and tinted by how strongly they apply.
+- **File tags.** Title, artist and album from MP3, FLAC and m4a tags.
+
+### Drums, bass and chords
+
+![Drum grid, bass piano roll and chord cards for one section](docs/images/drums-bass-chords.png)
+
+- **Drum lanes** for kick, snare, clap, hat, open hat, tom and perc, as a
+  16-step grid per section. Template patterns that fit the tempo are one click
+  away.
+- **Per-section bass and chords:** the bass note and rhythm for each bar, the
+  chord loop with Roman numerals, and what changed from one section to the next.
+- **Edit and play it.** Click steps, pick bass notes and chords, and hear it
+  in the browser. Export MIDI or copy it as text.
+- **Saved edits and versions.** Edits save automatically with the track. Name
+  a version to come back to later. Re-analyzing keeps your edits for sections
+  that didn't move.
+
+### Try this in Ableton or Strudel
+
+- **Ableton Live:** setup (tempo, scale, Camelot), drum rack programming, bass
+  and chord moves, scales to play over each chord, an arrangement map and mix
+  notes.
+- **[Strudel](https://strudel.cc):** a live-code sketch of the track with each
+  section's drums, bass and chords at the right tempo. It can use your edits
+  and the original audio cut into bars, either the full mix or separated stems.
+  "Open in Strudel" opens it in strudel.cc, ready to play and remix.
+
+![A generated Strudel sketch with the original audio](docs/images/strudel.png)
+
+### Listen and explore
+
+- **Energy, waveform and spectrogram views** with playback. Click a section to
+  play from there, drag the playhead to scrub (you hear it as you drag), and
+  scroll to zoom.
+- **Stem separation** into vocals, bass, other and drums with Demucs, on your
+  machine or on a [Modal](https://modal.com) GPU (see [Stems](#stems-optional)).
+- **Library sidebar** with search, sort and filters by vibe, key and BPM.
+- **Track and bulk actions:** copy a summary, reload metadata, re-analyze,
+  separate stems or delete, for one track or a whole selection.
+- **Explore tab** for running SQL against your library in the browser.
+- **Keyboard shortcuts** for most things; press `?` for the list.
+
+![Spectrogram view with sections and playback](docs/images/spectrogram.png)
+
+### Measured, not guessed
+
+`tastr bench` scores the engine against labeled datasets (GiantSteps,
+Beatport EDM Key, Harmonix, Beat This!, your own tracks), so every analysis
+change is judged by numbers. Experiments that worked and the ones that didn't
+are written up in [docs/bench.md](docs/bench.md), [docs/drums.md](docs/drums.md)
+and [docs/rhythm.md](docs/rhythm.md). See [Accuracy benchmark](#accuracy-benchmark).
 
 ## Quick start
 
@@ -21,12 +86,19 @@ From the repo folder:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'    # add ,links for yt-dlp link support later
+python -m pip install -e '.[dev]'    # use '.[dev,links]' to analyze track/playlist links
 tastr serve
 ```
 
 Then open http://127.0.0.1:8000 in your browser and drop in your audio files.
 The web UI is where you analyze tracks and browse their cards.
+
+### Links (optional)
+
+With the `links` extra ([yt-dlp](https://github.com/yt-dlp/yt-dlp)) you can
+paste a track or playlist link from YouTube, SoundCloud, Bandcamp, Mixcloud
+and other sites that allow downloads. Spotify and Apple Music links don't
+work, because those services don't allow downloading audio.
 
 ## Command line
 
@@ -89,6 +161,7 @@ Supported datasets:
 | `giantsteps-key` | global key (audio from the Zenodo GiantSteps+ mirror, 599 of 604 tracks) |
 | `giantsteps-tempo` | global BPM (the mirror covers only 43 of 664 tracks) |
 | `beatport-key` | global key (Beatport EDM Key, Zenodo 1101082; 1,275 tracks with a plain major/minor label) |
+| `beatport-tempo` | global BPM (Beatport's listed BPM; 774 of the Beatport EDM Key previews) |
 | `harmonix` | BPM, beats, downbeats, sections |
 | `manifest` | your own tracks, from a CSV or JSON file |
 | `synth` | generated tracks; a smoke test that needs no data |
@@ -111,7 +184,14 @@ compares against an earlier report.
 Current key baseline (`--stages core`, learned key model): GiantSteps 599 tracks, MIREX weighted
 score 0.676, exact 59.9%; Beatport EDM Key 1,275 tracks, 0.586, exact 49.1%. Both are in-sample (the model was
 trained on them); held-out halves score 0.682 and 0.606 (Beatport confidence-2 labels), against 0.650 and 0.562
-for the previous Krumhansl-Kessler method. See docs/bench.md "Key detection notes". There is no tempo baseline yet.
+for the previous Krumhansl-Kessler method. See docs/bench.md "Key detection notes". Tempo results, including the Beat This! spectrogram benches (`tastr spec-bench`), are under "Tempo notes" there.
+
+### Cloud (optional)
+
+Stem separation and benchmarks can run on [Modal](https://modal.com), with
+benchmark datasets in a Cloudflare R2 bucket (`python -m pip install -e '.[cloud]'`).
+The web app and everyday analysis stay local. Setup and costs are in
+[docs/cloud.md](docs/cloud.md).
 
 ## Layout
 
@@ -140,3 +220,16 @@ directly with `from tastr.engine import analyze_file`.
 
 Read `docs/ARCHITECTURE.md` for the data flow, card fields, feature names and
 DB tables, and `docs/modules/` for per-module specs.
+
+## Licenses
+
+Tastr doesn't have a license file yet. Third-party pieces it uses or links to:
+
+- **Strudel** is AGPL-3.0. Tastr doesn't bundle it: "Open in Strudel" opens
+  the generated sketch on strudel.cc.
+- **Demucs** (stems) is MIT. It is an optional install, and its model weights
+  download on first use.
+- **yt-dlp** (links) is under the Unlicense, also optional.
+- **Benchmark datasets** each have their own license, listed in
+  [docs/datasets.md](docs/datasets.md). Some don't allow redistribution, so
+  audio and labels are never committed to this repo.

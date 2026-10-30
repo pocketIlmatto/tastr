@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .. import db, service, stems
+from .. import db, lookup, service, stems
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import IngestError
 
@@ -113,6 +113,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         body["has_audio"] = _audio_path(card) is not None
         body["stems_available"] = stems.available()
         body["stems_state"] = jobs.status(_stems_dir(card, track_id))["state"]
+        body["lookups"] = lookup.describe(card, db.get_lookups(c, track_id))
+        body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in lookup.enabled()]
         return body
 
     def _stems_dir(card, track_id: int) -> Path:
@@ -231,6 +233,24 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             if result.error:
                 raise HTTPException(422, f"Couldn't analyze the file: {result.error}")
             return {"card": card_body(c, track_id), "edits_dropped": result.edits_dropped}
+
+    @app.post("/api/tracks/{track_id}/lookup")
+    def lookup_metadata(track_id: int):
+        """Ask the enabled catalogs (TASTR_LOOKUP) for this track's BPM and key again."""
+        providers = lookup.enabled()
+        if not providers:
+            raise HTTPException(400, "No lookup providers are set up. See docs/lookup.md.")
+        with closing(conn()) as c:
+            card = db.load_card(c, track_id)
+            if card is None:
+                raise HTTPException(404, "no such track")
+            if lookup.query_for(card) is None:
+                raise HTTPException(422, "This track has no artist and title tags to look up.")
+            results = lookup.lookup_track(c, track_id, card, providers)
+            body = card_body(c, track_id)
+            # Answers a provider's terms don't let us keep are shown this once, not stored.
+            body["lookups"] += lookup.describe(card, [r for r in results if r.get("transient")])
+            return {"card": body}
 
     # Edits to the drums, bass and chords: the current state autosaves; versions are named copies.
     def _track_or_404(c: sqlite3.Connection, track_id: int) -> None:

@@ -14,7 +14,7 @@ optionally run on a cloud GPU.
 
 ### Track cards
 
-- **Tempo and key.** BPM with a confidence score, a beat and bar grid, and the
+- **Tempo and key.** BPM with how likely it is to be right (calibrated on the benchmarks), a beat and bar grid, and the
   key from a small learned model trained on GiantSteps and Beatport (shown with
   its Camelot code for mixing). Drum & bass is read at its real tempo, not
   half or two thirds of it.
@@ -24,6 +24,10 @@ optionally run on a cloud GPU.
 - **Vibe tags.** Scored tags such as bass-heavy, dark or percussive, grouped by
   kind (energy, mood, rhythm, sound...) and tinted by how strongly they apply.
 - **File tags.** Title, artist and album from MP3, FLAC and m4a tags.
+- **Listed elsewhere (optional).** With your own API keys, the BPM and key that
+  [GetSongBPM](https://getsongbpm.com) and FreqBlog list for the track, shown next to
+  Tastr's figures with a mark when they disagree. Off by default; see
+  [docs/lookup.md](docs/lookup.md).
 
 ### Drums, bass and chords
 
@@ -110,6 +114,7 @@ tastr analyze ~/Music/some-track.wav ~/Music/folder/
 tastr list
 tastr show 1                     # full card as JSON
 tastr stems 1                    # split track 1 into vocals, bass, other and drums (needs the stems extra, below)
+tastr lookup                     # catalog BPM/key for every track (opt-in, docs/lookup.md)
 tastr retag                      # re-read file tags for analyzed tracks (`tastr serve` does this once after the tag reader changes)
 tastr query "SELECT title, bpm, camelot FROM tracks ORDER BY bpm"
 tastr stages                     # pipeline stages in run order
@@ -216,6 +221,7 @@ tastr/engine/               the analysis engine; imports nothing else from tastr
   bench/synth.py            synthetic tracks with known BPM/key/sections (tests/synth.py re-exports it)
 tastr/ingest.py             files/folders/links -> Sources, URL resolver registry
 tastr/resolvers/            link/playlist resolvers
+tastr/lookup/               opt-in catalog lookups (BPM/key by artist + title), one module per provider
 tastr/db.py                 SQLite schema and save/load/query
 tastr/service.py            inputs -> engine -> DB, used by the CLI and web app
 tastr/web/                  FastAPI app and UI
@@ -237,6 +243,10 @@ Tastr doesn't have a license file yet. Third-party pieces it uses or links to:
 - **Demucs** (stems) is MIT. It is an optional install, and its model weights
   download on first use.
 - **yt-dlp** (links) is under the Unlicense, also optional.
+- **Catalog lookups** (optional, your own API keys): [GetSongBPM](https://getsongbpm.com)
+  requires a link back wherever its data is shown, which the card does. FreqBlog's API
+  allows storing results only on paid plans, so Tastr keeps them only with
+  `FREQBLOG_PLAN=paid`. See [docs/lookup.md](docs/lookup.md).
 - **Benchmark datasets** each have their own license, listed in
   [docs/datasets.md](docs/datasets.md). Some don't allow redistribution, so
   audio and labels are never committed to this repo.

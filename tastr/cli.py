@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`."""
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`."""
 
 from __future__ import annotations
 
@@ -27,6 +27,10 @@ def main(argv: list[str] | None = None) -> int:
     q = sub.add_parser("query", help="run read-only SQL against the database")
     q.add_argument("sql")
     sub.add_parser("retag", help="re-read file tags for analyzed tracks without re-analyzing")
+    lk = sub.add_parser("lookup", help="look tracks up in online catalogs (TASTR_LOOKUP, see docs/lookup.md)")
+    lk.add_argument("track_ids", nargs="*", type=int, help="tracks to look up (default: all)")
+    lk.add_argument("--missing", action="store_true", help="skip providers that already answered for a track")
+    lk.add_argument("--providers", help="comma-separated provider names (default: TASTR_LOOKUP)")
     st = sub.add_parser("stems", help="separate one track into vocals, bass, other and drums (needs tastr[stems])")
     st.add_argument("track_id", type=int)
     st.add_argument("--force", action="store_true", help="separate again even if stems exist")
@@ -210,6 +214,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"updated {db.refresh_file_meta(db.connect(args.db))} track(s)")
         return 0
 
+    if args.cmd == "lookup":
+        return _lookup(args)
+
     if args.cmd == "query":
         db.connect(args.db).close()  # make sure the file and schema exist
         rows = db.query(db.connect(args.db, readonly=True), args.sql)
@@ -217,6 +224,30 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(r, default=str))
         return 0
     return 2
+
+
+def _lookup(args) -> int:
+    import os
+
+    from . import lookup
+
+    if args.providers:
+        os.environ["TASTR_LOOKUP"] = args.providers
+    providers = lookup.enabled()
+    if not providers:
+        print("no lookup providers enabled: set TASTR_LOOKUP and each provider's API key (docs/lookup.md)", file=sys.stderr)
+        return 1
+    conn = db.connect(args.db)
+    ids = args.track_ids or [t["id"] for t in db.list_tracks(conn)]
+    for tid in ids:
+        card = db.load_card(conn, tid)
+        if card is None:
+            print(f"{tid}: no such track", file=sys.stderr)
+            continue
+        for r in lookup.lookup_track(conn, tid, card, providers, only_missing=args.missing):
+            what = r.get("error") or " ".join(str(x) for x in (r.get("bpm") and f"{r['bpm']:g} BPM", r.get("key")) if x)
+            print(f"{tid}: {r['provider']} {r['status']}" + (f" ({what})" if what else ""))
+    return 0
 
 
 def _spec_bench(args) -> int:

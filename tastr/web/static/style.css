@@ -449,3 +449,10 @@ h1 { white-space: nowrap; }
 [data-look="technics"] .beat-group { background: transparent; border-bottom: 1px solid #12121233; border-radius: 0; }
 [data-look="technics"] .stat b { font-family: "Michroma", sans-serif; font-size: 18px; }
 [data-look="technics"] #lib, [data-look="technics"] .chord-cell { border: 1px solid #8c867a; border-radius: 2px; }
+
+/* "Listed elsewhere" (catalog lookups) under the header stats */
+.lookup-line { margin: 0; flex-basis: 100%; font-size: 14px; }
+.lookup-line .lk-src { color: var(--accent); }
+.lk-mark { font-weight: 600; margin-left: 3px; }
+.lk-agrees { color: var(--accent); }
+.lk-differs { color: var(--warn); }

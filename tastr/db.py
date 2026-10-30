@@ -117,6 +117,23 @@ CREATE TABLE IF NOT EXISTS track_edits (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_track_edits_current ON track_edits(track_id) WHERE name IS NULL;
 CREATE INDEX IF NOT EXISTS idx_track_edits_track ON track_edits(track_id);
 
+-- What online catalogs list for a track (tastr.lookup), one row per provider, kept across re-analysis.
+-- status: found | not_found | pending | no_tags | error. key_name is the key as listed; key_tonic / key_mode /
+-- camelot are parsed from it, so they compare with tracks. result_json is the full LookupResult.
+CREATE TABLE IF NOT EXISTS lookups (
+    track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    provider    TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    bpm         REAL,
+    key_name    TEXT,
+    key_tonic   INTEGER,
+    key_mode    TEXT,
+    camelot     TEXT,
+    fetched_at  TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    PRIMARY KEY (track_id, provider)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
 CREATE INDEX IF NOT EXISTS idx_tracks_camelot ON tracks(camelot);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
@@ -240,6 +257,19 @@ def list_tracks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 def delete_track(conn: sqlite3.Connection, track_id: int) -> bool:
     with conn:
         return conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,)).rowcount > 0
+
+
+def save_lookup(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:
+    """Store one provider's lookup result (a LookupResult dict, or {provider, status, error})."""
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO lookups VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (track_id, result["provider"], result["status"], result.get("bpm"), result.get("key"),
+                      result.get("tonic"), result.get("mode"), result.get("camelot"), _now(), json.dumps(result)))
+
+
+def get_lookups(conn: sqlite3.Connection, track_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT result_json, fetched_at FROM lookups WHERE track_id = ? ORDER BY provider", (track_id,))
+    return [json.loads(r[0]) | {"fetched_at": r[1]} for r in rows]
 
 
 EDIT_PARTS = ("drums", "bass", "chords", "drumsrc")

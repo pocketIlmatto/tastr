@@ -33,10 +33,24 @@ def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] |
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
         card = analyze_file(source.local_path, stages, source=source)
-        return AnalyzeResult(source, db.save_card(conn, card), card)
+        track_id = db.save_card(conn, card)
+        _lookup(conn, track_id, card)
+        return AnalyzeResult(source, track_id, card)
     except Exception as e:
         log.warning("failed to analyze %s: %s", source.uri, e)
         return AnalyzeResult(source, None, None, f"{type(e).__name__}: {e}")
+
+
+def _lookup(conn: sqlite3.Connection, track_id: int, card: TrackCard) -> None:
+    """Opt-in catalog lookups (TASTR_LOOKUP) right after analysis; never fails the analysis."""
+    from . import lookup
+
+    providers = lookup.enabled()
+    if providers:
+        try:
+            lookup.lookup_track(conn, track_id, card, providers, only_missing=True)
+        except Exception as e:
+            log.warning("metadata lookup failed for track %s: %s", track_id, e)
 
 
 def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], stages: list[str] | None = None) -> list[AnalyzeResult]:

@@ -78,6 +78,7 @@ SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or
 - `features`: long format `(track_id, name, value)`, so new features need no migration.
 - `series`: long format `(track_id, name, idx, t, value)` for curves.
 - `cards`: the full card JSON, the source of truth for re-rendering.
+- `lookups`: `(track_id, provider, status, bpm, key_name, fetched_at, result_json)`, what online catalogs list for the track (opt-in, `tastr/lookup/`, [lookup.md](lookup.md)). Kept across re-analysis.
 
 Example queries:
 

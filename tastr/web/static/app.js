@@ -278,6 +278,7 @@ function renderBulk(shown) {
 const plural = (n) => `${n} track${n === 1 ? "" : "s"}`;
 // Each action calls the per-track endpoint; `run` resolves to the track's fresh card (or null).
 const editsGone = new Set(); // tracks whose re-analysis dropped some saved edits
+let lookupProviders = []; // enabled catalogs (TASTR_LOOKUP), from the last card the server sent
 const BULK = {
   reload: { label: "Reload metadata", doing: "Reloading metadata…", fail: "Couldn't reload metadata",
     done: (n) => `Reloaded metadata for ${plural(n)}.`,
@@ -291,6 +292,10 @@ const BULK = {
       if (r.edits_dropped) editsGone.add(id);
       return r.card;
     } },
+  lookup: { label: "Look up BPM & key online", doing: "Looking up…", fail: "Couldn't look up",
+    when: () => lookupProviders.length > 0,
+    done: (n) => `Looked up ${plural(n)}.`,
+    run: async (id) => (await api(`/api/tracks/${id}/lookup`, { method: "POST" })).card },
   stems: { label: "Separate stems", note: "slow", doing: "Separating stems…", fail: "Couldn't separate stems",
     done: (n) => `Stems ready for ${plural(n)}.`,
     // The server separates in the background; wait for this track before starting the next one.
@@ -317,7 +322,7 @@ function bulkMenu() {
   const item = (label, onclick, o = {}) => h("button", { type: "button", role: "menuitem", class: "menu-item" + (o.danger ? " danger" : ""), onclick }, label, o.note ? h("span", { class: "menu-note" }, o.note) : null);
   const items = () => [...pop.querySelectorAll("[role=menuitem], .menu-confirm button")];
   const showMain = () => pop.replaceChildren(
-    ...Object.entries(BULK).map(([k, v]) => item(v.label, () => { close(false); runBulk(k, [...sel]); }, { note: v.note })),
+    ...Object.entries(BULK).filter(([, v]) => !v.when || v.when()).map(([k, v]) => item(v.label, () => { close(false); runBulk(k, [...sel]); }, { note: v.note })),
     h("hr", { class: "menu-sep" }),
     item(`Delete ${plural(n)}…`, showConfirm, { danger: true }));
   const showConfirm = () => {
@@ -448,6 +453,28 @@ function switchTo(view) {
   document.querySelector(`nav button[data-view=${view}]`).click();
 }
 
+// "Listed elsewhere": what online catalogs say (tastr.lookup), next to ours, never instead of it.
+const LOOKUP_MARK = { agrees: ["✓", "matches ours"], double: ["×2", "double ours"], half: ["½", "half ours"],
+  relative: ["≈", "relative key of ours"], fifth: ["≈", "a fifth from ours"], parallel: ["≈", "parallel key of ours"],
+  differs: ["≠", "differs from ours"] };
+function lookupLine(c) {
+  const rows = (c.lookups || []).filter((x) => x.status === "found" && (isNum(x.bpm) || x.key));
+  if (!rows.length) return null;
+  const mark = (what, cmp) => {
+    const m = cmp && LOOKUP_MARK[cmp];
+    return m ? h("span", { class: `lk-mark lk-${cmp}`, title: `${what} ${m[1]}` }, m[0]) : null;
+  };
+  return h("p", { class: "lookup-line" }, h("span", { class: "muted" }, "Listed elsewhere: "),
+    ...rows.flatMap((x, i) => [
+      i ? h("span", { class: "muted" }, " · ") : null,
+      h("a", { href: x.url || x.homepage, target: "_blank", rel: "noopener", class: "lk-src",
+        title: [x.matched_artist, x.matched_title].filter(Boolean).join(" – ") || x.label }, x.label),
+      ": ",
+      isNum(x.bpm) ? h("span", {}, `${Math.round(x.bpm * 10) / 10} BPM`, mark("BPM", x.compare && x.compare.bpm)) : null,
+      isNum(x.bpm) && x.key ? ", " : null,
+      x.key ? h("span", {}, x.key, mark("Key", x.compare && x.compare.key)) : null].filter((n) => n !== null)));
+}
+
 function stat(value, label, title) {
   return h("div", { class: "stat", ...(title ? { title } : {}) }, h("b", {}, value), h("span", {}, label));
 }
@@ -466,6 +493,7 @@ let sectionBus = new EventTarget();
 let shownCard = null;
 
 function renderCard(c) {
+  lookupProviders = c.lookup_providers || [];
   shownCard = c;
   stopAllPlayback();
   if (!savedEdits.has(c.id)) loadEdits(c.id).then(() => { if (savedEdits.has(c.id) && currentId === c.id && $("card").dataset.id === String(c.id)) renderCard(c); });
@@ -492,6 +520,8 @@ function renderCard(c) {
     h("div", { class: "meter" }, h("i", { style: `width:${isNum(core.energy) ? Math.max(0, Math.min(1, core.energy)) * 100 : 0}%` }))
   );
   head.append(en);
+  const listed = lookupLine(c);
+  if (listed) head.append(listed);
   root.append(head);
 
   if (c.metadata) root.append(metadataSection(c.metadata));
@@ -1839,6 +1869,16 @@ function trackMenu(c) {
     close(true);
     try { await startStems(c); } catch (e) { tell(e.message, true); }
   };
+  const lookUp = async () => {
+    close(true);
+    tell("Looking up BPM and key…", false, true);
+    try {
+      const r = await api(`/api/tracks/${c.id}/lookup`, { method: "POST" });
+      const found = (r.card.lookups || []).filter((x) => x.status === "found").length;
+      menuNote = { id: c.id, msg: found ? `Found in ${found} catalog${found > 1 ? "s" : ""}` : "Not found in the catalogs" };
+      if (currentId === c.id) renderCard(r.card); else menuNote = null;
+    } catch (e) { tell(e.message, true); }
+  };
   const stemsButton = () => {
     const st = stemsOf(c);
     if (st.state === "ready") return item("Stems ready", { disabled: true, title: "Pick stems under Try this in → Strudel" });
@@ -1867,13 +1907,14 @@ function trackMenu(c) {
   };
   const showMain = () => {
     const isFile = !c.source || c.source.kind !== "url"; // links have no file to re-read
-    pop.replaceChildren(
+    pop.replaceChildren(...[
       item("Copy track summary", { onclick: copy }),
       isFile ? item("Reload metadata", { onclick: reload }) : null,
       c.has_audio ? item("Re-analyze", { onclick: reanalyze }) : null, // needs the original audio on disk
+      (c.lookup_providers || []).length ? item("Look up BPM & key online", { onclick: lookUp }) : null,
       stemsItem(),
       h("hr", { class: "menu-sep" }),
-      item("Delete track…", { danger: true, onclick: showConfirm }));
+      item("Delete track…", { danger: true, onclick: showConfirm })].filter(Boolean));
   };
   const showConfirm = () => {
     const name = (c.source && (c.source.title || c.source.uri)) || `Track ${c.id}`;

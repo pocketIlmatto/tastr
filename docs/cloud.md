@@ -127,20 +127,22 @@ Each remote run prints where its time went: container start, imports, loading th
 
 The Beat This! tempo and downbeat benches read one spectrogram file plus annotations, not audio. Only
 the original recordings are scored, so upload a slim copy of the file without the augmented ones
-(hjdb: 153 MB instead of 3.2 GB), and only that dataset's annotations:
+(hjdb: 153 MB instead of 3.2 GB) and that dataset's annotations bundled into one JSON file:
 
 ```
 tastr spec-bench tempo ~/Development/tastr-data/beat-this --dataset hjdb --write-originals
-rclone copy ~/Development/tastr-data/beat-this/hjdb-originals.npz r2:tastr-data/beat-this
-rclone copy ~/Development/tastr-data/beat-this/beat_this_annotations-1.0/hjdb \
-  r2:tastr-data/beat-this/beat_this_annotations-1.0/hjdb
+rclone copy ~/Development/tastr-data/beat-this r2:tastr-data/beat-this \
+  --include "hjdb-originals.npz" --include "hjdb-annotations.json"
 tastr spec-bench tempo beat-this --dataset hjdb --remote --limit 20
 tastr spec-bench downbeats beat-this --dataset hjdb --remote
 ```
 
-No index is needed: the file's own key list is the track list. Locally, `tastr spec-bench` runs the
-same benches as `python -m tastr.engine.bench.tempo_spec` / `.downbeats`, and both read
-`<dataset>-originals.npz` when it is there.
+No index is needed: the file's own key list is the track list. The annotations JSON replaces one read
+per track (238 files for hjdb) with one: on the bucket mount those reads were most of a run's loading
+time (80 s cold for 20 tracks). With `--limit`, only the spectrograms of the tracks scored are read.
+Locally, `tastr spec-bench` runs the same benches as `python -m tastr.engine.bench.tempo_spec` /
+`.downbeats`, and both read `<dataset>-originals.npz` and `<dataset>-annotations.json` when they are
+there, else the release's files.
 
 Upload only what the loaders read (audio and annotations), not result reports or feature caches. The
 bucket must stay private: Beatport EDM Key and GiantSteps are CC BY-SA and not ours to republish.

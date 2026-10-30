@@ -8,13 +8,15 @@ beat/downbeat labels for public datasets whose audio isn't redistributable.
 
     python -m tastr.engine.bench.downbeats ~/data/beat_this --dataset gtzan --limit 200
 
-The folder needs `<dataset>.npz` (unzipped from `<dataset>.zip`), or the slim
-`<dataset>-originals.npz` from `write_originals`, and `beat_this_annotations-1.0/`. Only tracks labeled in 4/4 are scored.
+The folder needs `<dataset>.npz` (unzipped from `<dataset>.zip`) and `beat_this_annotations-1.0/`, or
+the slim `<dataset>-originals.npz` and `<dataset>-annotations.json` from `write_originals`. Only tracks
+labeled in 4/4 are scored.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from collections import Counter
@@ -25,6 +27,8 @@ import numpy as np
 FPS = 50  # Beat This! spectrogram frame rate
 # Some releases also ship pitch-shifted and time-stretched copies ("<name>/track_ps-3", "<name>/track_ts12").
 AUGMENTED = re.compile(r"_(ps|ts)-?\d+$")
+# Releases whose track names carry a group as their second word (gtzan_blues_00000, rwc_classical_CD1_01).
+GROUPED = ("gtzan", "rwc")
 
 
 def original_keys(specs) -> list[str]:
@@ -38,16 +42,50 @@ def spec_file(root: Path, dataset: str) -> Path:
     return slim if slim.exists() else root / f"{dataset}.npz"
 
 
-def write_originals(root: str | Path, dataset: str) -> Path:
-    """Save only the original recordings' spectrograms as `<dataset>-originals.npz` (hjdb: 153 MB of 3.2 GB).
+def annotations_file(root: Path, dataset: str) -> Path:
+    return root / f"{dataset}-annotations.json"
 
-    The benchmarks skip the augmented copies, so this is all they read; it's what goes to the cloud bucket.
+
+def _release_annotations(root: Path, dataset: str) -> tuple[dict[str, np.ndarray], dict[str, str]]:
+    ann = root / "beat_this_annotations-1.0" / dataset
+    beats = {f.stem: np.loadtxt(f, ndmin=2) for f in sorted((ann / "annotations" / "beats").glob("*.beats"))}
+    split_file = ann / "single.split"
+    split = dict(line.split("\t")[:2] for line in split_file.read_text().splitlines() if "\t" in line) \
+        if split_file.exists() else {}
+    return beats, {n: s.strip() for n, s in split.items()}
+
+
+def read_annotations(root: Path, dataset: str) -> tuple[dict[str, np.ndarray], dict[str, str]]:
+    """({track name: beat rows (time, bar position)}, {track name: split}).
+
+    From `<dataset>-annotations.json` when it's there: one read instead of one per track, which on the
+    cloud bucket mount is most of a run's loading time. Else from the release's `.beats` files.
+    """
+    bundled = annotations_file(root, dataset)
+    if not bundled.exists():
+        return _release_annotations(root, dataset)
+    data = json.loads(bundled.read_text())
+    return {n: np.array(b, dtype=float, ndmin=2) for n, b in data["beats"].items()}, data["split"]
+
+
+def write_originals(root: str | Path, dataset: str) -> tuple[Path, Path]:
+    """Save the original recordings' spectrograms as `<dataset>-originals.npz` (hjdb: 153 MB of 3.2 GB)
+    and their beats and splits as `<dataset>-annotations.json`.
+
+    The benchmarks skip the augmented copies, so these two files are all they read; they're what goes
+    to the cloud bucket.
     """
     root = Path(root).expanduser()
     specs = np.load(root / f"{dataset}.npz")
+    keys = original_keys(specs)
     out = root / f"{dataset}-originals.npz"
-    np.savez(out, **{k: specs[k] for k in original_keys(specs)})
-    return out
+    np.savez(out, **{k: specs[k] for k in keys})
+    beats, split = _release_annotations(root, dataset)
+    names = sorted({k.split("/")[0] for k in keys})
+    annotations_file(root, dataset).write_text(json.dumps({
+        "beats": {n: beats[n].tolist() for n in names if n in beats},
+        "split": {n: split[n] for n in names if n in split}}))
+    return out, annotations_file(root, dataset)
 
 
 def mel_freqs() -> np.ndarray:
@@ -60,22 +98,20 @@ def load(root: str | Path, dataset: str = "gtzan", limit: int | None = None, see
     """[(name, log_mel bands x frames, beat times, beat positions 1-4)], shuffled with a fixed seed."""
     root = Path(root).expanduser()
     specs = np.load(spec_file(root, dataset))
-    ann = root / "beat_this_annotations-1.0" / dataset / "annotations" / "beats"
-    items = []
+    beats, _ = read_annotations(root, dataset)
+    picked = []
     for key in original_keys(specs):
         name = key.split("/")[0]
-        f = ann / f"{name}.beats"
-        if not f.exists():
-            continue
-        a = np.loadtxt(f, ndmin=2)
-        if a.shape[1] < 2:
+        a = beats.get(name)
+        if a is None or a.size == 0 or a.shape[1] < 2:
             continue
         pos = a[:, 1].astype(int)
         if pos.max() != 4 or (pos == 1).sum() < 3:
             continue
-        items.append((name, specs[key].astype(np.float32).T, a[:, 0], pos))
-    np.random.default_rng(seed).shuffle(items)
-    return items[:limit] if limit else items
+        picked.append((name, key, a[:, 0], pos))
+    np.random.default_rng(seed).shuffle(picked)
+    # Spectrograms last, so --limit reads only the tracks it scores.
+    return [(name, specs[key].astype(np.float32).T, t, pos) for name, key, t, pos in picked[:limit or None]]
 
 
 def run(items) -> dict:
@@ -90,12 +126,13 @@ def run(items) -> dict:
         ok = (pos[p::4] == 1).mean() > 0.5
         right += ok
         half += (pos[(p + 2) % 4::4] == 1).mean() > 0.5
-        group = name.split("_")[1] if name.count("_") >= 2 else "all"
+        parts = name.split("_")
+        group = parts[1] if parts[0] in GROUPED and len(parts) >= 3 else "all"
         by_group[group] += ok
         n_group[group] += 1
     n = max(1, len(items))
     return {"tracks": len(items), "right": round(right / n, 3), "half_bar_off": round(half / n, 3),
-            "by_group": {g: round(by_group[g] / n_group[g], 3) for g in sorted(n_group)}}
+            "by_group": {g: round(by_group[g] / n_group[g], 3) for g in sorted(n_group)} if len(n_group) > 1 else {}}
 
 
 def main(argv: list[str] | None = None) -> int:

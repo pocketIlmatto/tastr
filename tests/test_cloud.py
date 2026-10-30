@@ -143,8 +143,12 @@ def test_write_originals_drops_augmented_copies(tmp_path):
     beat_this_folder(tmp_path)
     assert main(["spec-bench", "tempo", str(tmp_path), "--write-originals"]) == 0
     assert list(np.load(tmp_path / "hjdb-originals.npz").keys()) == ["hjdb_1_a/track"]
-    # The full file can go; the benches read the slim one.
+    assert json.loads((tmp_path / "hjdb-annotations.json").read_text())["beats"]["hjdb_1_a"][1] == [0.5, 2.0]
+    # The full file and the per-track annotations can go; the benches read the slim files.
+    import shutil
+
     (tmp_path / "hjdb.npz").unlink()
+    shutil.rmtree(tmp_path / "beat_this_annotations-1.0")
     report = jobs.run_spec_bench("tempo", "hjdb", tmp_path)
     assert report["summary"]["all"]["tracks"] == 1 and report["tracks"][0]["ref"] == 120.0
     assert jobs.run_spec_bench("downbeats", "hjdb", tmp_path)["tracks"] == 1

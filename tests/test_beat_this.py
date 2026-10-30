@@ -39,3 +39,12 @@ def test_loaders_skip_augmented_copies(tmp_path):
 def test_tempo_from_spectrogram(bpm):
     y, _ = make_track(bpm=bpm, bars_per_section=(4, 8, 4))
     assert abs(tempo_spec.tempo(_log_mel(y)) - bpm) <= 0.04 * bpm
+
+
+def test_downbeat_groups_only_for_grouped_releases(monkeypatch):
+    monkeypatch.setattr("tastr.engine.stages.core._downbeat_phase", lambda beats, log_mel, freqs: 0)
+    pos = np.array([1, 2, 3, 4] * 4)
+    item = lambda name: (name, np.zeros((128, 500), dtype=np.float32), np.arange(16) * 0.5, pos)
+    r = downbeats.run([item("gtzan_blues_00000"), item("gtzan_rock_00001")])
+    assert r["by_group"] == {"blues": 1.0, "rock": 1.0}
+    assert downbeats.run([item("hjdb_2_Bad_Mice"), item("hjdb_4_Am")])["by_group"] == {}

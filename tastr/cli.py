@@ -45,7 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     sb.add_argument("--out", help="write the JSON report here")
     sb.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
     sb.add_argument("--write-originals", action="store_true",
-                    help="save the original recordings' spectrograms as <dataset>-originals.npz, the file to upload")
+                    help="save the original recordings' spectrograms and annotations as <dataset>-originals.npz "
+                         "and <dataset>-annotations.json, the files to upload")
 
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
     b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, harmonix or manifest")
@@ -204,7 +205,8 @@ def _spec_bench(args) -> int:
         if args.write_originals:
             from .engine.bench.downbeats import write_originals
 
-            print(f"wrote {write_originals(args.path, dataset)}; upload it with the annotations (docs/cloud.md)")
+            npz, ann = write_originals(args.path, dataset)
+            print(f"wrote {npz} and {ann.name}; upload both (docs/cloud.md)")
             return 0
         if args.remote:
             print(f"running {args.bench} on {dataset} on Modal...", file=sys.stderr)

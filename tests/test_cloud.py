@@ -166,6 +166,50 @@ def test_spec_bench_remote(monkeypatch, tmp_path, capsys):
 
 
 @pytest.mark.audio
+def test_key_profiles_train_without_a_cache(tmp_path, capsys):
+    """`tastr key-profiles` writes what `train_key --profiles` reads, with no audio or feature cache after."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    from synth import make_track, write_wav
+
+    from tastr.engine.bench import key_features, train_key
+
+    folder = tmp_path / "gs"
+    (folder / "annotations" / "key").mkdir(parents=True)
+    (folder / "audio").mkdir()
+    for sid, (tonic, mode, name) in enumerate([(9, "minor", "A minor"), (0, "major", "C major")]):
+        y, _ = make_track(bpm=124, tonic=tonic, mode=mode, bars_per_section=(2, 2, 2))
+        write_wav(folder / "audio" / f"{sid}.LOFI.wav", y)
+        (folder / "annotations" / "key" / f"{sid}.LOFI.key").write_text(name)
+    out = tmp_path / "gs-profiles.json"
+    assert main(["key-profiles", "giantsteps-key", str(folder), "--out", str(out)]) == 0
+    rows = key_features.read_profiles(out)["giantsteps-key"]
+    assert [(r["tonic"], r["mode"], r["label_conf"]) for r in rows] == [(9, "minor", -1), (0, "major", -1)]
+
+    # The same rows as a feature cache gives, so a cache can be converted before it's deleted.
+    feats = tmp_path / "features"
+    assert key_features.cache("giantsteps-key", folder, feats) == []
+    cached = tmp_path / "from-cache.json"
+    assert main(["key-profiles", "giantsteps-key", str(folder), "--from-cache", str(feats), "--out", str(cached)]) == 0
+    import numpy as np
+
+    for a, b in zip(rows, key_features.read_profiles(cached)["giantsteps-key"]):
+        assert np.allclose(a["profile"], b["profile"], atol=1e-5)
+
+    assert train_key.main(["--profiles", str(out), "--profiles", str(out), "--no-synth"]) == 0
+    assert "giantsteps-key: 4 training tracks" in capsys.readouterr().out
+
+
+def test_key_profiles_remote(monkeypatch, tmp_path, capsys):
+    result = {"tracks": [{"id": "1", "dataset": "beatport-key", "profile": [0.5] * 12, "silent": False,
+                          "tonic": 2, "mode": "minor", "label_conf": 2}], "failed": [], "timing": {"load_seconds": 1}}
+    calls = fake_modal(monkeypatch, result)
+    out = tmp_path / "bp.json"
+    assert main(["key-profiles", "beatport-key", "beatport-key", "--remote", "--limit", "5", "--out", str(out)]) == 0
+    assert calls == [("key_profiles", ("beatport-key", "beatport-key", 5), {})]
+    assert json.loads(out.read_text())["tracks"][0]["label_conf"] == 2
+
+
+@pytest.mark.audio
 def test_run_drum_bench_on_a_folder(tmp_path):
     from test_drums import mdb_folder
 

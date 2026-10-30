@@ -88,7 +88,7 @@ modal deploy tastr/cloud/modal_app.py
 
 Run it again after every engine change. The first deploy builds two images and takes several minutes;
 the stems image downloads PyTorch and the Demucs weights. The app then shows up as `tastr` in the
-Modal dashboard, with the functions `bench`, `spec_bench`, `drum_bench` and `stems`.
+Modal dashboard, with the functions `bench`, `spec_bench`, `drum_bench`, `key_profiles` and `stems`.
 
 ### 6. Check it
 
@@ -146,6 +146,14 @@ there, else the release's files.
 
 Upload only what the loaders read (audio and annotations), not result reports or feature caches. The
 bucket must stay private: Beatport EDM Key and GiantSteps are CC BY-SA and not ours to republish.
+
+### Key model training
+
+`tastr key-profiles DATASET FOLDER --remote --out FILE` runs the `key_profiles` function (8 CPUs) on a key
+dataset already in the bucket and saves the key profiles and labels that `train_key --profiles` trains on
+([bench.md](bench.md#key-detection-notes)), so retraining the key model needs neither the audio nor a
+feature cache locally. It reads the folder's track index like `tastr bench`, and for Beatport the label
+confidence sheet `Beatport-EDM-Key-Dataset.xlsx`, so keep that in the bucket folder.
 
 ### Drum lane benches
 

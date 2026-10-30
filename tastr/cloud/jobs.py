@@ -60,6 +60,22 @@ def run_bench(dataset: str, path: str | None, root: str | Path, stages: list[str
     return report
 
 
+def run_key_profiles(dataset: str, path: str, root: str | Path, limit: int | None = None, jobs: int = 1,
+                     progress=None) -> dict:
+    """Key profiles and labels for `train_key` (`tastr key-profiles`), with `path` relative to `root`."""
+    from ..engine.bench import key_features
+
+    t0 = time.time()
+    folder = Path(root) / path
+    items = load_items(dataset, folder)
+    if not items:
+        raise ValueError(f"no labeled tracks with audio found for {dataset} at {path}")
+    load_seconds = round(time.time() - t0, 1)
+    rows, failed = key_features.profiles(dataset, items, folder, jobs=jobs, limit=limit, progress=progress)
+    return {"tracks": [dict(r, profile=[float(v) for v in r["profile"]]) for r in rows], "failed": failed,
+            "timing": {"load_seconds": load_seconds, "seconds": round(time.time() - t0 - load_seconds, 1), "jobs": jobs}}
+
+
 SPEC_BENCHES = {"tempo": "tempo_spec", "downbeats": "downbeats"}  # Beat This! spectrogram benches
 
 

@@ -13,11 +13,17 @@ Analyzing a track takes seconds; scoring a key-estimation variant on cached chro
 Files already written are skipped, so an interrupted run resumes.
 
     python -m tastr.engine.bench.key_features beatport-key ~/data/beatport-key ~/data/features/beatport-key --jobs 8
+
+Training the key model needs only each track's 12-bin key profile and label, so `profiles` computes
+those straight from the audio, without the cache, and `write_profiles` saves them as one small JSON file
+(about 200 bytes a track) that `train_key --profiles` reads. `tastr key-profiles` runs it locally or on
+Modal against the R2 bucket; `profiles_from_cache` turns an existing cache into the same file.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -103,6 +109,65 @@ def cache(dataset: str, root: str | Path, out_dir: str | Path, jobs: int = 1, pr
             if progress:
                 progress(len(results), len(work))
     return [(sid, err) for sid, err in results if err]
+
+
+def _profile(args) -> dict:
+    item, dataset, conf = args
+    from .. import signals
+    from ..audio import load_audio
+    from ..pipeline import HOP, SR, AnalysisContext
+
+    sid = track_id(item)
+    try:
+        y = load_audio(item.path, SR)
+        chroma = AnalysisContext(y=y, sr=SR, card=None, hop=HOP).get("chroma", signals.chroma)
+        silent = y.size == 0 or not np.any(np.abs(y) > 1e-4)
+        return {"id": sid, "dataset": dataset, "profile": music.key_profile(chroma), "silent": bool(silent),
+                "tonic": item.truth.tonic, "mode": item.truth.mode, "label_conf": conf.get(sid, -1)}
+    except Exception as e:
+        return {"id": sid, "error": f"{type(e).__name__}: {e}"}
+
+
+def profiles(dataset: str, items: list[Item], root: str | Path, jobs: int = 1, limit: int | None = None,
+             progress=None) -> tuple[list[dict], list[tuple[str, str]]]:
+    """Key profile and label of every item (as `load` returns them, computed from the audio); also returns
+    (track id, error) for the failures. `root` is the dataset folder, for Beatport's label confidence."""
+    conf = beatport_label_confidence(root) if dataset == "beatport-key" else {}
+    work = [(it, dataset, conf) for it in items[:limit]]
+    if not work:
+        return [], []
+    results = [_profile(work[0])]  # compiles numba's kernels before workers share the cache
+    if jobs > 1:
+        with ProcessPoolExecutor(jobs) as pool:
+            for r in pool.map(_profile, work[1:]):
+                results.append(r)
+                if progress:
+                    progress(len(results), len(work))
+    else:
+        for w in work[1:]:
+            results.append(_profile(w))
+            if progress:
+                progress(len(results), len(work))
+    return [r for r in results if "error" not in r], [(r["id"], r["error"]) for r in results if "error" in r]
+
+
+def profiles_from_cache(dataset: str, root: str | Path, feat_dir: str | Path) -> list[dict]:
+    """The same rows from a feature cache written by `cache`, without decoding any audio."""
+    return load(dataset, root, feat_dir)
+
+
+def write_profiles(rows: list[dict], path: str | Path) -> Path:
+    path = Path(path)
+    path.write_text(json.dumps({"tracks": [dict(r, profile=[round(float(v), 6) for v in r["profile"]]) for r in rows]}))
+    return path
+
+
+def read_profiles(path: str | Path) -> dict[str, list[dict]]:
+    """{dataset: rows} from a `write_profiles` file, with profiles as arrays, ready for `train_key`."""
+    out: dict[str, list[dict]] = {}
+    for r in json.loads(Path(path).read_text())["tracks"]:
+        out.setdefault(r["dataset"], []).append(dict(r, profile=np.array(r["profile"])))
+    return out
 
 
 def load(dataset: str, root: str | Path, feat_dir: str | Path) -> list[dict]:

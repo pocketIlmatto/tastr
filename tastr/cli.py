@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`."""
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`."""
 
 from __future__ import annotations
 
@@ -48,6 +48,16 @@ def main(argv: list[str] | None = None) -> int:
                     help="save the original recordings' spectrograms and annotations as <dataset>-originals.npz "
                          "and <dataset>-annotations.json, the files to upload")
 
+    kp = sub.add_parser("key-profiles", help="key profiles and labels of a key dataset, for train_key, locally or on Modal")
+    kp.add_argument("dataset", choices=["giantsteps-key", "beatport-key"])
+    kp.add_argument("path", help="dataset folder (a bucket folder with --remote)")
+    kp.add_argument("--out", required=True, help="the JSON file to write (train_key --profiles)")
+    kp.add_argument("--limit", type=int, help="first N tracks")
+    kp.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel (locally)")
+    kp.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
+    kp.add_argument("--from-cache", metavar="FEATURES",
+                    help="read a local key_features cache instead of decoding audio")
+
     db_ = sub.add_parser("drum-bench", help="drum lane benches (synth, idmt, mdb, stemgmd-mix), locally or on Modal")
     db_.add_argument("suite", choices=["synth", "idmt", "mdb", "stemgmd-mix"])
     db_.add_argument("path", nargs="?", help="dataset folder (a bucket folder with --remote); not for synth")
@@ -76,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "spec-bench":
         return _spec_bench(args)
+    if args.cmd == "key-profiles":
+        return _key_profiles(args)
     if args.cmd == "drum-bench":
         return _drum_bench(args)
 
@@ -237,6 +249,34 @@ def _spec_bench(args) -> int:
     if args.out:
         Path(args.out).write_text(json.dumps(report, indent=1))
     return 0
+
+
+def _key_profiles(args) -> int:
+    from .cloud import jobs, remote
+    from .engine.bench import key_features
+
+    try:
+        if args.from_cache:
+            rows, failed = key_features.profiles_from_cache(args.dataset, args.path, args.from_cache), []
+        else:
+            if args.remote:
+                print(f"computing {args.dataset} key profiles on Modal...", file=sys.stderr)
+                t0 = time.time()
+                result = remote.key_profiles(args.dataset, args.path, args.limit)
+                t = result.get("timing", {})
+                print(f"wall {time.time() - t0:.0f} s: loading the dataset {t.get('load_seconds', 0):.0f} s, "
+                      f"analysis {t.get('seconds', 0):.0f} s", file=sys.stderr)
+            else:
+                result = jobs.run_key_profiles(args.dataset, ".", args.path, limit=args.limit, jobs=args.jobs)
+            rows, failed = result["tracks"], result["failed"]
+    except (remote.RemoteError, ValueError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    key_features.write_profiles(rows, args.out)
+    print(f"wrote {len(rows)} tracks to {args.out}, {len(failed)} failed")
+    for sid, err in failed:
+        print(f"  {sid}: {err}", file=sys.stderr)
+    return 1 if failed else 0
 
 
 def _drum_bench(args) -> int:

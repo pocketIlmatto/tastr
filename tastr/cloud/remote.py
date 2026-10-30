@@ -31,6 +31,10 @@ def spec_bench(bench: str, dataset: str, path: str, limit: int | None = None) ->
     return _call("spec_bench", bench, dataset, path, limit)
 
 
+def key_profiles(dataset: str, path: str, limit: int | None = None) -> dict:
+    return _call("key_profiles", dataset, path, limit)
+
+
 def drum_bench(suite: str, path: str | None, limit: int | None = None, drums_only: bool = False) -> dict:
     return _call("drum_bench", suite, path, limit, drums_only)
 

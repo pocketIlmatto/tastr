@@ -148,6 +148,21 @@ python -m tastr.engine.bench.train_key \
 python -m tastr.engine.bench.train_key --data ... --data ... --write                 # writes key_model.py
 ```
 
+Or without the audio or a cache on this machine: `tastr key-profiles` computes each track's 12-bin key
+profile and label (all `train_key` reads) on Modal against the R2 bucket and saves them in one small JSON
+file (about 300 KB for Beatport):
+
+```
+tastr key-profiles giantsteps-key giantsteps-key --remote --out results/gs-key-profiles.json
+tastr key-profiles beatport-key beatport-key --remote --out results/bp-key-profiles.json
+python -m tastr.engine.bench.train_key --profiles results/gs-key-profiles.json \
+    --profiles results/bp-key-profiles.json --holdout                               # then --write
+```
+
+Without `--remote` it runs on a local folder (`--jobs N`); `--from-cache FEATURES` converts an existing
+feature cache without decoding anything. Recompute the profiles after changing `signals.chroma` or
+`music.key_profile`. Experiments that need the full chroma or bass CQT still use the local cache.
+
 `train_key` renders the synthetic progressions itself (about a minute; `--no-synth` leaves them out). The
 cached `.npz` files also hold the 36-bin bass CQT and the label confidence, so other estimators can be
 scored offline the same way. Bump the core stage version when the model changes.
@@ -188,7 +203,8 @@ The map is an isotonic (non-decreasing) fit, pooled into blocks of at least 40 t
 nudged towards 1/2 by half a track. Tables live in `tastr/engine/calibration_table.py`, written by
 `tastr.engine.bench.calibrate`. Key rows must be out-of-fold: the key model was trained on GiantSteps and
 Beatport, so a plain bench report on those sets is in-sample and overconfident. `train_key --holdout
---calibration-rows` saves the alternating-half held-out confidence and result for every track.
+--calibration-rows` saves the alternating-half held-out confidence and result for every track. It takes `--profiles` files
+from `tastr key-profiles --remote` in place of `--data`, so this step needs no local audio either.
 
 ```
 python -m tastr.engine.bench.train_key --data giantsteps-key GS GS-FEATURES --data beatport-key BP BP-FEATURES \

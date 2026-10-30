@@ -14,6 +14,10 @@ halves first, then write the module:
         --data giantsteps-key ~/data/giantsteps-key ~/data/features/giantsteps-key \\
         --data beatport-key ~/data/beatport-key ~/data/features/beatport-key --holdout
     python -m tastr.engine.bench.train_key --data ... --data ... --write
+
+Or from key-profile files (`tastr key-profiles`, which can run on Modal), no audio or cache needed:
+
+    python -m tastr.engine.bench.train_key --profiles gs-key-profiles.json --profiles bp-key-profiles.json --holdout
 """
 
 from __future__ import annotations
@@ -140,7 +144,9 @@ BIAS = np.array([{", ".join(repr(float(v)) for v in bias)}])
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data", nargs=3, action="append", required=True, metavar=("DATASET", "ROOT", "FEATURES"))
+    ap.add_argument("--data", nargs=3, action="append", default=[], metavar=("DATASET", "ROOT", "FEATURES"))
+    ap.add_argument("--profiles", action="append", default=[], metavar="FILE",
+                    help="a key-profile file from `tastr key-profiles` (instead of --data)")
     ap.add_argument("--holdout", action="store_true", help="report alternating-half held-out scores")
     ap.add_argument("--calibration-rows", metavar="JSON",
                     help="with --holdout, save per-track held-out confidence and result here for bench.calibrate")
@@ -149,7 +155,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-synth", action="store_true", help="leave out the synthetic progressions")
     a = ap.parse_args(argv)
 
+    if not a.data and not a.profiles:
+        ap.error("give --data or --profiles")
     by_dataset = {name: usable(key_features.load(name, root, feats)) for name, root, feats in a.data}
+    for f in a.profiles:
+        for name, rows in key_features.read_profiles(f).items():
+            by_dataset[name] = by_dataset.get(name, []) + usable(rows)
     extra = [] if a.no_synth else synthetic_tracks()
     for k, v in by_dataset.items():
         print(f"{k}: {len(v)} training tracks")

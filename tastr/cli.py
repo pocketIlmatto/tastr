@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`."""
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`."""
 
 from __future__ import annotations
 
@@ -37,6 +37,16 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"],
                    help="debug adds stage tracebacks and uvicorn's details (default: info)")
 
+    sb = sub.add_parser("spec-bench", help="Beat This! spectrogram benches (tempo, downbeats), locally or on Modal")
+    sb.add_argument("bench", choices=["tempo", "downbeats"])
+    sb.add_argument("path", help="folder with <dataset>.npz and beat_this_annotations-1.0/ (a bucket folder with --remote)")
+    sb.add_argument("--dataset", help="Beat This! dataset name (default: hjdb for tempo, gtzan for downbeats)")
+    sb.add_argument("--limit", type=int, help="first N tracks")
+    sb.add_argument("--out", help="write the JSON report here")
+    sb.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
+    sb.add_argument("--write-originals", action="store_true",
+                    help="save the original recordings' spectrograms as <dataset>-originals.npz, the file to upload")
+
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
     b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, harmonix or manifest")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
@@ -51,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
 
     args = p.parse_args(argv)
+
+    if args.cmd == "spec-bench":
+        return _spec_bench(args)
 
     if args.cmd == "bench" and args.write_index:
         from .cloud import jobs
@@ -178,6 +191,37 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(r, default=str))
         return 0
     return 2
+
+
+def _spec_bench(args) -> int:
+    from pathlib import Path
+
+    from .cloud import jobs, remote
+
+    dataset = args.dataset or ("hjdb" if args.bench == "tempo" else "gtzan")
+    mod = jobs.spec_module(args.bench)
+    try:
+        if args.write_originals:
+            from .engine.bench.downbeats import write_originals
+
+            print(f"wrote {write_originals(args.path, dataset)}; upload it with the annotations (docs/cloud.md)")
+            return 0
+        if args.remote:
+            print(f"running {args.bench} on {dataset} on Modal...", file=sys.stderr)
+            t0 = time.time()
+            report = remote.spec_bench(args.bench, dataset, args.path, args.limit)
+            t = report.get("timing", {})
+            print(f"wall {time.time() - t0:.0f} s: loading the dataset {t.get('load_seconds', 0):.0f} s, "
+                  f"analysis {t.get('seconds', 0):.0f} s", file=sys.stderr)
+        else:
+            report = jobs.run_spec_bench(args.bench, dataset, args.path, args.limit)
+    except (remote.RemoteError, ValueError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(mod.format_report(report))
+    if args.out:
+        Path(args.out).write_text(json.dumps(report, indent=1))
+    return 0
 
 
 def _stems(args) -> int:

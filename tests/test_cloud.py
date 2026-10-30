@@ -122,3 +122,40 @@ def test_index_round_trip(tmp_path, monkeypatch):
     # An index under #61's single name still counts for its own dataset.
     (moved / "tastr-index-beatport-key.json").rename(moved / "tastr-index.json")
     assert jobs.load_items("beatport-key", moved)[0].id == "bp-key-1" and len(loaded) == 2
+
+
+def beat_this_folder(root, dataset="hjdb"):
+    """A two-track Beat This! layout: one original spectrogram plus an augmented copy, beats at 120 BPM."""
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    spec = rng.random((1500, 128)).astype(np.float16)  # 30 s at 50 fps, frames x bands as released
+    np.savez(root / f"{dataset}.npz", **{"hjdb_1_a/track": spec, "hjdb_1_a/track_ps-3": spec})
+    beats = root / "beat_this_annotations-1.0" / dataset / "annotations" / "beats"
+    beats.mkdir(parents=True)
+    (beats / "hjdb_1_a.beats").write_text("\n".join(f"{i * 0.5:.2f}\t{i % 4 + 1}" for i in range(60)))
+    return root
+
+
+def test_write_originals_drops_augmented_copies(tmp_path):
+    import numpy as np
+
+    beat_this_folder(tmp_path)
+    assert main(["spec-bench", "tempo", str(tmp_path), "--write-originals"]) == 0
+    assert list(np.load(tmp_path / "hjdb-originals.npz").keys()) == ["hjdb_1_a/track"]
+    # The full file can go; the benches read the slim one.
+    (tmp_path / "hjdb.npz").unlink()
+    report = jobs.run_spec_bench("tempo", "hjdb", tmp_path)
+    assert report["summary"]["all"]["tracks"] == 1 and report["tracks"][0]["ref"] == 120.0
+    assert jobs.run_spec_bench("downbeats", "hjdb", tmp_path)["tracks"] == 1
+
+
+def test_spec_bench_remote(monkeypatch, tmp_path, capsys):
+    report = {"tracks": 1, "right": 1.0, "half_bar_off": 0.0, "by_group": {"1": 1.0}, "timing": {"load_seconds": 0.5}}
+    calls = fake_modal(monkeypatch, report)
+    out = tmp_path / "r.json"
+    assert main(["spec-bench", "downbeats", "beat-this", "--dataset", "hjdb", "--limit", "5", "--remote",
+                 "--out", str(out)]) == 0
+    assert calls == [("spec_bench", ("downbeats", "hjdb", "beat-this", 5), {})]
+    assert "bar 1 right 1.000" in capsys.readouterr().out
+    assert json.loads(out.read_text())["tracks"] == 1

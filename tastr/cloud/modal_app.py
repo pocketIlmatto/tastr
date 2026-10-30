@@ -65,6 +65,13 @@ def bench(dataset: str, path: str | None = None, stages: list[str] | None = None
     return report
 
 
+@app.function(image=image, cpu=2, memory=4096, timeout=3600, volumes={DATA: datasets})
+def spec_bench(bench: str, dataset: str, path: str, limit: int | None = None) -> dict:
+    from tastr.cloud.jobs import run_spec_bench
+
+    return run_spec_bench(bench, dataset, f"{DATA}/{path}", limit)
+
+
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)
 def stems(audio: bytes, suffix: str) -> dict[str, bytes]:
     from tastr.cloud.jobs import run_stems

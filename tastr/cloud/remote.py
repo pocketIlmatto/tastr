@@ -27,6 +27,10 @@ def bench(dataset: str, path: str | None, **kw) -> dict:
     return _call("bench", dataset, path, **kw)
 
 
+def spec_bench(bench: str, dataset: str, path: str, limit: int | None = None) -> dict:
+    return _call("spec_bench", bench, dataset, path, limit)
+
+
 def stems(audio_path: str | Path, out_dir: Path, progress=None) -> None:
     """Upload one file to the Modal `stems` function and write the FLAC stems it returns into `out_dir`."""
     from .. import stems as local

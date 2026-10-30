@@ -8,8 +8,8 @@ pitch-shifted / time-stretched copies.
 
     python -m tastr.engine.bench.tempo_spec ~/data/beat_this --dataset hjdb
 
-The folder needs `<dataset>.npz` and `beat_this_annotations-1.0/` as for
-`bench.downbeats`. On GiantSteps audio this adapter gives the same BPM (within 4%)
+The folder needs `<dataset>.npz` (or the slim `<dataset>-originals.npz`) and
+`beat_this_annotations-1.0/` as for `bench.downbeats`. On GiantSteps audio this adapter gives the same BPM (within 4%)
 as the normal audio path on 39 of 43 tracks; see docs/bench.md.
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .downbeats import FPS, mel_freqs, original_keys
+from .downbeats import FPS, mel_freqs, original_keys, spec_file
 from .metrics import TEMPO_TOLERANCE, tempo_scores
 
 SR = 22050
@@ -77,7 +77,7 @@ def ratio_name(est: float | None, ref: float) -> str:
 def load(root: str | Path, dataset: str = "hjdb", limit: int | None = None):
     """[(name, log_mel bands x frames, reference bpm, split)] for the original recordings."""
     root = Path(root).expanduser()
-    specs = np.load(root / f"{dataset}.npz")
+    specs = np.load(spec_file(root, dataset))
     ann = root / "beat_this_annotations-1.0" / dataset
     split_file = ann / "single.split"
     split = dict(line.split("\t")[:2] for line in split_file.read_text().splitlines() if "\t" in line) \
@@ -120,11 +120,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", help="write per-track results as JSON here")
     args = ap.parse_args(argv)
     r = run(load(args.path, args.dataset, args.limit))
-    for split, s in r["summary"].items():
-        print(f"{split:6s} {s['tracks']:4d} tracks  Acc1 {s['acc1']:.3f}  Acc2 {s['acc2']:.3f}  errors {s['errors']}")
+    print(format_report(r))
     if args.out:
         Path(args.out).write_text(json.dumps(r, indent=1))
     return 0
+
+
+def format_report(r: dict) -> str:
+    return "\n".join(f"{split:6s} {s['tracks']:4d} tracks  Acc1 {s['acc1']:.3f}  Acc2 {s['acc2']:.3f}  errors {s['errors']}"
+                     for split, s in r["summary"].items())
 
 
 if __name__ == "__main__":

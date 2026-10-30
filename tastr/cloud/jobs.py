@@ -60,6 +60,28 @@ def run_bench(dataset: str, path: str | None, root: str | Path, stages: list[str
     return report
 
 
+SPEC_BENCHES = {"tempo": "tempo_spec", "downbeats": "downbeats"}  # Beat This! spectrogram benches
+
+
+def spec_module(bench: str):
+    import importlib
+
+    if bench not in SPEC_BENCHES:
+        raise ValueError(f"unknown spectrogram bench {bench!r}; choose from {', '.join(SPEC_BENCHES)}")
+    return importlib.import_module(f"tastr.engine.bench.{SPEC_BENCHES[bench]}")
+
+
+def run_spec_bench(bench: str, dataset: str, folder: str | Path, limit: int | None = None) -> dict:
+    """A Beat This! spectrogram bench (`python -m tastr.engine.bench.<module>`) on `folder`; returns its report."""
+    mod = spec_module(bench)
+    t0 = time.time()
+    items = mod.load(folder, dataset, limit)
+    load_seconds = round(time.time() - t0, 1)
+    report = mod.run(items)
+    report["timing"] = {"load_seconds": load_seconds, "seconds": round(time.time() - t0 - load_seconds, 1)}
+    return report
+
+
 def run_stems(audio: bytes, suffix: str) -> dict[str, bytes]:
     """Separate one file's bytes with the local Demucs; returns {stem name: FLAC bytes}."""
     import tempfile

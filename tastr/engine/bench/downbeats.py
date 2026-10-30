@@ -8,8 +8,8 @@ beat/downbeat labels for public datasets whose audio isn't redistributable.
 
     python -m tastr.engine.bench.downbeats ~/data/beat_this --dataset gtzan --limit 200
 
-The folder needs `<dataset>.npz` (unzipped from `<dataset>.zip`) and
-`beat_this_annotations-1.0/`. Only tracks labeled in 4/4 are scored.
+The folder needs `<dataset>.npz` (unzipped from `<dataset>.zip`), or the slim
+`<dataset>-originals.npz` from `write_originals`, and `beat_this_annotations-1.0/`. Only tracks labeled in 4/4 are scored.
 """
 
 from __future__ import annotations
@@ -32,6 +32,24 @@ def original_keys(specs) -> list[str]:
     return sorted(k for k in specs.keys() if not AUGMENTED.search(k))
 
 
+def spec_file(root: Path, dataset: str) -> Path:
+    """`<dataset>-originals.npz` when it's there (written by `write_originals`), else `<dataset>.npz`."""
+    slim = root / f"{dataset}-originals.npz"
+    return slim if slim.exists() else root / f"{dataset}.npz"
+
+
+def write_originals(root: str | Path, dataset: str) -> Path:
+    """Save only the original recordings' spectrograms as `<dataset>-originals.npz` (hjdb: 153 MB of 3.2 GB).
+
+    The benchmarks skip the augmented copies, so this is all they read; it's what goes to the cloud bucket.
+    """
+    root = Path(root).expanduser()
+    specs = np.load(root / f"{dataset}.npz")
+    out = root / f"{dataset}-originals.npz"
+    np.savez(out, **{k: specs[k] for k in original_keys(specs)})
+    return out
+
+
 def mel_freqs() -> np.ndarray:
     import librosa
 
@@ -41,7 +59,7 @@ def mel_freqs() -> np.ndarray:
 def load(root: str | Path, dataset: str = "gtzan", limit: int | None = None, seed: int = 0):
     """[(name, log_mel bands x frames, beat times, beat positions 1-4)], shuffled with a fixed seed."""
     root = Path(root).expanduser()
-    specs = np.load(root / f"{dataset}.npz")
+    specs = np.load(spec_file(root, dataset))
     ann = root / "beat_this_annotations-1.0" / dataset / "annotations" / "beats"
     items = []
     for key in original_keys(specs):
@@ -86,11 +104,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dataset", default="gtzan")
     ap.add_argument("--limit", type=int, help="first N tracks (after a fixed shuffle)")
     args = ap.parse_args(argv)
-    r = run(load(args.path, args.dataset, args.limit))
-    print(f"tracks {r['tracks']}: bar 1 right {r['right']:.3f}, half a bar off {r['half_bar_off']:.3f}")
-    for g, v in r["by_group"].items():
-        print(f"  {g:10s} {v:.2f}")
+    print(format_report(run(load(args.path, args.dataset, args.limit))))
     return 0
+
+
+def format_report(r: dict) -> str:
+    lines = [f"tracks {r['tracks']}: bar 1 right {r['right']:.3f}, half a bar off {r['half_bar_off']:.3f}"]
+    lines += [f"  {g:10s} {v:.2f}" for g, v in r["by_group"].items()]
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

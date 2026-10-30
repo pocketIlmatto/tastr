@@ -122,3 +122,26 @@ def stems(audio: bytes, suffix: str) -> dict[str, bytes]:
     from tastr.cloud.jobs import run_stems
 
     return run_stems(audio, suffix)
+
+
+@app.local_entrypoint()
+def run_branch(kind: str, dataset: str, path: str, stages: str = "", limit: int = 0, out: str = ""):
+    """Bench a branch's code without deploying it, so the shared app stays as is:
+
+        modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --stages core
+        modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this   # any spec-bench
+
+    `modal run` uploads the working tree to a temporary app that stops when the run ends.
+    """
+    import json
+
+    if kind == "bench":
+        report = bench.remote(dataset, path, [s for s in stages.split(",") if s] or None, limit or None)
+    else:
+        report = spec_bench.remote(kind, dataset, path, limit or None)
+    text = json.dumps(report, indent=1)
+    if out:
+        with open(out, "w") as f:
+            f.write(text)
+    summary = report.get("summary", {k: v for k, v in report.items() if k not in ("tracks", "rows")})
+    print(json.dumps(summary, indent=1)[:4000])

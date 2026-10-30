@@ -146,6 +146,12 @@ stronger onsets separated them only weakly (median onset ratio 0.99 for
 3/4 vs 1.10 for 4/4 flips), so it was dropped. Fixing the 3/2 tempo error
 is the next step before the guess can change bars.
 
+**Update (2026-10-30):** most of those 3/2 errors came from core's own 1.5x
+re-track for drum & bass, which fired on 4/4 tracks. It now skips the switch
+when the faster beats group in 3s (`THREE_TWO_MAX_METER`, see bench.md
+"Tempo notes"). Same 49 + 300 GTZAN tracks on tracked beats: 4/4 flipped to
+3/4 11 of 300 (3.7%, was 12%), 3/4 found 33 of 49 (67%, was 59%).
+
 
 The "Beat This!" release on Zenodo (record 13922116, CC BY 4.0) has
 beat/downbeat labels for 16 public datasets, plus spectrograms in place of

@@ -302,6 +302,24 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   - Re-tracking at 1.25x for the 4/5 locks (tracked 117-129, labeled 146-165): the 1.25x strength on those
     (0.78-1.01) overlaps correctly tracked 128 BPM tracks (0.55-1.01). Every rule did nothing or cost
     Beatport 5 to 48 tracks.
+- 1.5x switch gated on meter (2026-10-30): on GTZAN (999 tracks, `bench.tempo_spec`) the switch fired on
+  183 tracks, wrongly on 101 (right tempo -> 1.5x, the tracker landing on dotted eighths) and rightly on 17.
+  Turning the switch off scored Acc1 0.668 vs 0.585 with it. The wrong switches' beats group in 3s: core's
+  `_meter_score` on the faster grid was above 0 on 89 of 101 wrong switches and 2 of 17 right ones (median
+  1.7 vs -4.5), while the tempogram ratio alone overlaps with the drum & bass cases it was tuned for. Now the
+  switch is skipped when that score is above `THREE_TWO_MAX_METER` (0). GTZAN Acc1 0.585 -> 0.673, Acc2
+  0.872, 1.5x errors 101 -> 21. The sets the switch was tuned for didn't lose anything (Acc1 / Acc2, on
+  Modal via `modal run`, see cloud.md):
+
+  | Set | Tracks | Before | After |
+  |---|---|---|---|
+  | GTZAN (spectrograms) | 999 | 0.585 / - | 0.673 / 0.872 |
+  | hjdb train (spectrograms) | 200 | 0.910 / 0.940 | 0.915 / 0.945 |
+  | hjdb val | 35 | 0.971 / 0.971 | 0.971 / 0.971 |
+  | `beatport-tempo` | 774 | 0.872 / 0.906 | 0.897 / 0.930 |
+  | `giantsteps-tempo` | 43 | 0.721 / 0.884 | 0.744 / 0.907 |
+
+  The gate was picked on GTZAN only, so the other four rows are held out.
 - Still open: drum & bass reported at half tempo (86 for 174) and half-time tracks labeled ~86 reported at 172.
   The tempogram and off-beat onsets do not separate them, and Beatport's labels show the convention itself
   varies, so a fix needs a stronger cue (e.g. snare placement within the bar) and labels that agree.

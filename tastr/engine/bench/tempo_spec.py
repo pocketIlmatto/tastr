@@ -64,7 +64,14 @@ def tempo_and_confidence(log_mel: np.ndarray) -> tuple[float | None, float]:
 
     onset, low_flux = envelopes(log_mel)
     ctx = AnalysisContext(y=np.zeros(0, dtype=np.float32), sr=SR, card=None, hop=HOP)
-    bpm, _, conf, *_ = _tempo_and_beats(ctx, onset, low_flux, onset.size)
+    from ..stages.core import _meter_score
+
+    freqs = mel_freqs()
+
+    def meter_of(frames):  # core's 43 fps beat frames onto the spectrogram's 50 fps
+        return _meter_score(np.clip(np.round(frames * HOP / SR * FPS).astype(int), 0, log_mel.shape[1] - 1), log_mel, freqs)
+
+    bpm, _, conf, *_ = _tempo_and_beats(ctx, onset, low_flux, onset.size, meter_of)
     return bpm, conf
 
 

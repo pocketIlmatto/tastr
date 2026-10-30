@@ -145,6 +145,19 @@ Locally, `tastr spec-bench` runs the same benches as `python -m tastr.engine.ben
 `.downbeats`, and both read `<dataset>-originals.npz` and `<dataset>-annotations.json` when they are
 there, else the release's files.
 
+### Benchmarking a branch without deploying
+
+`modal deploy` replaces the shared app that every remote run uses. To score a branch first, run its code in
+a temporary app with `modal run`, from that branch's checkout (it uploads the working tree):
+
+```
+modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --stages core --out bp.json
+modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this --out hjdb.json
+```
+
+`--kind bench` is `tastr bench`; any other kind is a `tastr spec-bench` bench (tempo, downbeats, meter).
+The app stops when the run ends.
+
 Upload only what the loaders read (audio and annotations), not result reports or feature caches. The
 bucket must stay private: Beatport EDM Key and GiantSteps are CC BY-SA and not ours to republish.
 

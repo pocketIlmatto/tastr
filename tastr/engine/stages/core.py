@@ -23,6 +23,10 @@ MIN_BEATS = 8
 # Picked on the 200 hjdb train tracks (0.75-0.85 score alike), checked on hjdb val, Beatport (774)
 # and GiantSteps (43); see docs/bench.md "Tempo notes".
 THREE_TWO_RATIO = 0.8
+# ...unless the faster beats group in 3s (meter score above this): then the tracked tempo was the beat of a
+# 4/4 track and 1.5x lands on dotted eighths. On GTZAN this blocks 89 of 101 wrong switches and 2 of 17
+# right ones; see docs/bench.md "Tempo notes".
+THREE_TWO_MAX_METER = 0.0
 
 
 class CoreStage:
@@ -48,7 +52,13 @@ class CoreStage:
 
         # --- Rhythm -----------------------------------------------------------
         low_flux = ctx.get("low_flux", signals.low_band_flux)
-        bpm, beat_frames, bpm_conf, stability, pulse_clarity = _tempo_and_beats(ctx, onset_env, low_flux, n_frames)
+        mel = ctx.get("log_mel", signals.log_mel)  # on core's frame grid
+
+        def meter_of(frames):
+            return _meter_score(np.clip(np.round(frames).astype(int), 0, n_frames - 1), *mel)
+
+        bpm, beat_frames, bpm_conf, stability, pulse_clarity = _tempo_and_beats(ctx, onset_env, low_flux, n_frames,
+                                                                                 meter_of)
         beat_times = beat_frames * ctx.hop / sr
         beat_idx = np.clip(np.round(beat_frames).astype(int), 0, max(n_frames - 1, 0))
         if bpm is not None:
@@ -56,7 +66,7 @@ class CoreStage:
             core.bpm_confidence = round(bpm_conf, 3)
             core.bpm_likely_correct = calibration.likely_correct("bpm", bpm_conf)
             core.beat_times = [round(float(t), 3) for t in beat_times if t <= duration]
-            log_mel, mel_f = ctx.get("log_mel", signals.log_mel)
+            log_mel, mel_f = mel
             cues = _beat_cues(beat_idx, log_mel, mel_f) if beat_idx.size >= MIN_BEATS and log_mel.shape[1] >= 2 else None
             phase = _downbeat_phase(beat_idx, log_mel, mel_f, cues=cues)
             # Meter is only a guess for now: bars stay 4 beats until the rest of the app handles 3/4.
@@ -139,8 +149,11 @@ def _amp_to_db(x: np.ndarray) -> np.ndarray:
     return 20 * np.log10(np.maximum(x, 1e-5))
 
 
-def _tempo_and_beats(ctx: AnalysisContext, onset_env: np.ndarray, low_flux: np.ndarray, n_frames: int):
+def _tempo_and_beats(ctx: AnalysisContext, onset_env: np.ndarray, low_flux: np.ndarray, n_frames: int,
+                     meter_of=None):
     """Beat frames, tempo refined from the beat spacing, folded into MIN_BPM..MAX_BPM.
+
+    `meter_of(beat_frames)` gives `_meter_score` for a beat grid; without it the 1.5x switch is ungated.
 
     Returns (bpm, beat_frames, confidence, stability, pulse_clarity); bpm is None
     when the audio has no usable onsets.
@@ -161,7 +174,7 @@ def _tempo_and_beats(ctx: AnalysisContext, onset_env: np.ndarray, low_flux: np.n
     bpm = 60.0 / spb
     if bpm * 1.5 < MAX_BPM and _periodicity(ctx, onset_env, bpm * 1.5) >= THREE_TWO_RATIO * _periodicity(ctx, onset_env, bpm):
         _, faster = librosa.beat.beat_track(onset_envelope=onset_env, sr=ctx.sr, hop_length=ctx.hop, bpm=bpm * 1.5)
-        if faster.size >= MIN_BEATS:
+        if faster.size >= MIN_BEATS and (meter_of is None or meter_of(np.asarray(faster, dtype=float)) <= THREE_TWO_MAX_METER):
             frames = np.asarray(faster, dtype=float)
             bpm = 60.0 / (np.median(np.diff(frames)) * ctx.hop / ctx.sr)
 

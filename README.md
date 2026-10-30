@@ -132,6 +132,13 @@ paste a track or playlist link from YouTube, SoundCloud, Bandcamp, Mixcloud
 and other sites that allow downloads. Spotify and Apple Music links don't
 work, because those services don't allow downloading audio.
 
+### Sharing with a few people (optional)
+
+Hosted mode (`TASTR_HOSTED=1`, the `hosted` extra) runs Tastr behind Cloudflare
+Access for a few invited people: every request needs their login, link analysis
+and the SQL box are off, and uploads and stem jobs have limits. See
+[docs/hosting.md](docs/hosting.md).
+
 ## Command line
 
 The `tastr` command does the same work from a terminal. Activate the virtualenv
@@ -282,7 +289,7 @@ tastr/resolvers/            link/playlist resolvers
 tastr/lookup/               opt-in catalog lookups (BPM/key by artist + title), one module per provider
 tastr/db.py                 SQLite schema and save/load/query
 tastr/service.py            inputs -> engine -> DB, used by the CLI and web app
-tastr/web/                  FastAPI app and UI
+tastr/web/                  FastAPI app and UI; hosted.py is the shared-server mode (docs/hosting.md)
 ```
 
 The engine is kept self-contained so it can be split into its own library

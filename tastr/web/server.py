@@ -8,21 +8,25 @@ import os
 import re
 import sqlite3
 import uuid
-from contextlib import closing
+from contextlib import closing, nullcontext
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import Body, FastAPI, File, Header, HTTPException, Response, UploadFile
+from fastapi import Body, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .. import db, lookup, service, stems
 from ..filemeta import describe, legacy_upload_prefix
-from ..ingest import IngestError
+from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url
+from .hosted import (HEALTH_PATH, TOKEN_HEADER, AccessVerifier, AnalysisSlots, Settings, inline_script_hashes,
+                     security_headers, stored_bytes, today)
 
 STATIC_DIR = Path(__file__).parent / "static"
+log = logging.getLogger(__name__)
 # Types the stdlib doesn't know everywhere; browsers need them to decode the stream.
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
                ".ogg": "audio/ogg", ".aif": "audio/aiff", ".aiff": "audio/aiff", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
@@ -57,9 +61,12 @@ class VersionBody(BaseModel):
     edits: dict[str, Any]
 
 
+def tastr_home() -> Path:
+    return Path(os.environ.get("TASTR_HOME", Path.home() / ".tastr"))
+
+
 def upload_dir() -> Path:
-    home = Path(os.environ.get("TASTR_HOME", Path.home() / ".tastr"))
-    d = home / "uploads"
+    d = tastr_home() / "uploads"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -89,8 +96,17 @@ def _cross_site(request) -> bool:
     return urlparse(origin).netloc != request.headers.get("host", "")
 
 
-def create_app(db_path: str | Path | None = None) -> FastAPI:
-    app = FastAPI(title="Tastr")
+def create_app(db_path: str | Path | None = None, settings: Settings | None = None, verifier=None) -> FastAPI:
+    """`settings` default to the environment (TASTR_HOSTED etc.); `verifier` maps an Access token to an email
+    (tests pass a stub; hosted mode otherwise checks tokens against the Access team's keys)."""
+    settings = settings or Settings.from_env()
+    hosted = settings.hosted
+    if hosted and verifier is None:
+        verifier = AccessVerifier(settings.access_team_domain, settings.access_aud)
+    slots = AnalysisSlots(settings.max_analyses) if hosted else None
+    extra_headers = security_headers(inline_script_hashes((STATIC_DIR / "index.html").read_text())) if hosted else {}
+    app = FastAPI(title="Tastr", docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
+                  openapi_url=None if hosted else "/openapi.json")
     jobs = stems.Jobs()
 
     @app.middleware("http")
@@ -101,8 +117,45 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
         return await call_next(request)
 
+    if hosted:
+        # Added last, so it runs first: nothing else sees a request without a valid Cloudflare Access login.
+        @app.middleware("http")
+        async def access_login(request, call_next):
+            if request.url.path != HEALTH_PATH:
+                token = request.headers.get(TOKEN_HEADER) or request.cookies.get("CF_Authorization")
+                user = None
+                if token:
+                    try:
+                        user = await run_in_threadpool(verifier, token)
+                    except Exception as e:  # expired, wrong audience, bad signature, keys unreachable
+                        log.info("rejected an Access token: %s", type(e).__name__)
+                if not user:
+                    return JSONResponse({"detail": "Sign in through the Tastr link you were invited to."},
+                                        status_code=401, headers=extra_headers)
+                request.state.user = user
+            response = await call_next(request)
+            response.headers.update(extra_headers)
+            return response
+
     def conn() -> sqlite3.Connection:
         return db.connect(db_path)
+
+    def results(rs) -> dict[str, Any]:
+        if hosted:  # error text can name server paths; keep it in the log
+            for r in rs:
+                if r.error:
+                    log.warning("analysis failed for %s: %s", r.source.uri, r.error)
+                    r.error = "Couldn't analyze this file."
+        return _results(rs)
+
+    def analysis_slot():
+        return slots or nullcontext()
+
+    @app.get("/api/config")
+    def config(request: Request):
+        """What this server allows, so the UI can hide what's turned off."""
+        return {"hosted": hosted, "links": not hosted, "query": not hosted,
+                "user": getattr(request.state, "user", None), "limits": settings.limits() if hosted else None}
 
     @app.get("/api/health")
     def health():
@@ -207,7 +260,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return _stems_status(_card_or_404(track_id), track_id)
 
     @app.post("/api/tracks/{track_id}/stems", status_code=202)
-    def separate_stems(track_id: int):
+    def separate_stems(track_id: int, request: Request):
         """Start separating one track into stems in the background (one track at a time; others queue)."""
         card = _card_or_404(track_id)
         path = _audio_path(card)
@@ -216,7 +269,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         if not stems.available():
             raise HTTPException(501, stems.INSTALL_HINT)
         folder = _stems_dir(card, track_id)
-        if not stems.is_ready(folder):
+        if not stems.is_ready(folder) and jobs.status(folder)["state"] not in ("queued", "running"):
+            if hosted:
+                user = request.state.user
+                with closing(conn()) as c:
+                    if db.usage_today(c, user, "stems", today()) >= settings.daily_stems:
+                        raise HTTPException(429, f"You've reached today's limit of {settings.daily_stems} stem separations.")
+                    db.add_usage(c, user, "stems", today())
             jobs.start(path, folder)
         return _stems_status(card, track_id)
 
@@ -268,12 +327,18 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         beats = service.KEEP if meter is None else None if meter == "auto" else int(meter[0])
         with closing(conn()) as c:
             try:
-                result = service.reanalyze_track(c, track_id, beats)
+                with analysis_slot():
+                    result = service.reanalyze_track(c, track_id, beats)
             except FileNotFoundError:
                 raise HTTPException(410, "The original audio file is no longer on disk.")
+            except TimeoutError:
+                raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.")
             if result is None:
                 raise HTTPException(404, "no such track")
             if result.error:
+                if hosted:
+                    log.warning("re-analysis of track %s failed: %s", track_id, result.error)
+                    raise HTTPException(422, "Couldn't analyze the file.")
                 raise HTTPException(422, f"Couldn't analyze the file: {result.error}")
             return {"card": card_body(c, track_id), "edits_dropped": result.edits_dropped}
 
@@ -359,22 +424,57 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     # Plain `def` endpoints below run in FastAPI's threadpool, so slow analysis
     # doesn't block the event loop.
     @app.post("/api/analyze")
-    def analyze(files: list[UploadFile] = File(...)):
+    def analyze(request: Request, files: list[UploadFile] = File(...)):
+        if hosted:
+            check_upload(request.state.user, files)
         paths: list[str] = []
         for f in files:
             name = re.sub(r"[^\w.\- ]", "_", Path(f.filename or "upload").name) or "upload"
             # The unique part is a folder, so the stored file keeps the name the user gave it (that is what the title falls back to).
             dest = upload_dir() / uuid.uuid4().hex[:8] / name
             dest.parent.mkdir()
+            size = 0
             with open(dest, "wb") as out:
                 while chunk := f.file.read(1 << 20):
+                    size += len(chunk)
+                    if hosted and size > settings.max_upload_bytes:
+                        break
                     out.write(chunk)
+            if hosted and size > settings.max_upload_bytes:
+                for p in [dest, *map(Path, paths)]:  # nothing from a refused request stays on disk
+                    p.unlink(missing_ok=True)
+                    p.parent.rmdir()
+                raise HTTPException(413, f"{name} is larger than {settings.max_upload_mb:g} MB.")
             paths.append(str(dest))
         with closing(conn()) as c:
-            return _results(service.analyze_inputs(c, paths))
+            if hosted:
+                db.add_usage(c, request.state.user, "tracks", today(), len(paths))
+            try:
+                with analysis_slot():
+                    return results(service.analyze_inputs(c, paths))
+            except TimeoutError:
+                raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.")
+
+    def check_upload(user: str, files: list[UploadFile]) -> None:
+        if len(files) > settings.max_files:
+            raise HTTPException(400, f"Upload at most {settings.max_files} files at a time.")
+        for f in files:
+            if Path(f.filename or "").suffix.lower() not in AUDIO_EXTENSIONS:
+                raise HTTPException(415, f"{Path(f.filename or 'upload').name} isn't an audio file Tastr can read.")
+        if stored_bytes(tastr_home()) >= settings.storage_gb * 1024 ** 3:
+            raise HTTPException(507, "This server is out of space for new uploads. Ask whoever invited you.")
+        with closing(conn()) as c:
+            used = db.usage_today(c, user, "tracks", today())
+        if used + len(files) > settings.daily_tracks:
+            left = max(0, settings.daily_tracks - used)
+            raise HTTPException(429, f"You can analyze {settings.daily_tracks} tracks a day; {left} left today.")
 
     @app.post("/api/analyze-url")
     def analyze_url(body: UrlBody):
+        if hosted:
+            raise HTTPException(403, "Link analysis is turned off on this server. Upload the audio file instead.")
+        if not is_url(body.url):  # never a path: anyone who can reach the server could read files off its disk
+            raise HTTPException(400, "Paste an http(s) link to a track or playlist.")
         with closing(conn()) as c:
             try:
                 results = service.analyze_inputs(c, [body.url])
@@ -384,6 +484,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
 
     @app.post("/api/query")
     def run_query(body: QueryBody):
+        if hosted:
+            raise HTTPException(403, "The SQL query box is turned off on this server.")
         path = db_path or db.default_db_path()
         try:
             with closing(db.connect(path, readonly=True)) as c:
@@ -429,7 +531,13 @@ def run(host: str = "127.0.0.1", port: int = 8000, db_path: str | None = None, l
 
     if filemeta.mutagen is None:
         print("Warning: mutagen is not installed, so file tags and audio info can't be read. Run: pip install -e .")
+    try:
+        settings = Settings.from_env()
+    except ValueError as e:
+        raise SystemExit(f"Error: {e}")
+    if settings.hosted:
+        print(f"Hosted mode: logins checked against {settings.access_team_domain}; link analysis and SQL are off.")
     n = db.refresh_file_meta(db.connect(db_path), only_if_stale=True)  # once per tag reader change
     if n:
         print(f"Refreshed file tags for {n} track(s)")
-    uvicorn.run(create_app(db_path), host=host, port=port, log_level=log_level)
+    uvicorn.run(create_app(db_path, settings), host=host, port=port, log_level=log_level)

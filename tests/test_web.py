@@ -447,3 +447,17 @@ def test_ui_has_the_glossary():
         assert f'data-bench="{key}"' in html
     for needle in ("openGlossary", "camelotWheel", "glPlay", "/api/bench", "/api/patterns", '"What the vibes mean"'):
         assert needle in js
+
+
+@pytest.mark.parametrize("headers,status", [
+    ({}, 404),  # curl / scripts: no browser headers
+    ({"Sec-Fetch-Site": "same-origin"}, 404),
+    ({"Sec-Fetch-Site": "cross-site"}, 403),
+    ({"Sec-Fetch-Site": "same-site"}, 403),
+    ({"Origin": "http://testserver"}, 404),
+    ({"Origin": "https://evil.example"}, 403),
+    ({"Origin": "null"}, 403),
+])
+def test_cross_site_writes_are_refused(client, headers, status):
+    assert client.delete("/api/tracks/999", headers=headers).status_code == status
+    assert client.get("/api/tracks", headers=headers).status_code == 200  # reads are unaffected

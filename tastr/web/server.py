@@ -11,9 +11,10 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, File, Header, HTTPException, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -76,9 +77,29 @@ def _unprefixed(title: str | None, uri: str | None) -> str | None:
     return title.removeprefix(legacy_upload_prefix(uri)) if title and uri else title
 
 
+def _cross_site(request) -> bool:
+    """A browser request sent by a page on another site (Sec-Fetch-Site, else an Origin for another host).
+    Requests without either header (curl, scripts, tests) aren't browser cross-site requests."""
+    site = request.headers.get("sec-fetch-site")
+    if site:
+        return site not in ("same-origin", "none")
+    origin = request.headers.get("origin")
+    if not origin or origin == "null":
+        return origin == "null"
+    return urlparse(origin).netloc != request.headers.get("host", "")
+
+
 def create_app(db_path: str | Path | None = None) -> FastAPI:
     app = FastAPI(title="Tastr")
     jobs = stems.Jobs()
+
+    @app.middleware("http")
+    async def same_origin_writes(request, call_next):
+        # Any page open in the browser could otherwise POST to the local server (analyze a path, delete a
+        # track, spend lookup quota). This is not authentication: scripts and curl still get through.
+        if request.method not in ("GET", "HEAD", "OPTIONS") and _cross_site(request):
+            return JSONResponse({"detail": "Cross-site requests are not allowed."}, status_code=403)
+        return await call_next(request)
 
     def conn() -> sqlite3.Connection:
         return db.connect(db_path)

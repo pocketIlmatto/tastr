@@ -57,7 +57,7 @@ not a hostile visitor once Tastr is shared. Every request a provider sends goes 
 | Guardrail | Default | Override |
 |---|---|---|
 | Spacing: one request at a time per provider, at least this far apart | 1 s | `TASTR_LOOKUP_<NAME>_INTERVAL` |
-| Requests per UTC day | FreqBlog 60, GetSongBPM 300 | `TASTR_LOOKUP_<NAME>_DAILY` |
+| Requests per UTC day | FreqBlog 60, GetSongBPM 1,000 (its own limit is 3,000 an hour) | `TASTR_LOOKUP_<NAME>_DAILY` |
 | Requests per calendar month | FreqBlog 900 (its free tier is 1,000), GetSongBPM none | `TASTR_LOOKUP_<NAME>_MONTHLY` |
 | The provider's own quota headers (`x-quota-used` / `x-quota-limit`, `x-ratelimit-remaining`) | pause 20 requests short of its limit until its reset time | |
 | HTTP 429 / 5xx | pause for Retry-After, else 1 min doubling to 1 h | |
@@ -69,6 +69,10 @@ Usage is counted per provider and day in the `lookup_usage` table, so restarting
 "limited" with the reason, and neither that nor an error replaces an answer already stored. Lookups only
 ever use a track's own tags, so a visitor can't make Tastr query arbitrary text, only re-ask about
 tracks in the library, which the limits above cap.
+
+The web server also refuses POST / PUT / DELETE requests that a browser sends from another site, so a
+page open in another tab can't trigger lookups (or analysis, deletes, stems). That is not a login:
+scripts and curl still get through, so a server other people can reach needs real authentication first.
 
 ## Providers
 

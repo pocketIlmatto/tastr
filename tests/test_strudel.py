@@ -94,6 +94,64 @@ def test_empty_part_is_silence_and_link_round_trips():
     assert decoded == out["code"]
 
 
+def per_section_card():
+    c = card(["Am", "F", "C", "G"])
+    meta = lambda i: {k: c["sections"][i][k] for k in ("label", "letter", "start_bar", "end_bar")}
+    c["suggestions"][1]["data"]["by_section"] = [
+        {"idx": 0, **meta(0), "progression": ["Am", None, "C", "C"], "roman": ["i", None, "III", "III"]},
+        {"idx": 1, **meta(1), "progression": ["F", "G", "Am", "Am"], "roman": ["VI", "VII", "i", "i"]},
+        {"idx": 2, **meta(2), "progression": ["Dm", "Dm", "Am", "Am"], "roman": ["iv", "iv", "i", "i"]},  # same part as idx 0
+    ]
+    c["suggestions"].append({"category": "bass", "title": "Bass loop", "body": "", "data": {
+        "loop": ["A", "F", "C", "G"], "rhythm": "x...x...x...x...", "by_section": [
+            {"idx": 0, **meta(0), "loop": [], "degrees": [], "rhythm": None},
+            {"idx": 1, **meta(1), "loop": ["F", None, "A", "Ab"], "degrees": ["6", None, "1", "(Ab)"], "rhythm": "..x...x...x...x."},
+        ]}})
+    return c
+
+
+def test_bass_and_chords_get_one_part_per_section_type():
+    code = run_js(per_section_card())["code"]
+    assert "drums, bass and chords for each section" in code
+    assert code.count("const introA_chords =") == 1 and code.count("const dropB_chords =") == 1
+    # null chords become rests; a section without bass is silence
+    assert 'const introA_chords = chord("<Am ~ C C>"), introA_bass = silence' in code
+    assert ('const dropB_chords = chord("<F G Am Am>"), dropB_bass = note("<f1 ~ a1 ab1>")'
+            '.struct("[~ ~ x ~] [~ ~ x ~] [~ ~ x ~] [~ ~ x ~]")') in code
+    chords = code[code.index("const chords = arrange("):code.index("const bass = arrange(")]
+    assert "  [16, introA_chords],\n  [32, dropB_chords],\n  [8, introA_chords]\n)" in chords
+    assert chords.rstrip().endswith('.voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)')
+    assert '  [8, introA_bass]\n).s("sawtooth").lpf(320).gain(.5)' in code
+    assert "the detected chord loop" not in code
+    assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)"
+
+
+def test_section_without_entries_falls_back_to_the_track_loop():
+    c = per_section_card()
+    c["suggestions"][1]["data"]["by_section"] = [x for x in c["suggestions"][1]["data"]["by_section"] if x["idx"] == 1]
+    c["suggestions"][2]["data"]["by_section"][1]["rhythm"] = None
+    code = run_js(c)["code"]
+    assert 'const introA_chords = chord("<Am F C G>")' in code
+    assert '.struct("[~ x]*4")' in code
+    c["suggestions"][1]["data"]["by_section"][0]["progression"] = []
+    assert "const dropB_chords = silence" in run_js(c)["code"]
+
+
+def test_old_cards_keep_the_single_loop():
+    code = run_js(card(["Am", "F", "C", "G"]))["code"]
+    assert "plus the chord loop" in code and "_chords" not in code and "_bass" not in code
+    assert 'const chords = chord("<Am F C G>")' in code
+
+
+def test_per_section_harmony_with_audio_and_stems():
+    c = with_grid(per_section_card(), first=0.5, bar=2.0)
+    code = run_js(c, AUDIO)["code"]
+    assert "with the detected drums, bass and chords for each section." in code
+    assert "stack(original, drums.gain(.5) /*, bass, chords */)" in code
+    stems = run_js_stems(c, AUDIO, ["vocals"])
+    assert "const dropB_chords" in stems and "  // bass, chords,\n)" in stems
+
+
 AUDIO = "http://127.0.0.1:8000/api/tracks/7/audio"
 
 

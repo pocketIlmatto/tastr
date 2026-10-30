@@ -34,12 +34,16 @@ def _hat(sr=SR, rng=np.random.default_rng(0)):
 
 
 def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per_section=(8, 16, 8), sr: int = SR,
-               progression: list[tuple[int, int]] | None = None):
+               progression: list[tuple[int, int]] | None = None,
+               section_progressions: list[list[tuple[int, int]]] | None = None,
+               bass_sections: tuple[bool, ...] | None = None):
     """Kick on every beat, off-beat hats, a triad progression in the key.
 
     Sections: an intro with no drums, a full section, and a quiet outro, each
     `bars_per_section[i]` bars long. `progression` overrides the chords: four
-    (root, third) pairs in semitones from the tonic, one per bar. Returns (audio, ground_truth).
+    (root, third) pairs in semitones from the tonic, one per bar. `section_progressions`
+    gives each section its own list of pairs, restarting at the section's first bar.
+    `bass_sections` turns the bass line off in sections marked False. Returns (audio, ground_truth).
     """
     beat = 60.0 / bpm
     bar = 4 * beat
@@ -58,13 +62,19 @@ def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per
     bar_idx = 0
     sections = []
     for s, n in enumerate(bars_per_section):
-        sections.append({"start": bar_idx * bar, "end": (bar_idx + n) * bar, "drums": s == 1})
+        has_bass = bass_sections is None or bass_sections[s]
+        sections.append({"start": bar_idx * bar, "end": (bar_idx + n) * bar, "drums": s == 1, "bass": has_bass})
         for b in range(n):
             t_bar = (bar_idx + b) * bar
-            root, q = prog[(bar_idx + b) % 4]
+            if section_progressions:
+                sp = section_progressions[s]
+                root, q = sp[b % len(sp)]
+            else:
+                root, q = prog[(bar_idx + b) % 4]
             for iv in (0, q, 7):
                 add(_tone(220 * 2 ** (((tonic + root + iv) % 12 - 9) / 12), bar), t_bar, 0.6)
-            add(_tone(55 * 2 ** (((tonic + root) % 12 - 9) / 12), bar, amp=0.35), t_bar)
+            if has_bass:
+                add(_tone(55 * 2 ** (((tonic + root) % 12 - 9) / 12), bar, amp=0.35), t_bar)
             if s == 1:
                 for k in range(4):
                     add(_kick(), t_bar + k * beat)

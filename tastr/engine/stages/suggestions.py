@@ -20,6 +20,15 @@ STEPS = 16
 # Default Drum Rack pad notes in Live.
 DRUM_RACK = {"kick": "C1", "snare": "D1", "clap": "D#1", "hat": "F#1", "open_hat": "A#1", "tom": "A1", "perc": "G#1"}
 
+# Bass: bins of the bass CQT (from C1, 12 per octave) that count toward a bar's bass level, and the level,
+# relative to the track's bassy bars (90th percentile), under which a bar or section counts as having no bass.
+# -6 dB, not lower: a kick with no bass under it still leaks about -8 dB into the harmonic part's low octaves.
+BASS_LOW_BINS = 24
+NO_BASS = 0.25
+
+# Chord matches under this score count as unconfident.
+CHORD_MIN_SCORE = 0.6
+
 # Lanes that are reported whenever they have a clear pattern; the rest also need to be loud enough.
 CORE_LANES = ("kick", "snare", "hat")
 
@@ -211,11 +220,18 @@ def _bass_summary(ctx: AnalysisContext, step_frames: np.ndarray, tonic: int | No
 
     cqt = ctx.get("bass_cqt", signals.bass_cqt)
     chroma = cqt.reshape(3, 12, -1).sum(axis=0)
-    pcs = []
+    # Bass level per bar: power in the two lowest octaves (C1-B2, about 32-123 Hz), where bass fundamentals sit.
+    low_power = (cqt[:BASS_LOW_BINS] ** 2).sum(axis=0)
+    all_pcs, low = [], []
     for a, b in _bar_slices(step_frames, cqt.shape[1]):
         vec = chroma[:, a:b].sum(axis=1)
-        pcs.append(int(np.argmax(vec)) if vec.sum() > 0 else None)
-    pcs = [p for p in pcs if p is not None]
+        all_pcs.append(int(np.argmax(vec)) if vec.sum() > 0 else None)
+        low.append(float(low_power[a:b].mean()))
+    low = np.asarray(low)
+    ref = float(np.percentile(low, 90)) if low.size else 0.0
+    # Aligned to bars: None where the bar has (next to) no bass compared with the track's bassy bars.
+    bar_pcs = [p if p is not None and ref > 0 and v >= NO_BASS * ref else None for p, v in zip(all_pcs, low)]
+    pcs = [p for p in all_pcs if p is not None]
     if not pcs:
         return {}
     notes = [music.note_name(p) for p in pcs]
@@ -232,25 +248,38 @@ def _bass_summary(ctx: AnalysisContext, step_frames: np.ndarray, tonic: int | No
         movement = "fourths/fifths"
     else:
         movement = "leaps"
-    degrees = []
-    if tonic is not None:
-        for n in loop:
-            d = music.degree_of(music.NOTE_NAMES.index(n), tonic, scale)
-            degrees.append(str(d + 1) if d is not None else f"({n})")
     log_s = librosa.power_to_db(cqt ** 2 + 1e-10)
     flux = np.maximum(0.0, np.diff(log_s, axis=1, prepend=log_s[:, :1])).mean(axis=0)
-    prof = _sample(flux, step_frames).mean(axis=0)
+    bar_flux = _sample(flux, step_frames)
+    prof = bar_flux.mean(axis=0)
     rhythm = _pattern(prof / prof.max()) if prof.max() > 0 else None
-    return {"notes": notes, "loop": list(loop), "degrees": degrees, "movement": movement, "rhythm": rhythm}
+    return {"notes": notes, "loop": list(loop), "degrees": _degrees(loop, tonic, scale), "movement": movement,
+            "rhythm": rhythm, "bar_notes": [music.note_name(p) if p is not None else None for p in bar_pcs],
+            "_low": low, "_ref": ref, "_flux": bar_flux}
+
+
+def _degrees(notes, tonic: int | None, scale: str) -> list[str | None]:
+    if tonic is None:
+        return []
+    out = []
+    for n in notes:
+        if n is None:
+            out.append(None)
+            continue
+        d = music.degree_of(music.NOTE_NAMES.index(n), tonic, scale)
+        out.append(str(d + 1) if d is not None else f"({n})")
+    return out
 
 
 def _harmony_summary(ctx: AnalysisContext, step_frames: np.ndarray, tonic: int, scale: str) -> dict:
     chroma = ctx.get("chroma", signals.chroma)
     bars = [music.match_chord(chroma[:, a:b].mean(axis=1)) for a, b in _bar_slices(step_frames, chroma.shape[1])]
-    confident = [b for b in bars if b["score"] >= 0.6 and b["root"] is not None]
+    confident = [b for b in bars if b["score"] >= CHORD_MIN_SCORE and b["root"] is not None]
     if not confident:
         return {}
     names = [b["name"] for b in bars]
+    # Aligned to bars: None where the chord match is unconfident.
+    bar_chords = [b["name"] if b["score"] >= CHORD_MIN_SCORE and b["root"] is not None else None for b in bars]
     loop = _common_loop(names, 4) or tuple(names[:4])
     lookup = {b["name"]: b for b in confident}
     chords = []
@@ -263,13 +292,68 @@ def _harmony_summary(ctx: AnalysisContext, step_frames: np.ndarray, tonic: int, 
             "scale": music.chord_scale(b["root"], b["quality"], tonic, scale),
         })
     roman = [music.roman_numeral(lookup[n]["root"], lookup[n]["quality"], tonic, scale) if n in lookup else "?" for n in loop]
-    return {"progression": list(loop), "roman": roman, "chords": chords}
+    return {"progression": list(loop), "roman": roman, "chords": chords, "bar_chords": bar_chords, "_lookup": lookup}
+
+
+def _section_loop(seq: list) -> list:
+    """Most common 4-bar window of a section's per-bar values (None = unknown), or its first bars if shorter.
+
+    Windows with nothing known are skipped; an empty list means nothing in the section is known.
+    """
+    if not any(v is not None for v in seq):
+        return []
+    windows = [tuple(seq[i:i + 4]) for i in range(0, len(seq) - 3, 4)]
+    windows = [w for w in windows if any(v is not None for v in w)]
+    return list(Counter(windows).most_common(1)[0][0]) if windows else list(seq[:4])
+
+
+def _section_span(sec, n_bars: int) -> tuple[int, int]:
+    a = max(0, sec.start_bar - 1)
+    return a, min(n_bars, sec.end_bar if sec.end_bar is not None else sec.start_bar)
+
+
+def _section_meta(idx: int, sec) -> dict:
+    return {"idx": idx, "label": sec.label, "letter": sec.letter, "start_bar": sec.start_bar, "end_bar": sec.end_bar}
+
+
+def _section_harmony(harm: dict, sections: list[tuple[int, object]], tonic: int, scale: str) -> list[dict]:
+    """Per-section chord loop: {idx, label, letter, start_bar, end_bar, progression, roman}; null = unconfident bar."""
+    bars, lookup, out = harm["bar_chords"], harm["_lookup"], []
+    for idx, sec in sections:
+        a, b = _section_span(sec, len(bars))
+        if b <= a:
+            continue
+        prog = _section_loop(bars[a:b])
+        roman = [music.roman_numeral(lookup[n]["root"], lookup[n]["quality"], tonic, scale) if n else None for n in prog]
+        out.append({**_section_meta(idx, sec), "progression": prog, "roman": roman})
+    return out
+
+
+def _section_bass(bass: dict, sections: list[tuple[int, object]], tonic: int | None, scale: str) -> list[dict]:
+    """Per-section bass: {idx, label, letter, start_bar, end_bar, loop, degrees, rhythm}.
+
+    `loop` is empty and `rhythm` None when the section has no bass (its bass level is well under the track's).
+    """
+    notes, low, flux, ref, out = bass["bar_notes"], bass["_low"], bass["_flux"], bass["_ref"], []
+    for idx, sec in sections:
+        a, b = _section_span(sec, len(notes))
+        if b <= a:
+            continue
+        loop, rhythm = [], None
+        has = [i for i in range(a, b) if notes[i] is not None]
+        if has and ref > 0 and float(low[a:b].mean()) >= NO_BASS * ref:
+            loop = _section_loop(notes[a:b])
+            prof = flux[has].mean(axis=0)
+            rhythm = _pattern(prof / prof.max()) if prof.max() > 0 else None
+        out.append({**_section_meta(idx, sec), "loop": loop, "degrees": _degrees(loop, tonic, scale), "rhythm": rhythm})
+    return out
 
 
 # --- Suggestion rules ------------------------------------------------------------
 
 
-def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_section: list[dict] | None = None) -> list[Suggestion]:
+def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_section: list[dict] | None = None,
+             bass_by_section: list[dict] | None = None, harm_by_section: list[dict] | None = None) -> list[Suggestion]:
     card = ctx.card
     core, f = card.core, card.features
     bpm, key = core.bpm, core.key
@@ -347,7 +431,8 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
         add("bass", f"Bass loop: {' - '.join(bass['loop'])} ({bass['movement']})",
             f"Per-bar bass notes loop as {' - '.join(bass['loop'])}{degrees}. {tips[bass['movement']]}"
             + (" The bass hits the off-beats (house-style), so leave the downbeats to the kick." if offbeat else ""),
-            {"loop": bass["loop"], "degrees": bass["degrees"], "rhythm": rhythm})
+            {"loop": bass["loop"], "degrees": bass["degrees"], "rhythm": rhythm,
+             **({"by_section": bass_by_section} if bass_by_section else {})})
     if bpm and ((f.get("low_end") or 0) > 0.2 or style in ("four_floor", "dnb", "halftime")):
         eighth = 60000 / bpm / 2
         add("bass", "Sidechain the bass to the kick",
@@ -362,7 +447,8 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
         add("harmony", f"Chord loop guess: {prog}",
             f"The most common 4-bar loop reads as {prog} ({roman} in {root} {scale}). Sketch it with the Chord "
             "MIDI effect or Live 12's chord generators, then thin the voicing so it doesn't fight the bass.",
-            {"progression": harm["progression"], "roman": harm["roman"]})
+            {"progression": harm["progression"], "roman": harm["roman"],
+             **({"by_section": harm_by_section} if harm_by_section else {})})
         for c in harm["chords"][:4]:
             add("harmony", f"Over {c['name']} ({c['roman']}): play {c['scale']}",
                 f"{c['name']} shows up in {c['bars']} bars. For leads or arps over it, {c['scale']} fits.", dict(c))
@@ -404,7 +490,7 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
 
 class SuggestionsStage:
     name = "suggestions"
-    version = "0.1.0"
+    version = "0.2.0"
     requires = ("core", "sections", "tags")
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -420,17 +506,23 @@ class SuggestionsStage:
             bass = _bass_summary(ctx, step_frames, tonic, scale)
             if tonic is not None:
                 harm = _harmony_summary(ctx, step_frames, tonic, scale)
-        by_section = []
-        if grid:
-            secs = [(i, x) for i, x in enumerate(card.sections) if x.start_bar is not None]
-            if len(secs) > 1:
+        by_section, sec_bass, sec_harm = [], [], []
+        secs = [(i, x) for i, x in enumerate(card.sections) if x.start_bar is not None]
+        if len(secs) > 1:
+            if grid:
                 by_section = _section_grooves(grid, _bar_energy(ctx, step_frames), secs)
-            card.extras["suggestions.drum_grid"] = {k: {f: v for f, v in g.items() if not f.startswith("_")} for k, g in grid.items()}
+            if bass:
+                sec_bass = _section_bass(bass, secs, tonic, scale)
+            if harm:
+                sec_harm = _section_harmony(harm, secs, tonic, scale)
+        public = lambda d: {k: v for k, v in d.items() if not k.startswith("_")}
+        if grid:
+            card.extras["suggestions.drum_grid"] = {k: public(g) for k, g in grid.items()}
         if bass:
-            card.extras["suggestions.bass"] = bass
+            card.extras["suggestions.bass"] = public(bass)
         if harm:
-            card.extras["suggestions.harmony"] = harm
-        card.suggestions = _suggest(ctx, grid, bass, harm, by_section)
+            card.extras["suggestions.harmony"] = public(harm)
+        card.suggestions = _suggest(ctx, grid, bass, harm, by_section, sec_bass, sec_harm)
 
 
 register_stage(SuggestionsStage())

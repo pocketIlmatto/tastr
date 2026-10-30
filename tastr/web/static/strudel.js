@@ -36,6 +36,12 @@ function strudelCode(c, audioUrl = null, stems = null) {
   if (det && det.data.by_section) det.data.by_section.forEach((x) => (pats[x.idx] = x.pattern));
   const harm = sugs.find((q) => q.data && Array.isArray(q.data.progression));
   const prog = harm ? harm.data.progression.filter((n) => n && n !== "N") : [];
+  // Per-section chord loops and bass lines (cards analyzed before they existed have only the single loop).
+  const bassSug = sugs.find((q) => q.category === "bass" && q.data && Array.isArray(q.data.loop));
+  const harmSecs = {}, bassSecs = {};
+  if (harm && Array.isArray(harm.data.by_section)) harm.data.by_section.forEach((x) => (harmSecs[x.idx] = x));
+  if (bassSug && Array.isArray(bassSug.data.by_section)) bassSug.data.by_section.forEach((x) => (bassSecs[x.idx] = x));
+  const perSection = secs.length > 0 && secs.some((s) => harmSecs[s.idx] || bassSecs[s.idx]);
   const hasBpm = typeof core.bpm === "number" && isFinite(core.bpm);
   const bpm = hasBpm ? Math.round(core.bpm * 10) / 10 : 120;
   // The tempo comes from the bar grid when there is one, so the sketch and the original audio don't drift apart.
@@ -48,13 +54,16 @@ function strudelCode(c, audioUrl = null, stems = null) {
   const out = [
     `// ${title}${artist ? " by " + artist : ""}`,
     `// Sketched by Tastr: ${hasBpm ? bpm + " BPM" : "tempo unknown, using 120 BPM"}, ${keyStr}. ${withAudio ? "The original audio cut into bars, layered" : "Not the original audio: the detected"}`,
-    withAudio ? "// with the detected drum pattern for each section and the chord loop." : "// drum pattern for each section, played for that section's length, plus the chord loop.",
+    withAudio ? `// with the detected ${perSection ? "drums, bass and chords for each section." : "drum pattern for each section and the chord loop."}`
+      : perSection ? "// drums, bass and chords for each section, played for that section's length."
+      : "// drum pattern for each section, played for that section's length, plus the chord loop.",
     `// Press Ctrl+Enter (Cmd+Enter on a Mac) to play, Ctrl+. to stop. Change anything and re-run.`,
     "",
     `setcpm(${cpmBpm}/4) // 1 cycle = 1 bar${cpmBpm !== bpm ? " (tempo from the detected bar grid)" : ""}`,
     "",
   ];
 
+  let sectionVar = null;
   const partOf = (pat) => {
     const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string").map(([lane, p]) => strudelLane(lane, p)).filter(Boolean);
     return lanes.length ? `stack(\n  ${lanes.join(",\n  ")}\n)` : "silence";
@@ -75,6 +84,7 @@ function strudelCode(c, audioUrl = null, stems = null) {
       out.push(`  [${end - sec.start_bar + 1}, ${varOf(sec)}]${i < secs.length - 1 ? "," : ""} // ${name}, bars ${sec.start_bar}-${end}`);
     });
     out.push(`).bank("RolandTR909")`, "");
+    sectionVar = varOf;
   } else {
     out.push("// --- Drums: the detected groove, looped (no sections with bar numbers) ---",
       `const drums = ${partOf(det && det.data.pattern)}.bank("RolandTR909")`, "");
@@ -84,13 +94,38 @@ function strudelCode(c, audioUrl = null, stems = null) {
   const chordsArr = prog.length ? prog : !hasKey ? []
     : (minor ? [0, 8, 3, 10] : [0, 7, 9, 5]).map((d, i) => STRUDEL_NOTES[(key.tonic + d) % 12] + ((minor ? [1, 0, 0, 0] : [0, 0, 1, 0])[i] ? "m" : ""));
   const parts = ["drums"];
-  if (chordsArr.length) {
-    // Bass octave: 2 for C-E, 1 for F-B, so the roots stay in one low register.
-    const rootNote = (name) => {
-      const m = /^([A-G][#b]?)/.exec(name), n = m ? m[1] : STRUDEL_NOTES[key.tonic % 12];
-      const i = STRUDEL_NOTES.indexOf(n.replace(/^([A-G])b$/, (_, l) => STRUDEL_NOTES[(STRUDEL_NOTES.indexOf(l) + 11) % 12]));
-      return `${n.toLowerCase()}${i >= 0 && i <= 4 ? 2 : 1}`;
-    };
+  // Bass octave: 2 for C-E, 1 for F-B, so the roots stay in one low register. Unknown notes are rests.
+  const rootNote = (name) => {
+    const m = /^([A-G][#b]?)/.exec(name || "");
+    if (!m) return "~";
+    const n = m[1], i = STRUDEL_NOTES.indexOf(n.replace(/^([A-G])b$/, (_, l) => STRUDEL_NOTES[(STRUDEL_NOTES.indexOf(l) + 11) % 12]));
+    return `${n.toLowerCase()}${i >= 0 && i <= 4 ? 2 : 1}`;
+  };
+  if (perSection) {
+    // One bass/chord part per section type, like the drums; a section with no chords or no bass is silence.
+    const okChord = (n) => (n && /^[A-G]/.test(n) ? n : "~");
+    const bassStruct = (r) => (r && /[xo]/.test(r) ? byBeat([...r.slice(0, 16).padEnd(16, ".")].map((ch) => (ch === "." ? "~" : "x"))) : "[~ x]*4");
+    out.push("// --- Bass and chords per section (one chord per bar, looping; same letter = same part) ---");
+    const done = new Set();
+    for (const sec of secs) {
+      const v = sectionVar(sec);
+      if (done.has(v)) continue;
+      done.add(v);
+      const hs = harmSecs[sec.idx], bs = bassSecs[sec.idx];
+      const cp = hs ? (hs.progression || []).map(okChord) : chordsArr;
+      const ch = cp.some((n) => n !== "~") ? `chord("<${cp.join(" ")}>")` : "silence";
+      const bl = bs ? (bs.loop || []).map(rootNote) : chordsArr.map(rootNote);
+      const bn = bl.some((n) => n !== "~") ? `note("<${bl.join(" ")}>").struct("${bassStruct(bs ? bs.rhythm : null)}")` : "silence";
+      out.push(`const ${v}_chords = ${ch}, ${v}_bass = ${bn}`);
+    }
+    const arr = (suffix) => secs.map((sec, i) => {
+      const end = sec.end_bar != null ? sec.end_bar : sec.start_bar;
+      return `  [${end - sec.start_bar + 1}, ${sectionVar(sec)}_${suffix}]${i < secs.length - 1 ? "," : ""}`;
+    });
+    out.push("const chords = arrange(", ...arr("chords"), `).voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)`);
+    out.push("const bass = arrange(", ...arr("bass"), `).s("sawtooth").lpf(320).gain(.5)`, "");
+    parts.push("bass", "chords");
+  } else if (chordsArr.length) {
     out.push(`// --- Harmony: ${prog.length ? "the detected chord loop" : `a common loop in ${keyStr} (no confident chord loop was detected)`}, one chord per bar ---`);
     out.push(`const chords = chord("<${chordsArr.join(" ")}>").voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)`);
     out.push(`const bass = note("<${chordsArr.map(rootNote).join(" ")}>").struct("[~ x]*4").s("sawtooth").lpf(320).gain(.5)`, "");

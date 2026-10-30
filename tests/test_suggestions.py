@@ -100,3 +100,64 @@ def test_template_suggestions_carry_bpm_and_style_key(card):
 def test_detected_groove_carries_bpm(card):
     groove = next(s for s in card.suggestions if s.data.get("origin") == "detected")
     assert groove.data["bpm"] == round(card.core.bpm)
+
+
+@pytest.fixture(scope="module")
+def sectioned_card():
+    """Three 8-bar sections with their own chord loops; the middle one (with drums) has no bass line."""
+    from synth import TruthCoreStage, make_track
+
+    from tastr.engine.card import Section
+    from tastr.engine.pipeline import register_stage, registered_stages
+
+    y, truth = make_track(bpm=124, tonic=9, mode="minor", bars_per_section=(8, 8, 8),
+                          section_progressions=[[(0, 3), (8, 4), (3, 4), (10, 4)],  # Am F C G
+                                                [(5, 3), (5, 3), (0, 3), (7, 4)],  # Dm Dm Am E
+                                                [(3, 4), (10, 4)]],  # C G
+                          bass_sections=(True, False, True))
+    original = registered_stages()["core"]
+    register_stage(TruthCoreStage(truth), replace=True)
+    try:
+        base = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x")), stages=["suggestions"])
+    finally:
+        register_stage(original, replace=True)
+    card = TrackCard(source=Source(kind="file", uri="x"), core=base.core)
+    card.sections = [Section(0.0, 1.0, "intro", "A", 1, 8, 0.3), Section(1.0, 2.0, "drop", "B", 9, 16, 0.9),
+                     Section(2.0, 3.0, "outro", "C", 17, 24, 0.3)]
+    SuggestionsStage().run(AnalysisContext(y=y, sr=SR, card=card))
+    return card
+
+
+def _by_section(card, category):
+    sug = next(s for s in card.suggestions if s.category == category and "by_section" in s.data)
+    json.dumps(sug.data)
+    return sug.data["by_section"]
+
+
+def test_chord_loop_by_section(sectioned_card):
+    by = _by_section(sectioned_card, "harmony")
+    assert [(s["idx"], s["label"], s["letter"], s["start_bar"], s["end_bar"]) for s in by] == [
+        (0, "intro", "A", 1, 8), (1, "drop", "B", 9, 16), (2, "outro", "C", 17, 24)]
+    assert [s["progression"] for s in by] == [["Am", "F", "C", "G"], ["Dm", "Dm", "Am", "E"], ["C", "G", "C", "G"]]
+    assert by[1]["roman"] == ["iv", "iv", "i", "V"]
+
+
+def test_bass_loop_by_section_with_a_bassless_section(sectioned_card):
+    by = _by_section(sectioned_card, "bass")
+    assert [s["loop"] for s in by] == [["A", "F", "C", "G"], [], ["C", "G", "C", "G"]]
+    assert by[1]["rhythm"] is None and by[1]["degrees"] == []
+    for s in (by[0], by[2]):
+        assert len(s["rhythm"]) == 16 and s["rhythm"][0] == "x"
+    # Per-bar reads stay aligned to bars: the bass-less bars are None, not dropped.
+    notes = sectioned_card.extras["suggestions.bass"]["bar_notes"]
+    assert notes[8:16] == [None] * 8 and notes[16:18] == ["C", "G"]
+    assert len(sectioned_card.extras["suggestions.harmony"]["bar_chords"]) == len(notes)
+    assert not any(k.startswith("_") for k in sectioned_card.extras["suggestions.bass"])
+
+
+def test_section_loop_skips_unknown_bars():
+    from tastr.engine.stages.suggestions import _section_loop
+
+    assert _section_loop([None] * 6) == []
+    assert _section_loop([None, None, None, None, "Am", None, "C", "G"]) == ["Am", None, "C", "G"]
+    assert _section_loop(["Am", "F"]) == ["Am", "F"]

@@ -316,12 +316,19 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         return {"changed": result == "changed", "tags_found": bool(body["source"].get("file_tags")), "card": body}
 
     @app.post("/api/tracks/{track_id}/reanalyze")
-    def reanalyze(track_id: int):
-        """Run the full engine again on the track's stored audio file (same id, fresh card)."""
+    def reanalyze(track_id: int, meter: str | None = None):
+        """Run the full engine again on the track's stored audio file (same id, fresh card).
+
+        `?meter=3/4` or `4/4` sets the time signature, `auto` goes back to detecting it; without it a meter
+        the user set before is kept.
+        """
+        if meter not in (None, "3/4", "4/4", "auto"):
+            raise HTTPException(400, "meter must be 3/4, 4/4 or auto")
+        beats = service.KEEP if meter is None else None if meter == "auto" else int(meter[0])
         with closing(conn()) as c:
             try:
                 with analysis_slot():
-                    result = service.reanalyze_track(c, track_id)
+                    result = service.reanalyze_track(c, track_id, beats)
             except FileNotFoundError:
                 raise HTTPException(410, "The original audio file is no longer on disk.")
             except TimeoutError:

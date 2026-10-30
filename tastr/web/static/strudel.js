@@ -9,14 +9,15 @@ const STRUDEL_SOUND = (lane) => {
   return l.includes("kick") ? "bd" : l.includes("snare") ? "sd" : l.includes("clap") ? "cp" : l.includes("open") ? "oh"
     : l.includes("hat") ? "hh" : l.includes("tom") ? "lt" : l.includes("cymbal") ? "cr" : "rim";
 };
-const byBeat = (cells) => [0, 1, 2, 3].map((b) => `[${cells.slice(b * 4, b * 4 + 4).join(" ")}]`).join(" ");
+// Four 16ths per beat, grouped by beat: 4 groups in 4/4, 3 in 3/4.
+const byBeat = (cells, beats = 4) => [...Array(beats).keys()].map((b) => `[${cells.slice(b * 4, b * 4 + 4).join(" ")}]`).join(" ");
 
-// One 16-step lane as s("…"), grouped by beat; softer ("o") steps add a .gain with .55. Empty lanes give null.
-function strudelLane(lane, p) {
-  const steps = [...p.slice(0, 16).padEnd(16, ".")], snd = STRUDEL_SOUND(lane);
+// One lane (16 steps in 4/4, 12 in 3/4) as s("…"), grouped by beat; softer ("o") steps add a .gain with .55. Empty lanes give null.
+function strudelLane(lane, p, beats = 4) {
+  const n = beats * 4, steps = [...p.slice(0, n).padEnd(n, ".")], snd = STRUDEL_SOUND(lane);
   if (steps.every((ch) => ch === ".")) return null;
-  let line = `s("${byBeat(steps.map((ch) => (ch === "." ? "~" : snd)))}")`;
-  if (steps.includes("o")) line += `.gain("${byBeat(steps.map((ch) => (ch === "o" ? ".55" : "1")))}")`;
+  let line = `s("${byBeat(steps.map((ch) => (ch === "." ? "~" : snd)), beats)}")`;
+  if (steps.includes("o")) line += `.gain("${byBeat(steps.map((ch) => (ch === "o" ? ".55" : "1")), beats)}")`;
   return line;
 }
 
@@ -47,12 +48,13 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
   if (harm && Array.isArray(harm.data.by_section)) harm.data.by_section.forEach((x) => (harmSecs[x.idx] = x));
   if (bassSug && Array.isArray(bassSug.data.by_section)) bassSug.data.by_section.forEach((x) => (bassSecs[x.idx] = x));
   const hasBpm = typeof core.bpm === "number" && isFinite(core.bpm);
+  const beats = core.beats_per_bar === 3 ? 3 : 4, nSteps = beats * 4; // 3/4 bars have 3 beats, 12 steps
   const bpm = hasBpm ? Math.round(core.bpm * 10) / 10 : 120;
   // The tempo comes from the bar grid when there is one, so the sketch and the original audio don't drift apart.
   const dbs = core.downbeat_times || [], gridBar = dbs.length > 1 ? (dbs[dbs.length - 1] - dbs[0]) / (dbs.length - 1) : null;
-  const cpmBpm = gridBar ? Math.round((240 / gridBar) * 1000) / 1000 : bpm;
+  const cpmBpm = gridBar ? Math.round((60 * beats / gridBar) * 1000) / 1000 : bpm;
   const withAudio = Boolean(audioUrl) && typeof c.duration === "number" && c.duration > 0;
-  const bar = gridBar || 240 / bpm, first = dbs.length ? dbs[0] : 0;
+  const bar = gridBar || 60 * beats / bpm, first = dbs.length ? dbs[0] : 0;
   // Without sections with bars, the whole track is one part.
   const song = secs.length ? secs : [{ idx: "all", label: "track", letter: "", start_bar: 1,
     end_bar: withAudio ? Math.max(1, Math.floor((c.duration - first) / bar)) : 1, whole: true }];
@@ -78,7 +80,7 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
     ...(editedSecs.length ? [`// With your edits in: ${[...new Set(editedSecs.map(secName))].join(", ")}.`] : []),
     `// Press Ctrl+Enter (Cmd+Enter on a Mac) to play, Ctrl+. to stop. Change anything and re-run.`,
     "",
-    `setcpm(${cpmBpm}/4) // 1 cycle = 1 bar${cpmBpm !== bpm ? " (tempo from the detected bar grid)" : ""}`,
+    `setcpm(${cpmBpm}/${beats}) // 1 cycle = 1 bar${beats === 3 ? " of 3/4" : ""}${cpmBpm !== bpm ? " (tempo from the detected bar grid)" : ""}`,
     "",
   ];
 
@@ -93,9 +95,9 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
     return `${n.toLowerCase()}${i >= 0 && i <= 4 ? 2 : 1}`;
   };
   const okChord = (n) => (n && /^[A-G]/.test(n) ? n : "~");
-  const bassStruct = (r) => (r && /[xo]/.test(r) ? byBeat([...r.slice(0, 16).padEnd(16, ".")].map((ch) => (ch === "." ? "~" : "x"))) : "[~ x]*4");
+  const bassStruct = (r) => (r && /[xo]/.test(r) ? byBeat([...r.slice(0, nSteps).padEnd(nSteps, ".")].map((ch) => (ch === "." ? "~" : "x")), beats) : `[~ x]*${beats}`);
   const drumsOf = (pat) => {
-    const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string").map(([lane, p]) => strudelLane(lane, p)).filter(Boolean);
+    const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string").map(([lane, p]) => strudelLane(lane, p, beats)).filter(Boolean);
     return lanes.length ? `stack(\n    ${lanes.join(",\n    ")}\n  )` : "silence";
   };
   // Same letter = same part, holding the first such section's drums (and chords and bass); a section with no chords or no bass is silence.
@@ -135,7 +137,7 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
   } else if (chordsArr.length) {
     out.push("", `// --- Harmony: ${prog.length ? "the detected chord loop" : `a common loop in ${keyStr} (no confident chord loop was detected)`}, one chord per bar ---`);
     out.push(`const chords = chord("<${chordsArr.join(" ")}>").voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)`);
-    out.push(`const bass = note("<${chordsArr.map(rootNote).join(" ")}>").struct("[~ x]*4").s("sawtooth").lpf(320).gain(.5)`);
+    out.push(`const bass = note("<${chordsArr.map(rootNote).join(" ")}>").struct("[~ x]*${beats}").s("sawtooth").lpf(320).gain(.5)`);
     parts.push("bass", "chords");
   }
   out.push("");

@@ -176,3 +176,24 @@ def test_a_few_bass_bars_at_a_section_edge_do_not_make_it_a_bass_section():
     drop, breakdown = _section_bass(bass, secs, 9, "Minor")
     assert drop["loop"] == ["A"] * 4
     assert breakdown["loop"] == [] and breakdown["rhythm"] is None
+
+
+def test_three_four_bars_have_12_steps_and_waltz_ideas(synth_wav, truth_core):
+    """With 3 beats per bar the grid, every pattern and the pattern ideas are 12 steps long."""
+    from dataclasses import replace
+
+    y = load_audio(str(synth_wav[0]), SR)
+    base = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x")), stages=["suggestions"])
+    core = replace(base.core, beats_per_bar=3, downbeat_times=base.core.beat_times[::3])
+    card = TrackCard(source=Source(kind="file", uri="x"), core=core)
+    SuggestionsStage().run(AnalysisContext(y=y, sr=SR, card=card))
+    grid = card.extras["suggestions.drum_grid"]
+    assert len(grid["kick"]["pattern"]) == 12 and len(grid["kick"]["velocity"]) == 12
+    assert all(grid["kick"]["pattern"][i] == "x" for i in (0, 4, 8))  # the synth's kick is on every beat
+    for s in card.suggestions:
+        for pat in (s.data.get("pattern") or {}).values():
+            assert len(pat) == 12, s.title
+        if s.data.get("rhythm"):
+            assert len(s.data["rhythm"]) == 12
+    ideas = [s for s in card.suggestions if s.data.get("origin") == "template"]
+    assert ideas and {s.data["style_key"] for s in ideas} == {"waltz"}

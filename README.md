@@ -18,6 +18,10 @@ optionally run on a cloud GPU.
   key from a small learned model trained on GiantSteps and Beatport (shown with
   its Camelot code for mixing). Drum & bass is read at its real tempo, not
   half or two thirds of it.
+- **Time signature.** Bars of 4 beats (4/4) or 3 (3/4, waltz time), detected
+  from how the beats group. Grids, MIDI and Strudel follow it. When it's wrong,
+  change it from the track's ⋯ menu; `TASTR_METER=4/4` turns 3/4 detection off.
+  6/8 and songs that change meter are read as 4/4 or 3/4.
 - **Energy and sections.** An energy curve with rough section boundaries
   (intro, build, drop, chorus, outro...). Sections that sound alike share a
   letter, so `Drop B` and `Outro B` are the same part.
@@ -34,8 +38,8 @@ optionally run on a cloud GPU.
 <img src="docs/images/drums-bass-chords.png" width="560" alt="Drum grid, bass piano roll and chord cards for one section">
 
 - **Drum lanes** for kick, snare, clap, hat, open hat, tom and perc, as a
-  16-step grid per section. Template patterns that fit the tempo are one click
-  away. With the optional drum model (below), kick, hat and tom come from
+  16-step grid per section (12 steps in 3/4). Template patterns that fit the
+  tempo (waltz patterns in 3/4) are one click away. With the optional drum model (below), kick, hat and tom come from
   [ADTOF](https://github.com/MZehren/ADTOF), a network trained on annotated
   real music that finds toms the built-in detector misses, and a cymbal lane
   (crash and ride) is added.

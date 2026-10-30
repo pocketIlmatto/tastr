@@ -58,9 +58,9 @@ def test_sections_become_parts_arranged_by_bar_count():
     # every layer is built from the song, using property access (double-quoted strings are patterns in Strudel)
     assert 'const drums = arrange(...song.map(([bars, p]) => [bars, p.drums])).bank("RolandTR909")' in code
     assert "p[" not in code
-    assert 's("[bd ~ ~ ~] [bd ~ ~ ~] [bd ~ ~ ~] [bd ~ ~ ~]")' in code
-    assert 's("[~ ~ ~ ~] [~ ~ oh ~] [~ ~ ~ ~] [~ ~ oh ~]")' in code
-    assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)"
+    assert 's("bd*4")' in code
+    assert 's("[~ ~ ~ oh]*2")' in code
+    assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)._punchcard()"
 
 
 def test_gain_only_for_lanes_with_softer_steps():
@@ -69,7 +69,7 @@ def test_gain_only_for_lanes_with_softer_steps():
     drop = code[code.index("const dropB"):code.index("const song")]
     assert ".gain(" not in intro
     assert drop.count(".gain(") == 1
-    assert 's("[hh hh hh hh] [hh hh hh hh] [hh hh hh hh] [hh hh hh hh]").gain("[1 .55 1 .55] [1 .55 1 .55] [1 .55 1 .55] [1 .55 1 .55]")' in drop
+    assert 's("hh*16").gain("[1 .55]*8")' in drop
 
 
 def test_detected_chord_loop_drops_no_chord():
@@ -118,14 +118,14 @@ def test_bass_and_chords_get_one_part_per_section_type():
     assert "drums, bass and chords for each section" in code
     assert code.count("const introA = {") == 1 and code.count("const dropB = {") == 1
     # null chords become rests; a section without bass is silence
-    assert '  chords: chord("<Am ~ C C>"),\n  bass: silence,\n}' in code
-    assert ('  chords: chord("<F G Am Am>"),\n  bass: note("<f1 ~ a1 ab1>")'
-            '.struct("[~ ~ x ~] [~ ~ x ~] [~ ~ x ~] [~ ~ x ~]"),\n}') in code
+    assert '  chords: chord("<Am ~ C!2>"),\n  bass: silence,\n}' in code
+    assert ('  chords: chord("<F G Am!2>"),\n  bass: note("<f1 ~ a1 ab1>")'
+            '.struct("[~ x]*4"),\n}') in code
     assert ('const chords = arrange(...song.map(([bars, p]) => [bars, p.chords]))'
-            '.voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)') in code
-    assert 'const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(320).gain(.5)' in code
+            '.voicing().s("sawtooth").lpf(slider(1400, 200, 6000)).gain(.22).room(.3)') in code
+    assert 'const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(slider(320, 60, 2000)).gain(.5)' in code
     assert "the detected chord loop" not in code
-    assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)"
+    assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)._punchcard()"
 
 
 def test_section_without_entries_falls_back_to_the_track_loop():
@@ -150,7 +150,7 @@ def test_per_section_harmony_with_audio_and_stems():
     c = with_grid(per_section_card(), first=0.5, bar=2.0)
     code = run_js(c, AUDIO)["code"]
     assert "with the detected drums, bass and chords for each section." in code
-    assert '  part("orig"),\n  drums.gain(.5),\n  // bass, chords,\n)' in code
+    assert '  part("orig"),\n  drums.gain(slider(.5, 0, 1)),\n  // bass, chords,\n)._punchcard()' in code
     stems = run_js_stems(c, AUDIO, ["vocals"])
     assert "  chords: chord(" in stems and "  // bass, chords,\n)" in stems
 
@@ -178,9 +178,9 @@ def test_original_audio_is_cut_into_bars_per_section():
     assert "const len = 114.500, bar = 2.0000, first = 0.500" in code
     # the original follows the song too, from each section's first bar
     assert "const part = (name) => arrange(...song.map(([bars, p, from]) => [bars, orig(name, from, from + bars - 1)]))" in code
-    assert '  part("orig"),\n  drums.gain(.5),\n  // bass, chords,\n)' in code
+    assert '  part("orig"),\n  drums.gain(slider(.5, 0, 1)),\n  // bass, chords,\n)._punchcard()' in code
     assert 'loop the first drop with orig("orig", 17, 20)' in code
-    assert "stack(drums, bass, chords)" not in code
+    assert "stack(drums, bass, chords)._punchcard()" not in code
 
 
 def test_audio_is_left_out_without_a_url_or_duration():
@@ -218,14 +218,14 @@ def test_stems_replace_the_full_mix_and_unticked_stems_are_commented_out():
     assert "orig(name, from, from + bars - 1)" in code[start:]
     tail = code[code.index("stack(\n", start):]
     assert '  part("vocals"),\n  part("bass"),\n  part("other"),\n  // part("drums"), // the sketch drums below play instead\n' in tail
-    assert "  drums.gain(.8),\n  // bass, chords,\n)" in tail
+    assert "  drums.gain(slider(.8, 0, 1)),\n  // bass, chords,\n)" in tail
     assert 'orig("vocals", 17, 20)' in code
 
 
 def test_original_drums_stem_turns_the_sketch_drums_down():
     code = run_js_stems(with_grid(card()), AUDIO, ["drums"])
     assert '  // part("vocals"),\n' in code and '  part("drums"),\n' in code
-    assert "drums.gain(.5)" in code and "the sketch drums below play instead" not in code
+    assert "drums.gain(slider(.5, 0, 1))" in code and "the sketch drums below play instead" not in code
 
 
 EDITS = {
@@ -238,11 +238,11 @@ EDITS = {
 def test_edited_section_uses_the_edits_and_the_rest_stay_detected():
     code = run_js(per_section_card(), edits=EDITS)["code"]
     drop = code.split("const dropB = {")[1].split("\n}")[0]
-    assert 's("[bd ~ bd ~] [bd ~ bd ~] [bd ~ bd ~] [bd ~ bd ~]")' in drop
+    assert 's("bd*8")' in drop
     assert 'chords: chord("<Dm F C ~>")' in drop
-    assert 'bass: note("<d2 d2 f1 ~>").struct("[x ~ ~ ~] [x ~ ~ ~] [x ~ ~ ~] [x ~ ~ ~]")' in drop
+    assert 'bass: note("<d2!2 f1 ~>").struct("x*4")' in drop
     intro = code.split("const introA = {")[1].split("\n}")[0]
-    assert 'chords: chord("<Am ~ C C>")' in intro and "bass: silence" in intro
+    assert 'chords: chord("<Am ~ C!2>")' in intro and "bass: silence" in intro
 
 
 def test_edits_header_only_with_edits():
@@ -280,9 +280,9 @@ def test_three_four_bars_play_in_three():
                                                                      "by_section": [{"idx": 0, "loop": ["C"], "rhythm": "x...x......."}]}}]}
     code = run_js(c)["code"]
     assert "setcpm(90/3) // 1 cycle = 1 bar of 3/4" in code
-    assert 's("[bd ~ ~ ~] [~ ~ ~ ~] [~ ~ ~ ~]")' in code
-    assert 's("[~ ~ ~ ~] [sd ~ ~ ~] [sd ~ ~ ~]")' in code
-    assert '.struct("[x ~ ~ ~] [x ~ ~ ~] [~ ~ ~ ~]")' in code
+    assert 's("bd ~ ~")' in code
+    assert 's("~ sd sd")' in code
+    assert '.struct("x x ~")' in code
     with_audio = run_js(c, "http://localhost:8000/api/tracks/1/audio")["code"]
     assert "bar = 2.0000" in with_audio
 
@@ -294,3 +294,48 @@ def test_shared_server_links_carry_their_token_to_the_stems():
     assert "private link that works for a week" in code and "tastr serve" not in code
     local = run_js(with_grid(card(["Am", "F", "C", "G"]), first=0.5, bar=2.0), AUDIO)["code"]
     assert "keep `tastr serve` running" in local and "private link" not in local
+
+
+def compact(fn: str, cases: list) -> list:
+    script = f"""
+const m = require({json.dumps(str(STRUDEL_JS))});
+console.log(JSON.stringify({json.dumps(cases)}.map((a) => m.{fn}(...a))));
+"""
+    return json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+
+
+def test_steps_are_written_the_short_way_a_live_coder_would():
+    def cells(p, tok="x"):
+        return [tok if ch != "." else "~" for ch in p]
+
+    cases = {
+        "x...x...x...x...": "x*4",
+        "x.x.x.x.x.x.x.x.": "x*8",
+        "xxxxxxxxxxxxxxxx": "x*16",
+        "....x.......x...": "[~ x]*2",
+        "..x...x...x...x.": "[~ x]*4",
+        "......x.......x.": "[~ ~ ~ x]*2",
+        "x..x..x.x..x..x.": "[x ~ ~ x ~ ~ x ~]*2",
+        "x...........x...": "x ~ ~ x",
+        "x.....x...x.....": "[x ~] [~ x] [~ x] [~ ~]",
+        "x..x....x.x....x": "[x ~ ~ x] [~ ~ ~ ~] [x ~ x ~] [~ ~ ~ x]",
+    }
+    got = compact("compactSteps", [[cells(p), 4] for p in cases])
+    assert dict(zip(cases, got)) == cases
+    # 3/4: 12 steps, three beats
+    three = {"x...........": "x ~ ~", "x...x...x...": "x*3", "x.x.x.x.x.x.": "x*6", "x.....x.....": "[x ~] [~ x] [~ ~]"}
+    assert compact("compactSteps", [[cells(p), 3] for p in three]) == list(three.values())
+
+
+def test_bar_lists_use_repeats_and_halves():
+    cases = [[["Am", "F", "C", "G"]], [["Am", "~", "C", "C"]], [["Am", "F", "Am", "F"]], [["Am", "Am", "Am", "Am"]],
+             [["d2", "d2", "f1", "~"]], [["C", "G", "Am"]]]
+    assert compact("compactBars", cases) == ["<Am F C G>", "<Am ~ C!2>", "<Am F>", "Am", "<d2!2 f1 ~>", "<C G Am>"]
+
+
+def test_knobs_are_sliders_and_a_punchcard_draws_under_the_code():
+    plain = run_js(card(["Am", "F", "C", "G"]))["code"]
+    assert ".lpf(slider(1400, 200, 6000))" in plain and ".lpf(slider(320, 60, 2000))" in plain
+    assert "stack(drums, bass, chords)._punchcard()" in plain
+    audio = run_js(with_grid(card(["Am", "F", "C", "G"]), first=0.5, bar=2.0), AUDIO)["code"]
+    assert "drums.gain(slider(.5, 0, 1))," in audio and ")._punchcard()" in audio

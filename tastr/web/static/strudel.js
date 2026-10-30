@@ -9,15 +9,48 @@ const STRUDEL_SOUND = (lane) => {
   return l.includes("kick") ? "bd" : l.includes("snare") ? "sd" : l.includes("clap") ? "cp" : l.includes("open") ? "oh"
     : l.includes("hat") ? "hh" : l.includes("tom") ? "lt" : l.includes("cymbal") ? "cr" : "rim";
 };
-// Four 16ths per beat, grouped by beat: 4 groups in 4/4, 3 in 3/4.
-const byBeat = (cells, beats = 4) => [...Array(beats).keys()].map((b) => `[${cells.slice(b * 4, b * 4 + 4).join(" ")}]`).join(" ");
+// A bar of 16ths (16 in 4/4, 12 in 3/4; "~" = rest) as short mini-notation, the way it's typed live:
+// the shortest repeating unit (1, 2, 4 or 8 steps) times its repeats, at the coarsest step its hits sit on.
+// x...x...x...x... -> bd*4, ....x.......x... -> [~ sd]*2, ..x...x...x...x. -> [~ hh]*4. With no repeat
+// the bar is grouped by beat, at that step: [bd ~] [~ bd] [~ bd] [~ ~].
+function compactSteps(cells, beats = 4) {
+  const n = beats * 4;
+  const p = [1, 2, 4, 8].find((q) => q < n && n % q === 0 && cells.every((x, i) => x === cells[i % q])) || n;
+  const r = [8, 4, 2, 1].find((q) => q <= p && p % q === 0 && cells.every((x, i) => x === "~" || i % q === 0));
+  const unit = cells.slice(0, p).filter((_, i) => i % r === 0);
+  if (unit.every((x) => x === unit[0] && x !== "~")) return `${unit[0]}*${n / r}`;
+  if (p < n) return `[${unit.join(" ")}]*${n / p}`;
+  if (r >= 4) return unit.join(" ");
+  const per = 4 / r;
+  return [...Array(beats).keys()].map((b) => `[${unit.slice(b * per, b * per + per).join(" ")}]`).join(" ");
+}
 
-// One lane (16 steps in 4/4, 12 in 3/4) as s("…"), grouped by beat; softer ("o") steps add a .gain with .55. Empty lanes give null.
+// A list of per-bar values for <…>, with runs written as x!n and a list that repeats its first half
+// shortened to that half: [Am, ~, C, C] -> <Am ~ C!2>, [Am, F, Am, F] -> <Am F>, [Am, Am] -> Am.
+function compactBars(values) {
+  let v = values.slice();
+  while (v.length % 2 === 0 && v.length > 1 && v.every((x, i) => x === v[i % (v.length / 2)])) v = v.slice(0, v.length / 2);
+  if (v.length === 1) return v[0];
+  const out = [];
+  for (let i = 0; i < v.length;) {
+    let j = i + 1;
+    while (j < v.length && v[j] === v[i]) j++;
+    out.push(j - i > 1 ? `${v[i]}!${j - i}` : v[i]);
+    i = j;
+  }
+  return `<${out.join(" ")}>`;
+}
+
+// A knob strudel.cc draws as a slider in the code, to sweep while it plays.
+const slider = (v, lo, hi) => `slider(${v}, ${lo}, ${hi})`;
+
+// One lane (16 steps in 4/4, 12 in 3/4) as s("…") in short mini-notation; softer ("o") steps add a .gain with .55. Empty lanes give null.
 function strudelLane(lane, p, beats = 4) {
   const n = beats * 4, steps = [...p.slice(0, n).padEnd(n, ".")], snd = STRUDEL_SOUND(lane);
   if (steps.every((ch) => ch === ".")) return null;
-  let line = `s("${byBeat(steps.map((ch) => (ch === "." ? "~" : snd)), beats)}")`;
-  if (steps.includes("o")) line += `.gain("${byBeat(steps.map((ch) => (ch === "o" ? ".55" : "1")), beats)}")`;
+  let line = `s("${compactSteps(steps.map((ch) => (ch === "." ? "~" : snd)), beats)}")`;
+  // Rests read as "~" here too: a gain pattern only matters where the lane has a hit.
+  if (steps.includes("o")) line += `.gain("${compactSteps(steps.map((ch) => (ch === "o" ? ".55" : ch === "." ? "~" : "1")), beats)}")`;
   return line;
 }
 
@@ -84,6 +117,8 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
     "",
   ];
 
+  // Filter knobs as sliders: drag them in strudel.cc to open up or darken the chords and bass.
+  const CHORD_LPF = slider(1400, 200, 6000), BASS_LPF = slider(320, 60, 2000);
   const minor = key.mode === "minor";
   const chordsArr = prog.length ? prog : !hasKey ? []
     : (minor ? [0, 8, 3, 10] : [0, 7, 9, 5]).map((d, i) => STRUDEL_NOTES[(key.tonic + d) % 12] + ((minor ? [1, 0, 0, 0] : [0, 0, 1, 0])[i] ? "m" : ""));
@@ -95,7 +130,7 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
     return `${n.toLowerCase()}${i >= 0 && i <= 4 ? 2 : 1}`;
   };
   const okChord = (n) => (n && /^[A-G]/.test(n) ? n : "~");
-  const bassStruct = (r) => (r && /[xo]/.test(r) ? byBeat([...r.slice(0, nSteps).padEnd(nSteps, ".")].map((ch) => (ch === "." ? "~" : "x")), beats) : `[~ x]*${beats}`);
+  const bassStruct = (r) => (r && /[xo]/.test(r) ? compactSteps([...r.slice(0, nSteps).padEnd(nSteps, ".")].map((ch) => (ch === "." ? "~" : "x")), beats) : `[~ x]*${beats}`);
   const drumsOf = (pat) => {
     const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string").map(([lane, p]) => strudelLane(lane, p, beats)).filter(Boolean);
     return lanes.length ? `stack(\n    ${lanes.join(",\n    ")}\n  )` : "silence";
@@ -111,8 +146,8 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
       const hs = harmSecs[sec.idx], bs = bassSecs[sec.idx];
       const cp = hs ? (hs.progression || []).map(okChord) : chordsArr;
       const bl = bs ? (bs.loop || []).map(rootNote) : chordsArr.map(rootNote);
-      lines.push(`  chords: ${cp.some((n) => n !== "~") ? `chord("<${cp.join(" ")}>")` : "silence"},`,
-        `  bass: ${bl.some((n) => n !== "~") ? `note("<${bl.join(" ")}>").struct("${bassStruct(bs ? bs.rhythm : null)}")` : "silence"},`);
+      lines.push(`  chords: ${cp.some((n) => n !== "~") ? `chord("${compactBars(cp)}")` : "silence"},`,
+        `  bass: ${bl.some((n) => n !== "~") ? `note("${compactBars(bl)}").struct("${bassStruct(bs ? bs.rhythm : null)}")` : "silence"},`);
     }
     const body = lines.join("\n");
     let v = varOf(sec);
@@ -131,21 +166,21 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
   out.push("]", "", `const drums = arrange(...song.map(([bars, p]) => [bars, p.drums])).bank("RolandTR909")`);
   const parts = ["drums"];
   if (perSection) {
-    out.push(`const chords = arrange(...song.map(([bars, p]) => [bars, p.chords])).voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)`,
-      `const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(320).gain(.5)`);
+    out.push(`const chords = arrange(...song.map(([bars, p]) => [bars, p.chords])).voicing().s("sawtooth").lpf(${CHORD_LPF}).gain(.22).room(.3)`,
+      `const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(${BASS_LPF}).gain(.5)`);
     parts.push("bass", "chords");
   } else if (chordsArr.length) {
     out.push("", `// --- Harmony: ${prog.length ? "the detected chord loop" : `a common loop in ${keyStr} (no confident chord loop was detected)`}, one chord per bar ---`);
-    out.push(`const chords = chord("<${chordsArr.join(" ")}>").voicing().s("sawtooth").lpf(1400).gain(.22).room(.3)`);
-    out.push(`const bass = note("<${chordsArr.map(rootNote).join(" ")}>").struct("[~ x]*${beats}").s("sawtooth").lpf(320).gain(.5)`);
+    out.push(`const chords = chord("${compactBars(chordsArr)}").voicing().s("sawtooth").lpf(${CHORD_LPF}).gain(.22).room(.3)`);
+    out.push(`const bass = note("${compactBars(chordsArr.map(rootNote))}").struct("[~ x]*${beats}").s("sawtooth").lpf(${BASS_LPF}).gain(.5)`);
     parts.push("bass", "chords");
   }
   out.push("");
   const drop = secs.find((x) => x.label === "drop") || song[0], at = drop.start_bar;
   const where = drop.label === "drop" ? "first drop" : "opening bars";
   if (!withAudio) {
-    out.push(`stack(${parts.join(", ")})`, "",
-      "// Ideas: mute a layer by deleting it from stack(), skip or reorder lines in song,",
+    out.push("// ._punchcard() draws what's playing under the code.", `stack(${parts.join(", ")})._punchcard()`, "",
+      "// Ideas: mute a layer by deleting it from stack(), drag the sliders, skip or reorder lines in song,",
       "// try .bank(\"RolandTR808\"), or add .fast(2) to the hats for double time.");
     return out.join("\n");
   }
@@ -167,10 +202,11 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
     "const part = (name) => arrange(...song.map(([bars, p, from]) => [bars, orig(name, from, from + bars - 1)]))", "");
   const origDrums = !stems || stems.includes("drums");
   if (stems) out.push("// Comment a line out (//) to mute it, or remove the // to bring it in.");
+  out.push("// ._punchcard() draws what's playing under the code.");
   out.push("stack(");
   if (stems) STRUDEL_STEMS.forEach((n) => out.push(`  ${stems.includes(n) ? "" : "// "}part("${n}"),${n === "drums" && !origDrums ? " // the sketch drums below play instead" : ""}`));
   else out.push(`  part("orig"),`);
-  out.push(`  drums.gain(${origDrums ? ".5" : ".8"}),`, ...(parts.length > 1 ? ["  // bass, chords,"] : []), ")", "",
+  out.push(`  drums.gain(${slider(origDrums ? ".5" : ".8", 0, 1)}),`, ...(parts.length > 1 ? ["  // bass, chords,"] : []), ")._punchcard()", "",
     `// Ideas: loop the ${where}${stems ? " of the vocals" : ""} with orig("${stems ? "vocals" : "orig"}", ${at}, ${at + 3}), skip or reorder lines in song,`,
     "// bring in bass and chords, or load a second track as another sample for a mash-up.");
   return out.join("\n");
@@ -184,4 +220,4 @@ function strudelLink(code) {
   return `https://strudel.cc/#${encodeURIComponent(btoa(bin))}`;
 }
 
-if (typeof module !== "undefined") module.exports = { strudelCode, strudelLink, strudelLane, STRUDEL_STEMS };
+if (typeof module !== "undefined") module.exports = { strudelCode, strudelLink, strudelLane, compactSteps, compactBars, STRUDEL_STEMS };

@@ -1,4 +1,5 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`."""
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
+`tastr vibe-bench`, `tastr vibe-fit`, `tastr fetch`."""
 
 from __future__ import annotations
 
@@ -75,6 +76,25 @@ def main(argv: list[str] | None = None) -> int:
     db_.add_argument("--write-bundle", action="store_true",
                      help="save the annotations (idmt, mdb) or trimmed hits (stemgmd-mix) as the one file a remote run reads")
 
+    vb = sub.add_parser("vibe-bench", help="danceability, energy and vibe tags vs. listener labels, locally or on Modal")
+    vb.add_argument("dataset", choices=["mtg-moods", "deam"])
+    vb.add_argument("path", help="dataset folder from `tastr fetch` (a bucket folder with --remote)")
+    vb.add_argument("--limit", type=int, help="first N tracks")
+    vb.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel (locally)")
+    vb.add_argument("--out", help="write the per-track rows and report here (the input of vibe-fit)")
+    vb.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
+
+    vf = sub.add_parser("vibe-fit", help="refit the danceability and energy weights from vibe-bench outputs")
+    vf.add_argument("results", nargs="+", help="JSON files written by vibe-bench --out")
+    vf.add_argument("--out", help="write the fit results as JSON here")
+
+    fe = sub.add_parser("fetch", help="download a vibe dataset (mtg-moods, deam), locally or on Modal into the bucket")
+    fe.add_argument("dataset", choices=["mtg-moods", "deam"])
+    fe.add_argument("path", help="destination folder (a bucket folder with --remote)")
+    fe.add_argument("--archives", default="0-5",
+                    help="mtg-moods: which of the 100 audio archives, about 1.6 GB each, e.g. 0-5 or 0,7,9 (default 0-5)")
+    fe.add_argument("--remote", action="store_true", help="run on Modal, writing into the R2 bucket (docs/cloud.md)")
+
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
     b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, harmonix or manifest")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
@@ -98,6 +118,12 @@ def main(argv: list[str] | None = None) -> int:
         return _key_profiles(args)
     if args.cmd == "drum-bench":
         return _drum_bench(args)
+    if args.cmd == "vibe-bench":
+        return _vibe_bench(args)
+    if args.cmd == "vibe-fit":
+        return _vibe_fit(args)
+    if args.cmd == "fetch":
+        return _fetch(args)
 
     if args.cmd in ("bench", "spec-bench") and args.record:
         err = _record_error(args)
@@ -379,6 +405,61 @@ def _drum_bench(args) -> int:
     if args.out:
         Path(args.out).write_text(json.dumps(report, indent=1))
     return 0
+
+
+def _vibe_bench(args) -> int:
+    from pathlib import Path
+
+    from .cloud import jobs, remote
+    from .engine.bench import vibes
+
+    try:
+        if args.remote:
+            print(f"running {args.dataset} on Modal...", file=sys.stderr)
+            t0 = time.time()
+            result = remote.vibe_bench(args.dataset, args.path, args.limit)
+            print(f"wall {time.time() - t0:.0f} s, of which the analysis {result.get('timing', {}).get('seconds', 0):.0f} s",
+                  file=sys.stderr)
+        else:
+            result = jobs.run_vibe_bench(args.dataset, ".", args.path, limit=args.limit, jobs=args.jobs)
+    except (remote.RemoteError, ValueError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(vibes.format_report(result["report"]))
+    if args.out:
+        Path(args.out).write_text(json.dumps(result))
+    return 0
+
+
+def _vibe_fit(args) -> int:
+    from pathlib import Path
+
+    from .engine.bench import vibes
+
+    rows = [r for f in args.results for r in json.loads(Path(f).read_text())["rows"]]
+    results = vibes.fit(rows)
+    print(vibes.format_fit(results))
+    if args.out:
+        Path(args.out).write_text(json.dumps(results, indent=1))
+    return 0
+
+
+def _fetch(args) -> int:
+    from .cloud import fetch, remote
+
+    archives = sorted({n for part in args.archives.split(",") for n in
+                       (range(int(part.split("-")[0]), int(part.split("-")[1]) + 1) if "-" in part else [int(part)])})
+    try:
+        if args.remote:
+            print(f"fetching {args.dataset} into the bucket at {args.path} on Modal...", file=sys.stderr)
+            result = remote.fetch(args.dataset, args.path, archives)
+        else:
+            result = fetch.fetch(args.dataset, args.path, archives)
+    except (remote.RemoteError, ValueError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, indent=1))
+    return 1 if result.get("checksum_mismatch") else 0
 
 
 def _stems(args) -> int:

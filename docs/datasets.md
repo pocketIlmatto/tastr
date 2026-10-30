@@ -16,8 +16,8 @@ own machine.
 | 3 | StemGMD (Zenodo 7860223) | per-piece drum stems: kick, snare, closed/open hat, 3 toms, crash, ride | 1,224 h, two parts | acoustic kits, grooves | CC BY 4.0 | Zenodo (cloud), take a slice | tom and perc lanes, overlapping hits |
 | 4 | MDB Drums (github.com/CarlSouthall/MDBDrums) | 21 drum classes incl. toms and percussion | 23 songs | mixed (MedleyDB) | CC BY-NC-SA | in the repo (clone) | tom/perc on real mixes |
 | 5 | E-GMD (magenta.tensorflow.org/datasets/e-gmd) | drum MIDI aligned to audio | 444 h on 43 electronic kits | electronic kits | CC BY 4.0 | large zip, check the host | tom lane on electronic kit sounds |
-| 6 | MTG-Jamendo, mood/theme subset (mtg.github.io/mtg-jamendo-dataset) | 56 mood/theme tags | about 18,500 full tracks | electronic-heavy | CC music, uploader tags | MTG server via script (local) | vibe tags vs. human mood tags |
-| 7 | DEAM | valence and arousal, static and per second | 1,802 songs/excerpts | mixed | CC audio | outside Zenodo (local) | energy vs. human arousal |
+| 6 | MTG-Jamendo, mood/theme subset and music-classification annotations (mtg.github.io/mtg-jamendo-dataset) | 59 mood/theme tags; yes/no danceable, party, aggressive, relaxed, happy, sad | 18,486 mood/theme tracks; 10,670 with yes/no labels | mixed | CC audio, metadata CC BY-NC-SA, non-commercial | `tastr fetch mtg-moods` (Modal) | vibe tags and danceability vs. listener labels ([vibes.md](vibes.md)) |
+| 7 | DEAM | valence and arousal, static and per second | 1,802 songs/excerpts | mixed | CC BY-NC | `tastr fetch deam` (Modal) | energy vs. listener arousal ([vibes.md](vibes.md)) |
 
 Notes:
 

@@ -48,6 +48,9 @@ stems_image = (
 )
 datasets = modal.CloudBucketMount(BUCKET, bucket_endpoint_url=ENDPOINT, read_only=True,
                                   secret=modal.Secret.from_name("tastr-r2"))
+# Writable, for `fetch` only: it downloads datasets straight into the bucket.
+datasets_rw = modal.CloudBucketMount(BUCKET, bucket_endpoint_url=ENDPOINT, read_only=False,
+                                     secret=modal.Secret.from_name("tastr-r2"))
 app = modal.App(APP_NAME)
 # CPUs the bench container asks for. os.cpu_count() there reports the host's cores, not this
 # reservation, so worker counts come from here.
@@ -84,6 +87,20 @@ def drum_bench(suite: str, path: str | None = None, limit: int | None = None, dr
     from tastr.cloud.jobs import run_drum_bench
 
     return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only)
+
+
+@app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3600, volumes={DATA: datasets})
+def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:
+    from tastr.cloud.jobs import run_vibe_bench
+
+    return run_vibe_bench(dataset, path, DATA, limit=limit, jobs=BENCH_CPUS)
+
+
+@app.function(image=image, cpu=2, memory=4096, timeout=6 * 3600, volumes={DATA: datasets_rw})
+def fetch(dataset: str, path: str, archives: list[int] | None = None) -> dict:
+    from tastr.cloud.fetch import fetch as run_fetch
+
+    return run_fetch(dataset, f"{DATA}/{path}", archives)
 
 
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)

@@ -39,6 +39,14 @@ def drum_bench(suite: str, path: str | None, limit: int | None = None, drums_onl
     return _call("drum_bench", suite, path, limit, drums_only)
 
 
+def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:
+    return _call("vibe_bench", dataset, path, limit)
+
+
+def fetch(dataset: str, path: str, archives: list[int] | None = None) -> dict:
+    return _call("fetch", dataset, path, archives)
+
+
 def stems(audio_path: str | Path, out_dir: Path, progress=None) -> None:
     """Upload one file to the Modal `stems` function and write the FLAC stems it returns into `out_dir`."""
     from .. import stems as local

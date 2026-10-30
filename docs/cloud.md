@@ -182,12 +182,22 @@ With the bundle, a track's audio is read only when it is scored, so `--limit` re
 scores. IDMT-SMT-Drums (CC BY-NC-ND) and MDB Drums (CC BY-NC-SA) are non-commercial licenses; the
 bucket stays private.
 
+### Vibe benchmark
+
+The vibe datasets are fetched by Modal straight into the bucket instead of uploaded from your machine:
+`tastr fetch mtg-moods mtg-moods --remote` runs the `fetch` function, the one function that mounts the
+bucket writable. It streams MTG-Jamendo's audio archives and keeps only the labeled tracks, cut to 60 s;
+`tastr fetch deam deam --remote` unpacks DEAM. Then `tastr vibe-bench DATASET FOLDER --remote --out F` runs
+the `vibe_bench` function (8 CPUs) and `tastr vibe-fit` refits the weights locally. Details and licenses in
+[vibes.md](vibes.md).
+
 ## How it fits together
 
 - `tastr/cloud/modal_app.py`: the Modal app. Its image installs the engine's dependencies (kept in step
   with `pyproject.toml` by `tests/test_cloud.py`) and the local `tastr` package. The bucket is mounted
-  read-only at `/data`.
+  read-only at `/data`, except in `fetch`, which writes datasets into it.
 - `tastr/cloud/jobs.py`: the job bodies, plain Python so tests run them without Modal.
+- `tastr/cloud/fetch.py`: downloads the vibe datasets (`tastr fetch`), into the bucket on Modal or a local folder.
 - `tastr/cloud/remote.py`: what the CLI and `tastr/stems.py` call; looks up the deployed function by name.
 
 ## Not here yet

@@ -27,12 +27,13 @@ class AnalyzeResult:
     edits_dropped: int = 0  # reanalyze_track: saved section edits whose section is gone
 
 
-def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] | None = None) -> AnalyzeResult:
+def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] | None = None,
+                   options: dict | None = None) -> AnalyzeResult:
     try:
         if not source.local_path:
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
-        card = analyze_file(source.local_path, stages, source=source)
+        card = analyze_file(source.local_path, stages, source=source, options=options)
         track_id = db.save_card(conn, card)
         _lookup(conn, track_id, card)
         return AnalyzeResult(source, track_id, card)
@@ -57,14 +58,20 @@ def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], stages: list[str
     return [analyze_source(conn, s, stages) for s in resolve_inputs(inputs)]
 
 
-def reanalyze_track(conn: sqlite3.Connection, track_id: int) -> AnalyzeResult | None:
+KEEP = "keep"
+
+
+def reanalyze_track(conn: sqlite3.Connection, track_id: int, beats_per_bar: int | None | str = KEEP) -> AnalyzeResult | None:
     """Run the full engine again on a stored track's audio file, so it picks up engine changes.
 
     Keeps the track's id and source (links stay links). File tracks also get their tags
     re-read. Returns None if there is no such track; raises FileNotFoundError if its
     audio file is no longer on disk. A failed analysis leaves the stored card as it was.
     Saved edits follow their section to the new one with the same bars; the rest are dropped
-    (counted in `edits_dropped`).
+    (counted in `edits_dropped`). A meter change drops them all, since bars change length.
+
+    `beats_per_bar`: 3 or 4 sets the meter, None goes back to detecting it, and the default keeps a
+    meter the user set before.
     """
     card = db.load_card(conn, track_id)
     if card is None:
@@ -73,9 +80,13 @@ def reanalyze_track(conn: sqlite3.Connection, track_id: int) -> AnalyzeResult | 
     if not source.local_path or not Path(source.local_path).is_file():
         raise FileNotFoundError(source.local_path or source.uri)
     old_bars = _section_bars(card)
-    result = analyze_source(conn, source)
+    if beats_per_bar == KEEP:
+        beats_per_bar = card.core.beats_per_bar if card.core.meter_set else None
+    result = analyze_source(conn, source, options={"beats_per_bar": beats_per_bar} if beats_per_bar else None)
     if result.track_id is not None:
-        result.edits_dropped = db.remap_edits(conn, result.track_id, old_bars, _section_bars(result.card))
+        same_meter = result.card.core.beats_per_bar == (card.core.beats_per_bar or 4)
+        result.edits_dropped = db.remap_edits(conn, result.track_id, old_bars, _section_bars(result.card),
+                                              keep_all=same_meter)
         if source.kind == "file":
             db.retag_track(conn, result.track_id)
     return result

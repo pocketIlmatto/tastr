@@ -62,9 +62,8 @@ Chance is 0.25.
 - **Tempo errors come first.** When the tracker halves or misreads the tempo
   (synthetic breakbeats, 174 BPM read as 87), the phase can't be right.
   Tempo is a separate problem.
-- **4/4 only.** Waltzes and other meters still get 4-beat bars. Core now
-  guesses 3/4 (next section), but bars stay 4 beats until the rest of the
-  app can draw 3-beat bars.
+- **4/4 and 3/4 only.** 6/8 and songs that change meter get 3- or 4-beat
+  bars (see "Meter").
 - GTZAN clips are 30-second excerpts. Nothing here measures full tracks from
   their start, where the first-beat prior helps most.
 
@@ -83,9 +82,15 @@ Chance is 0.25.
 
 ## Meter: 3/4 or 4/4 (2026-10-30)
 
-`_meter_score` in core guesses whether the beats group in 3s or 4s. It is
-recorded as `card.extras["core.meter_guess"]` (`beats_per_bar`, `score`)
-and changes nothing else yet. `_downbeat_phase(..., beats_per_bar=3)` picks
+`_meter_score` in core guesses whether the beats group in 3s or 4s. The
+guess is recorded as `card.extras["core.meter_guess"]` (`beats_per_bar`,
+`score`) and, since 2026-10-30, sets `core.beats_per_bar`: downbeats fall
+every 3rd beat in 3/4, the drum grid has 12 steps, and the UI, MIDI export
+(time signature 3/4) and Strudel sketch follow it. Two ways to overrule it:
+`TASTR_METER=4/4` keeps every track in 4/4, and the track menu's "Change to
+3/4 / 4/4 time" re-analyzes one track with that meter (`meter_set`, kept
+on later re-analyses; "Detect the time signature again" undoes it). A
+meter change drops that track's saved edits, since every bar changes length. `_downbeat_phase(..., beats_per_bar=3)` picks
 bar 1 among 3 phases, with "backbeat" meaning beats 2 and 3 against beat 1.
 Both share the per-beat cues of the 4/4 picker (`_beat_cues`).
 

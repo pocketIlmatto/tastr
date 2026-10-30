@@ -268,3 +268,20 @@ def test_whole_track_edits_on_cards_without_sections():
     assert "// With your edits in: Whole track." in code
     assert "  [1, track, 1], // Whole track, bars 1-1" in code
     assert 'chords: chord("<C G Am F>")' in code
+
+
+def test_three_four_bars_play_in_three():
+    waltz = {"kick": "x...........", "snare": "....x...x...", "hat": "xoxoxoxoxoxo"}
+    c = {"source": {"title": "Waltz"}, "duration": 30.0, "sections": [section("verse", "A", 1, 8)],
+         "core": {"bpm": 90.0, "beats_per_bar": 3, "downbeat_times": [0.0, 2.0, 4.0], "key": {"tonic": 0, "mode": "major"}},
+         "suggestions": [{"category": "drums", "title": "Detected groove", "body": "", "data": {
+             "origin": "detected", "pattern": waltz, "by_section": [{"idx": 0, "pattern": waltz}]}},
+             {"category": "bass", "title": "Bass", "body": "", "data": {"loop": ["C"], "rhythm": "x...x.......",
+                                                                     "by_section": [{"idx": 0, "loop": ["C"], "rhythm": "x...x......."}]}}]}
+    code = run_js(c)["code"]
+    assert "setcpm(90/3) // 1 cycle = 1 bar of 3/4" in code
+    assert 's("[bd ~ ~ ~] [~ ~ ~ ~] [~ ~ ~ ~]")' in code
+    assert 's("[~ ~ ~ ~] [sd ~ ~ ~] [sd ~ ~ ~]")' in code
+    assert '.struct("[x ~ ~ ~] [x ~ ~ ~] [~ ~ ~ ~]")' in code
+    with_audio = run_js(c, "http://localhost:8000/api/tracks/1/audio")["code"]
+    assert "bar = 2.0000" in with_audio

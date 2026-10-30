@@ -21,8 +21,9 @@ beats, downbeats, key, energy and the shared scalar features.
 | `core.bpm_confidence` | 0..1 | mean of tempo stability (1 - 4·std/mean of IBIs, clipped) and `pulse_clarity` |
 | `core.bpm_likely_correct` | 0..1 or null | `calibration.likely_correct("bpm", bpm_confidence)`: share of benchmark tracks with that score within 4% of the label (docs/bench.md "Confidence calibration") |
 | `core.beat_times` | list[float] s | beat tracker output; if fewer than 8 beats, synthesize a grid from the tempo |
-| `core.downbeat_times` | list[float] s | every 4th beat starting at the phase (0..3) whose beats have the most low-band (<150 Hz) onset energy; stay on phase 0 unless another phase wins by >10% |
-| `extras["core.meter_guess"]` | `{beats_per_bar: 3 or 4, score}` | `_meter_score` > `METER_THRESHOLD` reads as 3/4 (docs/rhythm.md "Meter"); informational only, downbeats stay every 4th beat |
+| `core.downbeat_times` | list[float] s | every `beats_per_bar`-th beat from the phase `_downbeat_phase` picks (kick, backbeat, timbre/chord, bass and bar-change cues; docs/rhythm.md) |
+| `core.beats_per_bar`, `core.meter_set` | 3 or 4, bool | the caller's `options["beats_per_bar"]` (meter_set true), else the detected guess below; `TASTR_METER=4/4` keeps every track at 4 |
+| `extras["core.meter_guess"]` | `{beats_per_bar: 3 or 4, score}` | what was detected, even when the user set the meter: `_meter_score` > `METER_THRESHOLD` reads as 3/4 (docs/rhythm.md "Meter") |
 | `core.key` | `Key` | `music.estimate_key(music.key_profile(chroma))`, the learned key model (`key_model.py`, see docs/bench.md) → tonic/mode; confidence = top key probability minus the runner-up's; `likely_correct = calibration.likely_correct("key", confidence)`; `scale = music.refine_mode(...)`; `camelot = music.camelot(tonic, mode)` |
 | `core.loudness_db` | float | already done in the stub (RMS dBFS) |
 | `core.energy` | 0..1 | 0.35·clip((loudness_db+30)/22) + 0.25·clip(onset_rate/6) + 0.20·brightness + 0.20·clip(percussiveness/0.5) |

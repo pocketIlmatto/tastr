@@ -336,14 +336,16 @@ def delete_edit_version(conn: sqlite3.Connection, track_id: int, version_id: int
                             (version_id, track_id)).rowcount > 0
 
 
-def remap_edits(conn: sqlite3.Connection, track_id: int, old_bars: dict[int, tuple], new_bars: dict[int, tuple]) -> int:
+def remap_edits(conn: sqlite3.Connection, track_id: int, old_bars: dict[int, tuple], new_bars: dict[int, tuple],
+                keep_all: bool = True) -> int:
     """After a re-analysis, move edits (current and saved versions) to the new section with the same bars.
 
     Edits are keyed by section index. `old_bars` and `new_bars` map index -> (start_bar, end_bar) before and
     after. An edit whose section's bars no longer exist is dropped; "all" (cards without sections) is kept.
+    With keep_all False (the meter changed, so every bar has a different length) every edit is dropped.
     Returns how many section edits were dropped.
     """
-    to_new = {bars: idx for idx, bars in new_bars.items()}
+    to_new = {bars: idx for idx, bars in new_bars.items()} if keep_all else {}
     dropped = 0
     rows = conn.execute("SELECT id, edits_json FROM track_edits WHERE track_id = ?", (track_id,)).fetchall()
     with conn:
@@ -354,7 +356,7 @@ def remap_edits(conn: sqlite3.Connection, track_id: int, old_bars: dict[int, tup
                     continue
                 kept = {}
                 for k, v in by_key.items():
-                    if k == "all":
+                    if k == "all" and keep_all:
                         kept[k] = v
                         continue
                     try:

@@ -1,6 +1,6 @@
 """"Try this in Ableton" suggestions: drum pattern ideas, bass movement, chord-scale guesses.
 
-Analyses the audio on the bar grid from core's downbeats (16-step drum lanes,
+Analyses the audio on the bar grid from core's downbeats (16th-note drum lanes: 16 steps in 4/4, 12 in 3/4,
 bass notes per bar, chords per bar), stores those by-products in card.extras,
 then turns them plus core/sections/tags into Suggestion entries.
 """
@@ -15,7 +15,13 @@ from .. import drums, music, signals
 from ..card import Suggestion
 from ..pipeline import AnalysisContext, register_stage
 
-STEPS = 16
+STEPS_PER_BEAT = 4  # 16th notes
+
+
+def _steps(ctx: AnalysisContext) -> int:
+    """Steps in one bar: 16 in 4/4, 12 in 3/4."""
+    return STEPS_PER_BEAT * (ctx.card.core.beats_per_bar or 4)
+
 
 # Default Drum Rack pad notes in Live.
 DRUM_RACK = {"kick": "C1", "snare": "D1", "clap": "D#1", "hat": "F#1", "open_hat": "A#1", "tom": "A1", "perc": "G#1"}
@@ -60,14 +66,21 @@ VARIATIONS = {
     "generic": [
         ("Backbeat", {"kick": "x.......x.x.....", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."}),
     ],
+    # 3/4: 12 steps, any tempo.
+    "waltz": [
+        ("Waltz", {"kick": "x...........", "snare": "....x...x...", "hat": "x...x...x..."}),
+        ("Jazz waltz", {"kick": "x.......x...", "snare": "......x.....", "hat": "x..xx..xx..x"}),
+    ],
 }
 
 
 STYLE_LABELS = {"four_floor": "four on the floor", "dnb": "drum and bass", "halftime": "halftime",
-                "hiphop": "hip-hop", "generic": "generic backbeat"}
+                "hiphop": "hip-hop", "generic": "generic backbeat", "waltz": "3/4 waltz"}
 
 
-def _style(bpm: float, perc: float | None) -> str:
+def _style(bpm: float, perc: float | None, beats_per_bar: int = 4) -> str:
+    if beats_per_bar == 3:
+        return "waltz"
     if 160 <= bpm <= 185:
         return "dnb"
     if 136 <= bpm <= 152 and (perc or 0) > 0.25:
@@ -102,14 +115,15 @@ def _title(text: str) -> str:
 def _step_grid(ctx: AnalysisContext, n_frames: int) -> np.ndarray:
     """Frame index of each 16th note for every complete bar (consecutive downbeats)."""
     downbeats = np.asarray(ctx.card.core.downbeat_times, dtype=float)
+    m = ctx.card.core.beats_per_bar or 4
     if downbeats.size < 2:
-        return np.zeros((0, STEPS), dtype=int)
+        return np.zeros((0, m * STEPS_PER_BEAT), dtype=int)
     beats = np.asarray(ctx.card.core.beat_times, dtype=float)
     rows = []
     for a, b in zip(downbeats[:-1], downbeats[1:]):
         in_bar = beats[(beats >= a - 1e-6) & (beats < b - 1e-6)]
-        edges = np.append(in_bar, b) if in_bar.size == 4 else np.linspace(a, b, 5)
-        times = [edges[i] + (edges[i + 1] - edges[i]) * s / 4 for i in range(4) for s in range(4)]
+        edges = np.append(in_bar, b) if in_bar.size == m else np.linspace(a, b, m + 1)
+        times = [edges[i] + (edges[i + 1] - edges[i]) * s / STEPS_PER_BEAT for i in range(m) for s in range(STEPS_PER_BEAT)]
         rows.append(times)
     frames = np.round(np.asarray(rows) * ctx.sr / ctx.hop).astype(int)
     return np.clip(frames, 0, max(n_frames - 1, 0))
@@ -154,7 +168,7 @@ def _drum_grid(ctx: AnalysisContext, step_frames: np.ndarray) -> dict:
     acts = drums.lane_activations(ctx, step_frames, step_seconds=step_s)
     # Noise floor: the same measure halfway between 16ths, where a played pattern has no hits.
     between = (step_frames + np.roll(step_frames, -1, axis=1)) // 2
-    between[:, -1] = step_frames[:, -1] + (step_frames[:, -1] - step_frames[:, -2]) // 2 if STEPS > 1 else step_frames[:, -1]
+    between[:, -1] = step_frames[:, -1] + (step_frames[:, -1] - step_frames[:, -2]) // 2
     floor_acts = drums.lane_activations(ctx, between, step_seconds=step_s, slop=0)
     grid = {}
     for lane in acts:  # drums.LANES, plus cymbal with the drum model
@@ -188,7 +202,7 @@ def _drum_grid(ctx: AnalysisContext, step_frames: np.ndarray) -> dict:
 
 
 def _section_grooves(grid: dict, energies: np.ndarray, sections: list[tuple[int, object]]) -> list[dict]:
-    """Per-section 16-step patterns, scaled against the whole-track peak so a quiet section stays sparse."""
+    """Per-section step patterns (one bar), scaled against the whole-track peak so a quiet section stays sparse."""
     n_bars = energies.size
     out = []
     for idx, sec in sections:
@@ -200,7 +214,7 @@ def _section_grooves(grid: dict, energies: np.ndarray, sections: list[tuple[int,
         pattern = {}
         for lane, g in grid.items():
             if g["_peak"] <= 0:
-                pattern[lane] = "." * STEPS
+                pattern[lane] = "." * g["_steps"].shape[1]
                 continue
             profile = g["_steps"][a:b][busy].mean(axis=0)
             pattern[lane] = _pattern(np.minimum(profile / g["_peak"], 1.0))
@@ -371,7 +385,7 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
     root = music.note_name(key.tonic) if key else None
     scale = (key.scale or ("Minor" if key.mode == "minor" else "Major")) if key else None
     perc = f.get("percussiveness")
-    style = _style(bpm, perc) if bpm else None
+    style = _style(bpm, perc, core.beats_per_bar or 4) if bpm else None
 
     # --- Setup ---
     if bpm:
@@ -434,7 +448,7 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
             "static": "It barely moves; rhythm does the work here.",
         }
         rhythm = bass.get("rhythm") or ""
-        offbeat = len(rhythm) == STEPS and rhythm[0] == "." and all(rhythm[i] in "xo" for i in (2, 6, 10, 14))
+        offbeat = len(rhythm) == _steps(ctx) and rhythm[0] == "." and all(rhythm[i] in "xo" for i in range(2, len(rhythm), 4))
         degrees = f" (scale degrees {' - '.join(bass['degrees'])})" if bass.get("degrees") else ""
         add("bass", f"Bass loop: {' - '.join(bass['loop'])} ({bass['movement']})",
             f"Per-bar bass notes loop as {' - '.join(bass['loop'])}{degrees}. {tips[bass['movement']]}"
@@ -498,7 +512,7 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
 
 class SuggestionsStage:
     name = "suggestions"
-    version = "0.3.0"  # 0.3: the optional drum model (tastr[drums]) supplies kick, hat, tom and cymbal
+    version = "0.4.0"  # 0.4: 12-step bars and waltz pattern ideas in 3/4
     requires = ("core", "sections", "tags")
 
     def run(self, ctx: AnalysisContext) -> None:

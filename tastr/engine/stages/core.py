@@ -8,6 +8,8 @@ bpm / key as None rather than guessing.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from .. import calibration, music, signals
@@ -31,7 +33,7 @@ THREE_TWO_MAX_METER = 0.0
 
 class CoreStage:
     name = "core"
-    version = "0.1.6"
+    version = "0.2.0"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -68,12 +70,12 @@ class CoreStage:
             core.beat_times = [round(float(t), 3) for t in beat_times if t <= duration]
             log_mel, mel_f = mel
             cues = _beat_cues(beat_idx, log_mel, mel_f) if beat_idx.size >= MIN_BEATS and log_mel.shape[1] >= 2 else None
-            phase = _downbeat_phase(beat_idx, log_mel, mel_f, cues=cues)
-            # Meter is only a guess for now: bars stay 4 beats until the rest of the app handles 3/4.
             meter = _meter_score(beat_idx, log_mel, mel_f, cues=cues)
-            ctx.card.extras["core.meter_guess"] = {"beats_per_bar": 3 if meter > METER_THRESHOLD else 4,
-                                                   "score": round(meter, 2)}
-            core.downbeat_times = [round(float(t), 3) for t in beat_times[phase::4] if t <= duration]
+            guess = 3 if meter > METER_THRESHOLD else 4
+            ctx.card.extras["core.meter_guess"] = {"beats_per_bar": guess, "score": round(meter, 2)}
+            core.beats_per_bar, core.meter_set = _beats_per_bar(ctx.options.get("beats_per_bar"), guess)
+            phase = _downbeat_phase(beat_idx, log_mel, mel_f, core.beats_per_bar, cues=cues)
+            core.downbeat_times = [round(float(t), 3) for t in beat_times[phase::core.beats_per_bar] if t <= duration]
             ctx.card.extras["core.bpm_alternatives"] = [round(bpm / 2, 2), round(bpm * 2, 2)]
             ctx.card.extras["core.downbeat_phase"] = int(phase)
 
@@ -335,6 +337,16 @@ def _downbeat_phase(beat_frames: np.ndarray, log_mel: np.ndarray, freqs: np.ndar
     best = int(np.argmax(total))
     # Without a clear winner (a loop that repeats every bar exactly), trust the first beat: most tracks start on bar 1.
     return best if total[best] - total[0] > 1.0 else 0
+
+
+def _beats_per_bar(chosen, guess: int) -> tuple[int, bool]:
+    """(beats per bar, set by the user): the caller's choice (3 or 4) wins; else the detected guess,
+    unless TASTR_METER=4/4 turns 3/4 detection off."""
+    if chosen in (3, 4):
+        return int(chosen), True
+    if os.environ.get("TASTR_METER", "auto").strip().lower() in ("4", "4/4", "off"):
+        return 4, False
+    return guess, False
 
 
 # 3 beats per bar vs 4: each cue is >0 when the music repeats every 3 beats more than every 4. Scales are

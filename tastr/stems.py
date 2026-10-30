@@ -188,6 +188,11 @@ class Jobs:
         self._pool.submit(self._run, audio_path, folder)
         return self.status(folder)
 
+    def active(self) -> int:
+        """Jobs queued or running, for the admin view."""
+        with self._lock:
+            return sum(job["state"] in ("queued", "running") for job in self._state.values())
+
     def forget(self, folder: Path) -> None:
         """For a deleted track: a finished job's state goes; a running one deletes its stems when it ends."""
         with self._lock:

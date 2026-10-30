@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 
 CREATE TABLE IF NOT EXISTS tracks (
     id              INTEGER PRIMARY KEY,
-    sha256          TEXT UNIQUE,
+    sha256          TEXT,
     source_kind     TEXT NOT NULL,
     source_uri      TEXT NOT NULL,
     local_path      TEXT,
@@ -48,7 +48,9 @@ CREATE TABLE IF NOT EXISTS tracks (
     loudness_db     REAL,
     stages_json     TEXT,
     errors_json     TEXT,
-    analyzed_at     TEXT NOT NULL
+    analyzed_at     TEXT NOT NULL,
+    owner           TEXT,  -- who uploaded it on a hosted server, as an Access email; NULL on your own machine
+    UNIQUE (sha256, owner)
 );
 
 CREATE TABLE IF NOT EXISTS sections (
@@ -152,6 +154,7 @@ CREATE TABLE IF NOT EXISTS user_usage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
+CREATE INDEX IF NOT EXISTS idx_tracks_owner ON tracks(owner);
 CREATE INDEX IF NOT EXISTS idx_tracks_camelot ON tracks(camelot);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
 CREATE INDEX IF NOT EXISTS idx_features_name ON features(name, value);
@@ -173,6 +176,7 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     else:
         conn = sqlite3.connect(path)
+        _add_owner_column(conn)
         conn.executescript(SCHEMA)
         if "album" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
             conn.execute("ALTER TABLE tracks ADD COLUMN album TEXT")  # databases created before album existed
@@ -183,8 +187,28 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
     return conn
 
 
-def save_card(conn: sqlite3.Connection, card: TrackCard) -> int:
-    """Insert or replace a card (deduped on sha256, else on source_uri). Returns track id."""
+def _add_owner_column(conn: sqlite3.Connection) -> None:
+    """Databases from before per-person libraries had sha256 UNIQUE on its own, so two people couldn't upload
+    the same file. SQLite can't drop that constraint in place, so the tracks table is rebuilt (ids kept)."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(tracks)")]
+    if not cols or "owner" in cols:
+        return
+    ddl = SCHEMA.split("CREATE TABLE IF NOT EXISTS tracks", 1)[1].split(");", 1)[0] + ");"
+    keep = ", ".join(cols)
+    conn.executescript(f"""
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        CREATE TABLE tracks_new {ddl}
+        INSERT INTO tracks_new ({keep}) SELECT {keep} FROM tracks;
+        DROP TABLE tracks;
+        ALTER TABLE tracks_new RENAME TO tracks;
+        COMMIT;
+    """)
+
+
+def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = None) -> int:
+    """Insert or replace a card (deduped on sha256, else on source_uri, within one owner's library). Returns
+    track id. `owner` is who uploaded it on a hosted server; None on your own machine."""
     s, c = card.source, card.core
     k = c.key
     row = {
@@ -212,7 +236,7 @@ def save_card(conn: sqlite3.Connection, card: TrackCard) -> int:
         "analyzed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     with conn:
-        existing = find_track_id(conn, sha256=s.sha256, source_uri=s.uri)
+        existing = find_track_id(conn, sha256=s.sha256, source_uri=s.uri, owner=owner)
         if existing is not None:
             sets = ", ".join(f"{col} = :{col}" for col in row)
             conn.execute(f"UPDATE tracks SET {sets} WHERE id = :id", {**row, "id": existing})
@@ -220,6 +244,7 @@ def save_card(conn: sqlite3.Connection, card: TrackCard) -> int:
             for table in ("sections", "tags", "suggestions", "features", "series", "cards"):
                 conn.execute(f"DELETE FROM {table} WHERE track_id = ?", (track_id,))
         else:
+            row["owner"] = owner
             cols = ", ".join(row)
             vals = ", ".join(f":{col}" for col in row)
             track_id = conn.execute(f"INSERT INTO tracks ({cols}) VALUES ({vals})", row).lastrowid
@@ -247,16 +272,29 @@ def save_card(conn: sqlite3.Connection, card: TrackCard) -> int:
     return track_id
 
 
-def find_track_id(conn: sqlite3.Connection, sha256: str | None = None, source_uri: str | None = None) -> int | None:
+def find_track_id(conn: sqlite3.Connection, sha256: str | None = None, source_uri: str | None = None,
+                  owner: str | None = None) -> int | None:
     if sha256:
-        r = conn.execute("SELECT id FROM tracks WHERE sha256 = ?", (sha256,)).fetchone()
+        r = conn.execute("SELECT id FROM tracks WHERE sha256 = ? AND owner IS ?", (sha256, owner)).fetchone()
         if r:
             return r[0]
     if source_uri:
-        r = conn.execute("SELECT id FROM tracks WHERE source_uri = ?", (source_uri,)).fetchone()
+        r = conn.execute("SELECT id FROM tracks WHERE source_uri = ? AND owner IS ?", (source_uri, owner)).fetchone()
         if r:
             return r[0]
     return None
+
+
+def track_owner(conn: sqlite3.Connection, track_id: int) -> tuple[bool, str | None]:
+    """(exists, owner) for one track."""
+    r = conn.execute("SELECT owner FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    return (r is not None, r[0] if r else None)
+
+
+def set_owner(conn: sqlite3.Connection, owner: str) -> int:
+    """Give every track with no owner (analyzed on your own machine) to `owner`. Returns how many."""
+    with conn:
+        return conn.execute("UPDATE tracks SET owner = ? WHERE owner IS NULL", (owner,)).rowcount
 
 
 def load_card(conn: sqlite3.Connection, track_id: int) -> TrackCard | None:
@@ -264,9 +302,12 @@ def load_card(conn: sqlite3.Connection, track_id: int) -> TrackCard | None:
     return TrackCard.from_dict(json.loads(r[0])) if r else None
 
 
-def list_tracks(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def list_tracks(conn: sqlite3.Connection, owner: str | None = None) -> list[dict[str, Any]]:
+    """All tracks, or only `owner`'s on a hosted server."""
+    where, args = ("WHERE owner = ?", (owner,)) if owner else ("", ())
     rows = conn.execute(
-        "SELECT id, title, artist, duration, bpm, key_name, camelot, energy, analyzed_at FROM tracks ORDER BY id"
+        f"SELECT id, title, artist, duration, bpm, key_name, camelot, energy, analyzed_at FROM tracks {where} ORDER BY id",
+        args,
     ).fetchall()
     return [dict(r) for r in rows]
 

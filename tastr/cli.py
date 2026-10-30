@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr set-owner EMAIL`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
 `tastr vibe-bench`, `tastr vibe-fit`, `tastr fetch`."""
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     q = sub.add_parser("query", help="run read-only SQL against the database")
     q.add_argument("sql")
     sub.add_parser("retag", help="re-read file tags for analyzed tracks without re-analyzing")
+    so = sub.add_parser("set-owner", help="give tracks with no owner to EMAIL, to move a library to a hosted server")
+    so.add_argument("email", help="the Access email whose library they join (docs/hosting.md)")
     lk = sub.add_parser("lookup", help="look tracks up in online catalogs (TASTR_LOOKUP, see docs/lookup.md)")
     lk.add_argument("track_ids", nargs="*", type=int, help="tracks to look up (default: all)")
     lk.add_argument("--missing", action="store_true", help="skip providers that already answered for a track")
@@ -260,6 +262,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "retag":
         print(f"updated {db.refresh_file_meta(db.connect(args.db))} track(s)")
+        return 0
+
+    if args.cmd == "set-owner":
+        email = args.email.strip().lower()
+        print(f"gave {db.set_owner(db.connect(args.db), email)} track(s) to {email}")
         return 0
 
     if args.cmd == "lookup":

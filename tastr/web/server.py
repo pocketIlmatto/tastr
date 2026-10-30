@@ -9,6 +9,7 @@ import re
 import sqlite3
 import uuid
 from contextlib import closing, nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -22,8 +23,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import db, lookup, service, stems
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url
-from .hosted import (HEALTH_PATH, TOKEN_HEADER, AccessVerifier, AnalysisSlots, Settings, inline_script_hashes,
-                     security_headers, stored_bytes, today)
+from .hosted import (HEALTH_PATH, TOKEN_HEADER, AccessVerifier, AnalysisSlots, Settings, file_bytes,
+                     inline_script_hashes, security_headers, stored_bytes, today)
 
 STATIC_DIR = Path(__file__).parent / "static"
 log = logging.getLogger(__name__)
@@ -34,6 +35,8 @@ MAX_QUERY_ROWS = 5000
 # The Strudel sketch ("Try this in Strudel") loads the original audio and its stems from strudel.cc, so only
 # those endpoints answer CORS, and only for that origin.
 STRUDEL_ORIGINS = ("https://strudel.cc",)
+# Every route about one track; on a hosted server only its owner gets past the login middleware.
+TRACK_PATH = re.compile(r"^/api/tracks/(\d+)(?:/|$)")
 
 
 def _strudel_cors(origin: str | None, preflight: bool = False) -> dict[str, str]:
@@ -108,6 +111,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     app = FastAPI(title="Tastr", docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
                   openapi_url=None if hosted else "/openapi.json")
     jobs = stems.Jobs()
+    last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
 
     @app.middleware("http")
     async def same_origin_writes(request, call_next):
@@ -133,12 +137,26 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                     return JSONResponse({"detail": "Sign in through the Tastr link you were invited to."},
                                         status_code=401, headers=extra_headers)
                 request.state.user = user
+                last_seen[user] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                m = TRACK_PATH.match(request.url.path)
+                if m and not await run_in_threadpool(owns, user, int(m[1])):
+                    # 404, not 403: someone else's track looks the same as one that doesn't exist.
+                    return JSONResponse({"detail": "no such track"}, status_code=404, headers=extra_headers)
             response = await call_next(request)
             response.headers.update(extra_headers)
             return response
 
     def conn() -> sqlite3.Connection:
         return db.connect(db_path)
+
+    def owns(user: str, track_id: int) -> bool:
+        with closing(conn()) as c:
+            exists, owner = db.track_owner(c, track_id)
+        return exists and owner == user
+
+    def owner_of(request: Request) -> str | None:
+        """Whose library a request reads and writes: the signed-in email when hosted, else everything."""
+        return request.state.user if hosted else None
 
     def results(rs) -> dict[str, Any]:
         if hosted:  # error text can name server paths; keep it in the log
@@ -153,9 +171,52 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
 
     @app.get("/api/config")
     def config(request: Request):
-        """What this server allows, so the UI can hide what's turned off."""
-        return {"hosted": hosted, "links": not hosted, "query": not hosted,
-                "user": getattr(request.state, "user", None), "limits": settings.limits() if hosted else None}
+        """What this server allows, so the UI can hide what's turned off. The UI asks once per page load,
+        so on a hosted server this also counts each person's visits for the admin view."""
+        user = getattr(request.state, "user", None)
+        if hosted:
+            with closing(conn()) as c:
+                db.add_usage(c, user, "visits", today())
+        return {"hosted": hosted, "links": not hosted, "query": not hosted, "user": user,
+                "admin": hosted and user in settings.admins, "limits": settings.limits() if hosted else None}
+
+    @app.get("/api/admin/usage")
+    def admin_usage(request: Request):
+        """Usage per person, the server's limits and analyses running or waiting, for the admin view. Hosted servers only, and only for
+        TASTR_ADMIN_EMAILS; everyone else gets 404."""
+        if not hosted or request.state.user not in settings.admins:
+            raise HTTPException(404, "Not Found")
+        day = today()
+        people: dict[str | None, dict[str, Any]] = {}
+
+        def person(email):
+            return people.setdefault(email, {"email": email, "tracks": 0, "audio_bytes": 0, "stems_bytes": 0,
+                                             "last_upload": None, "last_seen": last_seen.get(email),
+                                             "today": {"tracks": 0, "stems": 0, "visits": 0}})
+
+        with closing(conn()) as c:
+            for owner, tid, sha, path, at in c.execute(
+                    "SELECT owner, id, sha256, local_path, analyzed_at FROM tracks"):
+                p = person(owner)
+                p["tracks"] += 1
+                p["audio_bytes"] += file_bytes(path)
+                folder = stems.stems_dir(sha, tid)
+                if folder.is_dir():
+                    p["stems_bytes"] += sum(f.stat().st_size for f in folder.iterdir() if f.is_file())
+                p["last_upload"] = max(p["last_upload"] or "", at)
+            history = [{"day": d, "user": u, "kind": k, "n": n} for d, u, k, n in c.execute(
+                "SELECT day, user, kind, n FROM user_usage WHERE day >= date('now', '-29 days') ORDER BY day, user, kind")]
+        for h in history:
+            p = person(h["user"])
+            if h["day"] == day:
+                p["today"][h["kind"]] = h["n"]
+        for email in settings.admins:
+            person(email)
+        users = sorted(people.values(), key=lambda p: (p["email"] is None, p["email"] or ""))
+        return {"today": day, "users": users, "history": history, "admins": list(settings.admins),
+                "limits": settings.limits(),
+                "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(settings.storage_gb * 1024 ** 3)},
+                "active_stem_jobs": jobs.active(), "analyses": slots.status()}
 
     @app.get("/api/health")
     def health():
@@ -177,9 +238,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 for style, items in VARIATIONS.items() for name, pat in items]
 
     @app.get("/api/tracks")
-    def tracks():
+    def tracks(request: Request):
         with closing(conn()) as c:
-            rows = db.list_tracks(c)
+            rows = db.list_tracks(c, owner_of(request))
             uris = dict(c.execute("SELECT id, source_uri FROM tracks").fetchall())
             vibes: dict[int, list[str]] = {}
             for tid, tag in c.execute("SELECT track_id, tag FROM tags ORDER BY score DESC"):
@@ -415,11 +476,31 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             card = db.load_card(c, track_id)
             if not db.delete_track(c, track_id):
                 raise HTTPException(404, "no such track")
-        if card is not None:
+            # Stems are kept per audio file, so another library holding the same file keeps them.
+            shared = card is not None and c.execute(
+                "SELECT 1 FROM tracks WHERE sha256 = ?", (card.source.sha256,)).fetchone() is not None
+        if card is not None and not shared:
             folder = _stems_dir(card, track_id)
             jobs.forget(folder)
             stems.remove(folder)
+        if hosted and card is not None:
+            remove_upload(card.source.local_path)
         return Response(status_code=204)
+
+    def remove_upload(path: str | None) -> None:
+        """A deleted track's uploaded audio goes too (hosted only: on your own machine Tastr leaves files alone).
+        Only Tastr's own copies under uploads/, and only when no other track points at the same file."""
+        if not path:
+            return
+        p, root = Path(path).resolve(), upload_dir().resolve()
+        if root not in p.parents:
+            return
+        with closing(conn()) as c:
+            if c.execute("SELECT 1 FROM tracks WHERE local_path = ?", (path,)).fetchone():
+                return
+        p.unlink(missing_ok=True)
+        if p.parent != root and not any(p.parent.iterdir()):
+            p.parent.rmdir()
 
     # Plain `def` endpoints below run in FastAPI's threadpool, so slow analysis
     # doesn't block the event loop.
@@ -451,7 +532,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 db.add_usage(c, request.state.user, "tracks", today(), len(paths))
             try:
                 with analysis_slot():
-                    return results(service.analyze_inputs(c, paths))
+                    return results(service.analyze_inputs(c, paths, owner=owner_of(request)))
             except TimeoutError:
                 raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.")
 

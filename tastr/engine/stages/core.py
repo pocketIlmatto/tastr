@@ -33,7 +33,7 @@ THREE_TWO_MAX_METER = 0.0
 
 class CoreStage:
     name = "core"
-    version = "0.2.0"
+    version = "0.2.1"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -102,8 +102,9 @@ class CoreStage:
         )
         core.energy = round(float(np.clip(energy, 0, 1)), 3)
 
-        tempo_fit = float(np.exp(-(((bpm - 122) / 30) ** 2))) if bpm else 0.0
-        danceability = 0.55 * pulse_clarity + 0.25 * tempo_fit + 0.20 * perc_score
+        # Weights fitted against MTG-Jamendo listener labels (docs/vibes.md): pulse clarity didn't help.
+        tempo_fit = float(np.exp(-(((bpm - 135) / 45) ** 2))) if bpm else 0.0
+        danceability = 0.25 * tempo_fit + 0.75 * perc_score
         swing_pct, swing_conf = _swing(onset_env, beat_idx) if bpm else (50.0, 0.0)
 
         ctx.card.features.update({

@@ -270,8 +270,8 @@ def format_report(report: dict) -> str:
 ENERGY_INPUTS = ["loudness", "onset_rate", "brightness", "percussiveness"]
 ENERGY_WEIGHTS = (0.35, 0.25, 0.20, 0.20)
 DANCE_INPUTS = ["pulse_clarity", "tempo_fit", "percussiveness"]
-DANCE_WEIGHTS = (0.55, 0.25, 0.20)
-TEMPO_CENTER, TEMPO_WIDTH = 122.0, 30.0
+DANCE_WEIGHTS = (0.0, 0.25, 0.75)
+TEMPO_CENTER, TEMPO_WIDTH = 135.0, 45.0
 
 
 def energy_inputs(row: dict) -> list[float] | None:

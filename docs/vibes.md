@@ -6,7 +6,7 @@ said about real tracks, and refits the weights where the labels allow it.
 
 | Number | Where | Checked against |
 | --- | --- | --- |
-| danceability = 0.55 pulse clarity + 0.25 tempo fit (bell around 122 BPM, width 30) + 0.20 percussiveness | `stages/core.py` | MTG-Jamendo danceable, party |
+| danceability = 0.75 percussiveness (/0.5) + 0.25 tempo fit (bell around 135 BPM, width 45); until 2026-10-30 it was 0.55 pulse clarity + 0.25 tempo fit (122 BPM, width 30) + 0.20 percussiveness | `stages/core.py` | MTG-Jamendo danceable, party (fitted, see Results) |
 | energy = 0.35 loudness ((dB+30)/22) + 0.25 onset rate (/6 per s) + 0.20 brightness + 0.20 percussiveness (/0.5) | `stages/core.py` | DEAM arousal; MTG-Jamendo aggressive, energetic, relaxed |
 | mood-like tags: high energy, chill, melancholic, dark, bright, euphoric, danceable, atmospheric | `stages/tags.py` | MTG-Jamendo yes/no moods and mood/theme tags, DEAM valence |
 | descriptive tags: bass-heavy, percussive, swung, dynamic, driving, hypnotic | `stages/tags.py` | no public labels; meant to be set from the spread of your own library |
@@ -138,3 +138,11 @@ The tag findings from the first run all hold.
 With 60% more tracks, the danceability refit barely moved: pulse clarity 0, percussiveness 0.70-0.75, bell
 centered at 135 BPM. It still gains 0.09-0.14 AUC on held-out tracks. Both energy fits now shift weight from
 onset rate to brightness, but only the "aggressive" one gains much.
+
+### 2026-10-30: danceability refit shipped
+
+Danceability is now 0.75 percussiveness + 0.25 tempo fit, with the bell at 135 BPM and width 45. That's the
+"danceable" fit above, and it scored 0.828 held out against 0.741 before. Pulse clarity is still computed
+and still feeds driving, hypnotic and atmospheric. Energy keeps its hand-picked weights until DEAM can
+check them. `vibes.DANCE_WEIGHTS` now holds the shipped weights, so later `vibe-fit` runs compare against
+them.

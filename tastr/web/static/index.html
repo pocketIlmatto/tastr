@@ -268,13 +268,13 @@
         </div>
 
         <h3 id="g-measures">Measurements behind vibes</h3>
-        <p class="muted">The weights and cut-offs here and in the vibe rules are hand-picked starting points, not fitted to labeled data or benchmarked yet.</p>
+        <p class="muted">Danceability is fitted to listener labels. The other weights and cut-offs, here and in the vibe rules, are hand-picked, and were benchmarked against MTG-Jamendo listener labels in October 2026 (details in docs/vibes.md).</p>
         <dl class="gl-dl">
           <dt>Brightness (0-1)</dt><dd>The average spectral centroid (the "center of mass" of the frequencies) divided by 3.5 kHz. Higher means more treble.</dd>
           <dt>Percussiveness (0-1)</dt><dd>The share of the track's energy in its percussive part after splitting the audio into harmonic (sustained) and percussive (short, sharp) layers.</dd>
           <dt>Low end (0-1)</dt><dd>The share of the spectrum's power below 150 Hz.</dd>
           <dt>Pulse clarity (0-1)</dt><dd>How much stronger the onsets on the beat are than the average onset. A clear four-on-the-floor kick scores high; a beatless pad scores near 0.</dd>
-          <dt>Danceability (0-1)</dt><dd>55% pulse clarity, 25% how close the tempo is to about 122 BPM (the middle of house and pop dance tempos; the fit fades over about ±30 BPM), 20% percussiveness.</dd>
+          <dt>Danceability (0-1)</dt><dd>75% percussiveness, 25% how close the tempo is to about 135 BPM (the fit fades over about ±45 BPM). These weights were fitted to listener "danceable" labels on about 2,500 MTG-Jamendo tracks (October 2026). Pulse clarity turned out not to help, so it isn't used.</dd>
           <dt>Swing % and confidence</dt><dd>Where the off-beat 16th lands within each beat: 50% is straight, about 67% is a full triplet shuffle. Confidence is how consistent that position is from beat to beat.</dd>
           <dt>Section contrast</dt><dd>The spread (standard deviation) of the section energies. High contrast means big builds and drops.</dd>
         </dl>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
 from . import db
 from .engine.pipeline import registered_stages, resolve_order
@@ -44,10 +45,23 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel")
     b.add_argument("--out", help="write the full JSON report here")
     b.add_argument("--baseline", help="earlier report to compare against")
+    b.add_argument("--write-index", action="store_true",
+                   help="save the local dataset folder's track list to tastr-index.json for fast --remote runs")
     b.add_argument("--remote", action="store_true",
                    help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
 
     args = p.parse_args(argv)
+
+    if args.cmd == "bench" and args.write_index:
+        from .cloud import jobs
+
+        try:
+            out = jobs.write_index(args.dataset, args.path or "")
+        except (ValueError, FileNotFoundError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"wrote {out}; upload it with the folder (docs/cloud.md)")
+        return 0
 
     if args.cmd == "bench" and args.remote:
         from .cloud import remote
@@ -55,12 +69,22 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"running {args.dataset} on Modal...", file=sys.stderr)
         stages = args.stages.split(",") if args.stages else None
+        t0 = time.time()
         try:
             report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
                                   jobs=args.jobs if args.jobs > 1 else None)
         except (remote.RemoteError, ValueError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
+        timing = report.get("timing", {})
+        if timing:
+            # Where the wall time went: waiting for a container, loading the dataset index, analysis.
+            # (container times come from Modal's clock, so they're off by any clock skew)
+            ready = timing.get("container_started", t0) - t0
+            wait = timing.get("called", t0) - t0
+            print(f"wall {time.time() - t0:.0f} s: container ready after {ready:.0f} s, call started after {wait:.0f} s, "
+                  f"imports {timing.get('import_seconds', 0):.0f} s, loading the dataset {timing['load_seconds']:.0f} s, analysis {report['seconds']:.0f} s"
+                  f" ({timing['jobs']} workers)", file=sys.stderr)
         baseline = runner.load_report(args.baseline) if args.baseline else None
         print(runner.format_summary(report, baseline))
         if args.out:

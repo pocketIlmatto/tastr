@@ -29,6 +29,7 @@ def test_modal_image_deps_match_pyproject():
 def test_run_bench_resolves_path_under_root(tmp_path):
     report = jobs.run_bench("synth", None, tmp_path, limit=2)
     assert report["summary"]["tracks"] == 2
+    assert report["timing"]["jobs"] == 1 and report["timing"]["load_seconds"] >= 0
     with pytest.raises((ValueError, FileNotFoundError), match="missing"):
         jobs.run_bench("giantsteps-key", "missing", tmp_path)
 
@@ -88,3 +89,32 @@ def test_remote_bench_calls_deployed_function(monkeypatch, tmp_path):
     assert main(["bench", "beatport-key", "beatport-key", "--remote", "--limit", "50", "--out", str(out)]) == 0
     assert calls == [("bench", ("beatport-key", "beatport-key"), {"stages": None, "limit": 50, "jobs": None})]
     assert json.loads(out.read_text())["summary"]["tracks"] == 1
+
+
+def test_index_round_trip(tmp_path, monkeypatch):
+    from tastr.engine import bench
+    from tastr.engine.bench.datasets import Item, Truth
+
+    folder = tmp_path / "bp"
+    (folder / "audio").mkdir(parents=True)
+    (folder / "audio" / "1 a.mp3").write_bytes(b"")
+    loaded = []
+
+    def fake_load(name, path=None, **kw):
+        loaded.append(path)
+        return [Item(id="bp-key-1", path=str(Path(path) / "audio" / "1 a.mp3"), truth=Truth(tonic=9, mode="minor"))]
+
+    monkeypatch.setattr(bench, "load", fake_load)
+    assert main(["bench", "beatport-key", str(folder), "--write-index"]) == 0
+    assert len(loaded) == 1
+
+    # Mounted somewhere else, as on Modal: paths follow the folder and the loader isn't called again.
+    moved = tmp_path / "mnt" / "bp"
+    moved.parent.mkdir()
+    folder.rename(moved)
+    items = jobs.load_items("beatport-key", moved)
+    assert len(loaded) == 1
+    assert items[0].path == str(moved / "audio" / "1 a.mp3") and items[0].truth.mode == "minor"
+    # Another dataset's index is ignored.
+    jobs.load_items("giantsteps-key", moved)
+    assert len(loaded) == 2

@@ -10,8 +10,11 @@ mounted read-only at /data with the `tastr-r2` Modal secret. Setup steps are in 
 from __future__ import annotations
 
 import os
+import time
 
 import modal
+
+_IMPORTED = time.time()  # in the container: when it finished starting and imported this module
 
 APP_NAME = "tastr"
 DATA = "/data"
@@ -46,14 +49,20 @@ stems_image = (
 datasets = modal.CloudBucketMount(BUCKET, bucket_endpoint_url=ENDPOINT, read_only=True,
                                   secret=modal.Secret.from_name("tastr-r2"))
 app = modal.App(APP_NAME)
+# CPUs the bench container asks for. os.cpu_count() there reports the host's cores, not this
+# reservation, so worker counts come from here.
+BENCH_CPUS = 8
 
 
-@app.function(image=image, cpu=8, memory=16384, timeout=3 * 3600, volumes={DATA: datasets})
+@app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3 * 3600, volumes={DATA: datasets})
 def bench(dataset: str, path: str | None = None, stages: list[str] | None = None, limit: int | None = None,
           jobs: int | None = None) -> dict:
+    called = time.time()
     from tastr.cloud.jobs import run_bench
 
-    return run_bench(dataset, path, DATA, stages=stages, limit=limit, jobs=jobs or os.cpu_count() or 1)
+    report = run_bench(dataset, path, DATA, stages=stages, limit=limit, jobs=jobs or BENCH_CPUS)
+    report["timing"] |= {"container_started": _IMPORTED, "called": called, "import_seconds": round(time.time() - called - report["timing"]["load_seconds"] - report["seconds"], 1)}
+    return report
 
 
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)

@@ -24,11 +24,13 @@ if modal.is_local() and not ENDPOINT:
 # checks they stay in step).
 ENGINE_DEPS = ["numpy>=1.24", "scipy>=1.10", "librosa>=0.10", "soundfile>=0.12", "mutagen>=1.47"]
 STEMS_DEPS = ["demucs>=4.0.1"]  # the `stems` extra
+# Versions known to work together (docs/bench.md): librosa 1.0 with numba 0.68 and numpy 2.5 segfaults.
+PINS = ["numpy<2.3", "numba==0.61.2", "llvmlite==0.44.0", "librosa==0.11.0", "scipy<1.16"]
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
-    .pip_install(*ENGINE_DEPS)
+    .pip_install(*ENGINE_DEPS, *PINS)
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
     .add_local_python_source("tastr")
 )
@@ -36,7 +38,7 @@ image = (
 stems_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
-    .pip_install(*ENGINE_DEPS, *STEMS_DEPS)
+    .pip_install(*ENGINE_DEPS, *STEMS_DEPS, *PINS)
     .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs')\"")
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
     .add_local_python_source("tastr")

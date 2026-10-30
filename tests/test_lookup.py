@@ -1,5 +1,7 @@
 """Catalog lookups (tastr.lookup): providers on canned responses, storage, comparison and the API."""
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -27,7 +29,7 @@ def canned(monkeypatch, provider, *responses):
     calls = []
     it = iter(responses)
 
-    def fake(url, params=None, headers=None):
+    def fake(url, params=None, headers=None, source=None):
         calls.append((url, params or {}, headers or {}))
         r = next(it)
         if isinstance(r, Exception):
@@ -427,6 +429,7 @@ def test_acousticbrainz_not_found(ab_index, monkeypatch):
     assert p.lookup(Q).status == "not_found"  # not on MusicBrainz
     r = p.lookup(Q)  # on MusicBrainz, never analyzed by AcousticBrainz
     assert r.status == "not_found" and r.extra["mbids"] == ["55555555-5555-5555-5555-555555555555"]
+    assert (r.extra["tried"], r.extra["same_isrc"]) == (1, 0)
 
 
 def test_acousticbrainz_matches_credits_and_escapes_quotes(ab_index, monkeypatch):
@@ -434,7 +437,7 @@ def test_acousticbrainz_matches_credits_and_escapes_quotes(ab_index, monkeypatch
     calls = canned(monkeypatch, p, mb_search(mb_rec(MB_ONE, title='Say "Hi"', credit=(("Beta", " & "), ("Alpha", "")))))
     r = p.lookup(TrackQuery(artist="Alpha, Beta", title='Say "Hi"'))
     assert r.status == "found" and r.matched_artist == "Beta & Alpha"
-    assert calls[0][1]["query"] == 'recording:"Say \\"Hi\\"" AND artist:"Alpha, Beta"'
+    assert calls[0][1]["query"] == 'recording:"Say \\"Hi\\"" AND artist:"Alpha"'  # first artist; credits matched after
 
 
 def test_acousticbrainz_api_server_instead_of_an_index(tmp_path, monkeypatch):
@@ -487,3 +490,64 @@ def test_fetch_acousticbrainz_downloads_the_dumps_and_builds_the_index(tmp_path,
     assert result["recordings"] == 1 and set(result["bytes"]) == {*acousticbrainz.DUMP_FILES, acousticbrainz.INDEX_NAME}
     assert acousticbrainz.read_index(dest / acousticbrainz.INDEX_NAME, [MB_ONE])[MB_ONE] == \
         {"bpm": 128.0, "key_key": "A", "key_scale": "minor"}
+
+
+def test_acousticbrainz_tries_recordings_with_the_same_isrc(ab_index, monkeypatch):
+    p = acousticbrainz.AcousticBrainz()
+    calls = canned(monkeypatch, p,
+                   mb_search({**mb_rec("66666666-6666-6666-6666-666666666666"), "isrcs": ["GBDUW0000059"]}),
+                   mb_search({**mb_rec(MB_ONE, title="One More Time (single edit)"), "isrcs": ["GBDUW0000059"]},
+                             {**mb_rec(MB_LIVE), "isrcs": ["XX0000000000"]}))  # another ISRC: not the same audio
+    r = p.lookup(Q)
+    assert (r.status, r.bpm, r.extra["mbid"], r.extra["candidates"]) == ("found", 123.1, MB_ONE, 2)
+    assert calls[1][1]["query"] == "isrc:(GBDUW0000059)"
+
+
+def test_acousticbrainz_retries_a_dropped_connection_once(ab_index, monkeypatch):
+    p = acousticbrainz.AcousticBrainz()
+    canned(monkeypatch, p, ProviderError("MusicBrainz's response was cut off (IncompleteRead)"), mb_search(mb_rec(MB_ONE)))
+    assert p.lookup(Q).status == "found"
+    canned(monkeypatch, p, ProviderError("MusicBrainz answered HTTP 503", 503), mb_search(mb_rec(MB_ONE)))
+    assert p.lookup(Q).status == "found"  # busy: tried once more
+    canned(monkeypatch, p, *[ProviderError("MusicBrainz answered HTTP 503", 503)] * 2)
+    with pytest.raises(ProviderError, match="MusicBrainz answered HTTP 503"):
+        p.lookup(Q)
+    canned(monkeypatch, p, ProviderError("MusicBrainz answered HTTP 400", 400))
+    with pytest.raises(ProviderError, match="HTTP 400"):  # not retried
+        p.lookup(Q)
+
+
+def test_get_json_names_the_service_that_failed(monkeypatch):
+    import http.client
+    import urllib.request
+
+    p = acousticbrainz.AcousticBrainz()
+
+    def cut_off(req, timeout):
+        raise http.client.IncompleteRead(b"{", 10)
+
+    monkeypatch.setattr(urllib.request, "urlopen", cut_off)
+    with pytest.raises(ProviderError, match="^MusicBrainz's response was cut off"):
+        p.get_json("https://musicbrainz.example/ws/2/recording", source="MusicBrainz")
+
+
+def test_errors_can_be_asked_again_right_away(db_path, fake, monkeypatch):
+    monkeypatch.setenv("TASTR_LOOKUP_REFRESH_MINUTES", "10")
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, tagged_card())
+    fake.error = ProviderError("Fake answered HTTP 503", 503)
+    assert lookup.lookup_track(conn, tid, tagged_card())[0]["status"] == "error"
+    fake.error = None
+    assert lookup.lookup_track(conn, tid, tagged_card())[0]["status"] == "found"
+    assert lookup.lookup_track(conn, tid, tagged_card())[0]["status"] == "recent"
+
+
+def test_guard_ignores_musicbrainz_global_rate_headers():
+    p = acousticbrainz.AcousticBrainz()
+    g = p.guard
+    g.before_request()
+    g.after_response(200, {"x-ratelimit-limit": "15", "x-ratelimit-remaining": "12", "x-ratelimit-zone": "global"})
+    assert g.paused_until == 0.0
+    g.before_request()
+    g.after_response(503, {"retry-after": "0"})
+    assert g.paused_until <= time.time()  # Retry-After: 0 means no pause

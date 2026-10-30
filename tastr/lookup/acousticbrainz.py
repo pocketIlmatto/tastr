@@ -8,12 +8,15 @@ keeps each recording's first submission in a small SQLite index (`build_index`, 
 
 A lookup is two steps:
 
-1. MusicBrainz recording search by artist and title (https://musicbrainz.org/doc/MusicBrainz_API). No
-   key, but at most one request a second and a user agent that names the app; the guardrails space
-   this provider's requests 1.1 s apart. Hits must match the title and artist credit (and the length,
-   within LENGTH_SLACK, when both sides know it).
+1. MusicBrainz recording search by title and first-listed artist (https://musicbrainz.org/doc/MusicBrainz_API;
+   a whole multi-artist credit rarely matches theirs word for word). No key, but at most one request a
+   second and a user agent that names the app; the guardrails space this provider's requests 1.1 s
+   apart. Hits must match the title and the whole artist credit in any order (and the length, within
+   LENGTH_SLACK, when both sides know it).
 2. The matching recording ids (closest length first) in the index. The first one with a BPM or key is
    the answer. No network for this step.
+3. MusicBrainz often lists one song as several recordings and AcousticBrainz analyzed only some of
+   them, so when none is in the index, one more search finds the other recordings with the same ISRCs.
 
 Without an index, ACOUSTICBRAINZ_API_BASE can name a server that still speaks the AcousticBrainz API
 (its bulk /api/v1/low-level endpoint); then step 2 is one request for up to 25 ids.
@@ -38,7 +41,7 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 from . import register
-from .base import LookupResult, Provider, ProviderError, TrackQuery, num, same_artists, same_text
+from .base import LookupResult, Provider, ProviderError, TrackQuery, artist_names, num, same_artists, same_text
 
 MUSICBRAINZ_BASE = "https://musicbrainz.org/ws/2"
 DUMP_BASE = "https://data.metabrainz.org/pub/musicbrainz/acousticbrainz/dumps/acousticbrainz-lowlevel-features-20220623"
@@ -46,7 +49,7 @@ DUMP_FILES = ["acousticbrainz-lowlevel-features-20220623-rhythm.tar.zst",
               "acousticbrainz-lowlevel-features-20220623-tonal.tar.zst"]
 INDEX_NAME = "acousticbrainz-index.sqlite"
 LENGTH_SLACK = 15.0  # seconds a MusicBrainz recording's length may differ from the file's
-SEARCH_LIMIT = 10
+SEARCH_LIMIT = 25
 BULK_MAX = 25  # the AcousticBrainz API's limit per bulk request
 FIELDS = ("bpm", "key_key", "key_scale")
 
@@ -188,6 +191,10 @@ def _credit(rec: dict) -> str:
                    for c in rec.get("artist-credit") or [])
 
 
+def _usable(f: dict | None) -> bool:
+    return bool(f) and (num(f.get("bpm")) is not None or bool(f.get("key_key")))
+
+
 class AcousticBrainz(Provider):
     name = "acousticbrainz"
     label = "AcousticBrainz"
@@ -196,6 +203,7 @@ class AcousticBrainz(Provider):
     # MusicBrainz allows one request a second on average; stay a little under it.
     min_interval = 1.1
     daily_limit = 1000
+    quota_headers = False  # MusicBrainz's x-ratelimit-* headers are its global load, not ours
 
     def index(self) -> Path:
         return default_index()
@@ -210,15 +218,26 @@ class AcousticBrainz(Provider):
     def setup_hint(self) -> str:
         return f"no index at {self.index()} (run `tastr fetch acousticbrainz`, see docs/lookup.md)"
 
-    def candidates(self, q: TrackQuery) -> list[dict]:
-        """MusicBrainz recordings that match the track ({mbid, artist, title}), closest length first."""
+    def search(self, query: str) -> list[dict]:
+        """One MusicBrainz recording search. A dropped or cut-off connection, or a 503 (MusicBrainz is busy;
+        it sends Retry-After: 0), is tried once more through the guardrails, which space it 1.1 s on."""
         base = os.environ.get("MUSICBRAINZ_API_BASE", MUSICBRAINZ_BASE).rstrip("/")
-        _, body = self.get_json(f"{base}/recording", {
-            "query": f"recording:{_lucene(q.title)} AND artist:{_lucene(q.artist)}", "fmt": "json",
-            "limit": str(SEARCH_LIMIT)})
+        params = {"query": query, "fmt": "json", "limit": str(SEARCH_LIMIT)}
+        try:
+            _, body = self.get_json(f"{base}/recording", params, source="MusicBrainz")
+        except ProviderError as e:
+            if e.status not in (None, 503):
+                raise
+            _, body = self.get_json(f"{base}/recording", params, source="MusicBrainz")
         recs = (body or {}).get("recordings") if isinstance(body, dict) else None
         if not isinstance(recs, list):
             raise ProviderError("MusicBrainz sent an unexpected search response")
+        return recs
+
+    def candidates(self, q: TrackQuery) -> list[dict]:
+        """MusicBrainz recordings that match the track ({mbid, artist, title, isrcs}), closest length first."""
+        first = (artist_names(q.artist) or [q.artist])[0]
+        recs = self.search(f"recording:{_lucene(q.title)} AND artist:{_lucene(first)}")
         hits = []
         for r in recs:
             if not (r.get("id") and same_text(r.get("title"), q.title) and same_artists(_credit(r), q.artist)):
@@ -228,7 +247,7 @@ class AcousticBrainz(Provider):
             if diff is not None and diff > LENGTH_SLACK:
                 continue
             hits.append((diff if diff is not None else LENGTH_SLACK, len(hits),
-                         {"mbid": r["id"], "artist": _credit(r), "title": r.get("title")}))
+                         {"mbid": r["id"], "artist": _credit(r), "title": r.get("title"), "isrcs": r.get("isrcs") or []}))
         return [h for *_, h in sorted(hits, key=lambda h: h[:2])]
 
     def features(self, mbids: list[str]) -> dict[str, dict]:
@@ -244,19 +263,38 @@ class AcousticBrainz(Provider):
                     k: (doc.get("tonal") or {}).get(k) for k in ("key_key", "key_scale")}}
         return out
 
-    def lookup(self, q: TrackQuery) -> LookupResult:
-        hits = self.candidates(q)
-        mbids = [h["mbid"] for h in hits]
-        if not hits:
-            return LookupResult(self.name, "not_found")
+    def same_isrc(self, hits: list[dict]) -> list[dict]:
+        """Other MusicBrainz recordings sharing an ISRC with the hits: the same audio, listed again."""
+        isrcs = sorted({i for h in hits for i in h["isrcs"]})[:10]
+        if not isrcs:
+            return []
+        seen = {h["mbid"] for h in hits}
+        recs = self.search("isrc:(" + " OR ".join(isrcs) + ")")
+        return [{"mbid": r["id"], "artist": _credit(r), "title": r.get("title"), "isrcs": r.get("isrcs") or []}
+                for r in recs if r.get("id") and r["id"] not in seen and set(r.get("isrcs") or []) & set(isrcs)]
+
+    def _read(self, mbids: list[str]) -> dict[str, dict]:
         try:
-            found = self.features(mbids)
+            return self.features(mbids)
         except sqlite3.Error as e:
             raise ProviderError(f"Couldn't read the AcousticBrainz index at {self.index()}: {e}") from None
+
+    def lookup(self, q: TrackQuery) -> LookupResult:
+        hits = self.candidates(q)
+        if not hits:
+            return LookupResult(self.name, "not_found")
+        found = self._read([h["mbid"] for h in hits])
+        more: list[dict] = []
+        if not any(_usable(found.get(h["mbid"])) for h in hits):
+            more = self.same_isrc(hits)
+            if more:
+                hits += more
+                found |= self._read([h["mbid"] for h in more])
+        mbids = [h["mbid"] for h in hits]
         for h in hits:
             m = h["mbid"]
             f = found.get(m)
-            if not f or (num(f.get("bpm")) is None and not f.get("key_key")):
+            if not _usable(f):
                 continue
             key = " ".join(x for x in (f.get("key_key"), f.get("key_scale")) if x) or None
             return LookupResult(self.name, "found", bpm=num(f.get("bpm")), key=key,
@@ -264,7 +302,8 @@ class AcousticBrainz(Provider):
                                 url=f"https://musicbrainz.org/recording/{m}",
                                 extra={"mbid": m, "candidates": len(mbids)})
         # On MusicBrainz but never analyzed by AcousticBrainz (or released after 2022).
-        return LookupResult(self.name, "not_found", extra={"mbids": mbids[:3]})
+        return LookupResult(self.name, "not_found", extra={"mbids": mbids[:3], "tried": len(mbids),
+                                                           "same_isrc": len(more)})
 
 
 register(AcousticBrainz())

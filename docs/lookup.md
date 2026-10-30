@@ -113,7 +113,7 @@ tastr fetch acousticbrainz acousticbrainz --remote      # on Modal, into the R2 
 # or the same without redeploying the shared app, from a checkout of main:
 modal run tastr/cloud/modal_app.py::fetch --dataset acousticbrainz --path acousticbrainz
 # or on this machine (needs `pip install zstandard` or the zstd tool):
-tastr fetch acousticbrainz ~/Development/tastr-data/acousticbrainz
+tastr fetch acousticbrainz $TASTR_DATA/acousticbrainz
 ```
 
 `--remote` calls the deployed app, so it needs a `modal deploy` from a checkout that has this provider.

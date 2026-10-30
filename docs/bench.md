@@ -330,11 +330,13 @@ The drum lanes behind the detected groove (kick, snare, clap, hat, open hat,
 tom, perc; see `tastr/engine/drums.py`, and [drums.md](drums.md) for the design,
 what was tried and dropped, and known weaknesses) have their own benchmark:
 
+`$TASTR_DATA` is your dataset folder ([local-setup.md](local-setup.md)).
+
 ```
 tastr drum-bench synth                                          # generated loops, every lane
-tastr drum-bench idmt ~/Development/tastr-data/idmt-smt-drums --limit 20   # quick check while tuning
-tastr drum-bench mdb ~/Development/tastr-data/mdb-drums --out mdb.json
-tastr drum-bench stemgmd-mix ~/Development/tastr-data/stemgmd-single-hits
+tastr drum-bench idmt $TASTR_DATA/idmt-smt-drums --limit 20   # quick check while tuning
+tastr drum-bench mdb $TASTR_DATA/mdb-drums --out mdb.json
+tastr drum-bench stemgmd-mix $TASTR_DATA/stemgmd-single-hits
 tastr drum-bench mdb mdb-drums --remote                         # on Modal (docs/cloud.md)
 ```
 

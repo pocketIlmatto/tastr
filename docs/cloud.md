@@ -101,13 +101,15 @@ tastr bench synth --remote --limit 4      # synthetic tracks, needs no datasets
 Keep the same folder layout as on disk: each dataset is a top-level folder in the bucket, laid out the way
 its loader expects ([bench.md](bench.md#datasets)). With [rclone](https://rclone.org), once:
 
+`$TASTR_DATA` below is your local dataset folder ([local-setup.md](local-setup.md)).
+
 ```
 rclone config create r2 s3 provider=Cloudflare access_key_id=<id> secret_access_key=<secret> \
   endpoint=https://<account id>.r2.cloudflarestorage.com no_check_bucket=true
-tastr bench beatport-key ~/Development/tastr-data/beatport-key --write-index
-rclone copy ~/Development/tastr-data/beatport-key r2:tastr-data/beatport-key --progress
-tastr bench giantsteps-key ~/Development/tastr-data/giantsteps-key --write-index
-rclone copy -L ~/Development/tastr-data/giantsteps-key r2:tastr-data/giantsteps-key --progress
+tastr bench beatport-key $TASTR_DATA/beatport-key --write-index
+rclone copy $TASTR_DATA/beatport-key r2:tastr-data/beatport-key --progress
+tastr bench giantsteps-key $TASTR_DATA/giantsteps-key --write-index
+rclone copy -L $TASTR_DATA/giantsteps-key r2:tastr-data/giantsteps-key --progress
 ```
 
 `--write-index` saves the loader's track list as `tastr-index-<dataset>.json` in the folder (one per
@@ -130,8 +132,8 @@ the original recordings are scored, so upload a slim copy of the file without th
 (hjdb: 153 MB instead of 3.2 GB) and that dataset's annotations bundled into one JSON file:
 
 ```
-tastr spec-bench tempo ~/Development/tastr-data/beat-this --dataset hjdb --write-originals
-rclone copy ~/Development/tastr-data/beat-this r2:tastr-data/beat-this \
+tastr spec-bench tempo $TASTR_DATA/beat-this --dataset hjdb --write-originals
+rclone copy $TASTR_DATA/beat-this r2:tastr-data/beat-this \
   --include "hjdb-originals.npz" --include "hjdb-annotations.json"
 tastr spec-bench tempo beat-this --dataset hjdb --remote --limit 20
 tastr spec-bench downbeats beat-this --dataset hjdb --remote
@@ -195,14 +197,14 @@ single hits trimmed to 1.5 s, mono at 22,050 Hz, in one 55 MB npz. Write them, t
 audio:
 
 ```
-tastr drum-bench idmt ~/Development/tastr-data/idmt-smt-drums --write-bundle
-rclone copy ~/Development/tastr-data/idmt-smt-drums r2:tastr-data/idmt-smt-drums \
+tastr drum-bench idmt $TASTR_DATA/idmt-smt-drums --write-bundle
+rclone copy $TASTR_DATA/idmt-smt-drums r2:tastr-data/idmt-smt-drums \
   --include "audio/*#MIX.wav" --include "annotation_xml/*#MIX.xml" --include "idmt-annotations.json"
-tastr drum-bench mdb ~/Development/tastr-data/mdb-drums --write-bundle
-rclone copy ~/Development/tastr-data/mdb-drums r2:tastr-data/mdb-drums --include "audio/full_mix/**" \
+tastr drum-bench mdb $TASTR_DATA/mdb-drums --write-bundle
+rclone copy $TASTR_DATA/mdb-drums r2:tastr-data/mdb-drums --include "audio/full_mix/**" \
   --include "audio/drum_only/**" --include "annotations/**" --include "mdb-annotations.json"
-tastr drum-bench stemgmd-mix ~/Development/tastr-data/stemgmd-single-hits --write-bundle
-rclone copy ~/Development/tastr-data/stemgmd-single-hits r2:tastr-data/stemgmd-single-hits \
+tastr drum-bench stemgmd-mix $TASTR_DATA/stemgmd-single-hits --write-bundle
+rclone copy $TASTR_DATA/stemgmd-single-hits r2:tastr-data/stemgmd-single-hits \
   --include "StemGMD_single_hits/**" --include "stemgmd-hits.npz"
 tastr drum-bench mdb mdb-drums --remote
 tastr drum-bench synth --remote          # needs no dataset

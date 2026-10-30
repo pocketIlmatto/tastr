@@ -215,7 +215,7 @@ Supported datasets:
 | `manifest` | your own tracks, from a CSV or JSON file |
 | `synth` | generated tracks; a smoke test that needs no data |
 
-Stage the data in a folder outside the repo and never commit audio; docs/bench.md
+Stage the data in a folder outside the repo (`$TASTR_DATA`, see docs/local-setup.md) and never commit audio; docs/bench.md
 shows the layout. Example commands:
 
 ```bash

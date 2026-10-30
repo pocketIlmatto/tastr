@@ -247,6 +247,19 @@ def test_ui_saves_edits_and_versions():
     assert "Save your edits as a version" in html and "Close the Versions popover" in html
 
 
+def test_ui_has_808_and_technics_looks():
+    from tastr.web.server import STATIC_DIR
+
+    html = (STATIC_DIR / "index.html").read_text()
+    assert 'localStorage.getItem("tastr-look")' in html and 'dataset.look = "808"' in html
+    assert 'data-look="808" aria-pressed="true"' in html and 'data-look="technics"' in html
+    css = (STATIC_DIR / "style.css").read_text()
+    assert ':root[data-look="808"]' in css and ':root[data-look="technics"]' in css
+    assert css.count("--edit: #1f6fd1") == 2  # blue edits inside both looks: 808 uses yellow for beats
+    js = (STATIC_DIR / "app.js").read_text()
+    assert 'const LOOKS = ["808", "technics"]' in js and 'localStorage.setItem("tastr-look"' in js
+
+
 def test_ui_has_track_actions_menu():
     from tastr.web.server import STATIC_DIR
 

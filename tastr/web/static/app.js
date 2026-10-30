@@ -454,7 +454,10 @@ function stat(value, label) {
 
 let sectionBus = new EventTarget();
 
+let shownCard = null;
+
 function renderCard(c) {
+  shownCard = c;
   stopAllPlayback();
   if (!savedEdits.has(c.id)) loadEdits(c.id).then(() => { if (savedEdits.has(c.id) && currentId === c.id && $("card").dataset.id === String(c.id)) renderCard(c); });
   if (c.stems_state && !stemsBusy(stemStatus.get(c.id) || {})) { stemStatus.set(c.id, { state: c.stems_state }); pollStems(); } // a fresh card knows best
@@ -2057,3 +2060,17 @@ document.addEventListener("keydown", (e) => {
   openHelp();
 });
 $("sql").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runSql(); } });
+
+// Looks: data-look on <html> (808 by default; the inline script in index.html sets it before first paint).
+// To add a look: a :root[data-look="x"] block in style.css, a button in .look-pick, and the id here and in that script.
+const LOOKS = ["808", "technics"];
+function setLook(v, rerender = true) {
+  if (!LOOKS.includes(v)) v = LOOKS[0];
+  document.documentElement.dataset.look = v;
+  document.querySelectorAll(".look-pick button").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.look === v)));
+  try { localStorage.setItem("tastr-look", v); } catch (_) {}
+  // Re-render the open card so drawn charts pick up the new colors.
+  if (rerender && shownCard && currentId === shownCard.id) renderCard(shownCard);
+}
+document.querySelectorAll(".look-pick button").forEach((b) => b.addEventListener("click", () => setLook(b.dataset.look)));
+setLook(document.documentElement.dataset.look, false);

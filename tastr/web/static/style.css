@@ -269,7 +269,7 @@ details.sec[open] > summary::after { content: "Hide"; }
 #track-list li.trk .s.job { display: flex; align-items: center; gap: 6px; color: var(--accent); }
 #track-list li.trk .s.job.fail { color: var(--warn); cursor: help; }
 /* Shortcuts help. */
-header nav { margin-left: auto; }
+header .head-right { margin-left: auto; }
 #help-btn { flex: none; width: 32px; height: 32px; padding: 0; border-radius: 50%; font-weight: 600; }
 #help-btn:focus-visible, #help-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #help { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 40px rgb(0 0 0 / .3); }
@@ -352,8 +352,8 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .mini-keys { width: 84px; height: 34px; }
 .mini-keys .kw { fill: #f7f7fa; stroke: #b9b9c4; stroke-width: 1; }
 .mini-keys .kb { fill: #2a2a33; }
-.mini-keys .on { fill: #a99ff5; }
-.mini-keys .on.root { fill: #5b4bdb; }
+.mini-keys .on { fill: color-mix(in srgb, var(--accent) 50%, #fff); }
+.mini-keys .on.root { fill: var(--accent); }
 @media (max-width: 700px) { .chord-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .groove .bar-picks { grid-template-columns: repeat(4, 1fr); } .groove .bar-picks::before { display: none; } .roll { grid-template-columns: 28px 1fr; } }
 
 /* Edits in Drums, bass & chords: --edit (gold) marks what the user changed; it is not a section color and not the "changed vs previous section" outline */
@@ -388,3 +388,64 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .st-src .st-opt { margin: 0; }
 .seq-tools .linklike { padding: 0; font-size: inherit; }
 .ver-save button { font-size: 13px; padding: 4px 10px; }
+
+/* ---------- Looks: 808 (default) and Technics. Picked in the header, saved in localStorage "tastr-look".
+   To add one: a :root[data-look="x"] token block + overrides below, and a button in .look-pick. ---------- */
+h1 { white-space: nowrap; }
+.head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.look-pick { display: inline-flex; align-items: center; gap: 0; font-size: 11px; }
+.look-pick > span { margin-right: 6px; opacity: .75; text-transform: uppercase; letter-spacing: .12em; }
+.look-pick button { padding: 3px 8px; font-size: 11px; border-radius: 0; margin-left: -1px; }
+.look-pick button:first-of-type { border-radius: 3px 0 0 3px; } .look-pick button:last-of-type { border-radius: 0 3px 3px 0; }
+.look-pick button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.look-pick button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; position: relative; }
+[data-look="808"] .look-pick button { background: #2a2826; color: #f4efe2; border-color: #3a3734; box-shadow: 0 2px 0 #000; }
+[data-look="808"] .look-pick button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
+[data-look="technics"] .look-pick button[aria-pressed="true"] { background: #121212; color: #e7e3db; border-color: #121212; }
+@media (max-width: 700px) { [data-look] h1::after { display: none; } .look-pick > span { display: none; } }
+/* 808: drum-machine hardware. Cream panels, black body, orange/red/yellow keys, mono labels. */
+:root[data-look="808"] {
+  --bg: #e9e3d3; --fg: #161514; --muted: #6d665a; --line: #c9c0ab; --panel: #f4efe2;
+  --accent: #e2531d; --accent-soft: #f6d7c3; --warn: #b3261e; --edit: #1f6fd1;
+  --sec0: #e2531d; --sec1: #f0a01c; --sec2: #e8d33a; --sec3: #b8371f; --sec4: #6d665a;
+  color-scheme: light;
+}
+[data-look="808"] body { font-family: "Space Grotesk", system-ui, sans-serif; }
+[data-look="808"] header { background: #161514; color: #f4efe2; border-bottom: 4px solid var(--accent); }
+[data-look="808"] h1 { font-family: "Space Mono", monospace; letter-spacing: .25em; text-transform: uppercase; color: var(--accent); }
+[data-look="808"] h1::after { content: " · rhythm composer"; font-size: 11px; letter-spacing: .15em; color: #b9b1a0; }
+[data-look="808"] nav button { background: #2a2826; color: #f4efe2; border-color: #3a3734; }
+[data-look="808"] nav button.active { background: var(--accent); border-color: var(--accent); }
+[data-look="808"] button { border-radius: 3px; border: 1px solid #a99f88; box-shadow: 0 2px 0 #a99f88; font-family: "Space Mono", monospace; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+[data-look="808"] button:active { transform: translateY(1px); box-shadow: 0 1px 0 #a99f88; }
+[data-look="808"] details.sec > summary, [data-look="808"] .lib-title, [data-look="808"] h3 { font-family: "Space Mono", monospace; letter-spacing: .18em; color: var(--fg); }
+[data-look="808"] details.sec > summary { background: #161514; color: #f4efe2; border-radius: 3px; }
+[data-look="808"] details.sec > summary:hover { background: #2a2826; color: #fff; }
+[data-look="808"] .beat-group:nth-child(1) { background: #e2531d33; } [data-look="808"] .beat-group:nth-child(2) { background: #f0a01c33; }
+[data-look="808"] .beat-group:nth-child(3) { background: #e8d33a40; } [data-look="808"] .beat-group:nth-child(4) { background: #ffffff; }
+[data-look="808"] .drum-grid i { border-radius: 2px; border-color: #a99f88; background: #f4efe2; box-shadow: inset 0 -2px 0 #0001; }
+[data-look="808"] .drum-grid i.full { background: var(--accent); box-shadow: 0 0 6px #e2531d99; }
+[data-look="808"] #lib, [data-look="808"] .chord-cell { border: 2px solid #161514; border-radius: 4px; }
+
+/* Technics: 70s hi-fi. Champagne aluminium, black engraved wide type, red LED strobe dots. */
+:root[data-look="technics"] {
+  --bg: #d9d5cc; --fg: #121212; --muted: #5f5b53; --line: #b3ada1; --panel: #e7e3db;
+  --accent: #e5261f; --accent-soft: #f3cfc9; --warn: #b3261e; --edit: #1f6fd1;
+  --sec0: #121212; --sec1: #7a7468; --sec2: #e5261f; --sec3: #3e5c76; --sec4: #a39d90;
+  color-scheme: light;
+}
+[data-look="technics"] body { font-family: "Instrument Sans", system-ui, sans-serif; background: repeating-linear-gradient(0deg, #dcd8cf 0 1px, #d5d1c8 1px 2px); }
+[data-look="technics"] h1, [data-look="technics"] details.sec > summary, [data-look="technics"] .lib-title, [data-look="technics"] .card-head h2 { font-family: "Michroma", sans-serif; letter-spacing: .14em; text-transform: uppercase; font-weight: 400; color: var(--fg); }
+[data-look="technics"] h1 { font-size: 18px; }
+[data-look="technics"] h1::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); margin-right: 10px; vertical-align: middle; }
+[data-look="technics"] .card-head h2 { font-size: 20px; line-height: 1.3; }
+[data-look="technics"] details.sec > summary { font-size: 11px; border-bottom: 1px solid var(--fg); border-radius: 0; }
+[data-look="technics"] header { border-bottom: 1px solid var(--fg); }
+[data-look="technics"] button { border-radius: 1px; background: linear-gradient(#efece6, #cfcac0); border: 1px solid #8c867a; box-shadow: inset 0 1px 0 #fff; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+[data-look="technics"] nav button.active, [data-look="technics"] .sec-tab[aria-selected="true"] { background: #121212; color: #e7e3db; border-color: #121212; }
+[data-look="technics"] .drum-grid i { border-radius: 50%; background: #2a2a2a; border-color: #121212; transform: scale(.7); }
+[data-look="technics"] .drum-grid i.full { background: #ff3b30; box-shadow: 0 0 8px #ff3b30; }
+[data-look="technics"] .drum-grid i.half { background: #9e2a24; box-shadow: 0 0 4px #ff3b3099; }
+[data-look="technics"] .beat-group { background: transparent; border-bottom: 1px solid #12121233; border-radius: 0; }
+[data-look="technics"] .stat b { font-family: "Michroma", sans-serif; font-size: 18px; }
+[data-look="technics"] #lib, [data-look="technics"] .chord-cell { border: 1px solid #8c867a; border-radius: 2px; }

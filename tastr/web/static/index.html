@@ -4,15 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tastr</title>
+<script>try { var l = localStorage.getItem("tastr-look"); document.documentElement.dataset.look = (l === "technics") ? l : "808"; } catch (_) { document.documentElement.dataset.look = "808"; }</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600&family=Michroma&family=Space+Grotesk:wght@400;600&family=Space+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <header>
   <h1>Tastr</h1>
-  <nav>
-    <button data-view="library" class="active">Library</button>
-    <button data-view="explore">Explore</button>
-  </nav>
+  <div class="head-right">
+    <span class="look-pick" role="group" aria-label="Look"><span>Look</span><button type="button" data-look="808" aria-pressed="true" title="Drum-machine panel: cream, black and orange">808</button><button type="button" data-look="technics" aria-pressed="false" title="70s hi-fi: champagne aluminium and red LEDs">Technics</button></span>
+    <nav>
+      <button data-view="library" class="active">Library</button>
+      <button data-view="explore">Explore</button>
+    </nav>
+  </div>
   <button type="button" id="help-btn" aria-haspopup="dialog" aria-controls="help" aria-keyshortcuts="?" title="Keyboard and mouse shortcuts (?)">?</button>
 </header>
 <dialog id="help" aria-labelledby="help-title">

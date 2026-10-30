@@ -220,3 +220,27 @@ def test_meter_score_tells_three_from_four(meter):
 def test_core_records_a_meter_guess(default_card):
     card, _ = default_card
     assert card.extras["core.meter_guess"]["beats_per_bar"] == 4  # synthetic tracks are 4/4
+
+
+def test_meter_can_be_set_per_analysis(default_card):
+    """{"beats_per_bar": 3} puts a downbeat on every 3rd beat and marks the meter as the user's choice."""
+    y, _ = make_track(bpm=124, bars_per_section=SHORT)
+    card = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="synthetic")), stages=["core"],
+                        options={"beats_per_bar": 3})
+    beats, downs = card.core.beat_times, card.core.downbeat_times
+    assert card.core.beats_per_bar == 3 and card.core.meter_set
+    assert downs and all(d in beats for d in downs)
+    i = [beats.index(d) for d in downs]
+    assert set(np.diff(i)) == {3}
+    detected, _ = default_card
+    assert detected.core.beats_per_bar == 4 and not detected.core.meter_set
+
+
+def test_tastr_meter_turns_3_4_detection_off(monkeypatch):
+    from tastr.engine.stages.core import _beats_per_bar
+
+    assert _beats_per_bar(None, 3) == (3, False)
+    assert _beats_per_bar(4, 3) == (4, True)
+    monkeypatch.setenv("TASTR_METER", "4/4")
+    assert _beats_per_bar(None, 3) == (4, False)
+    assert _beats_per_bar(3, 4) == (3, True)  # a meter the user set still wins

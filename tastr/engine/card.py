@@ -56,7 +56,9 @@ class Core:
     energy: float | None = None  # 0..1, whole-track
     loudness_db: float | None = None
     beat_times: list[float] = field(default_factory=list)  # seconds
-    downbeat_times: list[float] = field(default_factory=list)  # seconds, bar starts (4/4 assumed)
+    downbeat_times: list[float] = field(default_factory=list)  # seconds, bar starts
+    beats_per_bar: int = 4  # 3 (3/4) or 4 (4/4): detected, or set by the user (meter_set)
+    meter_set: bool = False  # True when the user picked the meter for this track instead of detecting it
 
 
 @dataclass

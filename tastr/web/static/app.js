@@ -490,6 +490,11 @@ function sureness(likely, raw) {
 }
 
 let sectionBus = new EventTarget();
+// Beats per bar (3 or 4; cards analyzed before meter detection are 4/4) and 16th-note steps per bar.
+const beatsPerBar = (c) => ((c && c.core && c.core.beats_per_bar) === 3 ? 3 : 4);
+const barSteps = (c) => 4 * beatsPerBar(c);
+const METER_TIP = { detected: "Time signature, detected from how the beats group: in 3s (3/4, like a waltz) or 4s (4/4). Most tracks are 4/4. If it's wrong, change it in the ⋯ menu.",
+  set: "Time signature you picked in the ⋯ menu. Re-analyzing keeps it; pick “Detect the time signature again” to go back." };
 
 let shownCard = null;
 
@@ -513,7 +518,8 @@ function renderCard(c) {
     stat(mmss(c.duration), "duration"),
     stat(isNum(core.bpm) ? core.bpm.toFixed(1) : "–", bpmSure ? `BPM · ${bpmSure.text}` : "BPM", bpmSure && bpmSure.title),
     stat(key ? `${keyName(key)}` : "–", key ? [key.camelot, key.scale, keySure && keySure.text].filter(Boolean).join(" · ") || "key" : "key",
-      keySure && keySure.title)
+      keySure && keySure.title),
+    isNum(core.bpm) ? stat(`${beatsPerBar(c)}/4`, core.meter_set ? "time · set by you" : "time", core.meter_set ? METER_TIP.set : METER_TIP.detected) : null
   );
   const en = h("div", { class: "stat" },
     h("b", {}, isNum(core.energy) ? core.energy.toFixed(2) : "–"),
@@ -930,7 +936,7 @@ function energyChart(series, sections, duration, card) {
       // Beat grid: bar lines thinned by stride to stay >= 10 px apart, labels >= 30 px apart, beats only when >= 6 px apart.
       const beats = (card.core.beat_times || []).filter((t) => t >= view.a && t <= view.b), bars = card.core.downbeat_times || [];
       const pxPer = (W - L - R) / (view.b - view.a), barGap = bars.length > 1 ? (bars[1] - bars[0]) * pxPer : 0;
-      if (beats.length && barGap / 4 >= 6) {
+      if (beats.length && barGap / beatsPerBar(card) >= 6) {
         let bd = ""; for (const t of beats) bd += `M${x(t).toFixed(1)},${T}V${H - B}`;
         plot.append(svg("path", { d: bd, stroke: "var(--muted)", "stroke-width": 0.5, opacity: 0.35 }));
       }
@@ -1181,14 +1187,16 @@ const laneHelp = (lane, measured, help) => {
   return text ? `${cap(laneName(lane))}: ${text.charAt(0).toLowerCase()}${text.slice(1)}` : LANE_HELP[lane] || "Measured from the audio.";
 };
 
-// One lane per instrument; the 16 steps sit in four tinted beat groups, with beat numbers above the first lane.
+// One lane per instrument; the steps (16 in 4/4, 12 in 3/4) sit in tinted beat groups of 4, with beat numbers above the first lane.
 // `orig` is what the user's edits are measured against (the detected pattern or the picked template): steps that differ are "mine".
 const STEP_NAMES = { x: "strong", o: "softer", ".": "empty" };
 function laneRows(pattern, prev, measured, onToggle, help, orig) {
   const rows = [];
+  let nBeats = 4;
   for (const [lane, pat] of Object.entries(pattern)) {
     if (typeof pat !== "string") continue;
-    const cells = [...pat.slice(0, 16)].map((ch, i) => {
+    nBeats = pat.length === 12 ? 3 : 4;
+    const cells = [...pat.slice(0, nBeats * 4)].map((ch, i) => {
       const changed = prev && prev[lane] && prev[lane][i] !== ch;
       const was = orig ? (orig[lane] || "")[i] || "." : ch, mine = was !== ch;
       return h("i", { class: [ch === "x" ? "full" : ch === "o" ? "half" : "", changed ? "chg" : "", mine ? "mine" : ""].join(" ").trim(),
@@ -1198,10 +1206,10 @@ function laneRows(pattern, prev, measured, onToggle, help, orig) {
         onclick: onToggle ? () => onToggle(lane, i) : null,
         onkeydown: onToggle ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(lane, i); } } : null });
     });
-    const beats = [0, 1, 2, 3].map((b) => h("div", { class: "beat-group" }, cells.slice(b * 4, b * 4 + 4)));
+    const beats = [...Array(nBeats).keys()].map((b) => h("div", { class: "beat-group" }, cells.slice(b * 4, b * 4 + 4)));
     rows.push(h("div", { class: "drum-lane" }, h("span", { class: "name", tabindex: "0", "data-tip": laneHelp(lane, measured, help) }, laneName(lane)), h("div", { class: "drum-grid" }, beats)));
   }
-  if (rows.length) rows.unshift(h("div", { class: "drum-lane beat-nums", "aria-hidden": "true" }, h("span", { class: "name" }), h("div", { class: "drum-grid" }, [1, 2, 3, 4].map((n) => h("span", {}, n)))));
+  if (rows.length) rows.unshift(h("div", { class: "drum-lane beat-nums", "aria-hidden": "true" }, h("span", { class: "name" }), h("div", { class: "drum-grid" }, [...Array(nBeats).keys()].map((n) => h("span", {}, n + 1)))));
   return rows;
 }
 
@@ -1274,13 +1282,14 @@ function padVoice(ctx, midis, t, dur) {
 }
 // General MIDI drum map (channel 10): kick 36, snare 38, clap 39, closed hat 42, open hat 46, low tom 45, perc (cowbell) 56, anything else 37.
 const GM_NOTE = (lane) => { const l = lane.toLowerCase(); return l.includes("kick") ? 36 : l.includes("snare") ? 38 : l.includes("clap") ? 39 : isOpenHat(l) ? 46 : l.includes("hat") ? 42 : l.includes("tom") ? 45 : l.includes("perc") ? 56 : l.includes("cymbal") ? 49 : 37; };
-// Format 1, 480 PPQN (1920 ticks per 4/4 bar): a tempo track, then one track per part, as [name, channel, events {t, d, note, vel}].
-function midiMulti(tracks, bpm, ticks) {
+// Format 1, 480 PPQN (120 ticks per 16th, 1920 per 4/4 bar): a tempo and time signature track, then one track per part,
+// as [name, channel, events {t, d, note, vel}]. `beats` is the time signature's top number (4 for 4/4, 3 for 3/4).
+function midiMulti(tracks, bpm, ticks, beats = 4) {
   const vlq = (n) => { const o = [n & 127]; while ((n >>= 7)) o.unshift((n & 127) | 128); return o; };
   const chunk = (data) => [0x4d, 0x54, 0x72, 0x6b, data.length >> 24 & 255, data.length >> 16 & 255, data.length >> 8 & 255, data.length & 255, ...data];
   const us = Math.round(60e6 / bpm);
   const out = [0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 1, 0, tracks.length + 1, 1, 0xe0,
-    ...chunk([0, 0xff, 0x51, 3, us >> 16 & 255, us >> 8 & 255, us & 255, 0, 0xff, 0x58, 4, 4, 2, 24, 8, ...vlq(ticks), 0xff, 0x2f, 0])];
+    ...chunk([0, 0xff, 0x51, 3, us >> 16 & 255, us >> 8 & 255, us & 255, 0, 0xff, 0x58, 4, beats, 2, 24, 8, ...vlq(ticks), 0xff, 0x2f, 0])];
   for (const [name, ch, events] of tracks) {
     const nm = [...name].map((c) => c.charCodeAt(0) & 127), ev = [];
     for (const e of events) ev.push([e.t, 1, [0x90 | ch, e.note, e.vel]], [e.t + e.d, 0, [0x80 | ch, e.note, 0]]);
@@ -1311,11 +1320,11 @@ function diffText(pattern, prev) {
 }
 
 const TPL_TIPS = ["A hit on this step in the template.", "A lighter hit in the template, such as an accent or open hat.", "No hit on this step."];
-const legend = (measured = true) => h("div", { class: "grid-legend" },
+const legend = (measured = true, steps = 16) => h("div", { class: "grid-legend" },
   h("span", { tabindex: "0", "data-tip": !measured ? TPL_TIPS[0] : "Strong: at least 72% of the loudest hit in this lane." }, h("i", { class: "sw full" }), measured ? "Strong" : "Hit"),
   h("span", { tabindex: "0", "data-tip": !measured ? TPL_TIPS[1] : "Softer: 50% to 72% of the loudest hit in this lane. Often a ghost note, a quieter hat, or a hit that only lands in some bars." }, h("i", { class: "sw half" }), measured ? "Softer" : "Lighter"),
   h("span", { tabindex: "0", "data-tip": !measured ? TPL_TIPS[2] : "None: under 50% of the loudest hit in this lane, so treated as silence." }, h("i", { class: "sw" }), "None"),
-  h("span", { tabindex: "0", "data-tip": "The grid covers one typical bar of the music, split into 16 equal steps from left to right. Every group of 4 steps is one beat. Each lane (kick, snare, hat) shows which of those steps it plays on." }, "1 bar, 16 steps"));
+  h("span", { tabindex: "0", "data-tip": `The grid covers one typical bar of the music, split into ${steps} equal steps from left to right. Every group of 4 steps is one beat (${steps / 4} beats: ${steps / 4}/4 time). Each lane (kick, snare, hat) shows which of those steps it plays on.` }, `1 bar, ${steps} steps`));
 
 // Mirrors _style() in the suggestions stage: which tempo range picks which template style.
 const STYLE_INFO = {
@@ -1324,9 +1333,11 @@ const STYLE_INFO = {
   halftime: ["136-152 BPM with a percussive track", "Halftime puts the snare on beat 3 so the groove feels half as fast."],
   hiphop: ["80-105 BPM", "Hip-hop grooves sit on a laid-back kick and backbeat snare."],
   generic: ["any other tempo", "A plain backbeat: kick on 1, snare on 2 and 4."],
+  waltz: ["3/4 time", "A waltz counts in 3: a kick on 1, lighter hits on 2 and 3."],
 };
 const styleTip = (d) => {
   const [range, what] = STYLE_INFO[d.style_key] || ["", ""];
+  if (d.style_key === "waltz") return `${what} Chosen because this track was read as 3/4, at any tempo. The track's actual rhythm was not checked.`;
   return `${what} Chosen only because this track is ${d.bpm} BPM and ${range} maps to this style. The track's actual rhythm was not checked.`.trim();
 };
 
@@ -1387,26 +1398,26 @@ function noteOptions(val, key) {
   return [opt("", "—"), h("optgroup", { label: `In ${NOTES[key.tonic]} ${key.mode}` }, sc.map((n) => opt(n, `${n} · ${degreeOf(NOTES.indexOf(n), key)}`))),
     h("optgroup", { label: "Other notes" }, NOTES.filter((n) => !sc.includes(n)).map((n) => opt(n, n)))];
 }
-// Piano roll: 4 bars x 16 steps; rows from F1 to E2, widened to fit the notes used. Each bar's note plays on the rhythm's hits.
-function bassRoll(m, key, orig) {
+// Piano roll: 4 bars x `bar` steps (16 in 4/4, 12 in 3/4); rows from F1 to E2, widened to fit the notes used. Each bar's note plays on the rhythm's hits.
+function bassRoll(m, key, orig, bar = 16) {
   const used = m.notes.filter(Boolean).map((n) => bassMidi(n)).filter((x) => x != null);
   const lo = Math.min(...used, 12 * 2 + 5), hi = Math.max(...used, 12 * 3 + 4);
   const rows = []; for (let p = hi; p >= lo; p--) rows.push(p);
-  const RH = 9, W = 640, H = rows.length * RH, kids = [];
+  const RH = 9, W = 4 * bar * 10, H = rows.length * RH, kids = [];
   rows.forEach((p, r) => {
     kids.push(svg("rect", { x: 0, y: r * RH, width: W, height: RH, class: degreeOf(p % 12, key) != null ? "roll-row" : "roll-row off" }));
     if (p % 12 === key.tonic) kids.push(svg("rect", { x: 0, y: r * RH, width: W, height: RH, class: "roll-tonic" }));
   });
-  for (let st = 0; st <= 64; st += 4) kids.push(svg("line", { x1: st * 10, x2: st * 10, y1: 0, y2: H, class: st % 16 ? "roll-beat" : "roll-bar" }));
+  for (let st = 0; st <= 4 * bar; st += 4) kids.push(svg("line", { x1: st * 10, x2: st * 10, y1: 0, y2: H, class: st % bar ? "roll-beat" : "roll-bar" }));
   const r = m.rhythm;
   m.notes.slice(0, 4).forEach((n, b) => {
     const row = rows.indexOf(bassMidi(n));
     if (!n || !r || row < 0) return;
     [...r].forEach((ch, i) => {
       if (ch === ".") return;
-      let len = 1; while (i + len < 16 && r[i + len] === "." && len < 4) len++;
+      let len = 1; while (i + len < bar && r[i + len] === "." && len < 4) len++;
       const mine = orig && (pcOf(orig.notes[b]) !== pcOf(n) || (orig.rhythm || "")[i] !== ch);
-      kids.push(svg("rect", { x: (b * 16 + i) * 10 + 1, y: row * RH + 1, width: len * 10 - 2, height: RH - 2, rx: 2, class: "roll-note" + (ch === "o" ? " soft" : "") + (mine ? " mine" : "") }));
+      kids.push(svg("rect", { x: (b * bar + i) * 10 + 1, y: row * RH + 1, width: len * 10 - 2, height: RH - 2, rx: 2, class: "roll-note" + (ch === "o" ? " soft" : "") + (mine ? " mine" : "") }));
     });
   });
   kids.push(svg("rect", { x: -20, y: 0, width: 10, height: H, class: "roll-head" }));
@@ -1422,7 +1433,7 @@ function miniKeys(tones, root) {
   return svg("svg", { viewBox: "0 0 84 34", class: "mini-keys", "aria-hidden": "true" }, kids);
 }
 const PART_TIPS = {
-  drums: "Measured from the audio. For each bar in the section, the app takes the jump in loudness at each of 16 steps within each lane's frequency band, then averages across the section's bars.",
+  drums: "Measured from the audio. For each bar in the section, the app takes the jump in loudness at each of 16 steps (12 in 3/4) within each lane's frequency band, then averages across the section's bars.",
   bass: "Measured from the audio. For each bar, the app takes the strongest pitch below about 150 Hz, then finds the 4-bar loop that repeats most often in the section. The rhythm row shows where notes start.",
   chords: "Measured from the audio. For each bar, the app matches the notes it hears against major and minor chords, then finds the 4-bar loop that repeats most often in the section. Bars without a confident match show as a dash.",
 };
@@ -1430,6 +1441,7 @@ const flipStep = (s, i) => s.slice(0, i) + (s[i] === "." ? "x" : s[i] === "x" ? 
 
 function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
   const key = card.core && card.core.key && isNum(card.core.key.tonic) ? card.core.key : null;
+  const BAR = barSteps(card), EMPTY = ".".repeat(BAR); // steps per bar: 16 in 4/4, 12 in 3/4
   const parts = [(drumsSug || templates.length) && "drums", bassSug && key && "bass", harmSug && key && "chords"].filter(Boolean);
   const sugOf = { drums: drumsSug, bass: bassSug, chords: harmSug };
   const bySec = (sug) => (sug && Array.isArray(sug.data.by_section) && sug.data.by_section.length ? sug.data.by_section : null);
@@ -1485,15 +1497,15 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
   resetBtn.onclick = () => { [...parts, "drumsrc"].forEach((p) => delete editsFor(card, p)[ek(sel)]); paint(true); say("Edits reset for this section."); };
   const ui = (playing) => { playBtn.textContent = playing ? "■ Stop" : "▶ Play"; playBtn.setAttribute("aria-pressed", String(playing)); if (!playing) setNow(-1); };
   const playBass = (ctx, t, st, sd, m) => {
-    const r = m.rhythm, b = Math.floor(st / 16) % Math.max(1, m.notes.length), i = st % 16;
+    const r = m.rhythm, b = Math.floor(st / BAR) % Math.max(1, m.notes.length), i = st % BAR;
     if (!r || r[i] === "." || !m.notes[b] || bassMidi(m.notes[b]) == null) return;
-    let len = 1; while (i + len < 16 && r[i + len] === "." && len < 4) len++;
+    let len = 1; while (i + len < BAR && r[i + len] === "." && len < 4) len++;
     bassVoice(ctx, bassMidi(m.notes[b]), t, sd * len * 0.95, r[i] === "x" ? 1 : 0.6);
   };
   const playChords = (ctx, t, st, sd, m) => {
-    if (st % 16) return;
-    const c = m.chords[Math.floor(st / 16) % Math.max(1, m.chords.length)];
-    if (c) padVoice(ctx, chordMidis(c), t, sd * 16);
+    if (st % BAR) return;
+    const c = m.chords[Math.floor(st / BAR) % Math.max(1, m.chords.length)];
+    if (c) padVoice(ctx, chordMidis(c), t, sd * BAR);
   };
   playBtn.onclick = () => {
     if (playBtn.getAttribute("aria-pressed") === "true") { stopAllPlayback(); return; }
@@ -1501,10 +1513,10 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
     try {
       // Reads the current section and edits on every step, so changes (and template swaps) are heard right away.
       startLoop((ctx, t, st, sd) => {
-        if (on.has("drums")) for (const [lane, p] of Object.entries(cur("drums"))) if (typeof p === "string" && p[st % 16] && p[st % 16] !== ".") voice(ctx, lane, t, p[st % 16] === "x" ? 1 : 0.55);
+        if (on.has("drums")) for (const [lane, p] of Object.entries(cur("drums"))) if (typeof p === "string" && p[st % BAR] && p[st % BAR] !== ".") voice(ctx, lane, t, p[st % BAR] === "x" ? 1 : 0.55);
         if (on.has("bass")) playBass(ctx, t, st, sd, cur("bass"));
         if (on.has("chords")) playChords(ctx, t, st, sd, cur("chords"));
-      }, bpmVal, 64, (st) => setNow(st % (bars() * 16)), () => ui(false));
+      }, bpmVal, 4 * BAR, (st) => setNow(st % (bars() * BAR)), () => ui(false));
       ui(true); say("");
     } catch (e) { say("Audio isn't available in this browser."); }
   };
@@ -1514,23 +1526,23 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
     const n = bars(), tracks = [];
     if (on.has("drums")) {
       const ev = [];
-      for (let b = 0; b < n; b++) for (const [lane, p] of Object.entries(cur("drums"))) if (typeof p === "string") [...p.slice(0, 16)].forEach((ch, i) => { if (ch !== ".") ev.push({ t: b * 1920 + i * 120, d: 60, note: GM_NOTE(lane), vel: ch === "x" ? 110 : 70 }); });
+      for (let b = 0; b < n; b++) for (const [lane, p] of Object.entries(cur("drums"))) if (typeof p === "string") [...p.slice(0, BAR)].forEach((ch, i) => { if (ch !== ".") ev.push({ t: b * BAR * 120 + i * 120, d: 60, note: GM_NOTE(lane), vel: ch === "x" ? 110 : 70 }); });
       tracks.push(["Drums", 9, ev]);
     }
     if (on.has("bass")) {
       const m = cur("bass"), ev = [];
-      m.notes.slice(0, n).forEach((nn, b) => { if (nn && m.rhythm && bassMidi(nn) != null) [...m.rhythm].forEach((ch, i) => { if (ch !== ".") ev.push({ t: b * 1920 + i * 120, d: 110, note: bassMidi(nn), vel: ch === "x" ? 110 : 75 }); }); });
+      m.notes.slice(0, n).forEach((nn, b) => { if (nn && m.rhythm && bassMidi(nn) != null) [...m.rhythm].forEach((ch, i) => { if (ch !== ".") ev.push({ t: b * BAR * 120 + i * 120, d: 110, note: bassMidi(nn), vel: ch === "x" ? 110 : 75 }); }); });
       tracks.push(["Bass", 0, ev]);
     }
     if (on.has("chords")) {
       const ev = [];
-      cur("chords").chords.slice(0, n).forEach((c, b) => chordMidis(c).forEach((note) => ev.push({ t: b * 1920, d: 1900, note, vel: 90 })));
+      cur("chords").chords.slice(0, n).forEach((c, b) => chordMidis(c).forEach((note) => ev.push({ t: b * BAR * 120, d: BAR * 120 - 20, note, vel: 90 })));
       tracks.push(["Chords", 1, ev]);
     }
     if (!tracks.length) { say("Turn on at least one part to export."); return; }
     const file = fileName();
-    downloadBytes(midiMulti(tracks, bpmVal(), n * 1920), file, "audio/midi");
-    say(`Saved "${file}" (${tracks.map((x) => x[0].toLowerCase()).join(" + ")}, ${bpmVal()} BPM, ${n} bar${n > 1 ? "s" : ""}).`);
+    downloadBytes(midiMulti(tracks, bpmVal(), n * BAR * 120, BAR / 4), file, "audio/midi");
+    say(`Saved "${file}" (${tracks.map((x) => x[0].toLowerCase()).join(" + ")}, ${bpmVal()} BPM, ${n} bar${n > 1 ? "s" : ""} of ${BAR / 4}/4).`);
   };
   const textOf = () => {
     const out = [`${card.source.title || "Pattern"}${secs ? " · " + secName() : ""} · ${bpmVal()} BPM${key ? ` · ${NOTES[key.tonic]} ${key.mode}` : ""}`];
@@ -1622,8 +1634,8 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
     nowStep = st;
     wrap.querySelectorAll(".now").forEach((el) => el.classList.remove("now"));
     if (st < 0) return;
-    wrap.querySelectorAll(`.drum-grid i[data-step="${st % 16}"]`).forEach((el) => el.classList.add("now"));
-    wrap.querySelectorAll(`[data-bar="${Math.floor(st / 16)}"]`).forEach((el) => el.classList.add("now"));
+    wrap.querySelectorAll(`.drum-grid i[data-step="${st % BAR}"]`).forEach((el) => el.classList.add("now"));
+    wrap.querySelectorAll(`[data-bar="${Math.floor(st / BAR)}"]`).forEach((el) => el.classList.add("now"));
     const ph = wrap.querySelector(".roll-head"); if (ph) { ph.setAttribute("x", String(st * 10)); ph.classList.add("now"); }
   }
 
@@ -1643,7 +1655,7 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
   // What the user's edits are measured against: the picked template, or what was detected.
   const drumsOrig = () => { const v = srcStore()[ek(sel)]; return v != null && templates[v] ? templates[v].data.pattern : baseOf("drums", sel); };
   const origOf = (part) => (part === "drums" ? drumsOrig() : baseOf(part, sel));
-  const stepDiffs = (a, b) => { let n = 0; for (const lane of new Set([...Object.keys(a), ...Object.keys(b)])) for (let i = 0; i < 16; i++) if (((a[lane] || "")[i] || ".") !== ((b[lane] || "")[i] || ".")) n++; return n; };
+  const stepDiffs = (a, b) => { let n = 0; for (const lane of new Set([...Object.keys(a), ...Object.keys(b)])) for (let i = 0; i < BAR; i++) if (((a[lane] || "")[i] || ".") !== ((b[lane] || "")[i] || ".")) n++; return n; };
   const tplName = (t) => t.title.replace(/^Pattern idea: /, "");
   const useTemplate = (v, all) => {
     const keys = all && secs ? secs.map((_, k) => ek(k)) : [ek(sel)];
@@ -1673,13 +1685,13 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
       const el = wrap.querySelector(`.drum-grid i[data-lane="${lane}"][data-step="${i}"]`); if (el) el.focus();
     }, drumsSug && drumsSug.data.lane_help, orig);
     return panel("drums", "Drums", [drumsPicker(), ...(lanes.length ? lanes : [h("p", { class: "muted part-empty" }, "No drums detected. Pick a pattern idea to start from one.")])],
-      "1 bar, 16 steps; click any step to edit", stepDiffs(pat, orig) || (tpl ? true : 0));
+      `1 bar, ${BAR} steps; click any step to edit`, stepDiffs(pat, orig) || (tpl ? true : 0));
   };
   const bassPanel = (prev) => {
     const m = cur("bass"), has = m.notes.some(Boolean) && m.rhythm, slots = m.notes.length ? m.notes.slice(0, 4) : [null, null, null, null];
-    const o = baseOf("bass", sel), oRhythm = o.rhythm || "................";
+    const o = baseOf("bass", sel), oRhythm = o.rhythm || EMPTY;
     const noteMine = (n, b) => pcOf(o.notes[b]) !== pcOf(n);
-    const nEdits = slots.filter(noteMine).length + [...(m.rhythm || "................")].filter((ch, i) => ch !== oRhythm[i]).length;
+    const nEdits = slots.filter(noteMine).length + [...(m.rhythm || EMPTY)].filter((ch, i) => ch !== oRhythm[i]).length;
     const noteRow = h("div", { class: "bar-picks" }, slots.map((n, b) => h("label", { class: "bar-pick" + (noteMine(n, b) ? " mine" : ""), "data-bar": b,
       title: noteMine(n, b) ? `Your edit (detected: ${o.notes[b] || "none"})` : null },
       h("span", { class: "muted" }, `Bar ${b + 1}`, noteMine(n, b) ? h("span", { class: "mine-tag" }, " · edited")
@@ -1687,13 +1699,13 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
       h("select", { "aria-label": `Bass note, bar ${b + 1}`, onchange: (e) => edit("bass", (x) => {
         if (!x.notes.length) x.notes = [null, null, null, null];
         x.notes[b] = e.target.value || null;
-        if (!x.rhythm && e.target.value) x.rhythm = "x.......x.......";
+        if (!x.rhythm && e.target.value) x.rhythm = BAR === 16 ? "x.......x......." : "x" + ".".repeat(BAR - 1); // beats 1 and 3, or 1 in 3/4
       }) }, noteOptions(n, key)))));
     return panel("bass", "Bass", [
-      has ? bassRoll(m, key, o) : h("p", { class: "muted part-empty" }, "No bass in this section. Pick a note for a bar to add one."),
+      has ? bassRoll(m, key, o, BAR) : h("p", { class: "muted part-empty" }, "No bass in this section. Pick a note for a bar to add one."),
       noteRow,
-      ...laneRows({ rhythm: m.rhythm || "................" }, showChg && prev && prev.rhythm ? { rhythm: prev.rhythm } : null, true, (lane, i) => edit("bass", (x) => {
-        x.rhythm = flipStep(x.rhythm || "................", i);
+      ...laneRows({ rhythm: m.rhythm || EMPTY }, showChg && prev && prev.rhythm ? { rhythm: prev.rhythm } : null, true, (lane, i) => edit("bass", (x) => {
+        x.rhythm = flipStep(x.rhythm || EMPTY, i);
         if (!x.notes.some(Boolean)) x.notes = [0, 1, 2, 3].map(() => NOTES[key.tonic]);
       }), BASS_HELP, { rhythm: oRhythm }),
     ], "One note per bar; the rhythm repeats every bar", nEdits);
@@ -1760,7 +1772,7 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
     if (quiet !== true) bus.dispatchEvent(new CustomEvent("section", { detail: { idx: sec.idx, from: "groove" } }));
   }
   const mineKey = h("span", { tabindex: "0", "data-tip": "Steps, notes and chords you changed from what was detected (or from the picked pattern idea). Hover one to see what it was." }, h("i", { class: "sw mine" }), "Your edit");
-  const foot = h("div", { class: "grid-foot" }, h("div", { class: "grid-legend" }, legend(), mineKey), secs ? h("label", { class: "chg-toggle" }, toggle, "Outline Δ from the previous section") : null);
+  const foot = h("div", { class: "grid-foot" }, h("div", { class: "grid-legend" }, legend(true, BAR), mineKey), secs ? h("label", { class: "chg-toggle" }, toggle, "Outline Δ from the previous section") : null);
   if (secs) {
     bus.addEventListener("section", (e) => {
       if (e.detail.from !== "chart") return;
@@ -1778,7 +1790,7 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
 // ---------- track menu ----------
 function trackSummary(c) {
   const core = c.core || {}, k = core.key, src = c.source || {};
-  const facts = [isNum(core.bpm) ? `${core.bpm.toFixed(1)} BPM` : null, k ? `${keyName(k)}${k.camelot ? ` (${k.camelot})` : ""}` : null, mmss(c.duration)];
+  const facts = [isNum(core.bpm) ? `${core.bpm.toFixed(1)} BPM` : null, beatsPerBar(c) === 3 ? "3/4" : null, k ? `${keyName(k)}${k.camelot ? ` (${k.camelot})` : ""}` : null, mmss(c.duration)];
   const vibes = [...(c.tags || [])].sort((a, b) => b.score - a.score).map((t) => t.tag);
   return [`${src.title || src.uri || `Track ${c.id}`}${src.artist ? " by " + src.artist : ""}`, facts.filter(Boolean).join(" · "), vibes.length ? `Vibe: ${vibes.join(", ")}` : null].filter(Boolean).join("\n");
 }
@@ -1853,17 +1865,19 @@ function trackMenu(c) {
       try { await loadTracks(); renderList(); } catch (_) {}
     } catch (e) { tell(e.message, true); }
   };
-  const reanalyze = async () => {
+  // meter: "3/4", "4/4" or "auto" re-analyzes with that time signature (bars, grooves and sections all follow it).
+  const reanalyze = async (meter) => {
     close(true);
     tell("Re-analyzing… this can take a minute", false, true);
     try {
       await flushEdits(c.id); // the server moves saved edits to the new sections, so it needs the latest
-      const r = await api(`/api/tracks/${c.id}/reanalyze`, { method: "POST" });
+      const r = await api(`/api/tracks/${c.id}/reanalyze${typeof meter === "string" ? `?meter=${encodeURIComponent(meter)}` : ""}`, { method: "POST" });
       viewsCache = null; // the new card may carry its own waveform and spectrogram
       dropEdits(c.id);
       await loadEdits(c.id);
-      menuNote = r.edits_dropped ? { id: c.id, msg: "Re-analyzed. Some edits no longer match the new sections, so they were dropped.", ms: 10000 }
-        : { id: c.id, msg: "Re-analyzed with the current engine" };
+      const sig = `${(r.card.core && r.card.core.beats_per_bar) || 4}/4`;
+      menuNote = r.edits_dropped ? { id: c.id, msg: `Re-analyzed${typeof meter === "string" ? ` in ${sig}` : ""}. Some edits no longer match the new sections, so they were dropped.`, ms: 10000 }
+        : { id: c.id, msg: typeof meter === "string" ? `Re-analyzed in ${sig}` : "Re-analyzed with the current engine" };
       if (currentId === c.id) renderCard(r.card); else menuNote = null;
       try { await loadTracks(); renderList(); } catch (_) {}
     } catch (e) { tell(e.message, true); }
@@ -1917,7 +1931,9 @@ function trackMenu(c) {
     pop.replaceChildren(...[
       item("Copy track summary", { onclick: copy }),
       isFile ? item("Reload metadata", { onclick: reload }) : null,
-      c.has_audio ? item("Re-analyze", { onclick: reanalyze }) : null, // needs the original audio on disk
+      c.has_audio ? item("Re-analyze", { onclick: () => reanalyze() }) : null, // needs the original audio on disk
+      c.has_audio && c.core && c.core.bpm ? item(`Change to ${beatsPerBar(c) === 3 ? "4/4" : "3/4"} time`, { onclick: () => reanalyze(beatsPerBar(c) === 3 ? "4/4" : "3/4") }) : null,
+      c.has_audio && c.core && c.core.meter_set ? item("Detect the time signature again", { onclick: () => reanalyze("auto") }) : null,
       (c.lookup_providers || []).length ? item("Look up BPM & key online", { onclick: lookUp }) : null,
       stemsItem(),
       h("hr", { class: "menu-sep" }),

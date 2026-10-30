@@ -164,9 +164,10 @@
               <li>A track can still read at half or double speed (87 instead of 174), so both are kept as alternatives.</li>
             </ul></dd>
           <dt>Bar and downbeat</dt><dd>
-            <p class="gl-lead">The downbeat is beat 1 of each bar. Tastr currently supports only 4/4 time, so every bar is 4 beats.</p>
+            <p class="gl-lead">The downbeat is beat 1 of each bar. Bars are 4 beats (4/4) or 3 beats (3/4, waltz time), shown as "time" at the top of the card.</p>
             <ul class="gl-pts">
-              <li>Waltzes (3/4) and 6/8 tracks still get 4-beat bars for now. Support for other meters is planned, starting with 3/4.</li>
+              <li>The time signature comes from how the beats group: whether sound, bass and drums repeat every 3 beats or every 4. On labeled songs it finds about 2 in 3 waltzes and calls about 1 in 27 songs in 4/4 a waltz by mistake; when unsure it stays 4/4.</li>
+              <li>If it's wrong, pick "Change to 3/4 time" or "Change to 4/4 time" in the track's ⋯ menu. Re-analyzing keeps your choice. 6/8 and songs that change meter are read as 3/4 or 4/4.</li>
               <li>Beat 1 is right <span data-bench="downbeat">64%</span> of the time on 4/4 songs<span class="bench-asof muted" data-bench-asof="downbeat"></span>; most misses are half a bar off.</li>
             </ul></dd>
           <dt>Key</dt><dd>

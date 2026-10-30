@@ -233,6 +233,29 @@ def test_reanalyze_endpoint(client, db_path, synth_wav):
     assert client.post("/api/tracks/999/reanalyze").status_code == 404
 
 
+def test_reanalyze_with_a_time_signature(client, db_path, synth_wav):
+    path, _ = synth_wav
+    conn = db.connect(db_path)
+    card = full_card()
+    card.source = Source(kind="file", uri=str(path), local_path=str(path), title="t", sha256="stale")
+    tid = db.save_card(conn, card)
+    conn.close()
+
+    client.put(f"/api/tracks/{tid}/edits", json={"drums": {"all": {"kick": "x.x............."}}})
+    r = client.post(f"/api/tracks/{tid}/reanalyze?meter=3/4").json()
+    core = r["card"]["core"]
+    assert core["beats_per_bar"] == 3 and core["meter_set"]
+    assert r["edits_dropped"] == 1  # 16-step edits don't fit 12-step bars
+    assert client.get(f"/api/tracks/{tid}/edits").json()["drums"] == {}
+    groove = next(s for s in r["card"]["suggestions"] if s["title"] == "Detected groove")
+    assert all(len(p) == 12 for p in groove["data"]["pattern"].values())
+    # A plain re-analyze keeps the meter the user picked; "auto" goes back to detecting it.
+    assert client.post(f"/api/tracks/{tid}/reanalyze").json()["card"]["core"]["beats_per_bar"] == 3
+    core = client.post(f"/api/tracks/{tid}/reanalyze?meter=auto").json()["card"]["core"]
+    assert core["beats_per_bar"] == 4 and not core["meter_set"]
+    assert client.post(f"/api/tracks/{tid}/reanalyze?meter=5/4").status_code == 400
+
+
 def test_ui_saves_edits_and_versions():
     from tastr.web.server import STATIC_DIR
 

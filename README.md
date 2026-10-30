@@ -60,7 +60,11 @@ full mix. Demucs needs PyTorch, about 2 GB, so it is an optional install:
 python -m pip install -e '.[stems]'
 ```
 
-The model weights (about 80 MB) download the first time you separate a track. It
+The model weights (about 80 MB) download the first time you separate a track; Demucs 4.1
+gets them from the Hugging Face Hub and keeps them in `~/.cache/huggingface`. Later runs
+load them from there without going online, so the Hub's "unauthenticated requests ...
+set a HF_TOKEN" warning only shows on that first download. A free read token in `HF_TOKEN`
+(set in your shell, never in the repo) silences it there too, but isn't needed. It
 takes under a minute for a 2-minute track on a recent Mac CPU, and about half that on
 its GPU, which is used automatically (as is a CUDA GPU); set `TASTR_STEMS_DEVICE`
 to `cpu`, `mps` or `cuda` to choose. Stems are FLAC files in `~/.tastr/stems/` and are

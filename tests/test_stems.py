@@ -212,3 +212,30 @@ def test_stereo_decode_reads_m4a_through_ffmpeg(tmp_path):
     y = load_audio(m4a, 44100, mono=False)
     assert y.shape[0] == 2 and abs(y.shape[1] - 2 * 44100) < 4096
     assert load_audio(m4a, 22050).ndim == 1
+
+
+def _fake_hub_cache(root: Path, files: dict[str, str]) -> None:
+    """Lay out `files` the way huggingface_hub caches HF_REPO at revision main."""
+    repo = root / ("models--" + stems.HF_REPO.replace("/", "--"))
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs" / "main").write_text("abc123")
+    snap = repo / "snapshots" / "abc123"
+    snap.mkdir(parents=True)
+    for name, text in files.items():
+        (snap / name).write_text(text)
+
+
+@pytest.mark.parametrize("cached", [True, False])
+def test_hub_offline_only_while_loading_a_cached_model(tmp_path, monkeypatch, cached):
+    pytest.importorskip("yaml")
+    constants = pytest.importorskip("huggingface_hub.constants")
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path))
+    monkeypatch.setattr(constants, "HF_HUB_OFFLINE", False)
+    files = {f"{stems.MODEL}.yaml": "models: [a1, b2]\n", "a1.safetensors": ""}
+    if cached:
+        files["b2.safetensors"] = ""
+    _fake_hub_cache(tmp_path, files)
+
+    with stems._hub_offline_if_cached():
+        assert constants.HF_HUB_OFFLINE is cached
+    assert constants.HF_HUB_OFFLINE is False

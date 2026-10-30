@@ -12,6 +12,7 @@ Modal GPU instead (`tastr[cloud]`, docs/cloud.md) and only the stems come back h
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import logging
 import os
@@ -25,6 +26,7 @@ from typing import Callable
 
 STEM_NAMES = ("vocals", "bass", "other", "drums")
 MODEL = "htdemucs"
+HF_REPO = "adefossez/HTDemucs"  # where Demucs 4.1 keeps MODEL on the Hugging Face Hub
 INSTALL_HINT = "Stem separation needs Demucs, an optional install (about 2 GB with PyTorch): pip install 'tastr[stems]'"
 
 Progress = Callable[[float], None]
@@ -71,7 +73,8 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
 
     from .engine.audio import load_audio
 
-    model = get_model(MODEL)  # downloads the weights (about 80 MB) the first time
+    with _hub_offline_if_cached():
+        model = get_model(MODEL)  # downloads the weights (about 80 MB) the first time
     model.eval()
     wav = load_audio(audio_path, model.samplerate, mono=False)  # (channels, n); m4a/aac go through ffmpeg
     if wav.shape[0] < model.audio_channels:
@@ -105,6 +108,36 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
     for name, audio in zip(model.sources, sources):
         if name in STEM_NAMES:
             sf.write(stem_path(out_dir, name), audio.cpu().numpy().T, model.samplerate, subtype="PCM_16")
+
+
+@contextlib.contextmanager
+def _hub_offline_if_cached():
+    """Keep Hugging Face offline while Demucs loads a model that is already in its cache.
+
+    Demucs 4.1 loads `htdemucs` from the Hugging Face Hub (adefossez/HTDemucs). Even with the files
+    cached, each load asks the Hub whether they changed, which prints an "unauthenticated requests"
+    warning when no HF_TOKEN is set. HF_HUB_OFFLINE is read once at import, so set the constant.
+    """
+    try:
+        import yaml
+        from huggingface_hub import constants, try_to_load_from_cache
+    except ImportError:  # Demucs 4.0 downloads from Meta's server and doesn't use the Hub
+        yield
+        return
+    bag = try_to_load_from_cache(HF_REPO, f"{MODEL}.yaml")
+    cached = isinstance(bag, str)
+    if cached:
+        with open(bag) as f:
+            sigs = yaml.safe_load(f).get("models", [])
+        cached = all(isinstance(try_to_load_from_cache(HF_REPO, f"{s}.safetensors"), str) for s in sigs)
+    if not cached or constants.HF_HUB_OFFLINE:
+        yield
+        return
+    constants.HF_HUB_OFFLINE = True
+    try:
+        yield
+    finally:
+        constants.HF_HUB_OFFLINE = False
 
 
 def _default_device(torch) -> str:

@@ -32,29 +32,74 @@ Check both pricing pages before relying on these.
 
 ## One-time setup
 
-1. **Modal**: create an account, then on your machine:
-   ```
-   pip install -e '.[cloud]'
-   modal token new
-   ```
-2. **R2 bucket**: in the Cloudflare dashboard, create a bucket named `tastr-data` (or set
-   `TASTR_R2_BUCKET` when deploying). Note your account id; the endpoint is
-   `https://<account id>.r2.cloudflarestorage.com`.
-3. **R2 API token**: R2 > Manage API tokens > create a token with Object Read & Write on that bucket.
-   Keep the access key id and secret; Cloudflare shows the secret once.
-4. **Modal secret** with those keys (the mount reads them under these names):
-   ```
-   modal secret create tastr-r2 AWS_ACCESS_KEY_ID=<access key id> AWS_SECRET_ACCESS_KEY=<secret>
-   ```
-5. **Deploy** (again after every engine change):
-   ```
-   TASTR_R2_ENDPOINT=https://<account id>.r2.cloudflarestorage.com modal deploy tastr/cloud/modal_app.py
-   ```
+You need a Modal account and a Cloudflare account with R2 enabled. Run the commands below in the clone
+you run the app from, with its virtualenv active.
+
+### 1. Install
+
+```
+pip install -e '.[cloud]'   # the Modal client and its `modal` command
+brew install rclone         # only for uploading datasets
+```
+
+You don't need `tastr[stems]` (Demucs and PyTorch) locally; the Modal image installs them.
+
+### 2. Log in to Modal
+
+```
+modal token new
+```
+
+This opens the browser and saves a token to `~/.modal.toml`. There is nothing to copy by hand.
+
+### 3. Create the bucket and an R2 token
+
+In the Cloudflare dashboard:
+
+1. R2 Object Storage > Create bucket, named `tastr-data` (another name works if you set
+   `TASTR_R2_BUCKET` to it when deploying). Leave it private: no public access, no custom domain.
+2. R2 Object Storage > Manage API tokens > Create API token. Pick **Object Read & Write**, apply it to
+   the `tastr-data` bucket only, and create it.
+3. The next page shows several values. Keep three of them:
+   - **Access Key ID**
+   - **Secret Access Key** (shown only once)
+   - The **S3 endpoint**, `https://<account id>.r2.cloudflarestorage.com` (the account id is also in
+     the dashboard URL). Use the default endpoint, not a jurisdiction-specific one.
+
+   The "Token value" on that page is for Cloudflare's own API and isn't needed.
+
+### 4. Put the keys where they're used
+
+None of these go in the repo.
+
+| Where | What | Why |
+| --- | --- | --- |
+| A Modal secret named `tastr-r2` | `modal secret create tastr-r2 AWS_ACCESS_KEY_ID=<access key id> AWS_SECRET_ACCESS_KEY=<secret>` | The `bench` function mounts the bucket with these. The names must be exactly `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, even though it's R2. |
+| Your shell profile (`~/.zshrc`) | `export TASTR_R2_ENDPOINT=https://<account id>.r2.cloudflarestorage.com` | `modal deploy` needs it. Open a new terminal afterwards. |
+| An rclone remote named `r2` | see [Uploading datasets](#uploading-datasets) | Copying datasets from your machine to the bucket. |
+
+The secret can also be made in the Modal dashboard: Secrets > Create new secret > Custom.
+
+### 5. Deploy
+
+```
+modal deploy tastr/cloud/modal_app.py
+```
+
+Run it again after every engine change. The first deploy builds two images and takes several minutes;
+the stems image downloads PyTorch and the Demucs weights. The app then shows up as `tastr` in the
+Modal dashboard, with the functions `bench` and `stems`.
+
+### 6. Check it
+
+```
+tastr bench synth --remote --limit 4      # synthetic tracks, needs no datasets
+```
 
 ## Uploading datasets
 
 Keep the same folder layout as on disk: each dataset is a top-level folder in the bucket, laid out the way
-its loader expects ([bench.md](bench.md#datasets)). With [rclone](https://rclone.org) (`brew install rclone`):
+its loader expects ([bench.md](bench.md#datasets)). With [rclone](https://rclone.org), once:
 
 ```
 rclone config create r2 s3 provider=Cloudflare access_key_id=<id> secret_access_key=<secret> \

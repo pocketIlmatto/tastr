@@ -46,6 +46,7 @@ redistributing its labels or audio.
 | `giantsteps-key` | global key | 604 two-minute EDM previews | github.com/GiantSteps/giantsteps-key-dataset for the labels; see "Getting the GiantSteps audio" |
 | `giantsteps-tempo` | global BPM | 664 EDM previews | github.com/GiantSteps/giantsteps-tempo-dataset (uses `annotations_v2` when present) |
 | `beatport-key` | global key | 1,486 two-minute EDM previews (1,275 with a plain major/minor label are scored) | Zenodo record 1101082: unzip `keys.zip` and `audio.zip` into one folder; no overlap with GiantSteps Key |
+| `beatport-tempo` | Beatport's listed BPM | 774 of those previews with a bpm in `meta/` | same folder plus `original_metadata.zip` unzipped to `<root>/meta/*.json`; see "Tempo notes" for its drum & bass conventions |
 | `harmonix` | BPM, beats, downbeats, sections | 912 pop/EDM tracks | github.com/urinieto/harmonixset; audio is not distributed, put your copies in `<root>/audio` named by track id |
 | `manifest` | whatever you fill in | your tracks | a CSV or JSON file, below |
 | `synth` | everything, exact | 12 generated tracks | built in; a smoke test, not a benchmark |
@@ -186,8 +187,45 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   2/3-tempo drum & bass mostly 0.9 to 1.1. After: 0.698 / 0.861; fast tracks 9 of 16, slower tracks 21 of 27
   (two gained, one 121 BPM track lost to 161). 0.85 to 0.9 scored best; the threshold was picked on these
   same 43 tracks, so recheck it when more tempo-labeled audio is available.
+- Retuned on more data (2026-10-30): `THREE_TWO_RATIO` 0.9 -> 0.8, picked on the 200 hjdb train tracks
+  (0.75 to 0.85 score alike) and checked on the rest. Acc1 / Acc2, `--stages core` for audio:
+
+  | Set | Tracks | Before (0.9) | After (0.8) |
+  |---|---|---|---|
+  | hjdb train (spectrograms, `bench.tempo_spec`) | 200 | 0.755 / 0.785 | 0.910 / 0.940 |
+  | hjdb val | 35 | 0.829 / 0.829 | 0.971 / 0.971 |
+  | `beatport-tempo` | 774 | 0.872 / 0.899 | 0.872 / 0.906 |
+  | `giantsteps-tempo` | 43 | 0.698 / 0.861 | 0.721 / 0.884 |
+
+  hjdb errors (est / ref) went from 2/3 x35, 4/5 x7, half x6 to 4/5 x7, half x6, 2/3 x3 on train. Beatport
+  is unchanged in total but swaps 11 tracks each way: 110-120 BPM tracks pushed to 161-172 are lost, house and
+  techno tracked at 83-92 are fixed (re-tracked at 1.5x to 123-144).
+- hjdb (jungle / hardcore, in the Beat This! release) is not a 174 set: median 154 BPM, range 120-171, 35
+  tracks below 140, 160 at 140-160, 37 at 160-170, 3 at 170 or more. Its main error was 2/3 tempo, not half.
+  `bench.tempo_spec` rebuilds core's onset envelopes from the spectrograms and resamples them to core's
+  43 fps (the tempo logic is not frame-rate invariant: the unchanged audio path at 50 fps flips 4 of the
+  43 GiantSteps calls). On GiantSteps audio the adapter gives the audio path's BPM on 39 of 43 tracks, with
+  the same Acc1; it is a proxy, not the audio path.
+- Beatport's bpm is the DJ tempo and its drum & bass labels follow no one convention: of 40 tracks, 22 are
+  listed at 84-92 (half time), 8 at 111-119 (about 2/3 of 174), 8 at 160-175, 2 elsewhere. So
+  `beatport-tempo` Acc1 on drum & bass mostly measures the labeling (19 of 40 exact, 26 counting double / half).
+  Dubstep is listed at 140, some hip-hop at 150-195 (double time).
+- Tried and dropped (Acc1 counts as hjdb train / Beatport / GiantSteps, from 151 / 675 / 30 at 0.9):
+  - Onsets from the full mix instead of the HPSS percussive part: 50:50 mix at 0.8 gives 186 / 668 / 34, full
+    mix 184 / 659 / 34. Helps the fast sets, costs Beatport 7 to 16 tracks.
+  - A lower ratio only below 115 BPM (0.75, keeping 0.9 for 115-120): 185 / 681 / 31. Better on Beatport, but
+    the split was found by looking at Beatport's losses, so it is not a held-out result.
+  - Moving the 1.5x ceiling (re-track only when 1.5x the tempo is below `MAX_BPM` 180): 170-175 loses 6-7
+    GiantSteps tracks, 185-200 loses 6-17 Beatport tracks.
+  - Doubling when 2x lands in 150-185, gated on tempogram strength at 2x (ratio 0.6-1.0) or on off-beat
+    onset strength: fixes at most 5 half-tempo tracks on hjdb train and 4 on GiantSteps, costs Beatport 7-24.
+    The losses are real 85-92 BPM hip-hop and downtempo as well as half-time drum & bass labels.
+  - Re-tracking at 1.25x for the 4/5 locks (tracked 117-129, labeled 146-165): the 1.25x strength on those
+    (0.78-1.01) overlaps correctly tracked 128 BPM tracks (0.55-1.01). Every rule did nothing or cost
+    Beatport 5 to 48 tracks.
 - Still open: drum & bass reported at half tempo (86 for 174) and half-time tracks labeled ~86 reported at 172.
-  The tempogram does not separate these, and the labels themselves are a judgment call.
+  The tempogram and off-beat onsets do not separate them, and Beatport's labels show the convention itself
+  varies, so a fix needs a stronger cue (e.g. snare placement within the bar) and labels that agree.
 
 ## Drum lanes
 
@@ -225,4 +263,12 @@ when they land with a kick or snare; IDMT kits fire them on about 3 in 100 hits.
 `python -m tastr.engine.bench.downbeats <folder> --dataset gtzan [--limit N]`
 scores which beat core picks as bar 1, on labeled beats, from the Beat This!
 spectrogram release. See [rhythm.md](rhythm.md) for the data, scores and
-design notes.
+design notes. Only the original recordings are scored; the release's pitch-shifted
+and time-stretched copies (`<name>/track_ps-3`, `<name>/track_ts12`) are skipped.
+
+## Tempo on spectrograms
+
+`python -m tastr.engine.bench.tempo_spec <folder> --dataset hjdb [--out results.json]`
+runs core's tempo logic on onset envelopes rebuilt from the same release's
+spectrograms and scores it against 60 / the median labeled beat interval, per
+train / val split. See "Tempo notes" for how close it is to the audio path.

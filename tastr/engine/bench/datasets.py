@@ -158,6 +158,32 @@ def beatport_key(root: str | Path) -> list[Item]:
     return items
 
 
+def beatport_tempo(root: str | Path) -> list[Item]:
+    """Beatport EDM Key previews with the BPM Beatport lists for each track.
+
+    Reads <root>/meta/<id> <name>.json (from original_metadata.zip in Zenodo record 1101082)
+    and matches audio named "<id> <name>.mp3" anywhere under <root>, as beatport_key does.
+    Tracks with a missing, zero or NaN bpm are skipped. Beatport's bpm is the DJ tempo, and
+    drum & bass is often listed at half time (~87), see docs/bench.md.
+    """
+    root = Path(root)
+    audio = {}
+    for f in root.rglob("*"):
+        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS and not f.name.startswith("._"):
+            audio[f.name.split(" ")[0]] = f
+    items = []
+    for f in sorted((root / "meta").glob("*.json")):
+        if f.name.startswith("._"):
+            continue
+        meta = json.loads(re.sub(r":\s*nan\b", ": null", f.read_text()))  # some files have a bare nan
+        bpm = meta.get("bpm")
+        sid = str(meta.get("id") or f.name.split(" ")[0])
+        if not bpm or sid not in audio:
+            continue
+        items.append(Item(id=f"bp-tempo-{sid}", path=str(audio[sid]), truth=Truth(bpm=float(bpm))))
+    return items
+
+
 def giantsteps_tempo(root: str | Path) -> list[Item]:
     """GiantSteps Tempo: 664 EDM previews with a global BPM.
 
@@ -268,6 +294,7 @@ DATASETS: dict[str, Callable[..., list[Item]]] = {
     "giantsteps-key": giantsteps_key,
     "giantsteps-tempo": giantsteps_tempo,
     "beatport-key": beatport_key,
+    "beatport-tempo": beatport_tempo,
     "harmonix": harmonix,
     "manifest": manifest,
 }

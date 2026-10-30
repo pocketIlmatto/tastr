@@ -18,15 +18,16 @@ MIN_BPM = 70.0
 MAX_BPM = 180.0
 MIN_BEATS = 8
 # Switch to 1.5x the tracked tempo when the onset periodicity there is at least this strong relative
-# to the tracked tempo. Drum & bass (~174 BPM) gets tracked at 2/3 tempo (~117) because the tracker
-# prefers tempos near 120; a straight 4/4 track has little periodicity at 1.5x its beat. Measured on
-# the 43 GiantSteps tempo tracks with audio, where 0.85-0.9 scored best; see docs/bench.md.
-THREE_TWO_RATIO = 0.9
+# to the tracked tempo. Drum & bass and jungle (150-175 BPM) get tracked at 2/3 tempo (100-117) because
+# the tracker prefers tempos near 120; a straight 4/4 track has little periodicity at 1.5x its beat.
+# Picked on the 200 hjdb train tracks (0.75-0.85 score alike), checked on hjdb val, Beatport (774)
+# and GiantSteps (43); see docs/bench.md "Tempo notes".
+THREE_TWO_RATIO = 0.8
 
 
 class CoreStage:
     name = "core"
-    version = "0.1.3"
+    version = "0.1.4"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:

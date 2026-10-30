@@ -82,6 +82,20 @@ def test_beatport_key_loader(tmp_path):
     assert [(i.id, i.truth.tonic, i.truth.mode) for i in keys] == [("bp-key-201", 10, "minor")]
 
 
+def test_beatport_tempo_loader(tmp_path):
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "audio").mkdir()
+    metas = {"301": '{"id": 301, "bpm": 174}', "302": '{"id": 302, "bpm": nan, "genres": []}',
+             "303": '{"id": 303, "bpm": 0}', "304": '{"id": 304}', "305": '{"id": 305, "bpm": 128}'}
+    for sid, text in metas.items():
+        (tmp_path / "meta" / f"{sid} Artist - Title (Original Mix).json").write_text(text)
+        (tmp_path / "audio" / f"{sid} Artist - Title (Original Mix).mp3").write_bytes(b"")
+    (tmp_path / "meta" / "._301 Artist - Title (Original Mix).json").write_bytes(b"\x00")
+    (tmp_path / "audio" / "305 Artist - Title (Original Mix).mp3").unlink()  # no audio: skipped
+    tempos = datasets.beatport_tempo(tmp_path)
+    assert [(i.id, i.truth.bpm) for i in tempos] == [("bp-tempo-301", 174.0)]
+
+
 def test_harmonix_loader(tmp_path):
     ds = tmp_path / "dataset"
     (ds / "beats_and_downbeats").mkdir(parents=True)

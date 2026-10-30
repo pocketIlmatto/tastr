@@ -91,8 +91,13 @@ def low_band_flux(ctx: AnalysisContext, lo: float = 20.0, hi: float = 150.0) -> 
 def log_mel(ctx: AnalysisContext) -> tuple[np.ndarray, np.ndarray]:
     """(128 x frames log-compressed mel magnitude of the full mix, 30 Hz-11 kHz; band centre frequencies).
 
-    Same layout as the Beat This! spectrograms (log1p(1000 * magnitude)), so
-    rhythm logic tuned on their labeled sets carries over.
+    Same bands and compression as the Beat This! spectrograms (128 slaney-scale
+    bands, log1p(1000 * magnitude)), so the downbeat cues tuned on their labeled
+    sets carry over. It is not identical: this runs on core's hop (512, ~43 fps;
+    theirs is 441, 50 fps) with n_fft 2048, librosa's area-normalized filters and
+    sqrt of mel power, where theirs applies unnormalized filters to the STFT
+    magnitude / sqrt(1024). Band edges and centres match; per-band gain, low-band
+    frequency resolution, levels and frame times differ.
     """
     import librosa
 

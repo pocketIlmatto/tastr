@@ -3,7 +3,7 @@
 Scores only the choice of which beat starts each bar (core's `_downbeat_phase`),
 given the labeled beats, so beat-tracking errors don't blur it. Uses the
 "Beat This!" release (https://zenodo.org/records/13922116), which ships
-128-band log-mel spectrograms (the same layout as `signals.log_mel`) and
+128-band log-mel spectrograms (the same bands as `signals.log_mel`, at 50 fps) and
 beat/downbeat labels for public datasets whose audio isn't redistributable.
 
     python -m tastr.engine.bench.downbeats ~/data/beat_this --dataset gtzan --limit 200
@@ -15,6 +15,7 @@ The folder needs `<dataset>.npz` (unzipped from `<dataset>.zip`) and
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -22,6 +23,13 @@ from pathlib import Path
 import numpy as np
 
 FPS = 50  # Beat This! spectrogram frame rate
+# Some releases also ship pitch-shifted and time-stretched copies ("<name>/track_ps-3", "<name>/track_ts12").
+AUGMENTED = re.compile(r"_(ps|ts)-?\d+$")
+
+
+def original_keys(specs) -> list[str]:
+    """Spectrogram keys of the original recordings, skipping Beat This! augmentations."""
+    return sorted(k for k in specs.keys() if not AUGMENTED.search(k))
 
 
 def mel_freqs() -> np.ndarray:
@@ -36,7 +44,7 @@ def load(root: str | Path, dataset: str = "gtzan", limit: int | None = None, see
     specs = np.load(root / f"{dataset}.npz")
     ann = root / "beat_this_annotations-1.0" / dataset / "annotations" / "beats"
     items = []
-    for key in sorted(specs.keys()):
+    for key in original_keys(specs):
         name = key.split("/")[0]
         f = ann / f"{name}.beats"
         if not f.exists():

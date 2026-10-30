@@ -108,9 +108,10 @@ A lookup is:
 3. when none of them is in the index, one more search for the other recordings with the same ISRCs.
    MusicBrainz often lists one song as several recordings and AcousticBrainz analyzed only some.
 
-A song still missing after that is "not found". A dropped or cut-off MusicBrainz response is tried once
-more; an HTTP error (MusicBrainz answers 503 when it's busy) comes back as an error naming MusicBrainz,
-and the guardrails pause it before the next ask.
+A song still missing after that is "not found" (`result_json` lists the MBIDs tried and how many came
+from the ISRC search). A dropped or cut-off MusicBrainz response, or a 503 (MusicBrainz is busy), is tried
+once more; a second failure comes back as an error naming MusicBrainz. MusicBrainz's `x-ratelimit-*`
+headers count its global load, not Tastr's requests, so the guard doesn't pause on them.
 
 In a test on a small library of mostly 2019-2022 house releases (October 2026), no track was found:
 AcousticBrainz's coverage of recent electronic releases is thin. It suits older catalogs better.

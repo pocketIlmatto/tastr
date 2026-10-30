@@ -1,5 +1,7 @@
 """Catalog lookups (tastr.lookup): providers on canned responses, storage, comparison and the API."""
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -427,6 +429,7 @@ def test_acousticbrainz_not_found(ab_index, monkeypatch):
     assert p.lookup(Q).status == "not_found"  # not on MusicBrainz
     r = p.lookup(Q)  # on MusicBrainz, never analyzed by AcousticBrainz
     assert r.status == "not_found" and r.extra["mbids"] == ["55555555-5555-5555-5555-555555555555"]
+    assert (r.extra["tried"], r.extra["same_isrc"]) == (1, 0)
 
 
 def test_acousticbrainz_matches_credits_and_escapes_quotes(ab_index, monkeypatch):
@@ -505,7 +508,12 @@ def test_acousticbrainz_retries_a_dropped_connection_once(ab_index, monkeypatch)
     canned(monkeypatch, p, ProviderError("MusicBrainz's response was cut off (IncompleteRead)"), mb_search(mb_rec(MB_ONE)))
     assert p.lookup(Q).status == "found"
     canned(monkeypatch, p, ProviderError("MusicBrainz answered HTTP 503", 503), mb_search(mb_rec(MB_ONE)))
-    with pytest.raises(ProviderError, match="MusicBrainz answered HTTP 503"):  # the guard pauses it instead
+    assert p.lookup(Q).status == "found"  # busy: tried once more
+    canned(monkeypatch, p, *[ProviderError("MusicBrainz answered HTTP 503", 503)] * 2)
+    with pytest.raises(ProviderError, match="MusicBrainz answered HTTP 503"):
+        p.lookup(Q)
+    canned(monkeypatch, p, ProviderError("MusicBrainz answered HTTP 400", 400))
+    with pytest.raises(ProviderError, match="HTTP 400"):  # not retried
         p.lookup(Q)
 
 
@@ -532,3 +540,14 @@ def test_errors_can_be_asked_again_right_away(db_path, fake, monkeypatch):
     fake.error = None
     assert lookup.lookup_track(conn, tid, tagged_card())[0]["status"] == "found"
     assert lookup.lookup_track(conn, tid, tagged_card())[0]["status"] == "recent"
+
+
+def test_guard_ignores_musicbrainz_global_rate_headers():
+    p = acousticbrainz.AcousticBrainz()
+    g = p.guard
+    g.before_request()
+    g.after_response(200, {"x-ratelimit-limit": "15", "x-ratelimit-remaining": "12", "x-ratelimit-zone": "global"})
+    assert g.paused_until == 0.0
+    g.before_request()
+    g.after_response(503, {"retry-after": "0"})
+    assert g.paused_until <= time.time()  # Retry-After: 0 means no pause

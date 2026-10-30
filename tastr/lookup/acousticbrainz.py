@@ -203,6 +203,7 @@ class AcousticBrainz(Provider):
     # MusicBrainz allows one request a second on average; stay a little under it.
     min_interval = 1.1
     daily_limit = 1000
+    quota_headers = False  # MusicBrainz's x-ratelimit-* headers are its global load, not ours
 
     def index(self) -> Path:
         return default_index()
@@ -218,14 +219,14 @@ class AcousticBrainz(Provider):
         return f"no index at {self.index()} (run `tastr fetch acousticbrainz`, see docs/lookup.md)"
 
     def search(self, query: str) -> list[dict]:
-        """One MusicBrainz recording search. A dropped or cut-off connection is tried once more (through
-        the guardrails); an HTTP error isn't, since the guard pauses MusicBrainz after a 503."""
+        """One MusicBrainz recording search. A dropped or cut-off connection, or a 503 (MusicBrainz is busy;
+        it sends Retry-After: 0), is tried once more through the guardrails, which space it 1.1 s on."""
         base = os.environ.get("MUSICBRAINZ_API_BASE", MUSICBRAINZ_BASE).rstrip("/")
         params = {"query": query, "fmt": "json", "limit": str(SEARCH_LIMIT)}
         try:
             _, body = self.get_json(f"{base}/recording", params, source="MusicBrainz")
         except ProviderError as e:
-            if e.status is not None:
+            if e.status not in (None, 503):
                 raise
             _, body = self.get_json(f"{base}/recording", params, source="MusicBrainz")
         recs = (body or {}).get("recordings") if isinstance(body, dict) else None
@@ -283,6 +284,7 @@ class AcousticBrainz(Provider):
         if not hits:
             return LookupResult(self.name, "not_found")
         found = self._read([h["mbid"] for h in hits])
+        more: list[dict] = []
         if not any(_usable(found.get(h["mbid"])) for h in hits):
             more = self.same_isrc(hits)
             if more:
@@ -300,7 +302,8 @@ class AcousticBrainz(Provider):
                                 url=f"https://musicbrainz.org/recording/{m}",
                                 extra={"mbid": m, "candidates": len(mbids)})
         # On MusicBrainz but never analyzed by AcousticBrainz (or released after 2022).
-        return LookupResult(self.name, "not_found", extra={"mbids": mbids[:3]})
+        return LookupResult(self.name, "not_found", extra={"mbids": mbids[:3], "tried": len(mbids),
+                                                           "same_isrc": len(more)})
 
 
 register(AcousticBrainz())

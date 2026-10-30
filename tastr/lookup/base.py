@@ -80,6 +80,9 @@ class Provider:
     min_interval: float = 1.0  # seconds between requests
     daily_limit: int | None = 200
     monthly_limit: int | None = None
+    # Whether the provider's quota headers count our own usage. MusicBrainz's x-ratelimit-* count its global
+    # load (x-ratelimit-zone: global), so pausing on them would stop lookups whenever it's busy.
+    quota_headers: bool = True
     _guard = None
 
     @property

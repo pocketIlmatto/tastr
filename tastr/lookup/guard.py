@@ -123,6 +123,8 @@ class Guard:
                 self._pause(now + AUTH_PAUSE, f"HTTP {status}" + (f", check {self.p.key_env}" if self.p.key_env else ""))
             elif status is not None and status < 400:
                 self.backoff = 0.0
+            if not self.p.quota_headers:
+                return
             used, limit = _int(h.get("x-quota-used")), _int(h.get("x-quota-limit"))
             remaining = _int(h.get("x-ratelimit-remaining") or h.get("x-quota-remaining"))
             if remaining is None and used is not None and limit is not None:

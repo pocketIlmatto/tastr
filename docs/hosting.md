@@ -77,7 +77,7 @@ verifies against your team's public keys at `https://<team domain>/cdn-cgi/acces
 For the emails in `TASTR_ADMIN_EMAILS`, `GET /api/admin/usage` returns, per person: tracks, uploaded
 audio and stem bytes, last upload, last request since the server started, and today's tracks, stem jobs
 and visits (page loads), plus 30 days of daily counts, the limits, total storage against the cap and
-the stem jobs in progress. Everyone else gets 404. `/api/config` says `"admin": true` for admins.
+the stem jobs and analyses running or waiting. Everyone else gets 404. `/api/config` says `"admin": true` for admins.
 
 ## Moving your own library to a hosted server
 

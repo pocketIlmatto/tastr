@@ -73,7 +73,7 @@ class Settings:
 
     def limits(self) -> dict:
         return {"max_upload_mb": self.max_upload_mb, "max_files": self.max_files, "daily_tracks": self.daily_tracks,
-                "daily_stems": self.daily_stems}
+                "daily_stems": self.daily_stems, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses}
 
 
 class AccessVerifier:
@@ -122,16 +122,31 @@ class AnalysisSlots:
     """At most `n` analyses at once; later ones wait their turn (up to `timeout` seconds)."""
 
     def __init__(self, n: int, timeout: float = 600):
-        self.sem = threading.BoundedSemaphore(max(1, n))
+        self.max = max(1, n)
+        self.sem = threading.BoundedSemaphore(self.max)
         self.timeout = timeout
+        self.lock = threading.Lock()
+        self.running = self.waiting = 0
 
     def __enter__(self):
-        if not self.sem.acquire(timeout=self.timeout):
+        with self.lock:
+            self.waiting += 1
+        got = self.sem.acquire(timeout=self.timeout)
+        with self.lock:
+            self.waiting -= 1
+            self.running += got
+        if not got:
             raise TimeoutError
         return self
 
     def __exit__(self, *exc):
+        with self.lock:
+            self.running -= 1
         self.sem.release()
+
+    def status(self) -> dict:
+        with self.lock:
+            return {"running": self.running, "waiting": self.waiting, "max": self.max}
 
 
 def inline_script_hashes(html: str) -> list[str]:

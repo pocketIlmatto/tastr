@@ -168,9 +168,11 @@ def test_daily_stem_limit(db_path, home, tmp_path, monkeypatch):
 def test_analysis_slots_queue_then_give_up():
     slots = AnalysisSlots(1, timeout=0.05)
     with slots:
+        assert slots.status() == {"running": 1, "waiting": 0, "max": 1}
         with pytest.raises(TimeoutError):
             with slots:
                 pass
+    assert slots.status() == {"running": 0, "waiting": 0, "max": 1}
     with slots:  # released again
         pass
 
@@ -266,6 +268,8 @@ def test_admin_usage(db_path, home, tmp_path):
     assert f["today"] == {"tracks": 2, "stems": 0, "visits": 2}  # two /api/config page loads above
     assert by[None]["tracks"] == 1 and by["pam@example.com"]["tracks"] == 0
     assert body["limits"]["daily_tracks"] == 30 and body["storage"]["cap_bytes"] == 10 * 1024 ** 3
+    assert body["limits"]["storage_gb"] == 10 and body["limits"]["max_analyses"] == 2
+    assert body["analyses"] == {"running": 0, "waiting": 0, "max": 2}
     assert {h["kind"] for h in body["history"]} == {"tracks", "visits"}
     local = TestClient(create_app(db_path, Settings()))
     assert local.get("/api/admin/usage").status_code == 404

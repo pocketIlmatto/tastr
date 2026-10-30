@@ -182,7 +182,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
 
     @app.get("/api/admin/usage")
     def admin_usage(request: Request):
-        """Usage per person and the server's limits, for the admin view. Hosted servers only, and only for
+        """Usage per person, the server's limits and analyses running or waiting, for the admin view. Hosted servers only, and only for
         TASTR_ADMIN_EMAILS; everyone else gets 404."""
         if not hosted or request.state.user not in settings.admins:
             raise HTTPException(404, "Not Found")
@@ -216,7 +216,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         return {"today": day, "users": users, "history": history, "admins": list(settings.admins),
                 "limits": settings.limits(),
                 "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(settings.storage_gb * 1024 ** 3)},
-                "active_stem_jobs": jobs.active()}
+                "active_stem_jobs": jobs.active(), "analyses": slots.status()}
 
     @app.get("/api/health")
     def health():

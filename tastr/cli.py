@@ -41,10 +41,10 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"],
                    help="debug adds stage tracebacks and uvicorn's details (default: info)")
 
-    sb = sub.add_parser("spec-bench", help="Beat This! spectrogram benches (tempo, downbeats), locally or on Modal")
-    sb.add_argument("bench", choices=["tempo", "downbeats"])
+    sb = sub.add_parser("spec-bench", help="Beat This! spectrogram benches (tempo, downbeats, meter), locally or on Modal")
+    sb.add_argument("bench", choices=["tempo", "downbeats", "meter"])
     sb.add_argument("path", help="folder with <dataset>.npz and beat_this_annotations-1.0/ (a bucket folder with --remote)")
-    sb.add_argument("--dataset", help="Beat This! dataset name (default: hjdb for tempo, gtzan for downbeats)")
+    sb.add_argument("--dataset", help="Beat This! dataset name (default: hjdb for tempo, gtzan for downbeats and meter)")
     sb.add_argument("--limit", type=int, help="first N tracks")
     sb.add_argument("--out", help="write the JSON report here")
     sb.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")

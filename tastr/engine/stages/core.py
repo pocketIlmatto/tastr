@@ -27,7 +27,7 @@ THREE_TWO_RATIO = 0.8
 
 class CoreStage:
     name = "core"
-    version = "0.1.5"
+    version = "0.1.6"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -56,7 +56,13 @@ class CoreStage:
             core.bpm_confidence = round(bpm_conf, 3)
             core.bpm_likely_correct = calibration.likely_correct("bpm", bpm_conf)
             core.beat_times = [round(float(t), 3) for t in beat_times if t <= duration]
-            phase = _downbeat_phase(beat_idx, *ctx.get("log_mel", signals.log_mel))
+            log_mel, mel_f = ctx.get("log_mel", signals.log_mel)
+            cues = _beat_cues(beat_idx, log_mel, mel_f) if beat_idx.size >= MIN_BEATS and log_mel.shape[1] >= 2 else None
+            phase = _downbeat_phase(beat_idx, log_mel, mel_f, cues=cues)
+            # Meter is only a guess for now: bars stay 4 beats until the rest of the app handles 3/4.
+            meter = _meter_score(beat_idx, log_mel, mel_f, cues=cues)
+            ctx.card.extras["core.meter_guess"] = {"beats_per_bar": 3 if meter > METER_THRESHOLD else 4,
+                                                   "score": round(meter, 2)}
             core.downbeat_times = [round(float(t), 3) for t in beat_times[phase::4] if t <= duration]
             ctx.card.extras["core.bpm_alternatives"] = [round(bpm / 2, 2), round(bpm * 2, 2)]
             ctx.card.extras["core.downbeat_phase"] = int(phase)
@@ -246,17 +252,14 @@ def _sample(env: np.ndarray, frames: np.ndarray, radius: int = 2) -> np.ndarray:
     return out
 
 
-def _downbeat_phase(beat_frames: np.ndarray, log_mel: np.ndarray, freqs: np.ndarray) -> int:
-    """Which of the first 4 beats starts bar 1 (assumes 4/4).
+def _beat_cues(beat_frames: np.ndarray, log_mel: np.ndarray, freqs: np.ndarray) -> dict:
+    """Per-beat bar cues read from the log-mel spectrogram (docs/rhythm.md).
 
-    Five cues each score the 4 possible phases; they are z-scored and summed:
-    a heavier kick on the downbeat, a snare backbeat on beats 2 and 4, and
-    the timbre, chords (beat-to-beat and bar-to-bar) and bass changing as a
-    new bar starts. Kick and snare alone can't tell bar 1 from beat 3 (the
-    old half-bar offset); the change cues can. Tuned on GTZAN (docs/rhythm.md).
+    kick and snare are onset strengths on each beat; timbre and bass are each
+    beat's mean spectrum; change and bass_change how much they moved from the
+    previous beat, zeroed near silence (going in or out of it is a big change
+    wherever it falls). `quiet_near` marks those beats for the bar-level cue.
     """
-    if beat_frames.size < MIN_BEATS or log_mel.shape[1] < 2:
-        return 0
     n_frames = log_mel.shape[1]
     frames = np.clip(beat_frames, 0, n_frames - 1)
 
@@ -269,35 +272,86 @@ def _downbeat_phase(beat_frames: np.ndarray, log_mel: np.ndarray, freqs: np.ndar
         edges = list(frames) + [min(n_frames, frames[-1] + max(1, frames[-1] - frames[-2]))]
         return np.stack([x[:, a:max(b, a + 1)].mean(axis=1) for a, b in zip(edges[:-1], edges[1:])])
 
-    kick = _sample(flux(30, 150), frames)
-    snare = _sample(flux(180, 2500), frames)
     timbre = beat_spectra(60, 5000)
     bass = beat_spectra(30, 250)
-    n = len(frames)
     change = np.r_[0.0, np.linalg.norm(np.diff(timbre, axis=0), axis=1)]
     bass_change = np.r_[0.0, np.linalg.norm(np.diff(bass, axis=0), axis=1)]
-    bar_change = np.zeros(n)
-    for i in range(4, n - 3):
-        bar_change[i] = np.linalg.norm(timbre[i:i + 4].mean(axis=0) - timbre[i - 4:i].mean(axis=0))
-    # Coming in from or going out to near-silence is a big change at whatever phase it lands on; ignore it.
     level = timbre.mean(axis=1)
     quiet = level < 0.5 * np.median(level)
     near_quiet = quiet | np.r_[False, quiet[:-1]] | np.r_[quiet[1:], False]
     for i in np.flatnonzero(quiet):
         near_quiet[max(0, i - 4):i + 5] = True
-    change[near_quiet] = bass_change[near_quiet] = bar_change[near_quiet] = 0.0
+    change[near_quiet] = bass_change[near_quiet] = 0.0
+    return {"kick": _sample(flux(30, 150), frames), "snare": _sample(flux(180, 2500), frames),
+            "timbre": timbre, "bass": bass, "change": change, "bass_change": bass_change, "near_quiet": near_quiet}
+
+
+def _downbeat_phase(beat_frames: np.ndarray, log_mel: np.ndarray, freqs: np.ndarray, beats_per_bar: int = 4,
+                    cues: dict | None = None) -> int:
+    """Which of the first `beats_per_bar` beats starts bar 1 (4 or 3).
+
+    Five cues each score the possible phases; they are z-scored and summed:
+    a heavier kick on the downbeat, a snare backbeat (beats 2 and 4 in 4/4,
+    2 and 3 in 3/4), and the timbre, chords (beat-to-beat and bar-to-bar)
+    and bass changing as a new bar starts. Kick and snare alone can't tell
+    bar 1 from beat 3 (the old half-bar offset); the change cues can. Tuned
+    on GTZAN (docs/rhythm.md).
+    """
+    if beat_frames.size < MIN_BEATS or log_mel.shape[1] < 2:
+        return 0
+    m = beats_per_bar
+    c = cues or _beat_cues(beat_frames, log_mel, freqs)
+    timbre = c["timbre"]
+    n = len(timbre)
+    bar_change = np.zeros(n)
+    for i in range(m, n - m + 1):
+        bar_change[i] = np.linalg.norm(timbre[i:i + m].mean(axis=0) - timbre[i - m:i].mean(axis=0))
+    bar_change[c["near_quiet"]] = 0.0
 
     def per_phase(v):
-        return np.array([v[p::4].mean() for p in range(4)])
+        return np.array([v[p::m].mean() for p in range(m)])
 
-    sn = per_phase(snare)
-    backbeat = np.array([sn[(p + 1) % 4] + sn[(p + 3) % 4] - sn[p] - sn[(p + 2) % 4] for p in range(4)])
-    total = np.zeros(4)
-    for sc in (per_phase(kick), backbeat, per_phase(change), per_phase(bass_change), per_phase(bar_change)):
+    sn = per_phase(c["snare"])
+    if m == 4:
+        backbeat = np.array([sn[(p + 1) % 4] + sn[(p + 3) % 4] - sn[p] - sn[(p + 2) % 4] for p in range(4)])
+    else:  # every other beat against the downbeat
+        backbeat = (sn.sum() - sn) / (m - 1) - sn
+    total = np.zeros(m)
+    for sc in (per_phase(c["kick"]), backbeat, per_phase(c["change"]), per_phase(c["bass_change"]), per_phase(bar_change)):
         total += (sc - sc.mean()) / (sc.std() + 1e-9)
     best = int(np.argmax(total))
     # Without a clear winner (a loop that repeats every bar exactly), trust the first beat: most tracks start on bar 1.
     return best if total[best] - total[0] > 1.0 else 0
+
+
+# 3 beats per bar vs 4: each cue is >0 when the music repeats every 3 beats more than every 4. Scales are
+# the cues' spread over GTZAN (labeled beats), so each counts about equally; see docs/rhythm.md.
+METER_CUE_SCALES = {"timbre_lag": 0.1, "bass_lag": 0.27, "kick": 0.3, "snare": 0.25, "change": 0.17, "bass_change": 0.22}
+METER_THRESHOLD = 1.0  # summed scaled cues above this read as 3/4; below stays 4/4
+
+
+def _meter_score(beat_frames: np.ndarray, log_mel: np.ndarray, freqs: np.ndarray, cues: dict | None = None) -> float:
+    """How much more the beats group in 3s than in 4s (>METER_THRESHOLD reads as 3/4).
+
+    Two kinds of cue: beat spectra a 3 or 6 beats apart look more alike than 4 or 8 apart (timbre and
+    bass), and kick, snare and change strengths vary more across the 3 phases of a 3-beat cycle
+    than across the 4 of a 4-beat one.
+    """
+    if beat_frames.size < 2 * MIN_BEATS or log_mel.shape[1] < 2:
+        return 0.0
+    c = cues or _beat_cues(beat_frames, log_mel, freqs)
+
+    def lag_ratio(x):
+        d = {k: np.linalg.norm(x[k:] - x[:-k], axis=1).mean() for k in (3, 4, 6, 8)}
+        return float(np.log((d[4] + d[8] + 1e-9) / (d[3] + d[6] + 1e-9)))
+
+    def phase_spread(v, m):
+        return float(np.std([v[p::m].mean() for p in range(m)]) / (v.std() + 1e-9))
+
+    raw = {"timbre_lag": lag_ratio(c["timbre"]), "bass_lag": lag_ratio(c["bass"])}
+    for k in ("kick", "snare", "change", "bass_change"):
+        raw[k] = phase_spread(c[k], 3) - phase_spread(c[k], 4)
+    return float(sum(raw[k] / s for k, s in METER_CUE_SCALES.items()))
 
 
 def _swing(onset_env: np.ndarray, beat_frames: np.ndarray) -> tuple[float, float]:

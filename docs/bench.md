@@ -364,6 +364,13 @@ spectrogram release. See [rhythm.md](rhythm.md) for the data, scores and
 design notes. Only the original recordings are scored; the release's pitch-shifted
 and time-stretched copies (`<name>/track_ps-3`, `<name>/track_ts12`) are skipped.
 
+## Meter
+
+`python -m tastr.engine.bench.meter <folder> --dataset gtzan [--limit N]`
+(or `tastr spec-bench meter`) scores core's 3/4-or-4/4 guess and its 3-beat
+bar-1 picker on the same files, using tracks whose labeled bars are steadily
+3 or 4 beats long. See [rhythm.md](rhythm.md#meter-34-or-44-2026-10-30).
+
 ## Tempo on spectrograms
 
 `python -m tastr.engine.bench.tempo_spec <folder> --dataset hjdb [--out results.json]`

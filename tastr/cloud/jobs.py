@@ -76,7 +76,7 @@ def run_key_profiles(dataset: str, path: str, root: str | Path, limit: int | Non
             "timing": {"load_seconds": load_seconds, "seconds": round(time.time() - t0 - load_seconds, 1), "jobs": jobs}}
 
 
-SPEC_BENCHES = {"tempo": "tempo_spec", "downbeats": "downbeats"}  # Beat This! spectrogram benches
+SPEC_BENCHES = {"tempo": "tempo_spec", "downbeats": "downbeats", "meter": "meter"}  # Beat This! spectrogram benches
 
 
 def spec_module(bench: str):

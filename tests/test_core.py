@@ -175,23 +175,48 @@ def test_downbeats_land_on_bar_starts(default_card):
     assert np.mean(np.minimum(off, 1 - off) < 0.06) > 0.8
 
 
+FPB = 20  # spectrogram frames per beat in the synthetic bars below
+
+
+def _bars(meter: int, start: int, n_beats: int = 64):
+    """Log-mel of `n_beats` beats in `meter`: kick on every beat, snare on the backbeats (2 and 4 in 4/4,
+    2 and 3 in 3/4), a new chord each bar; the clip starts on beat `start + 1`."""
+    freqs = np.geomspace(30, 11000, 128)
+    log_mel = np.full((128, FPB * n_beats), 0.1)
+    rng = np.random.default_rng(0)
+    chords = rng.random((n_beats // meter + 2, 128)) * (freqs > 200) * (freqs < 2000)
+    for i in range(n_beats):
+        pos = (start + i) % meter  # 0 = beat 1
+        bar = (start + i) // meter
+        seg = slice(i * FPB, (i + 1) * FPB)
+        log_mel[:, seg] += chords[bar][:, None]
+        log_mel[freqs < 120, i * FPB:i * FPB + 3] += 3.0  # kick
+        if pos in ((1, 3) if meter == 4 else (1, 2)):
+            log_mel[(freqs > 300) & (freqs < 2500), i * FPB:i * FPB + 3] += 2.0  # snare
+    return np.arange(n_beats) * FPB, log_mel, freqs
+
+
 @pytest.mark.parametrize("start", [0, 1, 2, 3])
 def test_downbeat_phase_finds_bar_one(start):
-    """Kick on every beat, snare on 2 and 4, a new chord each bar; the clip starts on beat `start + 1`."""
     from tastr.engine.stages.core import _downbeat_phase
 
-    freqs = np.geomspace(30, 11000, 128)
-    fpb, n_beats = 20, 64
-    log_mel = np.full((128, fpb * n_beats), 0.1)
-    rng = np.random.default_rng(0)
-    chords = rng.random((n_beats // 4 + 2, 128)) * (freqs > 200) * (freqs < 2000)
-    for i in range(n_beats):
-        pos = (start + i) % 4  # 0 = beat 1
-        bar = (start + i) // 4
-        seg = slice(i * fpb, (i + 1) * fpb)
-        log_mel[:, seg] += chords[bar][:, None]
-        log_mel[freqs < 120, i * fpb:i * fpb + 3] += 3.0  # kick
-        if pos in (1, 3):
-            log_mel[(freqs > 300) & (freqs < 2500), i * fpb:i * fpb + 3] += 2.0  # snare
-    want = (4 - start) % 4
-    assert _downbeat_phase(np.arange(n_beats) * fpb, log_mel, freqs) == want
+    assert _downbeat_phase(*_bars(4, start)) == (4 - start) % 4
+
+
+@pytest.mark.parametrize("start", [0, 1, 2])
+def test_downbeat_phase_finds_bar_one_in_three(start):
+    from tastr.engine.stages.core import _downbeat_phase
+
+    assert _downbeat_phase(*_bars(3, start), beats_per_bar=3) == (3 - start) % 3
+
+
+@pytest.mark.parametrize("meter", [3, 4])
+def test_meter_score_tells_three_from_four(meter):
+    from tastr.engine.stages.core import METER_THRESHOLD, _meter_score
+
+    assert (_meter_score(*_bars(meter, 1)) > METER_THRESHOLD) == (meter == 3)
+
+
+def test_core_records_a_meter_guess(default_card):
+    card, _ = default_card
+    assert card.extras["core.meter_guess"]["beats_per_bar"] == 4  # synthetic tracks are 4/4

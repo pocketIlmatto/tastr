@@ -135,6 +135,7 @@ rclone copy ~/Development/tastr-data/beat-this r2:tastr-data/beat-this \
   --include "hjdb-originals.npz" --include "hjdb-annotations.json"
 tastr spec-bench tempo beat-this --dataset hjdb --remote --limit 20
 tastr spec-bench downbeats beat-this --dataset hjdb --remote
+tastr spec-bench meter beat-this --dataset gtzan --remote   # needs gtzan-originals.npz and gtzan-annotations.json
 ```
 
 No index is needed: the file's own key list is the track list. The annotations JSON replaces one read

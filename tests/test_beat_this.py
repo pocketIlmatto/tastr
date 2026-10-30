@@ -42,7 +42,7 @@ def test_tempo_from_spectrogram(bpm):
 
 
 def test_downbeat_groups_only_for_grouped_releases(monkeypatch):
-    monkeypatch.setattr("tastr.engine.stages.core._downbeat_phase", lambda beats, log_mel, freqs: 0)
+    monkeypatch.setattr("tastr.engine.stages.core._downbeat_phase", lambda beats, log_mel, freqs, **kw: 0)
     pos = np.array([1, 2, 3, 4] * 4)
     item = lambda name: (name, np.zeros((128, 500), dtype=np.float32), np.arange(16) * 0.5, pos)
     r = downbeats.run([item("gtzan_blues_00000"), item("gtzan_rock_00001")])

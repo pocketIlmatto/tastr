@@ -152,6 +152,7 @@ def test_write_originals_drops_augmented_copies(tmp_path):
     report = jobs.run_spec_bench("tempo", "hjdb", tmp_path)
     assert report["summary"]["all"]["tracks"] == 1 and report["tracks"][0]["ref"] == 120.0
     assert jobs.run_spec_bench("downbeats", "hjdb", tmp_path)["tracks"] == 1
+    assert jobs.run_spec_bench("meter", "hjdb", tmp_path)["tracks"] == 1
 
 
 def test_spec_bench_remote(monkeypatch, tmp_path, capsys):

@@ -244,3 +244,77 @@ def test_unsure_labels_are_left_out_of_training():
     t = {"profile": np.full(12, 1 / 12), "silent": False}
     tracks = [t | {"label_conf": c} for c in (-1, 0, 1, 2)] + [t | {"label_conf": 2, "silent": True}]
     assert [x["label_conf"] for x in train_key.usable(tracks)] == [-1, 2]
+
+
+def test_calibration_fit_is_monotone_and_pooled():
+    import numpy as np
+
+    from tastr.engine.bench import calibrate
+
+    rng = np.random.default_rng(3)
+    x = rng.random(2000)
+    y = (rng.random(2000) < 0.2 + 0.6 * x).astype(float)  # truly 20% right at 0, 80% at 1
+    knots = calibrate.fit(x, y)
+    rates = [p for _, p, _ in knots]
+    assert rates == sorted(rates)
+    assert all(n >= calibrate.MIN_BLOCK for *_, n in knots)
+    assert sum(n for *_, n in knots) == 2000
+    assert abs(calibrate.predict(knots, np.array([0.1]))[0] - 0.26) < 0.08
+    assert abs(calibrate.predict(knots, np.array([0.9]))[0] - 0.74) < 0.08
+    h = calibrate.holdout(x, y)
+    assert h["brier_calibrated"] < h["brier_flat"]
+
+
+def test_calibration_smooths_small_certain_blocks():
+    import numpy as np
+
+    from tastr.engine.bench import calibrate
+
+    knots = calibrate.fit(np.linspace(0, 1, 10), np.ones(10), min_block=5)
+    assert len(knots) == 1 and knots[0][1] == round(10.5 / 11, 4)
+
+
+def test_calibration_module_round_trips(tmp_path, monkeypatch):
+    import importlib.util
+
+    from tastr.engine import calibration
+    from tastr.engine.bench import calibrate
+
+    tables = {"bpm": [(0.2, 0.5, 50), (0.8, 0.9, 60)], "key": [(0.1, 0.3, 40), (0.5, 0.7, 45)]}
+    path = tmp_path / "calibration_table.py"
+    path.write_text(calibrate.module_source(tables, {"bpm": ["bp.json"], "key": ["key.json"]}))
+    spec = importlib.util.spec_from_file_location("calibration_table", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.BPM == tuple(tables["bpm"]) and mod.KEY == tuple(tables["key"])
+
+    monkeypatch.setitem(__import__("sys").modules, "tastr.engine.calibration_table", mod)
+    import tastr.engine as engine
+    monkeypatch.setattr(engine, "calibration_table", mod, raising=False)
+    assert calibration.likely_correct("bpm", 0.5) == 0.7
+    assert calibration.likely_correct("bpm", 0.0) == 0.5  # flat beyond the fitted range
+    assert calibration.likely_correct("key", 0.9) == 0.7
+    assert calibration.likely_correct("bpm", None) is None
+
+
+def test_calibrate_reads_reports_and_key_rows(tmp_path):
+    from tastr.engine.bench import calibrate
+
+    (tmp_path / "r.json").write_text(json.dumps({"rows": [
+        {"bpm_confidence": 0.9, "acc1": 1.0}, {"bpm_confidence": 0.3, "acc1": 0.0}, {"est_bpm": None}]}))
+    (tmp_path / "s.json").write_text(json.dumps({"tracks": [{"bpm_confidence": 0.5, "acc1": 1.0}]}))
+    x, y = calibrate.read_pairs([str(tmp_path / "r.json"), str(tmp_path / "s.json")], "bpm")
+    assert list(x) == [0.9, 0.3, 0.5] and list(y) == [1.0, 0.0, 1.0]
+    with pytest.raises(SystemExit):
+        calibrate.main(["--bpm", str(tmp_path / "r.json"), "--write"])
+
+
+def test_key_holdout_writes_calibration_rows():
+    import numpy as np
+
+    from tastr.engine.bench import train_key
+
+    tracks = _scale_tracks(np.random.default_rng(4), 40)
+    rows: list = []
+    train_key.holdout({"major": tracks[0::2], "minor": tracks[1::2]}, [], rows=rows)  # both modes in each half
+    assert len(rows) == 40 and all({"key_confidence", "key_correct", "dataset"} <= r.keys() for r in rows)

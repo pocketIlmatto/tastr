@@ -35,7 +35,8 @@ class Key:
     mode: str  # "major" | "minor"
     scale: str | None = None  # modal flavour in Live's naming: "Dorian", "Minor", ...
     camelot: str | None = None  # e.g. "8A"
-    confidence: float | None = None  # 0..1
+    confidence: float | None = None  # 0..1, top key probability minus the runner-up's
+    likely_correct: float | None = None  # 0..1, share of benchmark tracks at this confidence with the exact key
 
     @property
     def name(self) -> str:
@@ -49,7 +50,8 @@ class Core:
     """Filled by the `core` stage."""
 
     bpm: float | None = None
-    bpm_confidence: float | None = None
+    bpm_confidence: float | None = None  # 0..1, how clear the pulse is in this track
+    bpm_likely_correct: float | None = None  # 0..1, share of benchmark tracks at this confidence within 4% of the label
     key: Key | None = None
     energy: float | None = None  # 0..1, whole-track
     loudness_db: float | None = None

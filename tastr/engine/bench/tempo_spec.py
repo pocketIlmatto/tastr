@@ -54,13 +54,18 @@ def envelopes(log_mel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def tempo(log_mel: np.ndarray) -> float | None:
+    return tempo_and_confidence(log_mel)[0]
+
+
+def tempo_and_confidence(log_mel: np.ndarray) -> tuple[float | None, float]:
+    """Core's (bpm, bpm_confidence) for one spectrogram."""
     from ..pipeline import AnalysisContext
     from ..stages.core import _tempo_and_beats
 
     onset, low_flux = envelopes(log_mel)
     ctx = AnalysisContext(y=np.zeros(0, dtype=np.float32), sr=SR, card=None, hop=HOP)
-    bpm, *_ = _tempo_and_beats(ctx, onset, low_flux, onset.size)
-    return bpm
+    bpm, _, conf, *_ = _tempo_and_beats(ctx, onset, low_flux, onset.size)
+    return bpm, conf
 
 
 def ratio_name(est: float | None, ref: float) -> str:
@@ -95,8 +100,9 @@ def load(root: str | Path, dataset: str = "hjdb", limit: int | None = None):
 def run(items) -> dict:
     rows = []
     for name, log_mel, ref, split in items:
-        est = tempo(log_mel)
+        est, conf = tempo_and_confidence(log_mel)
         rows.append({"name": name, "split": split, "ref": round(ref, 2), "est": est and round(est, 2),
+                     "bpm_confidence": round(conf, 3),
                      "error": ratio_name(est, ref), **tempo_scores(est, ref)})
     summary = {}
     for split in sorted({r["split"] for r in rows}) + ["all"]:

@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import collections
 import datetime
+import json
 import sys
 from pathlib import Path
 
@@ -81,27 +82,31 @@ def fit(tracks: list[dict], c: float = C) -> tuple[np.ndarray, np.ndarray]:
     return clf.coef_.copy(), clf.intercept_.copy()
 
 
-def score(tracks: list[dict], weights: np.ndarray, bias: np.ndarray) -> dict:
+def score(tracks: list[dict], weights: np.ndarray, bias: np.ndarray, out: list | None = None,
+          dataset: str = "") -> dict:
     rows = []
     for t in tracks:
         est = music.estimate_key(t["profile"], weights, bias)
         rows.append(metrics.key_scores(est["tonic"], est["mode"], t["tonic"], t["mode"]))
+        if out is not None:
+            out.append({"id": t.get("id"), "dataset": dataset, "key_confidence": est["confidence"]} | rows[-1])
     n = len(rows) or 1
     return {"n": len(rows), "mirex": sum(r["key_weighted"] for r in rows) / n,
             "exact": sum(r["key_correct"] for r in rows) / n,
             "categories": collections.Counter(r["key_category"] for r in rows)}
 
 
-def holdout(by_dataset: dict[str, list[dict]], extra: list[dict], c: float = C) -> dict[str, dict]:
+def holdout(by_dataset: dict[str, list[dict]], extra: list[dict], c: float = C,
+            rows: list | None = None) -> dict[str, dict]:
     """Split every dataset into alternating halves A/B; train on all A halves (+ `extra`), score the B halves,
-    and the reverse."""
+    and the reverse. Per-track held-out results are appended to `rows` when given (for calibrate)."""
     A = {k: v[0::2] for k, v in by_dataset.items()}
     B = {k: v[1::2] for k, v in by_dataset.items()}
     wa, ba = fit([t for v in A.values() for t in v] + extra, c)
     wb, bb = fit([t for v in B.values() for t in v] + extra, c)
     out = {}
     for k in by_dataset:
-        ra, rb = score(A[k], wb, bb), score(B[k], wa, ba)
+        ra, rb = score(A[k], wb, bb, rows, k), score(B[k], wa, ba, rows, k)
         n = ra["n"] + rb["n"]
         out[k] = {"A": ra["mirex"], "B": rb["mirex"], "n": n,
                   "mirex": (ra["mirex"] * ra["n"] + rb["mirex"] * rb["n"]) / n,
@@ -137,6 +142,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", nargs=3, action="append", required=True, metavar=("DATASET", "ROOT", "FEATURES"))
     ap.add_argument("--holdout", action="store_true", help="report alternating-half held-out scores")
+    ap.add_argument("--calibration-rows", metavar="JSON",
+                    help="with --holdout, save per-track held-out confidence and result here for bench.calibrate")
     ap.add_argument("--write", action="store_true", help=f"fit on everything and write {MODULE.name}")
     ap.add_argument("-C", type=float, default=C)
     ap.add_argument("--no-synth", action="store_true", help="leave out the synthetic progressions")
@@ -148,10 +155,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{k}: {len(v)} training tracks")
     print(f"synthetic: {len(extra)} progressions")
     if a.holdout:
-        for k, r in holdout(by_dataset, extra, a.C).items():
+        rows: list[dict] = []
+        for k, r in holdout(by_dataset, extra, a.C, rows).items():
             cats = " ".join(f"{c} {r['categories'][c]}" for c in ("fifth", "relative", "parallel", "other"))
             print(f"held out {k}: A {r['A']:.3f}, B {r['B']:.3f}, all {r['mirex']:.3f} (n={r['n']}), "
                   f"exact {r['exact']:.3f} | {cats}")
+        if a.calibration_rows:
+            Path(a.calibration_rows).expanduser().write_text(json.dumps({"rows": rows}, indent=1))
+            print(f"wrote {len(rows)} held-out rows to {a.calibration_rows}")
     if a.write:
         weights, bias = fit([t for v in by_dataset.values() for t in v] + extra, a.C)
         MODULE.write_text(module_source(weights, bias, {k: len(v) for k, v in by_dataset.items()}, a.C, len(extra)))

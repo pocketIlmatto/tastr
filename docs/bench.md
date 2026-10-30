@@ -175,6 +175,53 @@ bonuses, and overtone-suppressed chroma. On 200-track subsets, differences under
   compiled into it at once. `--jobs` now analyzes one track before starting workers; if a cache is already
   broken, delete the `.nbi`/`.nbc` files under librosa's `__pycache__` or point `NUMBA_CACHE_DIR` at a fresh folder.
 
+## Confidence calibration
+
+The raw `bpm_confidence` and key `confidence` say how clear the evidence was in one track, not how often
+the answer is right: a track with a steady, pronounced beat can score 0.94 and still be read at 2/3 tempo.
+`calibration.likely_correct` maps each raw score to the share of benchmark tracks with that score that were
+right (BPM: Acc1, within 4% of the label; key: the exact key), and the card stores it as
+`core.bpm_likely_correct` and `key.likely_correct`. The UI shows it as "N% likely right"; cards analyzed
+before calibration keep the raw "N% conf" until re-analyzed.
+
+The map is an isotonic (non-decreasing) fit, pooled into blocks of at least 40 tracks, with each block's rate
+nudged towards 1/2 by half a track. Tables live in `tastr/engine/calibration_table.py`, written by
+`tastr.engine.bench.calibrate`. Key rows must be out-of-fold: the key model was trained on GiantSteps and
+Beatport, so a plain bench report on those sets is in-sample and overconfident. `train_key --holdout
+--calibration-rows` saves the alternating-half held-out confidence and result for every track.
+
+```
+python -m tastr.engine.bench.train_key --data giantsteps-key GS GS-FEATURES --data beatport-key BP BP-FEATURES \
+    --holdout --calibration-rows results/key-oof.json
+tastr bench beatport-tempo BP --stages core --out results/bp-tempo-core.json
+tastr bench giantsteps-tempo GS-TEMPO --stages core --out results/gs-tempo-core.json
+python -m tastr.engine.bench.tempo_spec BEAT-THIS --dataset hjdb --out results/hjdb-tempo.json
+python -m tastr.engine.bench.calibrate --bpm results/bp-tempo-core.json results/gs-tempo-core.json \
+    results/hjdb-tempo.json --key results/key-oof.json          # held-out check and reliability table
+python -m tastr.engine.bench.calibrate ... --write             # then write calibration_table.py
+```
+
+**Fitted 2026-10-30.** BPM from 1,052 tracks, `--stages core`: Beatport tempo 774 (Acc1 0.872), GiantSteps
+tempo 43 (0.721), hjdb 235 (0.919); 87.6% right overall. Key from 1,721 out-of-fold rows: GiantSteps 599,
+Beatport 1,122; 54.6% exact overall. Held-out Brier (fit on one alternating half, scored on the other;
+lower is better), raw score / flat overall rate / calibrated: BPM 0.284 / 0.109 / 0.095, key 0.280 / 0.249 /
+0.224. Reliability, five equal-count bins of the raw score:
+
+| BPM raw | Tracks | Predicted | Actual | | Key raw | Tracks | Predicted | Actual |
+|---|---|---|---|---|---|---|---|---|
+| 0.32-0.43 | 206 | 63% | 61% | | 0.00-0.09 | 339 | 33% | 34% |
+| 0.43-0.44 | 207 | 92% | 93% | | 0.09-0.21 | 348 | 41% | 40% |
+| 0.44-0.45 | 203 | 94% | 95% | | 0.21-0.36 | 346 | 57% | 57% |
+| 0.45-0.46 | 212 | 95% | 94% | | 0.36-0.56 | 343 | 66% | 68% |
+| 0.46-0.98 | 224 | 95% | 94% | | 0.56-0.97 | 345 | 76% | 74% |
+
+The raw BPM score is bunched in 0.41-0.47 on all three sets, so it mostly separates the bottom fifth
+(about 60% right) from the rest (about 94%); it says little among confident tracks.
+
+Refit after changing the tempo or key logic (a new `THREE_TWO_RATIO`, a retrained key model). The
+benchmarks are EDM-heavy (Beatport, GiantSteps) plus jungle / hardcore (hjdb), so the figures describe
+those genres best.
+
 ## Tempo notes
 
 Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror (`annotations_v2`),

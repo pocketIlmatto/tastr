@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .. import music, signals
+from .. import calibration, music, signals
 from ..card import Key
 from ..pipeline import AnalysisContext, register_stage
 
@@ -27,7 +27,7 @@ THREE_TWO_RATIO = 0.8
 
 class CoreStage:
     name = "core"
-    version = "0.1.4"
+    version = "0.1.5"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -54,6 +54,7 @@ class CoreStage:
         if bpm is not None:
             core.bpm = round(bpm, 2)
             core.bpm_confidence = round(bpm_conf, 3)
+            core.bpm_likely_correct = calibration.likely_correct("bpm", bpm_conf)
             core.beat_times = [round(float(t), 3) for t in beat_times if t <= duration]
             phase = _downbeat_phase(beat_idx, *ctx.get("log_mel", signals.log_mel))
             core.downbeat_times = [round(float(t), 3) for t in beat_times[phase::4] if t <= duration]
@@ -111,6 +112,7 @@ class CoreStage:
                 scale=music.refine_mode(profile, est["tonic"], est["mode"]),
                 camelot=music.camelot(est["tonic"], est["mode"]),
                 confidence=est["confidence"],
+                likely_correct=calibration.likely_correct("key", est["confidence"]),
             )
             ctx.card.extras["core.key_alternatives"] = est.get("alternatives", [])
 

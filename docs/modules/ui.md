@@ -32,7 +32,7 @@ Analysis is CPU-bound and slow (tens of seconds); run it in FastAPI's threadpool
 
 ## Track card view (one per track)
 Render from the card JSON, tolerating any field being null/empty:
-- Header: title, duration (m:ss), BPM (1 decimal) with confidence, key name + Camelot + scale, energy meter 0..1.
+- Header: title, duration (m:ss), BPM (1 decimal) with "N% likely right" (`core.bpm_likely_correct`; older cards show the raw `bpm_confidence` as "N% conf"), key name + Camelot + scale + "N% likely right" (`key.likely_correct`, hidden when absent), energy meter 0..1.
 - Energy curve: `series.energy` as a line/area over time, with `sections` as shaded bands labeled `label letter`.
 - Tags as chips sized or shaded by score.
 - Drum grid: from any suggestion whose `data.pattern` exists, a 16-column grid per lane (`x` full, `o` half, `.` empty), beats 1-4 visually grouped.

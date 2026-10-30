@@ -448,8 +448,17 @@ function switchTo(view) {
   document.querySelector(`nav button[data-view=${view}]`).click();
 }
 
-function stat(value, label) {
-  return h("div", { class: "stat" }, h("b", {}, value), h("span", {}, label));
+function stat(value, label, title) {
+  return h("div", { class: "stat", ...(title ? { title } : {}) }, h("b", {}, value), h("span", {}, label));
+}
+
+// "BPM · 85% likely right" from the benchmark-calibrated chance; cards analyzed before calibration show the raw score.
+function sureness(likely, raw) {
+  if (isNum(likely)) return { text: `${Math.round(likely * 100)}% likely right`,
+    title: `About ${Math.round(likely * 100)} in 100 benchmark tracks with this confidence score were right.` };
+  if (isNum(raw)) return { text: `${Math.round(raw * 100)}% conf`,
+    title: "How clear the evidence was in this track, not how often it's right. Re-analyze to get a calibrated figure." };
+  return null;
 }
 
 let sectionBus = new EventTarget();
@@ -464,6 +473,8 @@ function renderCard(c) {
   sectionBus = new EventTarget();
   const core = c.core || {};
   const key = core.key;
+  const bpmSure = isNum(core.bpm) ? sureness(core.bpm_likely_correct, core.bpm_confidence) : null;
+  const keySure = key && isNum(key.likely_correct) ? sureness(key.likely_correct) : null;
   const root = $("card");
   root.replaceChildren();
   root.dataset.id = c.id;
@@ -471,8 +482,9 @@ function renderCard(c) {
     h("div", { class: "title-row" }, h("h2", {}, (c.source && (c.source.title || c.source.uri)) || `Track ${c.id}`), trackMenu(c)),
     h("p", { class: "card-sub" + (c.source.artist ? "" : " muted") }, [c.source.artist, c.source.album].filter(Boolean).join(" · ") || "No artist or album in the file tags"),
     stat(mmss(c.duration), "duration"),
-    stat(isNum(core.bpm) ? core.bpm.toFixed(1) : "–", isNum(core.bpm_confidence) ? `BPM · ${Math.round(core.bpm_confidence * 100)}% conf` : "BPM"),
-    stat(key ? `${keyName(key)}` : "–", key ? [key.camelot, key.scale].filter(Boolean).join(" · ") || "key" : "key")
+    stat(isNum(core.bpm) ? core.bpm.toFixed(1) : "–", bpmSure ? `BPM · ${bpmSure.text}` : "BPM", bpmSure && bpmSure.title),
+    stat(key ? `${keyName(key)}` : "–", key ? [key.camelot, key.scale, keySure && keySure.text].filter(Boolean).join(" · ") || "key" : "key",
+      keySure && keySure.title)
   );
   const en = h("div", { class: "stat" },
     h("b", {}, isNum(core.energy) ? core.energy.toFixed(2) : "–"),

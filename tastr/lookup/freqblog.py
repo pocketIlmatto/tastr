@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 
 from . import register
-from .base import LookupResult, Provider, ProviderError, TrackQuery, num, same_text
+from .base import LookupResult, Provider, ProviderError, TrackQuery, num, same_artists, same_text
 
 DEFAULT_BASE = "https://api.freqblog.com"
 
@@ -58,7 +58,7 @@ class FreqBlog(Provider):
         if num(track.get("bpm")) is None and not track.get("key"):
             return LookupResult(self.name, "not_found")
         # The lookup returns its closest match; don't store a different song as this one.
-        if (title and not same_text(title, q.title)) or (artist and not same_text(artist, q.artist)):
+        if (title and not same_text(title, q.title)) or (artist and not same_artists(artist, q.artist)):
             return LookupResult(self.name, "not_found", extra={"closest": f"{artist or '?'} – {title or '?'}"})
         return LookupResult(
             self.name, "found", bpm=num(track.get("bpm")), key=track.get("key") or None,

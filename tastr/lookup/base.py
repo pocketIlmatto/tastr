@@ -140,3 +140,18 @@ def same_text(a: str | None, b: str | None) -> bool:
 
     x, y = norm(a), norm(b)
     return bool(x and y) and (x == y or x in y or y in x)
+
+
+_ARTIST_SEP = re.compile(r"\s*(?:,|&|\band\b|\bx\b|\bvs\.?|\bfeat\.?|\bft\.?|\bfeaturing\b)\s*", re.IGNORECASE)
+
+
+def same_artists(a: str | None, b: str | None) -> bool:
+    """Artist credits match: same_text, or every artist in the shorter credit is in the longer one, in any
+    order and however joined ("A, B & C" vs "A, C, B"; "A feat. B" vs "A")."""
+    if same_text(a, b):
+        return True
+    xs, ys = ([n for n in _ARTIST_SEP.split(s or "") if n.strip()] for s in (a, b))
+    if not xs or not ys:
+        return False
+    short, long = sorted((xs, ys), key=len)
+    return all(any(same_text(s, t) for t in long) for s in short)

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from tastr import db, lookup
 from tastr.lookup import freqblog, getsongbpm
-from tastr.lookup.base import LookupResult, Provider, ProviderError, TrackQuery, same_text
+from tastr.lookup.base import LookupResult, Provider, ProviderError, TrackQuery, same_artists, same_text
 from tastr.web.server import create_app
 from test_foundation import full_card
 
@@ -82,17 +82,24 @@ def test_getsongbpm_fetches_thin_hits_and_reports_no_result(monkeypatch):
         p.lookup(Q)
 
 
+# A /lookup 200 as the live API sends it (2026-10-30), trimmed and with made-up values.
+LIVE_SHAPE = {"track_name": "One More Time", "artist_name": "Daft Punk", "album_name": "Discovery", "isrc": "XX0000000001",
+              "duration_ms": 320000, "is_remix": False, "bpm": 123.0, "bpm_alt": 61.5, "bpm_confidence": 2.65,
+              "key": "D-Major", "key_confidence": 0.89, "mode": 1, "key_int": 2, "camelot": "10B", "open_key": "3d",
+              "energy": 0.77, "time_signature": 4, "mood": "happy", "mood_vector": {"happy": 0.77},
+              "extended": {"timbre": "dark"}, "feature_source": "essentia_preview", "bpm_snapped": 123}
+
+
 def test_freqblog_found_pending_and_missing(monkeypatch):
     p = freqblog.FreqBlog()
     monkeypatch.setenv("FREQBLOG_API_KEY", "k")
     calls = canned(monkeypatch, p,
-                   (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "bpm_alt": 61.5,
-                          "key": "D major", "camelot": "10B"}),
+                   (200, LIVE_SHAPE),
                    (202, {"status": "queued"}),
                    ProviderError("FreqBlog answered HTTP 404", 404),
                    (200, {"track_name": "Around the World", "artist_name": "Daft Punk", "bpm": 121, "key": "E minor"}))
     r = p.lookup(Q)
-    assert (r.status, r.bpm, r.key, r.camelot, r.extra["bpm_alt"], r.matched_title) == ("found", 123.0, "D major", "10B", 61.5, "One More Time")
+    assert (r.status, r.bpm, r.key, r.camelot, r.extra["bpm_alt"], r.matched_title) == ("found", 123.0, "D-Major", "10B", 61.5, "One More Time")
     assert calls[0][1] == {"track": "One More Time", "artist": "Daft Punk"} and calls[0][2] == {"X-API-Key": "k"}
     assert p.lookup(Q).status == "pending"
     assert p.lookup(Q).status == "not_found"
@@ -130,6 +137,21 @@ def test_enabled_needs_the_name_and_the_key(monkeypatch):
     assert [p.name for p in lookup.enabled()] == ["freqblog"]
     monkeypatch.delenv("TASTR_LOOKUP")
     assert lookup.enabled() == []
+
+
+def test_freqblog_matches_artists_listed_in_another_order(monkeypatch):
+    p = freqblog.FreqBlog()
+    monkeypatch.setenv("FREQBLOG_API_KEY", "k")
+    canned(monkeypatch, p, (200, {**LIVE_SHAPE, "track_name": "Same Song",
+                                  "artist_name": "Alpha, Beta, Gamma, Epsilon & Delta"}))
+    r = p.lookup(TrackQuery(artist="Alpha, Beta, Gamma, Delta, Epsilon", title="Same Song"))
+    assert r.status == "found" and r.matched_artist == "Alpha, Beta, Gamma, Epsilon & Delta"
+
+
+def test_same_artists():
+    assert same_artists("A, B & C", "C, A, B") and same_artists("Fred again.. feat. Future", "Fred again..")
+    assert same_artists("Disclosure, Eliza Doolittle", "Disclosure & Eliza Doolittle")
+    assert not same_artists("Daft Punk, Justice", "Daft Punk, Kavinsky") and not same_artists("", "A")
 
 
 def test_same_text():
@@ -213,3 +235,11 @@ def _other_card():
     c = full_card()
     c.source.sha256, c.source.uri = "other", "/other.wav"
     return c
+
+
+def test_getsongbpm_matches_reordered_artist_credits(monkeypatch):
+    p = getsongbpm.GetSongBPM()
+    canned(monkeypatch, p, (200, {"search": [
+        {"song_id": "c", "song_title": "Song", "artist": {"name": "Beta & Alpha"}, "tempo": "120", "key_of": "Bbm"}]}))
+    r = p.lookup(TrackQuery(artist="Alpha, Beta", title="Song"))
+    assert (r.status, r.bpm) == ("found", 120.0)

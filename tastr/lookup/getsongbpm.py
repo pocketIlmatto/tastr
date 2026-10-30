@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 
 from . import register
-from .base import LookupResult, Provider, ProviderError, TrackQuery, num, same_text
+from .base import LookupResult, Provider, ProviderError, TrackQuery, num, same_artists, same_text
 
 DEFAULT_BASE = "https://api.getsong.co"
 
@@ -44,7 +44,7 @@ class GetSongBPM(Provider):
             raise ProviderError(f"{self.label}: {hits['error']}")
         if not isinstance(hits, list):
             raise ProviderError(f"{self.label} sent an unexpected search response")
-        song = next((h for h in hits if same_text(_artist(h), q.artist) and same_text(_title(h), q.title)), None)
+        song = next((h for h in hits if same_artists(_artist(h), q.artist) and same_text(_title(h), q.title)), None)
         if song is None:
             return LookupResult(self.name, "not_found")
         sid = song.get("song_id") or song.get("id")

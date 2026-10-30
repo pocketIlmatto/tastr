@@ -17,6 +17,9 @@ storage on R2, analysis on Modal) comes in a later change.
 | Link analysis (yt-dlp) | on (with the `links` extra) | off; the link field is hidden |
 | SQL box (`/api/query`) | on | off; the box is hidden |
 | Uploads | any size | audio types only, size, count, per-person daily and total storage limits |
+| Library | one, yours | one per person: each sees and changes only the tracks they uploaded |
+| Deleting a track | removes its stems | also removes its uploaded audio |
+| Admin view (`/api/admin/usage`) | none | usage per person, for `TASTR_ADMIN_EMAILS` |
 | Stem separation | unlimited | per-person daily limit |
 | Analyses at once | unlimited | capped; extra ones wait their turn |
 | Analysis errors | full message | "Couldn't analyze this file." (details go to the server log) |
@@ -25,8 +28,9 @@ storage on R2, analysis on Modal) comes in a later change.
 
 In both modes `/api/analyze-url` accepts only `http(s)` links, never a path on the server.
 
-Every person currently shares one library. Per-person libraries come next, so invite only one person
-until they land.
+Each track belongs to the email that uploaded it. A request for someone else's track answers 404, the
+same as a track that doesn't exist. Two people can upload the same file; each gets their own track,
+and they share its stems, which stay until the last copy is deleted.
 
 ## Settings
 
@@ -43,6 +47,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this |
 | `TASTR_MAX_ANALYSES` | 2 | analyses that run at once |
 | `TASTR_DAILY_STEMS` | 10 | stem separations each person can start per UTC day |
+| `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
 
 With `TASTR_HOSTED=1` but no team domain or AUD tag, `tastr serve` refuses to start rather than run
 without a login check.
@@ -66,6 +71,23 @@ You need a domain on Cloudflare (Tastr will live at a hostname on it, such as `t
 
 Cloudflare then forwards each signed-in request with a `Cf-Access-Jwt-Assertion` header, which Tastr
 verifies against your team's public keys at `https://<team domain>/cdn-cgi/access/certs`.
+
+## Admin view
+
+For the emails in `TASTR_ADMIN_EMAILS`, `GET /api/admin/usage` returns, per person: tracks, uploaded
+audio and stem bytes, last upload, last request since the server started, and today's tracks, stem jobs
+and visits (page loads), plus 30 days of daily counts, the limits, total storage against the cap and
+the stem jobs in progress. Everyone else gets 404. `/api/config` says `"admin": true` for admins.
+
+## Moving your own library to a hosted server
+
+Tracks analyzed on your own machine have no owner, so on a hosted server nobody sees them. Once your
+database is on the server (the deploy change adds a script that moves the audio too), give its tracks to
+your Access email:
+
+```
+tastr set-owner you@example.com
+```
 
 ## Known gaps until the deploy change
 

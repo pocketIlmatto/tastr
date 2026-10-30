@@ -73,7 +73,7 @@ RMS) live in `tastr/engine/signals.py`; use them so they are computed once.
 SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or
 `--db`). Tables:
 
-- `tracks`: one row per track, headline numbers as columns (bpm, key, camelot, energy...). Deduped on `sha256`.
+- `tracks`: one row per track, headline numbers as columns (bpm, key, camelot, energy...). Deduped on `sha256` within one owner's library; `owner` is the uploader's Access email on a hosted server (docs/hosting.md) and NULL on your own machine.
 - `sections`, `tags`, `suggestions`: one row per item, keyed by `track_id`.
 - `features`: long format `(track_id, name, value)`, so new features need no migration.
 - `series`: long format `(track_id, name, idx, t, value)` for curves.

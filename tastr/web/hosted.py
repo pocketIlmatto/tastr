@@ -7,7 +7,9 @@
 - turns off link analysis (yt-dlp) and the SQL box;
 - limits uploads (size, count, audio types, total storage, tracks per person per day), stem jobs per
   person per day, and how many analyses run at once;
-- hides error details that could name server paths, and sends security headers (CSP, no framing).
+- hides error details that could name server paths, and sends security headers (CSP, no framing);
+- gives each person their own library: tracks carry the uploader's email, and every /api/tracks/{id}
+  request for someone else's track answers 404. TASTR_ADMIN_EMAILS may open /api/admin/usage.
 
 Settings come from environment variables (see `Settings.from_env` and docs/hosting.md).
 """
@@ -42,6 +44,7 @@ class Settings:
     storage_gb: float = 10
     max_analyses: int = 2
     daily_stems: int = 10
+    admins: tuple[str, ...] = ()  # emails that may open the admin view
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -57,6 +60,7 @@ class Settings:
             storage_gb=float(env.get("TASTR_STORAGE_GB", cls.storage_gb)),
             max_analyses=int(env.get("TASTR_MAX_ANALYSES", cls.max_analyses)),
             daily_stems=int(env.get("TASTR_DAILY_STEMS", cls.daily_stems)),
+            admins=tuple(e.strip().lower() for e in env.get("TASTR_ADMIN_EMAILS", "").split(",") if e.strip()),
         )
         if hosted and not (s.access_team_domain and s.access_aud):
             # Fail closed: a hosted server that can't check logins must not start.
@@ -95,6 +99,13 @@ class AccessVerifier:
 
 def today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def file_bytes(path: str | None) -> int:
+    try:
+        return Path(path).stat().st_size if path else 0
+    except OSError:
+        return 0
 
 
 def stored_bytes(home: Path) -> int:

@@ -28,13 +28,13 @@ class AnalyzeResult:
 
 
 def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] | None = None,
-                   options: dict | None = None) -> AnalyzeResult:
+                   options: dict | None = None, owner: str | None = None) -> AnalyzeResult:
     try:
         if not source.local_path:
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
         card = analyze_file(source.local_path, stages, source=source, options=options)
-        track_id = db.save_card(conn, card)
+        track_id = db.save_card(conn, card, owner)
         _lookup(conn, track_id, card)
         return AnalyzeResult(source, track_id, card)
     except Exception as e:
@@ -54,8 +54,10 @@ def _lookup(conn: sqlite3.Connection, track_id: int, card: TrackCard) -> None:
             log.warning("metadata lookup failed for track %s: %s", track_id, e)
 
 
-def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], stages: list[str] | None = None) -> list[AnalyzeResult]:
-    return [analyze_source(conn, s, stages) for s in resolve_inputs(inputs)]
+def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], stages: list[str] | None = None,
+                   owner: str | None = None) -> list[AnalyzeResult]:
+    """`owner`: whose library the tracks go in on a hosted server (None on your own machine)."""
+    return [analyze_source(conn, s, stages, owner=owner) for s in resolve_inputs(inputs)]
 
 
 KEEP = "keep"
@@ -82,7 +84,8 @@ def reanalyze_track(conn: sqlite3.Connection, track_id: int, beats_per_bar: int 
     old_bars = _section_bars(card)
     if beats_per_bar == KEEP:
         beats_per_bar = card.core.beats_per_bar if card.core.meter_set else None
-    result = analyze_source(conn, source, options={"beats_per_bar": beats_per_bar} if beats_per_bar else None)
+    result = analyze_source(conn, source, options={"beats_per_bar": beats_per_bar} if beats_per_bar else None,
+                            owner=db.track_owner(conn, track_id)[1])
     if result.track_id is not None:
         same_meter = result.card.core.beats_per_bar == (card.core.beats_per_bar or 4)
         result.edits_dropped = db.remap_edits(conn, result.track_id, old_bars, _section_bars(result.card),

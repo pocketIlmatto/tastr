@@ -150,6 +150,7 @@ tastr list
 tastr show 1                     # full card as JSON
 tastr stems 1                    # split track 1 into vocals, bass, other and drums (needs the stems extra, below)
 tastr lookup                     # catalog BPM/key for every track (opt-in, docs/lookup.md)
+tastr set-owner you@example.com  # give tracks with no owner to a hosted-mode user (docs/hosting.md)
 tastr retag                      # re-read file tags for analyzed tracks (`tastr serve` does this once after the tag reader changes)
 tastr query "SELECT title, bpm, camelot FROM tracks ORDER BY bpm"
 tastr stages                     # pipeline stages in run order

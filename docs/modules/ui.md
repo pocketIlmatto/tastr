@@ -21,7 +21,7 @@ across the library.
 | POST | `/api/analyze` | multipart `files[]` | `{"results": [{"track_id", "title", "error"}]}`; saves each upload as `$TASTR_HOME/uploads/<random id>/<original name>` then calls `service.analyze_inputs` |
 | POST | `/api/analyze-url` | `{"url": "..."}` | same shape; `IngestError` → 400 with the message; anything but an `http(s)` link (a server path) → 400; 403 in hosted mode |
 | GET | `/api/config` | | `{"hosted", "links", "query", "user", "admin", "limits"}`: what this server allows, so the UI hides link analysis and the SQL box when they're off (docs/hosting.md) |
-| GET | `/api/admin/usage` | | hosted mode, `TASTR_ADMIN_EMAILS` only (404 otherwise): `{"today", "users": [{"email", "tracks", "audio_bytes", "stems_bytes", "last_upload", "last_seen", "today": {"tracks", "stems", "visits"}}], "history": [{"day", "user", "kind", "n"}], "admins", "limits", "storage": {"used_bytes", "cap_bytes"}, "active_stem_jobs"}`; `email` is null for tracks with no owner |
+| GET | `/api/admin/usage` | | hosted mode, `TASTR_ADMIN_EMAILS` only (404 otherwise): `{"today", "users": [{"email", "tracks", "audio_bytes", "stems_bytes", "last_upload", "last_seen", "today": {"tracks", "stems", "visits"}}], "history": [{"day", "user", "kind", "n"}], "admins", "limits", "storage": {"used_bytes", "cap_bytes"}, "active_stem_jobs", "analyses": {"running", "waiting", "max"}, "recent": [{"at", "user", "kind", "ok", "detail"}], "blocked_today"}`; `email` is null for tracks with no owner |
 | DELETE | `/api/tracks/{id}` | | 204 / 404; also deletes the track's edits and versions |
 | GET / PUT | `/api/tracks/{id}/edits` | PUT: the whole edits object | the current, autosaved edits to the drums, bass and chords, `{drums\|bass\|chords\|drumsrc: {section idx or "all": value}}`, or `{}`; PUT returns 204 (an object with no edited section clears them) |
 | GET / POST | `/api/tracks/{id}/edit-versions` | POST: `{"name", "edits"}` | saved versions, newest first: `[{"id", "name", "created_at", "sections"}]`; POST returns the new one (201) |
@@ -47,6 +47,10 @@ Render from the card JSON, tolerating any field being null/empty:
 - Scatter of BPM (x) vs energy (y) for all tracks, point label on hover, click opens the card.
 - Filter by tag and BPM range.
 - A SQL box posting to `/api/query`, results as a table, with 3 example queries from `docs/ARCHITECTURE.md` as buttons.
+
+## Admin view (hosted mode, admins only)
+- The Admin header button shows only when `/api/config` says `"admin": true`; `#admin` opens it, and falls back to the Library for everyone else.
+- Fetches `/api/admin/usage` each time it opens (no polling): tiles, a stacked 30-day chart per person (Tracks / Stem jobs), the people table (click or Enter picks a person out in the chart), the activity log, limits and the blocked-request count. The 30-day cloud cost is estimated in the client (`ADM_TRACK_COST`, `ADM_STEM_COST`, `ADM_BUDGET` in app.js).
 
 ## Tests (`tests/test_web.py`) with `fastapi.testclient.TestClient`
 Seed the DB with `db.save_card` (see `full_card()` in `tests/test_foundation.py`) instead of running analysis, except one upload test using the synth wav.

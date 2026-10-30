@@ -128,9 +128,10 @@ async function api(path, opts) {
 document.querySelectorAll("nav button").forEach((b) =>
   b.addEventListener("click", () => {
     document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x === b));
-    for (const v of ["library", "explore", "glossary"]) $("view-" + v).hidden = v !== b.dataset.view;
+    for (const v of ["library", "explore", "glossary", "admin"]) $("view-" + v).hidden = v !== b.dataset.view;
     if (b.dataset.view === "explore") renderExplore();
     if (b.dataset.view === "glossary") loadGlossaryData();
+    if (b.dataset.view === "admin") loadAdmin();
   })
 );
 
@@ -2117,12 +2118,129 @@ async function runSql() {
 }
 $("run-sql").addEventListener("click", runSql);
 
+const startView = location.hash.slice(1);  // read before anything can change the hash
 refresh().catch((e) => setStatus(e.message, true));
 // A shared (hosted) server turns off link analysis and the SQL box; hide them rather than let them fail.
+// Admins of a hosted server also get the Admin tab; everyone else never sees it, and #admin stays on the library.
 api("/api/config").then((cfg) => {
   if (!cfg.links) $("url-form").hidden = true;
   if (!cfg.query) for (const id of ["sql-panel", "help-sql"]) $(id).hidden = true;
+  if (cfg.admin) {
+    document.querySelector("nav button[data-view=admin]").hidden = false;
+    if (startView === "admin") switchTo("admin");
+  }
 }).catch(() => {});
+
+// ---------- admin (hosted mode, admins only) ----------
+// GET /api/admin/usage, fetched each time the tab opens (no polling). Days are UTC days, like the limits.
+// Cloud cost is an estimate: Modal bills about $0.001 per analysis and $0.008 per stem job (T4, ~50 s), against the
+// friends environment's monthly budget, which is set in Modal and not known to the server.
+const ADM_TRACK_COST = 0.001, ADM_STEM_COST = 0.008, ADM_BUDGET = 10;
+let admData = null, admKind = "tracks", admFocus = null;
+const admColor = (i) => `var(--sec${i % 5})`;
+const admMeter = (v, hot) => h("div", { class: "adm-meter" + (hot ? " hot" : ""), style: `--v:${Math.min(1, v || 0)}` }, h("i"));
+const admGB = (bytes) => `${(bytes / 1024 ** 3).toFixed(bytes >= 1024 ** 3 ? 1 : 2)} GB`;
+const admName = (email) => (email ? email.split("@")[0] : "");
+function admAgo(iso) {
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (!isFinite(s)) return "–";
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h`;
+  return s < 172800 ? "yesterday" : `${Math.floor(s / 86400)} days`;
+}
+const admDaysAgo = (n) => (n === 0 ? "today" : n === 1 ? "yesterday" : `${n} days ago`);
+async function loadAdmin() {
+  try {
+    admData = await api("/api/admin/usage");
+    $("adm-error").textContent = "";
+    renderAdmin();
+  } catch (e) { $("adm-error").textContent = e.message; }
+}
+function renderAdmin() {
+  const A = admData;
+  if (!A) return;
+  const L = A.limits, dayMs = 86400000, today = Date.parse(A.today + "T00:00:00Z");
+  // One row per person, with 30 days of [tracks, stem jobs] (index 29 is today) from the usage history.
+  const all = A.users.map((u) => ({ ...u, admin: A.admins.includes(u.email), days: Array.from({ length: 30 }, () => [0, 0]),
+    active: false, lastDay: null, bytes: u.audio_bytes + u.stems_bytes }));
+  const P = all.filter((p) => p.email), byEmail = Object.fromEntries(P.map((p) => [p.email, p]));
+  for (const x of A.history) {
+    const p = byEmail[x.user], i = 29 - Math.round((today - Date.parse(x.day + "T00:00:00Z")) / dayMs);
+    if (!p || i < 0 || i > 29) continue;
+    if (x.kind === "tracks") p.days[i][0] += x.n;
+    if (x.kind === "stems") p.days[i][1] += x.n;
+    if (i >= 23) p.active = true;
+    p.lastDay = Math.max(p.lastDay ?? 0, i);
+  }
+  for (const p of all) {
+    p.tracks30 = p.days.reduce((a, d) => a + d[0], 0); p.stems30 = p.days.reduce((a, d) => a + d[1], 0);
+    p.cost = p.tracks30 * ADM_TRACK_COST + p.stems30 * ADM_STEM_COST;
+  }
+  const sum = (f) => P.reduce((a, p) => a + f(p), 0), cost = sum((p) => p.cost);
+  const used = A.storage.used_bytes, capB = A.storage.cap_bytes, an = A.analyses;
+  const tile = (value, label, meter) => h("div", { class: "adm-tile" }, stat(value, label), meter || null);
+  $("adm-tiles").replaceChildren(
+    tile(String(P.length), `people, ${P.filter((p) => p.active).length} active this week, ${sum((p) => p.today.visits)} visits today`),
+    tile(String(sum((p) => p.today.tracks)), `tracks today, ${sum((p) => p.tracks30)} in 30 days`),
+    tile(String(sum((p) => p.today.stems)), `stem jobs today, ${sum((p) => p.stems30)} in 30 days`),
+    tile(admGB(used), `stored of ${L.storage_gb} GB`, admMeter(used / capB, used / capB >= 0.9)),
+    tile(`${an.running} / ${an.max}`, `analyzing now, ${an.waiting} waiting`, admMeter(an.running / an.max, an.running / an.max >= 0.9)),
+    tile(`$${cost.toFixed(2)}`, "cloud cost, 30 days (est.)", admMeter(cost / ADM_BUDGET, cost / ADM_BUDGET >= 0.9)));
+  // Stacked daily bars, one color per person. Sized from the container so the text doesn't scale.
+  const k = admKind === "tracks" ? 0 : 1, what = admKind === "tracks" ? "tracks" : "stem jobs";
+  const W = Math.max(300, $("adm-chart").clientWidth || 600), H = 160, pad = 22, top0 = 8, bw = (W - pad) / 30;
+  const max = Math.max(4, ...Array.from({ length: 30 }, (_, i) => sum((p) => p.days[i][k]))), y = (v) => (H - 16 - top0) * v / max;
+  const g = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${what} per day for the last 30 days` });
+  for (const t of [0, Math.round(max / 2), max]) g.append(svg("text", { x: 0, y: H - 16 - y(t) + 3 }, String(t)));
+  for (let i = 0; i < 30; i++) {
+    let top = H - 16;
+    P.forEach((p, j) => {
+      const v = p.days[i][k];
+      if (!v) return;
+      const hh = y(v); top -= hh;
+      g.append(svg("rect", { class: "bar" + (admFocus === j ? " on" : ""), x: pad + i * bw + 1, y: top, width: Math.max(1, bw - 2), height: hh, rx: 1, fill: admColor(j) },
+        svg("title", {}, `${admName(p.email)}: ${v} ${what}, ${admDaysAgo(29 - i)}`)));
+    });
+  }
+  g.append(svg("text", { x: pad, y: H - 2 }, "30 days ago"), svg("text", { x: W, y: H - 2, "text-anchor": "end" }, "today"));
+  $("adm-chart").classList.toggle("focus", admFocus != null);
+  $("adm-chart").replaceChildren(g);
+  $("adm-legend").replaceChildren(...P.map((p, j) => h("span", {}, h("i", { style: `background:${admColor(j)}` }), p.email)));
+  // People
+  const quota = (n, capN) => h("div", { class: "adm-quota" }, h("span", {}, `${n} / ${capN}`), admMeter(n / capN, n >= capN));
+  const seen = (p) => (p.last_seen ? admAgo(p.last_seen).replace(/^(\d.*)$/, "$1 ago") : p.lastDay != null ? admDaysAgo(29 - p.lastDay) : "–");
+  $("adm-people").replaceChildren(
+    h("thead", {}, h("tr", {}, ...["Person", "Last seen", "Visits today", "Tracks today", "Stems today", "Tracks, 30 d", "Library", "Storage", "Cost, 30 d"]
+      .map((t, i) => h("th", { class: i === 2 || i > 4 ? "num" : "" }, t)))),
+    h("tbody", {}, ...all.map((p) => {
+      if (!p.email) return h("tr", { class: "adm-none" }, h("td", {}, "No owner", h("span", { class: "muted" }, " · added before sharing")), h("td", { colspan: "5" }),
+        h("td", { class: "num" }, String(p.tracks)), h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td"));
+      const j = P.indexOf(p), pick = () => { admFocus = admFocus === j ? null : j; renderAdmin(); };
+      return h("tr", { class: admFocus === j ? "sel" : "", tabindex: "0", title: "Pick out in the chart", onclick: pick,
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } },
+        h("td", {}, h("span", { class: "adm-who", style: `background:${admColor(j)}` }), p.email, p.admin ? h("span", { class: "muted" }, " · admin") : null),
+        h("td", {}, seen(p)), h("td", { class: "num" }, String(p.today.visits)),
+        h("td", {}, quota(p.today.tracks, L.daily_tracks)), h("td", {}, quota(p.today.stems, L.daily_stems)),
+        h("td", { class: "num" }, String(p.tracks30)), h("td", { class: "num" }, String(p.tracks)),
+        h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", { class: "num" }, `$${p.cost.toFixed(2)}`));
+    })));
+  $("adm-log").replaceChildren(...(A.recent.length ? A.recent.map((e) => h("li", { class: e.ok ? "" : "warn" },
+    h("time", { datetime: e.at, title: e.at }, admAgo(e.at)),
+    h("span", {}, e.user ? h("b", { title: e.user }, admName(e.user) + " ") : null, h("span", {}, e.detail)))) : [h("li", { class: "muted" }, "Nothing yet.")]));
+  const kv = [["Upload size", `${L.max_upload_mb} MB`, "TASTR_MAX_UPLOAD_MB"], ["Files per upload", L.max_files, "TASTR_MAX_FILES"],
+    ["Tracks per person per day", L.daily_tracks, "TASTR_DAILY_TRACKS"], ["Stem jobs per person per day", L.daily_stems, "TASTR_DAILY_STEMS"],
+    ["Total storage", `${L.storage_gb} GB`, "TASTR_STORAGE_GB"], ["Analyses at once", L.max_analyses, "TASTR_MAX_ANALYSES"],
+    ["Modal budget (friends env)", `$${ADM_BUDGET}/mo`, "set in Modal"]];
+  $("adm-limits").replaceChildren(h("tbody", {}, ...kv.map(([a, b, c]) => h("tr", {}, h("td", {}, a, h("br"), h("code", {}, c)), h("td", {}, String(b))))));
+  $("adm-blocked").textContent = `Blocked today: ${A.blocked_today} request${A.blocked_today === 1 ? "" : "s"} without a valid Access token.`;
+}
+document.querySelectorAll(".adm-seg button").forEach((b) => b.addEventListener("click", () => {
+  admKind = b.dataset.k;
+  document.querySelectorAll(".adm-seg button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  renderAdmin();
+}));
+window.addEventListener("resize", () => { if (!$("view-admin").hidden) renderAdmin(); });
 
 // ---------- help ----------
 // "?" opens the shortcuts dialog unless the user is typing; the dialog closes on Esc, its ✕ or a click outside it.

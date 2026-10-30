@@ -97,16 +97,21 @@ def test_ui_has_collapsible_sections():
     from pathlib import Path
 
     js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
-    for key in ("meta", "energy", "vibe", "drums", "try"):
+    for key in ("meta", "energy", "vibe", "groove", "try"):
         assert f'section("{key}"' in js
 
 
-def test_ui_hides_template_grids_until_requested():
+def test_ui_has_one_drums_bass_and_chords_section():
     from pathlib import Path
 
     js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
-    for needle in ('origin === "template"', "ideasShown", "Suggest pattern ideas", "Hide pattern ideas", "Strong", "beat-group", "STYLE_INFO", "sec-link", "midiBytes", "startPlayer", "Export MIDI", "Copy as text", "Reset edits"):
+    for needle in ('origin === "template"', '"Drums, bass & chords"', "grooveView", "Pattern ideas (by tempo)", "Use in every section",
+                   "drumsrc", "partEdits", "by_section", "bassRoll", "miniKeys", "noteOptions", "midiMulti", "startLoop",
+                   "Strong", "beat-group", "STYLE_INFO", "sec-link", "Export MIDI", "Copy as text", "Reset edits", "Outline what changed"):
         assert needle in js
+    # Template patterns live in the Pattern picker only: no separate grids or reveal button.
+    for gone in ("ideasShown", "Suggest pattern ideas", "drumGrid(", "midiBytes(", "startPlayer("):
+        assert gone not in js
 
 
 def test_upload_keeps_the_file_name_without_a_hash(client, synth_wav):

@@ -19,7 +19,8 @@ across the library.
 | GET | `/api/tracks/{id}/audio` | | the original file, with HTTP Range support; 404 when it isn't on disk |
 | GET | `/api/tracks/{id}/views` | | `extras["views"]` (waveform + spectrogram data); 404 for cards analyzed before the `views` stage, where the UI computes both from the decoded audio |
 | POST | `/api/analyze` | multipart `files[]` | `{"results": [{"track_id", "title", "error"}]}`; saves each upload as `$TASTR_HOME/uploads/<random id>/<original name>` then calls `service.analyze_inputs` |
-| POST | `/api/analyze-url` | `{"url": "..."}` | same shape; `IngestError` → 400 with the message |
+| POST | `/api/analyze-url` | `{"url": "..."}` | same shape; `IngestError` → 400 with the message; anything but an `http(s)` link (a server path) → 400; 403 in hosted mode |
+| GET | `/api/config` | | `{"hosted", "links", "query", "user", "limits"}`: what this server allows, so the UI hides link analysis and the SQL box when they're off (docs/hosting.md) |
 | DELETE | `/api/tracks/{id}` | | 204 / 404; also deletes the track's edits and versions |
 | GET / PUT | `/api/tracks/{id}/edits` | PUT: the whole edits object | the current, autosaved edits to the drums, bass and chords, `{drums\|bass\|chords\|drumsrc: {section idx or "all": value}}`, or `{}`; PUT returns 204 (an object with no edited section clears them) |
 | GET / POST | `/api/tracks/{id}/edit-versions` | POST: `{"name", "edits"}` | saved versions, newest first: `[{"id", "name", "created_at", "sections"}]`; POST returns the new one (201) |
@@ -27,7 +28,7 @@ across the library.
 | POST | `/api/tracks/{id}/reanalyze` | | `{"card", "edits_dropped"}`. Edits move to the new section with the same start and end bars; edits whose section is gone are dropped (in versions too), and `edits_dropped` counts them |
 | GET | `/api/bench` | | the benchmark scores the Glossary quotes, from `tastr/engine/bench_scores.json` (`{"scores": {key: {"exact", "tracks", "what", "run"}}}`); `{"scores": {}}` when the file is missing |
 | GET | `/api/patterns` | | the engine's template drum patterns, `[{"style", "name", "pattern"}]`, for the Glossary's pattern grids |
-| POST | `/api/query` | `{"sql": "..."}` | `{"columns": [...], "rows": [[...]]}`; opens the DB with `db.connect(path, readonly=True)` so writes fail; 400 on SQL error |
+| POST | `/api/query` | `{"sql": "..."}` | `{"columns": [...], "rows": [[...]]}`; opens the DB with `db.connect(path, readonly=True)` so writes fail; 400 on SQL error; 403 in hosted mode |
 | GET | `/` | | the static UI |
 
 Analysis is CPU-bound and slow (tens of seconds); run it in FastAPI's threadpool (plain `def` endpoint) so the server stays responsive.

@@ -142,6 +142,15 @@ CREATE TABLE IF NOT EXISTS lookup_usage (
     PRIMARY KEY (provider, day)
 );
 
+-- Tracks uploaded and stem jobs started per person per UTC day, for the hosted-mode limits (tastr/web/hosted.py).
+CREATE TABLE IF NOT EXISTS user_usage (
+    user  TEXT NOT NULL,
+    day   TEXT NOT NULL,
+    kind  TEXT NOT NULL,
+    n     INTEGER NOT NULL,
+    PRIMARY KEY (user, day, kind)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
 CREATE INDEX IF NOT EXISTS idx_tracks_camelot ON tracks(camelot);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
@@ -421,3 +430,14 @@ def retag_track(conn: sqlite3.Connection, track_id: int) -> str:
         conn.execute("UPDATE tracks SET title = ?, artist = ?, album = ? WHERE id = ?", (s.title, s.artist, s.album, track_id))
         conn.execute("UPDATE cards SET json = ? WHERE track_id = ?", (card.to_json(), track_id))
     return "changed"
+
+
+def usage_today(conn: sqlite3.Connection, user: str, kind: str, day: str) -> int:
+    row = conn.execute("SELECT n FROM user_usage WHERE user = ? AND day = ? AND kind = ?", (user, day, kind)).fetchone()
+    return row[0] if row else 0
+
+
+def add_usage(conn: sqlite3.Connection, user: str, kind: str, day: str, n: int = 1) -> None:
+    conn.execute("INSERT INTO user_usage VALUES (?, ?, ?, ?) ON CONFLICT (user, day, kind) DO UPDATE SET n = n + ?",
+                 (user, day, kind, n, n))
+    conn.commit()

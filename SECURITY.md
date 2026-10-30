@@ -1,7 +1,9 @@
 # Security
 
 Tastr is a local app: `tastr serve` binds to 127.0.0.1 and has no login. Don't expose it
-to a network you don't trust.
+to a network you don't trust. To share it with a few invited people, run it in hosted mode behind
+Cloudflare Access ([docs/hosting.md](docs/hosting.md)), which requires a login on every request and
+turns off link analysis and the SQL box.
 
 ## Reporting a vulnerability
 

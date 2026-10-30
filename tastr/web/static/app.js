@@ -2043,21 +2043,19 @@ $("url-form").addEventListener("submit", (e) => {
 });
 
 // ---------- explore ----------
-async function loadTags() {
-  try {
-    const r = await sql("SELECT track_id, tag FROM tags");
-    tagsByTrack = {};
-    for (const [tid, tag] of r.rows) (tagsByTrack[tid] ||= new Set()).add(tag);
-  } catch (_) { tagsByTrack = {}; }
+function loadTags() {
+  // /api/tracks already lists each track's tags, so this works where the SQL box is turned off.
+  tagsByTrack = {};
+  for (const t of tracks) if (t.tags && t.tags.length) tagsByTrack[t.id] = new Set(t.tags);
   const all = [...new Set(Object.values(tagsByTrack).flatMap((s) => [...s]))].sort();
   const sel = $("f-tag"), cur = sel.value;
-  sel.replaceChildren(h("option", { value: "" }, "any"), all.map((t) => h("option", { value: t }, t)));
+  sel.replaceChildren(h("option", { value: "" }, "any"), ...all.map((t) => h("option", { value: t }, t)));
   sel.value = all.includes(cur) ? cur : "";
 }
 
 async function renderExplore() {
   await loadTracks();
-  await loadTags();
+  loadTags();
   drawScatter();
 }
 
@@ -2104,6 +2102,11 @@ async function runSql() {
 $("run-sql").addEventListener("click", runSql);
 
 refresh().catch((e) => setStatus(e.message, true));
+// A shared (hosted) server turns off link analysis and the SQL box; hide them rather than let them fail.
+api("/api/config").then((cfg) => {
+  if (!cfg.links) $("url-form").hidden = true;
+  if (!cfg.query) for (const id of ["sql-panel", "help-sql"]) $(id).hidden = true;
+}).catch(() => {});
 
 // ---------- help ----------
 // "?" opens the shortcuts dialog unless the user is typing; the dialog closes on Esc, its ✕ or a click outside it.

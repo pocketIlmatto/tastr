@@ -81,7 +81,7 @@
         <dt><kbd>Esc</kbd> / click outside</dt><dd>Close the Versions popover</dd>
       </dl>
     </section>
-    <section>
+    <section id="help-sql">
       <h3>Explore</h3>
       <dl>
         <dt><kbd>Ctrl</kbd>/<kbd>⌘</kbd> <kbd>Enter</kbd></dt><dd>Run the SQL query</dd>
@@ -130,12 +130,14 @@
       <label>BPM <input id="f-min" type="number" placeholder="min"> – <input id="f-max" type="number" placeholder="max"></label>
     </div>
     <div id="scatter-wrap"></div>
-    <h2>SQL</h2>
-    <div id="examples"></div>
-    <textarea id="sql" rows="4" spellcheck="false">SELECT title, bpm, camelot, energy FROM tracks ORDER BY bpm</textarea>
-    <button id="run-sql">Run</button>
-    <p id="sql-error" class="error"></p>
-    <div class="table-wrap"><table id="sql-result"></table></div>
+    <div id="sql-panel">
+      <h2>SQL</h2>
+      <div id="examples"></div>
+      <textarea id="sql" rows="4" spellcheck="false">SELECT title, bpm, camelot, energy FROM tracks ORDER BY bpm</textarea>
+      <button id="run-sql">Run</button>
+      <p id="sql-error" class="error"></p>
+      <div class="table-wrap"><table id="sql-result"></table></div>
+    </div>
   </section>
   <section id="view-glossary" hidden>
     <div class="gl">

@@ -38,14 +38,18 @@ image = (
     .add_local_python_source("tastr")
 )
 # The same plus Demucs, with the htdemucs weights baked in so a cold start does not download them.
-stems_image = (
+_torch_base = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
     .pip_install(*ENGINE_DEPS, *STEMS_DEPS, *PINS)
     .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs')\"")
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
-    .add_local_python_source("tastr")
 )
+stems_image = _torch_base.add_local_python_source("tastr")
+# For the pretrained drum model (PyTorch comes with Demucs). Its weights download into /tmp on first use
+# (about 5 MB, docs/drums.md); one torch thread per bench worker, since the 4 workers share the CPUs.
+# Local files go last: Modal refuses build steps after them.
+drums_image = _torch_base.env({"TASTR_HOME": "/tmp/tastr", "TASTR_DRUM_MODEL": "adtof", "OMP_NUM_THREADS": "1"}).add_local_python_source("tastr")
 datasets = modal.CloudBucketMount(BUCKET, bucket_endpoint_url=ENDPOINT, read_only=True,
                                   secret=modal.Secret.from_name("tastr-r2"))
 # Writable, for `fetch` only: it downloads datasets straight into the bucket.
@@ -90,11 +94,8 @@ def drum_bench(suite: str, path: str | None = None, limit: int | None = None, dr
     return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits)
 
 
-# The drum bench with the pretrained drum model (tastr[drums]): the stems image already has PyTorch. The
-# model's weights download into the container's /tmp on first use (about 5 MB, docs/drums.md). One torch
-# thread per bench worker, since the 4 workers already share the CPUs.
-@app.function(image=stems_image.env({"TASTR_HOME": "/tmp/tastr", "TASTR_DRUM_MODEL": "adtof", "OMP_NUM_THREADS": "1"}), cpu=4, memory=8192, timeout=3600,
-              volumes={DATA: datasets})
+# The drum bench with the pretrained drum model (tastr[drums]).
+@app.function(image=drums_image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
 def drum_bench_model(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False,
                      kits: str = "all") -> dict:
     from tastr.cloud.jobs import run_drum_bench

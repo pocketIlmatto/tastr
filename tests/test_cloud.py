@@ -257,3 +257,42 @@ def test_drums_extra_shares_pytorch():
     tomllib = pytest.importorskip("tomllib")
     extras = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["optional-dependencies"]
     assert any(d.startswith("torch") for d in extras["drums"])
+
+
+def test_modal_images_add_local_files_last(monkeypatch):
+    """Modal refuses an image build step after `add_local_*` (that failed a real deploy), so check every image."""
+    class Image:
+        def __init__(self, local=False):
+            self.local = local
+
+        def _step(self, *a, **kw):
+            assert not self.local, "a build step after add_local_python_source"
+            return Image()
+
+        apt_install = pip_install = run_commands = env = _step
+
+        def add_local_python_source(self, *a, **kw):
+            assert not self.local
+            return Image(local=True)
+
+    images = []
+
+    class App:
+        def __init__(self, name):
+            pass
+
+        def function(self, image, **kw):
+            images.append(image)
+            return lambda f: f
+
+    fake = types.SimpleNamespace(
+        Image=types.SimpleNamespace(debian_slim=lambda **kw: Image()), App=App, is_local=lambda: True,
+        CloudBucketMount=lambda *a, **kw: None, Secret=types.SimpleNamespace(from_name=lambda name: None))
+    monkeypatch.setitem(sys.modules, "modal", fake)
+    monkeypatch.setenv("TASTR_R2_ENDPOINT", "https://example.r2.cloudflarestorage.com")
+    import importlib
+
+    sys.modules.pop("tastr.cloud.modal_app", None)
+    importlib.import_module("tastr.cloud.modal_app")
+    sys.modules.pop("tastr.cloud.modal_app", None)
+    assert images and all(i.local for i in images)  # every function's image ships the tastr source

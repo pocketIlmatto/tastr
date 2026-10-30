@@ -333,6 +333,10 @@ def test_record_keeps_full_run_scores(tmp_path):
     scores.record(key, entry, path)
     assert set(scores.load(path)["scores"]) == {"giantsteps-key", "downbeat"}
     assert not scores.recordable("bench", "harmonix") and not scores.recordable("downbeats", "hjdb")
+    assert scores.recordable("sections", "harmonix")
+    sec = {"tracks": 4, "tune_tracks": 2, "current": {"tune": {"f_3": 0.6}, "check": {"f_3": 0.5}}}
+    assert scores.entry_from_report("sections", "harmonix", sec, run="2026-11-01") == (
+        "sections", {"exact": 0.55, "tracks": 4, "what": "songs, boundary F within 3 s", "run": "2026-11-01"})
 
 
 def test_record_refuses_subset_runs(capsys):

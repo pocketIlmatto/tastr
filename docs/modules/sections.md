@@ -27,8 +27,8 @@ Also `features["section_contrast"]` (std of section energies) and `features["sec
 
 ## Suggested method (from the draft `_sections()` in the reference drafts)
 1. Per-bar feature vectors: chroma (12) + MFCC 2-13 + mean RMS dB, z-scored per dimension.
-2. `librosa.segment.agglomerative(z, k)` with `k = clip(round(duration/28), 3, 12)`, capped at `n_bars // 4`.
-3. Snap boundaries to multiples of 4 bars, drop sections shorter than 4 bars (merge into previous).
+2. `librosa.segment.agglomerative(z, k)` with `k = clip(round(duration/18), 3, 12)`, capped at `n_bars // 2` (18 s and 2 bars tuned on Harmonix, see [bench.md](../bench.md#sections)).
+3. Snap boundaries to multiples of 2 bars, drop sections shorter than 2 bars (merge into previous).
 4. Letters: compare each section's mean vector to earlier letters' prototypes; reuse a letter when RMS distance per dim < 0.55.
 5. Labels from relative energy: first & low (<0.5) → intro; last & low → outro; ≥0.68 → drop if percussive (features `percussiveness` > 0.25 and bpm > 105) else chorus; next section jumps ≥0.2 into ≥0.6 → build; <0.38 → breakdown; else verse.
    Per-bar energy: use `card.series["energy"]` if core provided it, else compute RMS per bar yourself.
@@ -38,7 +38,7 @@ Use `make_track(bpm=124, bars_per_section=(8, 16, 8))` and the `truth_core`
 fixture so downbeats are exact.
 
 ## Acceptance criteria
-1. Sections are contiguous, ordered, cover `[0, duration]`, and each is ≥ 4 bars (except a track shorter than 8 bars, which gets one `full` section).
+1. Sections are contiguous, ordered, cover `[0, duration]`, and each is ≥ 2 bars (except a track shorter than 8 bars, which gets one `full` section).
 2. On the synth track, there is a boundary within 1 bar (≈1.94 s) of 15.5 s and of 46.5 s (the drum section's start and end).
 3. The synth's drum section (bars 9-24) gets a higher `energy` than intro and outro, and is labeled `drop` or `chorus`; the first section is `intro`.
 4. With `downbeat_times = []` the stage still returns valid sections.

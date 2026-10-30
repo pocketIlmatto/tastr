@@ -1,7 +1,7 @@
 """Rough section detection (intro / build / drop / breakdown / outro...).
 
 Boundaries come from temporally-constrained clustering of per-bar timbre,
-harmony and loudness, snapped to 4-bar phrases. Labels are guessed from each
+harmony and loudness, snapped to 2-bar phrases. Labels are guessed from each
 section's energy relative to the rest of the track, so they are a starting
 point for arranging ideas, not a transcription.
 """
@@ -15,14 +15,16 @@ from ..card import Section
 from ..pipeline import AnalysisContext, register_stage
 
 FALLBACK_BAR_SECONDS = 8.0  # stand-in "bar" length when core gave no downbeats
-PHRASE_BARS = 4  # boundaries snap to multiples of this, sections are at least this long
+PHRASE_BARS = 2  # boundaries snap to multiples of this, sections are at least this long (Harmonix: docs/bench.md#sections)
 MIN_BARS_FOR_SPLIT = 8  # shorter tracks get a single "full" section
+SECONDS_PER_SECTION = 18.0  # target section count is duration / this, clipped to MIN..MAX_SECTIONS (tuned on Harmonix)
+MIN_SECTIONS, MAX_SECTIONS = 3, 12
 LETTER_DISTANCE = 0.55  # RMS distance per z-scored dim below which two sections share a letter
 
 
 class SectionsStage:
     name = "sections"
-    version = "0.1.0"
+    version = "0.2.0"
     requires = ("core",)
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -132,40 +134,46 @@ def _bar_vectors(ctx: AnalysisContext, bar_times: np.ndarray, duration: float) -
     return (bars - bars.mean(axis=1, keepdims=True)) / (bars.std(axis=1, keepdims=True) + 1e-9)
 
 
+def _target(duration: float, n_bars: int, seconds: float = SECONDS_PER_SECTION, phrase: int = PHRASE_BARS,
+            cap: int = MAX_SECTIONS) -> int:
+    """How many sections to ask the clustering for."""
+    k = int(np.clip(round(duration / seconds), MIN_SECTIONS, cap))
+    return min(k, max(2, n_bars // phrase))
+
+
 def _boundaries(z: np.ndarray, duration: float, k: int | None = None) -> list[int]:
     """Bar indices where a new section starts (always includes 0), before snapping."""
     import librosa
 
     n_bars = z.shape[1]
     if k is None:
-        k = int(np.clip(round(duration / 28), 3, 12))
-        k = min(k, max(2, n_bars // PHRASE_BARS))
+        k = _target(duration, n_bars)
     # Returns the k left-boundary bar indices of the segments (always starting at 0).
     return sorted({0} | {int(b) for b in librosa.segment.agglomerative(z, k) if 0 < b < n_bars})
 
 
-def _segment(z: np.ndarray, duration: float, n_bars: int) -> list[int]:
+def _segment(z: np.ndarray, duration: float, n_bars: int, seconds: float = SECONDS_PER_SECTION,
+             phrase: int = PHRASE_BARS, cap: int = MAX_SECTIONS) -> list[int]:
     """Snapped section starts. Clusters that snapping throws away (e.g. a lone partial bar
     at the end, which core's extended beat grid often produces) are retried with a larger
     k so they don't eat a real boundary."""
-    target = int(np.clip(round(duration / 28), 3, 12))
-    target = min(target, max(2, n_bars // PHRASE_BARS))
-    best = _snap(_boundaries(z, duration), n_bars)
+    target = _target(duration, n_bars, seconds, phrase, cap)
+    best = _snap(_boundaries(z, duration, target), n_bars, phrase)
     for extra in range(1, 4):
         if len(best) >= target or target + extra > n_bars:
             break
-        best = max(best, _snap(_boundaries(z, duration, target + extra), n_bars), key=len)
+        best = max(best, _snap(_boundaries(z, duration, target + extra), n_bars, phrase), key=len)
     return best
 
 
-def _snap(starts: list[int], n_bars: int) -> list[int]:
-    """Snap to 4-bar phrases and merge any section shorter than 4 bars into its neighbour."""
-    snapped = sorted({0} | {round(s / PHRASE_BARS) * PHRASE_BARS for s in starts[1:]})
+def _snap(starts: list[int], n_bars: int, phrase: int = PHRASE_BARS) -> list[int]:
+    """Snap to `phrase`-bar multiples and merge any section shorter than that into its neighbour."""
+    snapped = sorted({0} | {round(s / phrase) * phrase for s in starts[1:]})
     merged = [0]
     for s in snapped[1:]:
-        if s < n_bars and s - merged[-1] >= PHRASE_BARS:
+        if s < n_bars and s - merged[-1] >= phrase:
             merged.append(s)
-    if n_bars - merged[-1] < PHRASE_BARS and len(merged) > 1:
+    if n_bars - merged[-1] < phrase and len(merged) > 1:
         merged.pop()
     return merged
 

@@ -43,15 +43,15 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"],
                    help="debug adds stage tracebacks and uvicorn's details (default: info)")
 
-    sb = sub.add_parser("spec-bench", help="Beat This! spectrogram benches (tempo, downbeats, meter), locally or on Modal")
-    sb.add_argument("bench", choices=["tempo", "downbeats", "meter"])
+    sb = sub.add_parser("spec-bench", help="spectrogram benches (Beat This!: tempo, downbeats, meter; Harmonix: sections), locally or on Modal")
+    sb.add_argument("bench", choices=["tempo", "downbeats", "meter", "sections"])
     sb.add_argument("path", help="folder with <dataset>.npz and beat_this_annotations-1.0/ (a bucket folder with --remote)")
     sb.add_argument("--dataset", help="Beat This! dataset name (default: hjdb for tempo, gtzan for downbeats and meter)")
     sb.add_argument("--limit", type=int, help="first N tracks")
     sb.add_argument("--out", help="write the JSON report here")
     sb.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
     sb.add_argument("--record", action="store_true",
-                    help="save the score to tastr/engine/bench_scores.json, quoted in the UI (full gtzan downbeat runs only)")
+                    help="save the score to tastr/engine/bench_scores.json, quoted in the UI (full gtzan downbeat and harmonix sections runs only)")
     sb.add_argument("--write-originals", action="store_true",
                     help="save the original recordings' spectrograms and annotations as <dataset>-originals.npz "
                          "and <dataset>-annotations.json, the files to upload")
@@ -281,11 +281,11 @@ def _record_error(args) -> str | None:
     if args.limit:
         return "--record saves milestone scores, so it needs a full run (drop --limit)"
     if args.cmd == "spec-bench":
-        bench, dataset = args.bench, args.dataset or ("hjdb" if args.bench == "tempo" else "gtzan")
+        bench, dataset = args.bench, args.dataset or {"tempo": "hjdb", "sections": "harmonix"}.get(args.bench, "gtzan")
     else:
         bench, dataset = "bench", args.dataset
     if not scores.recordable(bench, dataset):
-        return f"--record has no score to keep for {dataset}; the UI quotes {', '.join(scores.BENCH_METRICS)} and gtzan downbeats"
+        return f"--record has no score to keep for {dataset}; the UI quotes {', '.join(scores.BENCH_METRICS)}, gtzan downbeats and harmonix sections"
     return None
 
 
@@ -341,7 +341,7 @@ def _spec_bench(args) -> int:
 
     from .cloud import jobs, remote
 
-    dataset = args.dataset or ("hjdb" if args.bench == "tempo" else "gtzan")
+    dataset = args.dataset or {"tempo": "hjdb", "sections": "harmonix"}.get(args.bench, "gtzan")
     mod = jobs.spec_module(args.bench)
     try:
         if args.write_originals:

@@ -411,3 +411,49 @@ bar-1 picker on the same files, using tracks whose labeled bars are steadily
 runs core's tempo logic on onset envelopes rebuilt from the same release's
 spectrograms and scores it against 60 / the median labeled beat interval, per
 train / val split. See "Tempo notes" for how close it is to the audio path.
+
+## Sections
+
+`tastr spec-bench sections <folder> [--limit N] [--remote]` (or `python -m tastr.engine.bench.sections_spec`)
+scores the sections stage's boundaries against the Harmonix Set (912 pop tracks, a few dance) at 0.5 s
+and 3 s, for a grid of settings: seconds per section (the stage asks for duration / this many sections),
+phrase snap in bars, and the cap on the count. Tracks are split in two halves at random (seed 0): pick on
+"tune", read on "check". Harmonix ships mel spectrograms, not audio, so the bench rebuilds the stage's
+per-bar features from them: MFCC from the log-mel, loudness from the summed mel power, and a chroma
+folded from the 80 mel bands between 55 Hz and 2.1 kHz, which is much coarser than the stage's CQT
+chroma. The bar grid is the labeled downbeats, so beat tracking errors don't blur it. Getting the data:
+[cloud.md](cloud.md#harmonix-sections-bench).
+
+### Section length (2026-10-30)
+
+Before the audio run, the annotations alone: Harmonix sections are 20.5 s long at the median (IQR
+17.4 to 24.6 s), 10 per track. With perfect placement, the count that `duration / 28` asks for caps the
+3 s F at 0.79 on the check half (20 s: 0.89; tempo-relative divisors were worse, 8 bars 0.87), and
+snapping perfect boundaries to 4-bar phrases drops them to 0.82 (2 bars 0.98, 1 bar 1.0). Only 51% of
+Harmonix boundaries fall on a 4-bar phrase counted from the first downbeat; 86% fall on a downbeat.
+
+Full run on all 912 tracks, commit a13cba7 (382 s on 2 Modal CPUs, plus 85 s loading). F at 3 s / 0.5 s
+and section count bias (estimated minus labeled), check half:
+
+| seconds | phrase bars | cap | F 3 s | F 0.5 s | count bias |
+|---|---|---|---|---|---|
+| 28 | 4 | 12 | 0.477 | 0.302 | -3.08 (current) |
+| 20 | 4 | 12 | 0.530 | 0.341 | -1.01 |
+| 22 | 2 | 12 | 0.557 | 0.369 | -1.14 |
+| 20 | 2 | 12 | 0.571 | 0.378 | -0.47 |
+| 18 | 2 | 12 | 0.577 | 0.381 | +0.09 |
+| 16 | 2 | 12 | 0.581 | 0.383 | +0.49 |
+| 16 | 2 | 16 | 0.581 | 0.383 | +2.02 (best on tune) |
+| 16 | 1 | 12 | 0.559 | 0.368 | +0.69 |
+
+The tune half agrees within 0.02 everywhere. Learnings:
+
+- The 4-bar snap costs about as much as the long sections; 2 bars beats both 4 and 1 at every length.
+- 16 to 18 s per section with a 2-bar snap gains about 0.10 F at 3 s. Raising the cap past 12 adds
+  sections without adding hits.
+- 55 of 912 tracks score 0 at 3 s with about the right count, which looks like a systematic offset on
+  those tracks rather than a counting problem. Not looked into yet.
+- A 60-track subset (30 per half) gave the same ranking (current 0.468, 16 s / 2 bars 0.56 on check), so
+  subsets are fine for iterating here.
+- The stage now uses 18 s and 2 bars (sections 0.2.0): within 0.004 of the best F with the count closest
+  to the labels. Harmonix is mostly pop, so it leans away from over-splitting. Re-analyze updates old cards.

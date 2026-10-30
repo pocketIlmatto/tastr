@@ -161,6 +161,23 @@ The app stops when the run ends.
 Upload only what the loaders read (audio and annotations), not result reports or feature caches. The
 bucket must stay private: Beatport EDM Key and GiantSteps are CC BY-SA and not ours to republish.
 
+### Harmonix sections bench
+
+Harmonix doesn't distribute audio; its authors share 80-band mel spectrograms on Dropbox (~1.2 GB), which
+cloud sessions can't reach. `scripts/fetch_harmonix_mels.py` is a one-off Modal job (`modal run`, no
+deploy) that downloads them inside the container and writes `harmonix/melspecs.npz`,
+`melspecs-info.json`, the archive itself and `annotations.json` (labeled downbeats and section starts,
+from the dataset repo) to the bucket. A rerun skips Dropbox when the npz is already there. Then:
+
+```
+TASTR_R2_ENDPOINT=... modal run scripts/fetch_harmonix_mels.py
+tastr spec-bench sections harmonix --remote --limit 60
+```
+
+`--remote` calls the deployed app, so deploy after this bench lands. Before that, run it as an ephemeral
+app from the clone: `with app.run(): spec_bench.remote("sections", "harmonix", "harmonix", 60)` (importing
+`app, spec_bench` from `tastr.cloud.modal_app`). The archive's `._*` files are macOS metadata, not arrays.
+
 ### Key model training
 
 `tastr key-profiles DATASET FOLDER --remote --out FILE` runs the `key_profiles` function (8 CPUs) on a key

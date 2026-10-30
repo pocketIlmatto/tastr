@@ -105,5 +105,5 @@ def test_through_pipeline_with_truth_core(synth_wav, truth_core):
     y, sr = sf.read(str(path), dtype="float32")
     card = run_pipeline(y, sr, TrackCard(source=Source(kind="file", uri=str(path))), stages=["sections"])
     assert "sections" not in card.errors, card.errors
-    assert card.stages_run["sections"] == "0.1.0"
+    assert card.stages_run["sections"] == "0.2.0"
     _check_valid(card)

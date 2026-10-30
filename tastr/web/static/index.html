@@ -276,7 +276,7 @@
         </dl>
 
         <h3 id="g-sections">Sections</h3>
-        <p><b>Finding the boundaries.</b> For each bar Tastr measures its harmony (12-note chroma), timbre (MFCCs) and loudness. Bars are then grouped into runs that sound alike (temporally constrained clustering), aiming for roughly one section per 28 seconds (between 3 and 12). Boundaries snap to 4-bar phrases, and anything shorter than 4 bars merges into its neighbor. Tracks under 8 bars get one "full" section.</p>
+        <p><b>Finding the boundaries.</b> For each bar Tastr measures its harmony (12-note chroma), timbre (MFCCs) and loudness. Bars are then grouped into runs that sound alike (temporally constrained clustering), aiming for roughly one section per 18 seconds (between 3 and 12). Boundaries snap to 2-bar phrases, and anything shorter than 2 bars merges into its neighbor. Tracks under 8 bars get one "full" section. The 18 seconds and 2 bars were tuned on 912 labeled pop songs (the Harmonix Set), where Tastr's boundaries score <span data-bench="sections">58%</span> (F-score, a hit is within 3 seconds of a labeled boundary)<span class="bench-asof muted" data-bench-asof="sections"></span>.</p>
         <p><b>Letters.</b> Sections that sound alike share a letter: "Drop C" and a later "Drop C" are the same material coming back, while "Build B" after "Intro A" is new material. Section colors in the chart and tabs follow the letter, so repeats share a color. The boundary confidence is how different a section sounds from the one before it.</p>
         <p><b>Labels</b> come from each section's energy relative to the rest of the track, checked in this order:</p>
         <table class="gl-table">

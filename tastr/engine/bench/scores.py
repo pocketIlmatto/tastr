@@ -24,6 +24,8 @@ BENCH_METRICS = {
 }
 # `tastr spec-bench downbeats` dataset -> score key
 DOWNBEAT_KEYS = {"gtzan": "downbeat"}
+# `tastr spec-bench sections` dataset -> score key (F at 3 s of the stage's current settings, both halves)
+SECTION_KEYS = {"harmonix": "sections"}
 
 
 def load(path: Path | None = None) -> dict:
@@ -36,12 +38,19 @@ def load(path: Path | None = None) -> dict:
 
 
 def recordable(bench: str, dataset: str) -> bool:
-    return dataset in (BENCH_METRICS if bench == "bench" else DOWNBEAT_KEYS if bench == "downbeats" else {})
+    keys = {"bench": BENCH_METRICS, "downbeats": DOWNBEAT_KEYS, "sections": SECTION_KEYS}.get(bench, {})
+    return dataset in keys
 
 
 def entry_from_report(bench: str, dataset: str, report: dict, run: str | None = None) -> tuple[str, dict]:
-    """(score key, entry) for a finished full run: `bench` is "bench" (runner report) or "downbeats"."""
+    """(score key, entry) for a finished full run: `bench` is "bench" (runner report), "downbeats" or "sections"."""
     run = run or dt.datetime.now().astimezone().date().isoformat()
+    if bench == "sections":
+        cur, n = report["current"], report["tracks"]
+        n_tune = report["tune_tracks"]
+        f3 = (cur["tune"]["f_3"] * n_tune + cur["check"]["f_3"] * (n - n_tune)) / n
+        return SECTION_KEYS[dataset], {"exact": round(f3, 3), "tracks": n, "what": "songs, boundary F within 3 s",
+                                       "run": run}
     if bench == "downbeats":
         return DOWNBEAT_KEYS[dataset], {"exact": report["right"], "tracks": report["tracks"],
                                         "what": "songs, bar 1 right", "run": run}

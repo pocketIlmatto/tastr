@@ -29,6 +29,12 @@
       "tracks": 43,
       "what": "tracks, BPM within 4%",
       "run": "2026-10-30"
+    },
+    "sections": {
+      "exact": 0.581,
+      "tracks": 912,
+      "what": "songs, boundary F within 3 s",
+      "run": "2026-10-30"
     }
   }
 }

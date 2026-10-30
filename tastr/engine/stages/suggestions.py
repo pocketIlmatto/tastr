@@ -20,11 +20,15 @@ STEPS = 16
 # Default Drum Rack pad notes in Live.
 DRUM_RACK = {"kick": "C1", "snare": "D1", "clap": "D#1", "hat": "F#1", "open_hat": "A#1", "tom": "A1", "perc": "G#1"}
 
-# Bass: bins of the bass CQT (from C1, 12 per octave) that count toward a bar's bass level, and the level,
-# relative to the track's bassy bars (90th percentile), under which a bar or section counts as having no bass.
-# -6 dB, not lower: a kick with no bass under it still leaks about -8 dB into the harmonic part's low octaves.
+# Bass: bins of the bass CQT (from C1, 12 per octave) that count toward a bar's bass level, and the levels,
+# relative to the track's bassy bars (90th percentile), under which a bar has no bass (-7 dB) and under which
+# a section's median bar has no bass (-7.5 dB). Measured on real tracks (docs/modules/tags-suggestions.md):
+# kick-only bars leak up to about -9 dB, quiet bass parts sit around -5 to -7, and section medians split at
+# -9.7 or lower (no bass) against -5.5 or higher (bass). The median, not the mean, so a few bass bars at a
+# section's edges (boundaries are often 1-4 bars off) don't decide it.
 BASS_LOW_BINS = 24
-NO_BASS = 0.25
+NO_BASS = 10 ** -0.7
+NO_BASS_SECTION = 10 ** -0.75
 
 # Chord matches under this score count as unconfident.
 CHORD_MIN_SCORE = 0.6
@@ -332,7 +336,7 @@ def _section_harmony(harm: dict, sections: list[tuple[int, object]], tonic: int,
 def _section_bass(bass: dict, sections: list[tuple[int, object]], tonic: int | None, scale: str) -> list[dict]:
     """Per-section bass: {idx, label, letter, start_bar, end_bar, loop, degrees, rhythm}.
 
-    `loop` is empty and `rhythm` None when the section has no bass (its bass level is well under the track's).
+    `loop` is empty and `rhythm` None when the section has no bass (its median bar's bass level is well under the track's).
     """
     notes, low, flux, ref, out = bass["bar_notes"], bass["_low"], bass["_flux"], bass["_ref"], []
     for idx, sec in sections:
@@ -341,7 +345,7 @@ def _section_bass(bass: dict, sections: list[tuple[int, object]], tonic: int | N
             continue
         loop, rhythm = [], None
         has = [i for i in range(a, b) if notes[i] is not None]
-        if has and ref > 0 and float(low[a:b].mean()) >= NO_BASS * ref:
+        if has and ref > 0 and float(np.median(low[a:b])) >= NO_BASS_SECTION * ref:
             loop = _section_loop(notes[a:b])
             prof = flux[has].mean(axis=0)
             rhythm = _pattern(prof / prof.max()) if prof.max() > 0 else None
@@ -490,7 +494,7 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
 
 class SuggestionsStage:
     name = "suggestions"
-    version = "0.2.0"
+    version = "0.2.1"
     requires = ("core", "sections", "tags")
 
     def run(self, ctx: AnalysisContext) -> None:

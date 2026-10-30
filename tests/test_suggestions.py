@@ -114,7 +114,8 @@ def sectioned_card():
                           section_progressions=[[(0, 3), (8, 4), (3, 4), (10, 4)],  # Am F C G
                                                 [(5, 3), (5, 3), (0, 3), (7, 4)],  # Dm Dm Am E
                                                 [(3, 4), (10, 4)]],  # C G
-                          bass_sections=(True, False, True))
+                          bass_sections=(True, False, True),
+                          kick_gain=0.6)  # full-level synth kicks leak about -7 dB, more than real kicks (-9 dB)
     original = registered_stages()["core"]
     register_stage(TruthCoreStage(truth), replace=True)
     try:
@@ -161,3 +162,17 @@ def test_section_loop_skips_unknown_bars():
     assert _section_loop([None] * 6) == []
     assert _section_loop([None, None, None, None, "Am", None, "C", "G"]) == ["Am", None, "C", "G"]
     assert _section_loop(["Am", "F"]) == ["Am", "F"]
+
+
+def test_a_few_bass_bars_at_a_section_edge_do_not_make_it_a_bass_section():
+    from tastr.engine.card import Section
+    from tastr.engine.stages.suggestions import _section_bass
+
+    # Bars 1-6 of the breakdown are quiet (-12 dB); the last two are already the next drop (0 dB).
+    low = np.array([1.0] * 8 + [10 ** -1.2] * 6 + [1.0] * 2)
+    notes = ["A"] * 8 + [None] * 6 + ["A", "A"]
+    bass = {"bar_notes": notes, "_low": low, "_ref": 1.0, "_flux": np.ones((16, 16))}
+    secs = [(0, Section(0.0, 1.0, "drop", "A", 1, 8, 0.9)), (1, Section(1.0, 2.0, "breakdown", "B", 9, 16, 0.3))]
+    drop, breakdown = _section_bass(bass, secs, 9, "Minor")
+    assert drop["loop"] == ["A"] * 4
+    assert breakdown["loop"] == [] and breakdown["rhythm"] is None

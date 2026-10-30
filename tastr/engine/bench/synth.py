@@ -36,14 +36,15 @@ def _hat(sr=SR, rng=np.random.default_rng(0)):
 def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per_section=(8, 16, 8), sr: int = SR,
                progression: list[tuple[int, int]] | None = None,
                section_progressions: list[list[tuple[int, int]]] | None = None,
-               bass_sections: tuple[bool, ...] | None = None):
+               bass_sections: tuple[bool, ...] | None = None, kick_gain: float = 1.0):
     """Kick on every beat, off-beat hats, a triad progression in the key.
 
     Sections: an intro with no drums, a full section, and a quiet outro, each
     `bars_per_section[i]` bars long. `progression` overrides the chords: four
     (root, third) pairs in semitones from the tonic, one per bar. `section_progressions`
     gives each section its own list of pairs, restarting at the section's first bar.
-    `bass_sections` turns the bass line off in sections marked False. Returns (audio, ground_truth).
+    `bass_sections` turns the bass line off in sections marked False. `kick_gain` scales the kick (at 1.0 it is
+    louder against the bass than in most real mixes). Returns (audio, ground_truth).
     """
     beat = 60.0 / bpm
     bar = 4 * beat
@@ -77,7 +78,7 @@ def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per
                 add(_tone(55 * 2 ** (((tonic + root) % 12 - 9) / 12), bar, amp=0.35), t_bar)
             if s == 1:
                 for k in range(4):
-                    add(_kick(), t_bar + k * beat)
+                    add(_kick(), t_bar + k * beat, kick_gain)
                     add(_hat(), t_bar + k * beat + beat / 2)
         bar_idx += n
     y = (y / (np.abs(y).max() + 1e-9) * 0.9).astype(np.float32)

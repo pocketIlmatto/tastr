@@ -30,6 +30,9 @@ class GetSongBPM(Provider):
     label = "GetSongBPM"
     homepage = "https://getsongbpm.com"
     key_env = "GETSONGBPM_API_KEY"
+    # No published quota; a search can take two requests (search, then the song).
+    min_interval = 1.0
+    daily_limit = 300
 
     def base(self) -> str:
         return os.environ.get("GETSONGBPM_API_BASE", DEFAULT_BASE).rstrip("/")

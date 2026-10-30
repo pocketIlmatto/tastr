@@ -27,7 +27,7 @@ Then:
   provider that already answered (found or not found), so it doesn't spend quota;
 - "Look up BPM & key online" in a track's ⋯ menu, or in the sidebar's bulk actions, asks again;
 - `tastr lookup [IDS...] [--missing] [--providers a,b]` does the same from a terminal (all tracks when
-  no ids are given).
+  no ids are given); `tastr lookup --usage` shows requests used against each limit.
 
 Results are stored per track and provider in the `lookups` table (`status`, `bpm`, `key_name` as
 listed, `key_tonic` / `key_mode` / `camelot` parsed from it, `fetched_at`, `result_json`) and survive
@@ -48,6 +48,28 @@ during analysis.
 `status` is `found`, `not_found`, `pending` (FreqBlog queued the track for analysis; asked again next
 time), `no_tags` or `error` (the message is in `result_json`).
 
+## Guardrails
+
+Nothing should be able to hammer a provider: not a bulk run over a big library, not a stuck client, and
+not a hostile visitor once Tastr is shared. Every request a provider sends goes through
+`tastr/lookup/guard.py`, wherever the lookup started:
+
+| Guardrail | Default | Override |
+|---|---|---|
+| Spacing: one request at a time per provider, at least this far apart | 1 s | `TASTR_LOOKUP_<NAME>_INTERVAL` |
+| Requests per UTC day | FreqBlog 60, GetSongBPM 300 | `TASTR_LOOKUP_<NAME>_DAILY` |
+| Requests per calendar month | FreqBlog 900 (its free tier is 1,000), GetSongBPM none | `TASTR_LOOKUP_<NAME>_MONTHLY` |
+| The provider's own quota headers (`x-quota-used` / `x-quota-limit`, `x-ratelimit-remaining`) | pause 20 requests short of its limit until its reset time | |
+| HTTP 429 / 5xx | pause for Retry-After, else 1 min doubling to 1 h | |
+| HTTP 401 / 403 (bad key) | pause 1 h | |
+| The same track asked again (menu clicks, bulk re-runs) | skipped for 10 min | `TASTR_LOOKUP_REFRESH_MINUTES` |
+
+Usage is counted per provider and day in the `lookup_usage` table, so restarting doesn't reset it
+(`tastr lookup --usage` shows it). A request a guardrail holds back is never sent; the lookup comes back
+"limited" with the reason, and neither that nor an error replaces an answer already stored. Lookups only
+ever use a track's own tags, so a visitor can't make Tastr query arbitrary text, only re-ask about
+tracks in the library, which the limits above cap.
+
 ## Providers
 
 | Name | What it returns | Terms to keep |
@@ -65,7 +87,7 @@ check them against a live key after an API change.
    `key_env`, and implement `lookup(TrackQuery) -> LookupResult` (status `found` / `not_found` /
    `pending`; raise `ProviderError` for anything else). Return the key as the provider spells it;
    `lookup_track` parses it into tonic / mode / Camelot. Override `may_store()` if the provider's terms
-   forbid keeping results. `Provider.get_json` does the HTTP with a timeout
+   forbid keeping results, and set `min_interval` / `daily_limit` / `monthly_limit` to fit its quota. `Provider.get_json` does the HTTP with a timeout
    and a Tastr user agent; `base.num` and `base.same_text` help with loose fields and fuzzy matches.
 2. Call `register(MyProvider())` at the bottom and import the module at the end of
    `tastr/lookup/__init__.py`.

@@ -1876,7 +1876,11 @@ function trackMenu(c) {
     try {
       const r = await api(`/api/tracks/${c.id}/lookup`, { method: "POST" });
       const found = (r.card.lookups || []).filter((x) => x.status === "found").length;
-      menuNote = { id: c.id, msg: found ? `Found in ${found} catalog${found > 1 ? "s" : ""}` : "Not found in the catalogs" };
+      const notes = r.notes || [];
+      const held = notes.find((n) => n.status === "limited" || n.status === "error");
+      menuNote = { id: c.id, ms: held ? 10000 : undefined, isErr: !!held,
+        msg: held ? held.error : notes.length && notes.every((n) => n.status === "recent") ? "Already looked up in the last few minutes"
+          : found ? `Found in ${found} catalog${found > 1 ? "s" : ""}` : "Not found in the catalogs" };
       if (currentId === c.id) renderCard(r.card); else menuNote = null;
     } catch (e) { tell(e.message, true); }
   };

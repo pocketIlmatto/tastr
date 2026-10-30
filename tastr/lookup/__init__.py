@@ -14,9 +14,12 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import time
+from datetime import datetime
 from typing import Any
 
 from .base import LookupResult, Provider, ProviderError, TrackQuery, parse_listed_key
+from .guard import Limited, usage_conn
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +58,27 @@ def query_for(card) -> TrackQuery | None:
 
 
 SETTLED = ("found", "not_found")  # answers worth keeping; pending, no_tags and error are asked again
+REFRESH_MINUTES = 10.0  # a track isn't asked about again sooner than this (TASTR_LOOKUP_REFRESH_MINUTES)
+_asked: dict[tuple[int, str], float] = {}  # (track id, provider) -> last ask, for providers we can't store
+
+
+def _refresh_seconds() -> float:
+    try:
+        return 60 * float(os.environ.get("TASTR_LOOKUP_REFRESH_MINUTES", REFRESH_MINUTES))
+    except ValueError:
+        return 60 * REFRESH_MINUTES
+
+
+def _recently_asked(stored: dict[str, dict], track_id: int, p: Provider, now: float) -> bool:
+    """Whether this provider was asked about this track within the refresh window (any outcome)."""
+    last = _asked.get((track_id, p.name), 0.0)
+    r = stored.get(p.name)
+    if r and r.get("fetched_at"):
+        try:
+            last = max(last, datetime.fromisoformat(r["fetched_at"]).timestamp())
+        except ValueError:
+            pass
+    return now - last < _refresh_seconds()
 
 
 def lookup_track(conn: sqlite3.Connection, track_id: int, card, providers: list[Provider] | None = None,
@@ -64,32 +88,58 @@ def lookup_track(conn: sqlite3.Connection, track_id: int, card, providers: list[
     A provider that fails (network, bad key) is recorded with status "error" and its message, so the UI
     can say why; the others still run. `only_missing` skips providers that already have a settled
     answer for the track (analysis uses it, so re-analyzing doesn't spend API quota again).
+
+    Guardrails (guard.py) can hold a request back: that comes back as status "limited" and is never
+    stored. Neither an error nor "limited" replaces an answer already stored. A provider asked about the
+    track within the last REFRESH_MINUTES is skipped ("recent"), so repeated clicks cost nothing.
     """
     from .. import db
 
     providers = enabled() if providers is None else providers
+    stored = {r["provider"]: r for r in db.get_lookups(conn, track_id)}
     if only_missing:
-        done = {r["provider"] for r in db.get_lookups(conn, track_id) if r.get("status") in SETTLED}
-        providers = [p for p in providers if p.name not in done and p.may_store()]
+        providers = [p for p in providers if stored.get(p.name, {}).get("status") not in SETTLED and p.may_store()]
     q = query_for(card)
     out = []
-    for p in providers:
-        if q is None:
-            res = {"provider": p.name, "status": "no_tags"}
-        else:
-            try:
-                res = normalize(p.lookup(q)).to_dict()
-            except ProviderError as e:
-                res = {"provider": p.name, "status": "error", "error": str(e)}
-            except Exception as e:  # a provider bug shouldn't break analysis
-                log.warning("lookup %s failed: %s", p.name, e)
-                res = {"provider": p.name, "status": "error", "error": f"{type(e).__name__}: {e}"}
-        if p.may_store():
-            db.save_lookup(conn, track_id, res)
-        else:
-            res["transient"] = True  # the provider's terms don't allow keeping it
-        out.append(res)
+    token = usage_conn.set(conn)
+    try:
+        for p in providers:
+            now = time.time()
+            if q is None:
+                res = {"provider": p.name, "status": "no_tags"}
+            elif _recently_asked(stored, track_id, p, now):
+                out.append({"provider": p.name, "status": "recent"})
+                continue
+            else:
+                _asked[(track_id, p.name)] = now
+                try:
+                    res = normalize(p.lookup(q)).to_dict()
+                except Limited as e:
+                    _asked.pop((track_id, p.name), None)  # nothing was asked
+                    out.append({"provider": p.name, "status": "limited", "error": str(e)})
+                    continue
+                except ProviderError as e:
+                    res = {"provider": p.name, "status": "error", "error": str(e)}
+                except Exception as e:  # a provider bug shouldn't break analysis
+                    log.warning("lookup %s failed: %s", p.name, e)
+                    res = {"provider": p.name, "status": "error", "error": f"{type(e).__name__}: {e}"}
+            if not p.may_store():
+                res["transient"] = True  # the provider's terms don't allow keeping it
+            elif res["status"] in SETTLED or stored.get(p.name, {}).get("status") not in SETTLED:
+                db.save_lookup(conn, track_id, res)
+            out.append(res)
+    finally:
+        usage_conn.reset(token)
     return out
+
+
+def usage(conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Requests used and limits per enabled provider (for `tastr lookup --usage` and the docs)."""
+    token = usage_conn.set(conn)
+    try:
+        return [p.guard.status() for p in enabled()]
+    finally:
+        usage_conn.reset(token)
 
 
 def normalize(r: LookupResult) -> LookupResult:

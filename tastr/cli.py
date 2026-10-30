@@ -32,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     lk.add_argument("track_ids", nargs="*", type=int, help="tracks to look up (default: all)")
     lk.add_argument("--missing", action="store_true", help="skip providers that already answered for a track")
     lk.add_argument("--providers", help="comma-separated provider names (default: TASTR_LOOKUP)")
+    lk.add_argument("--usage", action="store_true", help="show requests used and limits per provider, send nothing")
     st = sub.add_parser("stems", help="separate one track into vocals, bass, other and drums (needs tastr[stems])")
     st.add_argument("track_id", type=int)
     st.add_argument("--force", action="store_true", help="separate again even if stems exist")
@@ -305,6 +306,13 @@ def _lookup(args) -> int:
         print("no lookup providers enabled: set TASTR_LOOKUP and each provider's API key (docs/lookup.md)", file=sys.stderr)
         return 1
     conn = db.connect(args.db)
+    if args.usage:
+        for u in lookup.usage(conn):
+            cap = lambda v: "no limit" if v is None else v  # noqa: E731
+            print(f"{u['provider']}: {u['today']} today (limit {cap(u['daily'])}), {u['month']} this month "
+                  f"(limit {cap(u['monthly'])}), one request per {u['interval']:g} s"
+                  + (f"; paused {u['paused_for']} s: {u['pause_reason']}" if u["paused_for"] else ""))
+        return 0
     ids = args.track_ids or [t["id"] for t in db.list_tracks(conn)]
     for tid in ids:
         card = db.load_card(conn, tid)

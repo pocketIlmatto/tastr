@@ -265,7 +265,11 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
             body = card_body(c, track_id)
             # Answers a provider's terms don't let us keep are shown this once, not stored.
             body["lookups"] += lookup.describe(card, [r for r in results if r.get("transient")])
-            return {"card": body}
+            # "limited" (a guardrail held the request back) and "recent" (asked within the refresh window)
+            # aren't stored; the UI says why nothing new came back.
+            notes = [{"provider": r["provider"], "status": r["status"], "error": r.get("error")}
+                     for r in results if r["status"] in ("limited", "recent", "error")]
+            return {"card": body, "notes": notes}
 
     # Edits to the drums, bass and chords: the current state autosaves; versions are named copies.
     def _track_or_404(c: sqlite3.Connection, track_id: int) -> None:

@@ -35,6 +35,10 @@ class FreqBlog(Provider):
     label = "FreqBlog"
     homepage = "https://freqblog.com"
     key_env = "FREQBLOG_API_KEY"
+    # Free tier: 1,000 requests a month. Stay under it with room for manual checks.
+    min_interval = 1.0
+    daily_limit = 60
+    monthly_limit = 900
 
     def base(self) -> str:
         return os.environ.get("FREQBLOG_API_BASE", DEFAULT_BASE).rstrip("/")

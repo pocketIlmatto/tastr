@@ -67,12 +67,27 @@ class Provider:
     label       shown in the UI next to its numbers
     homepage    linked from the UI (some providers require a visible link back)
     key_env     environment variable holding the API key (None if the provider needs none)
+
+    Every request goes through `get_json`, which applies the guardrails in guard.py.
     """
 
     name: str = ""
     label: str = ""
     homepage: str = ""
     key_env: str | None = None
+    # Guardrails (guard.py), each overridable with TASTR_LOOKUP_<NAME>_INTERVAL / _DAILY / _MONTHLY.
+    min_interval: float = 1.0  # seconds between requests
+    daily_limit: int | None = 200
+    monthly_limit: int | None = None
+    _guard = None
+
+    @property
+    def guard(self):
+        from .guard import Guard
+
+        if self._guard is None:
+            self._guard = Guard(self)
+        return self._guard
 
     def api_key(self) -> str | None:
         return os.environ.get(self.key_env) if self.key_env else None
@@ -93,16 +108,22 @@ class Provider:
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})})
+        self.guard.before_request()  # raises guard.Limited instead of sending
+        status, resp_headers = None, None
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                status, resp_headers = r.status, r.headers
                 return r.status, json.loads(r.read() or b"null")
         except urllib.error.HTTPError as e:
+            status, resp_headers = e.code, e.headers
             detail = e.read()[:300].decode("utf-8", "replace").strip()
             raise ProviderError(f"{self.label} answered HTTP {e.code}" + (f": {detail}" if detail else ""), e.code) from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise ProviderError(f"Couldn't reach {self.label}: {getattr(e, 'reason', e)}") from None
         except json.JSONDecodeError:
             raise ProviderError(f"{self.label} sent a response that isn't JSON") from None
+        finally:
+            self.guard.after_response(status, dict(resp_headers.items()) if resp_headers else None)
 
 
 def num(v: Any) -> float | None:

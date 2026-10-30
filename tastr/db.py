@@ -134,6 +134,14 @@ CREATE TABLE IF NOT EXISTS lookups (
     PRIMARY KEY (track_id, provider)
 );
 
+-- Requests sent to each lookup provider per UTC day, for the guardrails in tastr/lookup/guard.py.
+CREATE TABLE IF NOT EXISTS lookup_usage (
+    provider TEXT NOT NULL,
+    day      TEXT NOT NULL,
+    requests INTEGER NOT NULL,
+    PRIMARY KEY (provider, day)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
 CREATE INDEX IF NOT EXISTS idx_tracks_camelot ON tracks(camelot);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);

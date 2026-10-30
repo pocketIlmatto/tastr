@@ -12,6 +12,16 @@ from test_foundation import full_card
 Q = TrackQuery(artist="Daft Punk", title="One More Time")
 
 
+@pytest.fixture(autouse=True)
+def fresh_guards(monkeypatch):
+    """No refresh window, spacing or usage carried between tests (the guardrail tests set their own)."""
+    lookup._asked.clear()
+    monkeypatch.setenv("TASTR_LOOKUP_REFRESH_MINUTES", "0")
+    for p in lookup.PROVIDERS.values():
+        monkeypatch.setattr(p, "_guard", None)
+        monkeypatch.setattr(p, "min_interval", 0.0)
+
+
 def canned(monkeypatch, provider, *responses):
     """Make provider.get_json return the given (status, body) pairs in turn, recording the calls."""
     calls = []
@@ -212,6 +222,8 @@ def test_api_lookup_and_card_body(db_path, tmp_path, monkeypatch, fake):
     (row,) = r["lookups"]
     assert row["label"] == "Fake" and row["homepage"] == "https://fake.example"
     assert row["compare"] == {"bpm": "agrees", "key": "agrees"}
+    monkeypatch.setenv("TASTR_LOOKUP_REFRESH_MINUTES", "10")
+    assert client.post(f"/api/tracks/{tid}/lookup").json()["notes"] == [{"provider": "fake", "status": "recent", "error": None}]
     assert client.post(f"/api/tracks/{untagged}/lookup").status_code == 422
     assert client.post("/api/tracks/999/lookup").status_code == 404
     monkeypatch.delenv("TASTR_LOOKUP")
@@ -243,3 +255,104 @@ def test_getsongbpm_matches_reordered_artist_credits(monkeypatch):
         {"song_id": "c", "song_title": "Song", "artist": {"name": "Beta & Alpha"}, "tempo": "120", "key_of": "Bbm"}]}))
     r = p.lookup(TrackQuery(artist="Alpha, Beta", title="Song"))
     assert (r.status, r.bpm) == ("found", 120.0)
+
+
+# --- guardrails ---------------------------------------------------------------------------------------
+
+from tastr.lookup import guard as guardmod  # noqa: E402
+
+
+def _guard(name="g", interval=0.0, daily=None, monthly=None):
+    p = Fake()
+    p.name, p.label, p.key_env = name, name.upper(), "G_KEY"
+    p.min_interval, p.daily_limit, p.monthly_limit = interval, daily, monthly
+    return guardmod.Guard(p)
+
+
+def _req(g, status=200, headers=None):
+    g.before_request()
+    g.after_response(status, headers)
+
+
+def test_guard_spaces_requests():
+    import time
+
+    g = _guard(interval=0.15)
+    t0 = time.time()
+    _req(g), _req(g), _req(g)
+    assert time.time() - t0 >= 0.3
+
+
+def test_guard_daily_and_monthly_budgets_persist(db_path, monkeypatch):
+    conn = db.connect(db_path)
+    token = guardmod.usage_conn.set(conn)
+    try:
+        g = _guard(daily=2)
+        _req(g), _req(g)
+        with pytest.raises(guardmod.Limited, match="daily limit of 2"):
+            g.before_request()
+        assert _guard().used()[0] == 2  # counted in the database, so a restart doesn't reset it
+        monkeypatch.setenv("TASTR_LOOKUP_G_DAILY", "5")
+        monkeypatch.setenv("TASTR_LOOKUP_G_MONTHLY", "3")
+        _req(g)
+        with pytest.raises(guardmod.Limited, match="monthly limit of 3"):
+            g.before_request()
+    finally:
+        guardmod.usage_conn.reset(token)
+    assert tuple(conn.execute("SELECT provider, requests FROM lookup_usage").fetchone()) == ("g", 3)
+
+
+@pytest.mark.parametrize("status,headers,reason", [
+    (429, {"Retry-After": "120"}, "HTTP 429"),
+    (503, {}, "HTTP 503"),
+    (401, {}, "G_KEY"),
+    (200, {"X-Quota-Used": "990", "X-Quota-Limit": "1000", "X-Quota-Reset": "2099-01-01T00:00:00Z"}, "nearly used up"),
+    (200, {"X-RateLimit-Remaining": "3"}, "nearly used up"),
+])
+def test_guard_pauses_on_pushback(status, headers, reason):
+    g = _guard()
+    _req(g, status, headers)
+    with pytest.raises(guardmod.Limited, match=reason):
+        g.before_request()
+    assert g.status()["paused_for"] > 0
+
+
+def test_guard_ignores_healthy_quota_and_frees_the_lock():
+    g = _guard()
+    _req(g, 200, {"x-quota-used": "5", "x-quota-limit": "1000"})
+    _req(g, 404)
+    assert g.status()["paused_for"] == 0 and not g.lock.locked()
+
+
+def test_get_json_goes_through_the_guard(monkeypatch):
+    import io
+    import urllib.error
+
+    p = getsongbpm.GetSongBPM()
+
+    def fail(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many", {"Retry-After": "60"}, io.BytesIO(b"slow down"))
+
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    with pytest.raises(ProviderError, match="429"):
+        p.get_json("https://example.invalid/x")
+    with pytest.raises(guardmod.Limited):  # paused: the second call never reaches urlopen
+        p.get_json("https://example.invalid/x")
+    assert p.guard.used()[0] == 1
+
+
+def test_lookup_track_limited_and_recent(db_path, fake, monkeypatch):
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, tagged_card())
+    lookup.lookup_track(conn, tid, tagged_card(), [fake])
+    fake.error = guardmod.Limited("FAKE: daily limit of 1 requests reached")
+    (r,) = lookup.lookup_track(conn, tid, tagged_card(), [fake])
+    assert r["status"] == "limited"
+    assert db.get_lookups(conn, tid)[0]["status"] == "found"  # the stored answer survives
+    fake.error = ProviderError("Fake answered HTTP 500")
+    lookup.lookup_track(conn, tid, tagged_card(), [fake])
+    assert db.get_lookups(conn, tid)[0]["status"] == "found"  # so does it after an error
+    monkeypatch.setenv("TASTR_LOOKUP_REFRESH_MINUTES", "10")
+    calls = fake.calls
+    assert lookup.lookup_track(conn, tid, tagged_card(), [fake]) == [{"provider": "fake", "status": "recent"}]
+    assert fake.calls == calls

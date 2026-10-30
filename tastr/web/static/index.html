@@ -18,6 +18,7 @@
       <button data-view="library" class="active">Library</button>
       <button data-view="explore">Explore</button>
       <button data-view="glossary">Glossary</button>
+      <button data-view="admin" hidden title="Only admins see this, and only when Tastr is hosted">Admin</button>
     </nav>
   </div>
   <button type="button" id="help-btn" aria-haspopup="dialog" aria-controls="help" aria-keyshortcuts="?" title="Keyboard and mouse shortcuts (?)">?</button>
@@ -347,6 +348,33 @@
           <dt>Stems</dt><dd>The track split into drums, bass, vocals and other (with the optional Demucs install), run on demand per track.</dd>
           <dt>Waveform and spectrogram</dt><dd>The waveform shows loudness over time. The spectrogram shows which frequencies sound when: low at the bottom, bright at the top.</dd>
         </dl>
+      </div>
+    </div>
+  </section>
+  <section id="view-admin" hidden>
+    <div class="adm">
+      <div class="adm-head"><h2>Admin</h2><p class="muted">Only admins see this tab, and only when Tastr is hosted for friends. Days are UTC days, like the daily limits.</p></div>
+      <p id="adm-error" class="error"></p>
+      <div class="adm-tiles" id="adm-tiles"></div>
+      <div class="adm-panel">
+        <h2>Usage, last 30 days <span class="adm-seg" role="group" aria-label="Show"><button type="button" data-k="tracks" aria-pressed="true">Tracks</button><button type="button" data-k="stems" aria-pressed="false">Stem jobs</button></span></h2>
+        <div class="adm-chart" id="adm-chart"></div>
+        <div class="adm-legend" id="adm-legend"></div>
+      </div>
+      <div class="adm-panel">
+        <h2>People <span class="muted">Click a person to pick them out in the chart.</span></h2>
+        <div class="table-wrap"><table class="adm-people" id="adm-people"></table></div>
+      </div>
+      <div class="adm-two">
+        <div class="adm-panel"><h2>Recent activity</h2><ul class="adm-log" id="adm-log"></ul></div>
+        <div class="adm-panel">
+          <h2>Limits</h2>
+          <table class="adm-kv" id="adm-limits"></table>
+          <p class="muted">Set with environment variables on the server (docs/hosting.md). They apply after a restart.</p>
+          <h2 class="adm-sub">Access</h2>
+          <p>Who can sign in is set in Cloudflare Access (Zero Trust, Access, Applications). People appear here after their first sign-in.</p>
+          <p id="adm-blocked"></p>
+        </div>
       </div>
     </div>
   </section>

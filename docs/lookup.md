@@ -110,11 +110,14 @@ Build the index once:
 
 ```bash
 tastr fetch acousticbrainz acousticbrainz --remote      # on Modal, into the R2 bucket (docs/cloud.md)
+# or the same without redeploying the shared app, from a checkout of main:
+modal run tastr/cloud/modal_app.py::fetch --dataset acousticbrainz --path acousticbrainz
 # or on this machine (needs `pip install zstandard` or the zstd tool):
 tastr fetch acousticbrainz ~/Development/tastr-data/acousticbrainz
 ```
 
-Both download the two `.tar.zst` archives from data.metabrainz.org (kept whole, skipped when already
+`--remote` calls the deployed app, so it needs a `modal deploy` from a checkout that has this provider.
+All of them download the two `.tar.zst` archives (rhythm 1.26 GB, tonal 0.88 GB) from data.metabrainz.org (kept whole, skipped when already
 there) and write `acousticbrainz-index.sqlite` beside them. Put the index at
 `~/.tastr/acousticbrainz-index.sqlite` (from the bucket, download it in the Cloudflare dashboard or
 with any S3 client), or point `ACOUSTICBRAINZ_INDEX` at it. The provider counts as set up when the

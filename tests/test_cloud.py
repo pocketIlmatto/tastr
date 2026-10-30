@@ -285,6 +285,9 @@ def test_modal_images_add_local_files_last(monkeypatch):
             images.append(image)
             return lambda f: f
 
+        def local_entrypoint(self, **kw):
+            return lambda f: f
+
     fake = types.SimpleNamespace(
         Image=types.SimpleNamespace(debian_slim=lambda **kw: Image()), App=App, is_local=lambda: True,
         CloudBucketMount=lambda *a, **kw: None, Secret=types.SimpleNamespace(from_name=lambda name: None))

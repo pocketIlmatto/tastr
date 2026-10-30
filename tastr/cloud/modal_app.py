@@ -111,9 +111,13 @@ def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:
 
 
 @app.function(image=image, cpu=2, memory=4096, timeout=6 * 3600, volumes={DATA: datasets_rw})
-def fetch(dataset: str, path: str, archives: list[int] | None = None) -> dict:
+def fetch(dataset: str, path: str, archives: str = "") -> dict:
+    """`archives`: a list of ints from `tastr fetch --remote`, or "0,1,2" from `modal run`, whose CLI can't
+    parse a list annotation."""
     from tastr.cloud.fetch import fetch as run_fetch
 
+    if isinstance(archives, str):
+        archives = [int(a) for a in archives.split(",") if a.strip()] or None
     return run_fetch(dataset, f"{DATA}/{path}", archives)
 
 

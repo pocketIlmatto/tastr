@@ -281,18 +281,35 @@ tom, perc; see `tastr/engine/drums.py`, and [drums.md](drums.md) for the design,
 what was tried and dropped, and known weaknesses) have their own benchmark:
 
 ```
-python -m tastr.engine.bench.drums synth                                  # generated loops, every lane
-python -m tastr.engine.bench.drums idmt ~/data/IDMT-SMT-DRUMS-V2 --limit 20 # quick check while tuning
-python -m tastr.engine.bench.drums idmt ~/data/IDMT-SMT-DRUMS-V2 --out drums.json
+tastr drum-bench synth                                          # generated loops, every lane
+tastr drum-bench idmt ~/Development/tastr-data/idmt-smt-drums --limit 20   # quick check while tuning
+tastr drum-bench mdb ~/Development/tastr-data/mdb-drums --out mdb.json
+tastr drum-bench stemgmd-mix ~/Development/tastr-data/stemgmd-single-hits
+tastr drum-bench mdb mdb-drums --remote                         # on Modal (docs/cloud.md)
 ```
 
-`idmt` is [IDMT-SMT-Drums](https://zenodo.org/records/7544164) (95 loops from
-real, sampled and techno kits, CC BY-NC-ND): kick, snare and hi-hat onsets,
-scored within 50 ms. Snare counts snare or clap hits, hat counts closed or open.
-It has no toms or percussion, so it also reports how often those lanes fire
-anyway. `synth` scores every lane step by step on generated loops, which is
-exact but uses one synthetic kit. Iterate with `--limit`, run the full set
-before keeping a change.
+`python -m tastr.engine.bench.drums` takes the same arguments.
+
+- `synth` scores every lane step by step on generated loops: exact, but one synthetic kit.
+- `idmt` is [IDMT-SMT-Drums](https://zenodo.org/records/7544164) (95 loops from real, sampled and
+  techno kits, CC BY-NC-ND): kick, snare and hi-hat only. Snare counts snare or clap hits, hat counts
+  closed or open. It also reports how often the lanes it has no labels for (tom, perc, clap) fire.
+- `mdb` is [MDB Drums](https://github.com/CarlSouthall/MDBDrums) (23 MedleyDB songs, real full mixes,
+  CC BY-NC-SA), from its subclass labels: kick; snare (incl. brushes, ghost notes, flams); hat (closed
+  and pedal); open hat; tom (high, mid, two floor toms; 90 hits); perc (tambourine and side stick; 70
+  hits). `hats` is either hat lane on any hi-hat, as IDMT scores it. Rides and crashes (1,002 hits) have no lane: hat-lane
+  onsets on them aren't counted against the hat, and are reported. No clap. `--drums-only` scores the
+  drum stems instead, to tell mixing losses from classification ones.
+- `stemgmd-mix` builds grooves from the [StemGMD](https://zenodo.org/records/7882857) single hits (10
+  acoustic kits, 9 classes, 10 velocity variants each, CC BY 4.0): 5 grooves x 10 kits x 96 and 124
+  BPM, with toms in fills (alone) and on the kick and snare, open hats, ride and crash. StemGMD has no
+  percussion or clap, so the `perc-layer` groove adds the synthetic cowbell from `bench/synth.py`: that
+  row is optimistic, being the sample perc was tuned on. Labels are exact.
+
+The onset suites match within 50 ms. A label's onsets are the peaks of its lanes above 0.4x the 99.5th
+percentile of that lane family (kick and tom; snare, clap and perc; hat and open hat), so a lane a
+track barely uses can't fire on its own leakage. Tom and perc recall is split by whether a kick or
+snare lands within 30 ms, and the report says where each lane's false positives landed.
 
 Scores on 2026-10-29 (onset F-measure; before is the old three-band split):
 
@@ -302,8 +319,26 @@ Scores on 2026-10-29 (onset F-measure; before is the old three-band split):
 | IDMT, now | 0.96 | 0.94 | 0.90 |
 
 Synth, now: kick 1.00, clap 1.00, hat 0.91, snare 0.75, open hat 0.69, tom
-0.67, perc 0.64. Toms and percussion are found when they play alone but missed
-when they land with a kick or snare; IDMT kits fire them on about 3 in 100 hits.
+0.67, perc 0.64.
+
+Real kits, 2026-10-29 (F, with P / R):
+
+| | Kick | Snare | Hats | Open hat | Tom | Perc |
+|---|---|---|---|---|---|---|
+| MDB, full mix | 0.81 | 0.51 (0.72 / 0.39) | 0.65 | 0.24 (0.15 / 0.56) | 0.01 (0.01 / 0.02) | 0.03 (0.01 / 0.11) |
+| MDB, drum stems | 0.96 | 0.60 (0.94 / 0.44) | 0.71 | 0.30 | 0.00 | 0.00 |
+| stemgmd-mix | 0.91 | 0.43 (0.41 / 0.45) | 0.72 | 0.52 (0.37 / 0.84) | 0.02 (0.52 / 0.01) | 0.67 (0.99 / 0.50)* |
+
+\* the synthetic cowbell. Real acoustic toms are almost never found, alone or with a kick or snare.
+Against the lane's own loudest moment instead of its family's ("lenient" in the report) tom recall is
+still 0.09 on stemgmd-mix and 0.16 on the MDB stems: the low part barely moves on a tom, whose attack
+lands in the hat (921 false hats on stemgmd-mix toms) and snare (474) lanes instead. On MDB mixes the
+tom and perc lanes fire mostly on snares. IDMT kits fire tom on 1 in 100 labeled hits, perc on 0.2
+and clap on 0.1. StemGMD's variants span about 19 dB for snares (ghost-note soft) and kicks sit
+about 9 dB above snares, part of why its snare recall is low.
+
+Iterate with `--limit`, run the full set before keeping a change. With `--jobs 4` locally: IDMT 21 s,
+MDB 22 s, stemgmd-mix 27 s (100 grooves), synth 9 s.
 
 ## Downbeats
 

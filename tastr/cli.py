@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`."""
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`."""
 
 from __future__ import annotations
 
@@ -48,6 +48,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="save the original recordings' spectrograms and annotations as <dataset>-originals.npz "
                          "and <dataset>-annotations.json, the files to upload")
 
+    db_ = sub.add_parser("drum-bench", help="drum lane benches (synth, idmt, mdb, stemgmd-mix), locally or on Modal")
+    db_.add_argument("suite", choices=["synth", "idmt", "mdb", "stemgmd-mix"])
+    db_.add_argument("path", nargs="?", help="dataset folder (a bucket folder with --remote); not for synth")
+    db_.add_argument("--limit", type=int, help="first N tracks")
+    db_.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel (locally)")
+    db_.add_argument("--drums-only", action="store_true", help="mdb: score the drum stems instead of the full mixes")
+    db_.add_argument("--out", help="write the JSON report here")
+    db_.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
+    db_.add_argument("--write-bundle", action="store_true",
+                     help="save the annotations (idmt, mdb) or trimmed hits (stemgmd-mix) as the one file a remote run reads")
+
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
     b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, harmonix or manifest")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
@@ -65,6 +76,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "spec-bench":
         return _spec_bench(args)
+    if args.cmd == "drum-bench":
+        return _drum_bench(args)
 
     if args.cmd == "bench" and args.write_index:
         from .cloud import jobs
@@ -221,6 +234,36 @@ def _spec_bench(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
     print(mod.format_report(report))
+    if args.out:
+        Path(args.out).write_text(json.dumps(report, indent=1))
+    return 0
+
+
+def _drum_bench(args) -> int:
+    from pathlib import Path
+
+    from .cloud import jobs, remote
+    from .engine.bench import drums
+
+    if args.suite != "synth" and not args.path:
+        print(f"error: {args.suite} needs the dataset folder", file=sys.stderr)
+        return 2
+    try:
+        if args.write_bundle:
+            print(f"wrote {drums.write_bundle(args.suite, args.path)}; upload it with the folder (docs/cloud.md)")
+            return 0
+        if args.remote:
+            print(f"running {args.suite} on Modal...", file=sys.stderr)
+            t0 = time.time()
+            report = remote.drum_bench(args.suite, args.path, args.limit, args.drums_only)
+            print(f"wall {time.time() - t0:.0f} s, of which the bench {report.get('timing', {}).get('seconds', 0):.0f} s",
+                  file=sys.stderr)
+        else:
+            report = jobs.run_drum_bench(args.suite, args.path, args.limit, args.jobs, args.drums_only)
+    except (remote.RemoteError, ValueError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(drums.format_report(report))
     if args.out:
         Path(args.out).write_text(json.dumps(report, indent=1))
     return 0

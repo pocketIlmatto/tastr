@@ -163,3 +163,37 @@ def test_spec_bench_remote(monkeypatch, tmp_path, capsys):
     assert calls == [("spec_bench", ("downbeats", "hjdb", "beat-this", 5), {})]
     assert "bar 1 right 1.000" in capsys.readouterr().out
     assert json.loads(out.read_text())["tracks"] == 1
+
+
+@pytest.mark.audio
+def test_run_drum_bench_on_a_folder(tmp_path):
+    from test_drums import mdb_folder
+
+    report = jobs.run_drum_bench("mdb", mdb_folder(tmp_path / "mdb"), limit=1)
+    assert report["suite"] == "mdb" and report["tracks"] == 1 and report["timing"]["jobs"] == 1
+    assert jobs.run_drum_bench("mdb", tmp_path / "mdb", drums_only=True)["audio"] == "drum_only"
+    with pytest.raises(ValueError, match="unknown drum suite"):
+        jobs.run_drum_bench("enst", tmp_path)
+    with pytest.raises(ValueError, match="needs the dataset folder"):
+        jobs.run_drum_bench("mdb", None)
+
+
+def test_drum_bench_remote(monkeypatch, tmp_path, capsys):
+    report = {"suite": "mdb", "tracks": 2, "seconds": 3.0, "audio_seconds": 60.0, "fp_at": {}, "excused_cymbal_onsets": 0,
+              "unlabeled_onsets_per_ref": {"clap": 0.01}, "timing": {"seconds": 4.0, "jobs": 4},
+              "summary": {"tom": {"f": 0.5, "p": 0.5, "r": 0.5, "n": 4, "lenient": {"f": 0.6, "p": 0.6, "r": 0.6, "n": 4}, "r_alone": 1.0, "r_with": 0.0, "n_alone": 2, "n_with": 2}}}
+    calls = fake_modal(monkeypatch, report)
+    out = tmp_path / "r.json"
+    assert main(["drum-bench", "mdb", "mdb-drums", "--limit", "3", "--remote", "--out", str(out)]) == 0
+    assert calls == [("drum_bench", ("mdb", "mdb-drums", 3, False), {})]
+    assert "R alone 1.00 (n=2)" in capsys.readouterr().out
+    assert json.loads(out.read_text())["tracks"] == 2
+    assert main(["drum-bench", "idmt"]) == 2
+
+
+def test_drum_bench_write_bundle(tmp_path):
+    from test_drums import mdb_folder
+
+    root = mdb_folder(tmp_path / "mdb")
+    assert main(["drum-bench", "mdb", str(root), "--write-bundle"]) == 0
+    assert "Song" in json.loads((root / "mdb-annotations.json").read_text())

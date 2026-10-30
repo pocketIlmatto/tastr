@@ -72,6 +72,13 @@ def spec_bench(bench: str, dataset: str, path: str, limit: int | None = None) ->
     return run_spec_bench(bench, dataset, f"{DATA}/{path}", limit)
 
 
+@app.function(image=image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
+def drum_bench(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False) -> dict:
+    from tastr.cloud.jobs import run_drum_bench
+
+    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only)
+
+
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)
 def stems(audio: bytes, suffix: str) -> dict[str, bytes]:
     from tastr.cloud.jobs import run_stems

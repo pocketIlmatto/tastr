@@ -67,9 +67,11 @@ open hat 0.69, tom 0.67, perc 0.64.
   time between 16ths to see a hat keep ringing.
 - **Clap vs snare** relies on the burst pattern. Layered or heavily processed
   claps may read as snare.
-- **IDMT covers only kick, snare and hat.** Nothing labeled checks clap, toms,
-  perc or open hats on real audio. Those were tuned on the synthetic kit only,
-  so treat their thresholds as provisional.
+- **Real toms are missed.** MDB Drums and grooves built from StemGMD single
+  hits now check toms, perc and open hats on real kits (bench.md, "Real
+  kits"): real tom F is about 0.02, because a tom barely moves the low part.
+  Clap is still checked only on the synthetic kit. These lanes were tuned on
+  the synthetic kit, so treat their thresholds as provisional.
 - **Grid phase comes from core.** In a full-pipeline check on a synthetic
   loop, the bar grid started half a bar late. The lanes were right but
   shifted by 8 steps. That is the core downbeat estimate, not drum detection.

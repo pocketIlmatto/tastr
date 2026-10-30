@@ -1,19 +1,37 @@
 """Drum lane benchmark: how well tastr.engine.drums finds each kind of hit.
 
-Two suites:
+Four suites:
 
 - `synth`: generated loops with known 16-step patterns for every lane (kick,
   snare, clap, hat, open hat, tom, perc), scored step by step on the detected
   groove the suggestions stage builds. Exact labels, but a synthetic kit.
 - `idmt`: IDMT-SMT-Drums (real, sampled and techno kits; kick, snare and hi-hat
-  onsets only), scored as onsets within 50 ms. Fetch it from
-  https://zenodo.org/records/7544164 and unzip; pass the folder that holds
-  `audio/` and `annotation_xml/`.
+  onsets only). Fetch it from https://zenodo.org/records/7544164 and unzip;
+  pass the folder that holds `audio/` and `annotation_xml/`.
+- `mdb`: MDB Drums (23 real full mixes from MedleyDB, with toms, tambourine and
+  side stick). Pass the folder that holds `audio/full_mix/` and
+  `annotations/subclass/` (https://github.com/CarlSouthall/MDBDrums).
+- `stemgmd-mix`: grooves generated from the StemGMD single hits (10 acoustic
+  kits; https://zenodo.org/records/7882857, `StemGMD_single_hits.zip`), with
+  toms landing alone and with kick or snare. StemGMD has no percussion, so one
+  groove layers the synthetic cowbell over the kit. Exact labels.
+
+`idmt`, `mdb` and `stemgmd-mix` are scored as onsets within 50 ms. A label's
+onsets are the peaks of its lanes' summed activation above 0.4x the 99.5th
+percentile of that lane family (low: kick and tom; mid: snare, clap and perc;
+high: hat and open hat), so a lane a track barely uses can't fire on its own
+leakage. Tom and perc recall is also split by whether a kick or snare lands
+within 30 ms ("alone" or "with").
 
     python -m tastr.engine.bench.drums synth
     python -m tastr.engine.bench.drums idmt ~/data/IDMT-SMT-DRUMS-V2 --limit 20
+    python -m tastr.engine.bench.drums mdb ~/data/mdb-drums --jobs 4
+    python -m tastr.engine.bench.drums stemgmd-mix ~/data/stemgmd-single-hits
 
-Iterate on a `--limit` subset; run the full set when a change is worth keeping.
+`--write-bundle` saves what a remote run reads in one go next to the data:
+the annotations as one JSON file (idmt, mdb) or the trimmed mono hits as one
+npz (stemgmd-mix). Iterate on a `--limit` subset; run the full set when a
+change is worth keeping.
 """
 
 from __future__ import annotations
@@ -21,7 +39,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import xml.etree.ElementTree as ET
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -29,10 +50,34 @@ import numpy as np
 from .. import drums
 from ..card import Source, TrackCard
 from ..pipeline import SR, AnalysisContext
-from .synth import DRUM_PATTERNS, make_drum_track
+from .synth import DRUM_PATTERNS, _fade, drum_sounds, make_drum_track
 
-# IDMT instrument -> the lanes that count as finding it.
-IDMT_LANES = {"KD": ("kick",), "SD": ("snare", "clap"), "HH": ("hat", "open_hat")}
+SUITES = ("synth", "idmt", "mdb", "stemgmd-mix")
+TOL = 0.05  # seconds: an onset within this of a labeled one counts
+WITH_TOL = 0.03  # a tom or perc hit with a kick or snare this close "lands with" it
+FAMILY = {"kick": "low", "tom": "low", "snare": "mid", "clap": "mid", "perc": "mid", "hat": "high", "open_hat": "high"}
+
+# label -> (reference classes, lanes whose onsets count as finding it)
+IDMT_LABELS = {"kick": (("KD",), ("kick",)), "snare": (("SD",), ("snare", "clap")), "hat": (("HH",), ("hat", "open_hat"))}
+MDB_CLASSES = {  # MDB subclass -> class used here
+    "KD": "kick", "SD": "snare", "SDB": "snare", "SDD": "snare", "SDF": "snare", "SDG": "snare", "SDNS": "snare",
+    "CHH": "hat", "PHH": "hat", "OHH": "open_hat", "HIT": "tom", "MHT": "tom", "HFT": "tom", "LFT": "tom",
+    "TMB": "perc", "SST": "perc", "RDC": "cymbal", "RDB": "cymbal", "CRC": "cymbal", "CHC": "cymbal", "SPC": "cymbal",
+}
+LANE_LABELS = {  # mdb and stemgmd-mix
+    "kick": (("kick",), ("kick",)),
+    "snare": (("snare",), ("snare", "clap")),
+    "hat": (("hat",), ("hat",)),
+    "open_hat": (("open_hat",), ("open_hat",)),
+    "hats": (("hat", "open_hat"), ("hat", "open_hat")),  # either hat lane, as IDMT scores it
+    "tom": (("tom",), ("tom",)),
+    "perc": (("perc",), ("perc",)),
+}
+# Hits on these classes don't count against these labels: a ride or crash has no lane of its own and
+# reads as a hat.
+EXCUSED = {"hat": ("cymbal",), "open_hat": ("cymbal",), "hats": ("cymbal",)}
+STEMGMD_CLASSES = {"kick": "kick", "snare": "snare", "hihat_closed": "hat", "hihat_open": "open_hat",
+                   "hi_tom": "tom", "mid_tom": "tom", "low_tom": "tom", "ride": "cymbal", "crash_left": "cymbal"}
 
 
 def _prf(tp: int, fp: int, fn: int) -> dict:
@@ -73,15 +118,14 @@ def run_synth(bpms=(100, 128, 174)) -> dict:
                     c[1] += g != "." and w != "x"
                     c[2] += g == "." and w == "x"
             rows.append({"pattern": name, "bpm": bpm, "got": got_all, "want": pats})
-    return {"summary": {lane: _prf(*c) for lane, c in counts.items()}, "rows": rows}
+    return {"suite": "synth", "summary": {lane: _prf(*c) for lane, c in counts.items()}, "rows": rows}
 
 
-def _peaks(x: np.ndarray, rel: float = 0.4, wait: int = 3) -> np.ndarray:
-    """Frames of local maxima above `rel` x the track's 99.5th percentile, at least `wait` frames apart."""
-    thr = rel * np.percentile(x, 99.5)
+def _peaks(x: np.ndarray, thr: float, wait: int = 3) -> np.ndarray:
+    """Frames of local maxima of at least `thr`, at least `wait` frames apart."""
     keep: list[int] = []
     for i in range(1, len(x) - 1):
-        if x[i] < thr or x[i] < x[i - 1] or x[i] <= x[i + 1]:
+        if x[i] < thr or x[i] <= 0 or x[i] < x[i - 1] or x[i] <= x[i + 1]:
             continue
         if keep and i - keep[-1] < wait:
             if x[i] > x[keep[-1]]:
@@ -91,75 +135,412 @@ def _peaks(x: np.ndarray, rel: float = 0.4, wait: int = 3) -> np.ndarray:
     return np.asarray(keep, dtype=int)
 
 
-def _match(est, ref, tol: float = 0.05) -> tuple[int, int, int]:
-    used: set[int] = set()
-    tp = 0
-    for e in est:
-        j = next((j for j, r in enumerate(ref) if j not in used and abs(r - e) <= tol), None)
-        if j is not None:
-            used.add(j)
-            tp += 1
-    return tp, len(est) - tp, len(ref) - tp
+def lane_onsets(acts: dict[str, np.ndarray], lanes, rel: float = 0.4) -> np.ndarray:
+    """Onset frames of `lanes` together: peaks above `rel` x the 99.5th percentile of their families' total."""
+    fam = {FAMILY[lane] for lane in lanes}
+    total = sum(acts[lane] for lane in drums.LANES if FAMILY[lane] in fam)
+    return _peaks(sum(acts[lane] for lane in lanes), rel * float(np.percentile(total, 99.5)))
 
 
-def idmt_items(root: str | Path) -> list[tuple[Path, dict[str, list[float]]]]:
-    """(mix audio path, {"KD"|"SD"|"HH": onset seconds}) for every annotated mix with audio present."""
-    root = Path(root).expanduser()
-    out = []
+def _match(est, ref, tol: float = TOL) -> tuple[np.ndarray, np.ndarray]:
+    """Greedy one-to-one matching: (estimates that found a reference, references that were found)."""
+    ref = np.asarray(ref, dtype=float)
+    hit_e, hit_r = np.zeros(len(est), bool), np.zeros(len(ref), bool)
+    for k, e in enumerate(est):
+        free = np.flatnonzero(~hit_r & (np.abs(ref - e) <= tol))
+        if free.size:
+            hit_e[k] = hit_r[free[0]] = True
+    return hit_e, hit_r
+
+
+def _near(t: float, times, tol: float) -> bool:
+    return bool(len(times)) and float(np.min(np.abs(np.asarray(times) - t))) <= tol
+
+
+def _nearest(t: float, ref: dict[str, list[float]], skip=()) -> str:
+    """The class (outside `skip`) with the labeled onset closest to `t`, if one is within TOL, else "none"."""
+    best, name = TOL, "none"
+    for c, times in ref.items():
+        if c not in skip and len(times):
+            d = float(np.min(np.abs(np.asarray(times) - t)))
+            if d <= best:
+                best, name = d, c
+    return name
+
+
+def score_track(acts: dict[str, np.ndarray], ref: dict[str, list[float]], labels: dict, excused: dict | None = None,
+                spare=("tom", "perc", "clap"), hop: int = 512, sr: int = SR) -> dict:
+    """Counts for one track: per label tp/fp/fn, where its false positives landed, tom/perc recall alone vs
+    with a kick or snare, and onsets of the `spare` lanes the dataset has no labels for (it has none of them)."""
+    excused = excused or {}
+    out = {"counts": {}, "fp_at": {}, "split": {}, "excused": 0, "unlabeled": {}}
+    for label, (classes, lanes) in labels.items():
+        want = sorted(t for c in classes for t in ref.get(c, []))
+        est = lane_onsets(acts, lanes) * hop / sr
+        hit_e, hit_r = _match(est, want)
+        ok = [t for c in excused.get(label, ()) for t in ref.get(c, [])]
+        fps = [e for e, h in zip(est, hit_e) if not h and not _near(e, ok, TOL)]
+        if label == "hats":  # it covers both hat lanes; counting the others too would count onsets twice
+            out["excused"] = int((~hit_e).sum()) - len(fps)
+        out["counts"][label] = [int(hit_r.sum()), len(fps), int((~hit_r).sum())]
+        out["fp_at"][label] = dict(Counter(_nearest(e, ref, classes) for e in fps))
+        if label in ("tom", "perc"):
+            # Lenient: against the lane's own loudest moment, not its family's. Tells a lane that ranks its
+            # hits right but too quietly (it would rarely show in the groove) from one that misses them.
+            x = sum(acts[lane] for lane in lanes)
+            le, lr = _match(_peaks(x, 0.4 * float(x.max())) * hop / sr if x.max() > 0 else [], want)
+            out["lenient"] = out.get("lenient", {}) | {label: [int(lr.sum()), int((~le).sum()), int((~lr).sum())]}
+            others = [t for c in ("kick", "snare", "KD", "SD") for t in ref.get(c, [])]
+            split = {"alone": [0, 0], "with": [0, 0]}  # [found, labeled]
+            for t, h in zip(want, hit_r):
+                s = split["with" if _near(t, others, WITH_TOL) else "alone"]
+                s[0] += int(h)
+                s[1] += 1
+            out["split"][label] = split
+    labeled = {c for classes, _ in labels.values() for c in classes}
+    for lane in spare:
+        if lane not in labeled:  # e.g. clap on MDB, which labels none; it still counts towards snare above
+            out["unlabeled"][lane] = len(lane_onsets(acts, (lane,)))
+    return out
+
+
+def _activations(y: np.ndarray, uri: str) -> tuple[dict[str, np.ndarray], int]:
+    ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri=uri)))
+    return drums.lane_activations(ctx, np.arange(1 + len(y) // ctx.hop), slop=0), ctx.hop
+
+
+def _work(job) -> dict:
+    """One item: (id, audio path or samples at SR, ref, labels, excused) -> its score_track counts."""
+    item_id, audio, ref, labels, excused = job
+    if isinstance(audio, (str, Path)):
+        import librosa
+
+        audio, _ = librosa.load(str(audio), sr=SR, mono=True)
+    acts, hop = _activations(np.asarray(audio, dtype=np.float32), item_id)
+    return {"id": item_id, "seconds": round(len(audio) / SR, 1)} | score_track(acts, ref, labels, excused, hop=hop)
+
+
+def run_onsets(suite: str, items: list, labels: dict, excused: dict | None = None, jobs: int = 1) -> dict:
+    """Score `items` [(id, audio path or samples, {class: onset seconds})] and pool the counts per label."""
+    work = [(i, a, ref, labels, excused) for i, a, ref in items]
+    t0 = time.time()
+    if jobs > 1 and len(work) > 1:
+        # One track here first so librosa's numba kernels are compiled and cached before the workers start
+        # (see runner.run).
+        rows = [_work(work[0])]
+        with ProcessPoolExecutor(jobs) as pool:
+            rows += list(pool.map(_work, work[1:]))
+    else:
+        rows = [_work(w) for w in work]
+    counts = {label: np.zeros(3, dtype=int) for label in labels}
+    split = {label: {"alone": [0, 0], "with": [0, 0]} for label in ("tom", "perc") if label in labels}
+    fp_at: dict[str, Counter] = {label: Counter() for label in labels}
+    unlabeled: Counter = Counter()
+    lenient = {label: np.zeros(3, dtype=int) for label in split}
+    for r in rows:
+        for label, c in r.get("lenient", {}).items():
+            lenient[label] += c
+        for label, c in r["counts"].items():
+            counts[label] += c
+            fp_at[label].update(r["fp_at"][label])
+        for label, s in r["split"].items():
+            for cond in s:
+                split[label][cond] = [a + b for a, b in zip(split[label][cond], s[cond])]
+        unlabeled.update(r["unlabeled"])
+    summary = {label: _prf(*c) for label, c in counts.items()}
+    for label, s in split.items():
+        summary[label] |= {"lenient": _prf(*lenient[label])}
+        summary[label] |= {f"r_{cond}": round(f / max(1, n), 3) for cond, (f, n) in s.items()}
+        summary[label] |= {f"n_{cond}": n for cond, (_, n) in s.items()}
+    n_ref = sum(int(c[0] + c[2]) for label, c in counts.items() if label != "hats")
+    return {"suite": suite, "tracks": len(rows), "summary": summary,
+            "fp_at": {label: dict(c.most_common()) for label, c in fp_at.items() if c},
+            "excused_cymbal_onsets": sum(r["excused"] for r in rows),
+            "unlabeled_onsets_per_ref": {lane: round(n / max(1, n_ref), 3) for lane, n in unlabeled.items()},
+            "seconds": round(time.time() - t0, 1), "audio_seconds": round(sum(r["seconds"] for r in rows), 1),
+            "rows": rows}
+
+
+# --- IDMT-SMT-Drums -------------------------------------------------------------------------------
+
+IDMT_BUNDLE = "idmt-annotations.json"
+
+
+def _idmt_annotations(root: Path) -> dict[str, dict[str, list[float]]]:
+    """{mix audio file name: {"KD"|"SD"|"HH": onset seconds}} from the XML files."""
+    out = {}
     for fx in sorted((root / "annotation_xml").glob("*#MIX.xml")):
         r = ET.parse(fx).getroot()
-        wav = root / "audio" / r.find("globalParameter/audioFileName").text
-        if not wav.exists():
-            continue
-        ref: dict[str, list[float]] = {k: [] for k in IDMT_LANES}
+        ref: dict[str, list[float]] = {k: [] for k in ("KD", "SD", "HH")}
         for ev in r.iter("event"):
             inst = ev.find("instrument").text
             if inst in ref:
                 ref[inst].append(float(ev.find("onsetSec").text))
-        out.append((wav, ref))
+        out[r.find("globalParameter/audioFileName").text] = ref
     return out
 
 
-def run_idmt(root: str | Path, limit: int | None = None) -> dict:
-    """Onset precision/recall per instrument, plus how often the extra lanes (tom, perc) fire on kits that have none."""
-    import librosa
+def idmt_items(root: str | Path, limit: int | None = None) -> list[tuple[str, Path, dict[str, list[float]]]]:
+    """(id, mix audio path, {"KD"|"SD"|"HH": onset seconds}) for every annotated mix, from the bundle if present."""
+    root = Path(root).expanduser()
+    bundle = root / IDMT_BUNDLE
+    ann = json.loads(bundle.read_text()) if bundle.is_file() else _idmt_annotations(root)
+    # With the bundle, audio isn't checked file by file (slow on a bucket mount); it was there when written.
+    items = [(name, root / "audio" / name, ref) for name, ref in sorted(ann.items())
+             if bundle.is_file() or (root / "audio" / name).exists()]
+    return items[:limit or None]
 
-    counts = {k: np.zeros(3, dtype=int) for k in IDMT_LANES}
-    extra = n_ref = 0
-    items = idmt_items(root)[:limit]
-    for wav, ref in items:
-        y, _ = librosa.load(str(wav), sr=SR, mono=True)
-        ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri=str(wav))))
-        acts = drums.lane_activations(ctx, np.arange(1 + len(y) // ctx.hop), slop=0)
-        lanes = {k: sum(acts[lane] for lane in v) for k, v in IDMT_LANES.items()}
-        top = max(np.percentile(v, 99.5) for v in lanes.values())
-        for lane in ("tom", "perc"):
-            # Mirrors the groove's rule: a lane far quieter than the loudest one is not shown.
-            if np.percentile(acts[lane], 99.5) > 0.2 * top:
-                extra += len(_peaks(acts[lane]))
-        n_ref += sum(len(v) for v in ref.values())
-        for k, x in lanes.items():
-            counts[k] += _match(_peaks(x) * ctx.hop / SR, ref[k])
-    return {"tracks": len(items), "summary": {k: _prf(*c) for k, c in counts.items()},
-            "extra_onsets_per_ref": round(extra / max(1, n_ref), 3)}
+
+def run_idmt(root: str | Path, limit: int | None = None, jobs: int = 1) -> dict:
+    """Onset precision/recall for kick, snare and hat, plus how often tom, perc and clap fire (IDMT has none)."""
+    return run_onsets("idmt", [(i, str(p), ref) for i, p, ref in idmt_items(root, limit)], IDMT_LABELS, jobs=jobs)
+
+
+# --- MDB Drums ------------------------------------------------------------------------------------
+
+MDB_BUNDLE = "mdb-annotations.json"
+
+
+def _mdb_annotations(root: Path) -> dict[str, dict[str, list[float]]]:
+    """{track name: {MDB subclass: onset seconds}} from annotations/subclass/."""
+    out = {}
+    for f in sorted((root / "annotations" / "subclass").glob("*_subclass.txt")):
+        ref: dict[str, list[float]] = {}
+        for line in f.read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                ref.setdefault(parts[1], []).append(float(parts[0]))
+        out[f.name.removesuffix("_subclass.txt")] = ref
+    return out
+
+
+def mdb_items(root: str | Path, limit: int | None = None, drums_only: bool = False):
+    """(id, audio path, {class: onset seconds}) per track, classes as in MDB_CLASSES. `drums_only` scores the
+    drum stem instead of the full mix."""
+    root = Path(root).expanduser()
+    bundle = root / MDB_BUNDLE
+    ann = json.loads(bundle.read_text()) if bundle.is_file() else _mdb_annotations(root)
+    items = []
+    for name, sub in sorted(ann.items()):
+        wav = root / "audio" / ("drum_only" if drums_only else "full_mix") / f"{name}_{'Drum' if drums_only else 'MIX'}.wav"
+        if not bundle.is_file() and not wav.exists():
+            continue
+        ref: dict[str, list[float]] = {}
+        for code, times in sub.items():
+            if code in MDB_CLASSES:
+                ref.setdefault(MDB_CLASSES[code], []).extend(times)
+        items.append((name, wav, {k: sorted(v) for k, v in ref.items()}))
+    return items[:limit or None]
+
+
+def run_mdb(root: str | Path, limit: int | None = None, jobs: int = 1, drums_only: bool = False) -> dict:
+    items = [(i, str(p), ref) for i, p, ref in mdb_items(root, limit, drums_only)]
+    report = run_onsets("mdb", items, LANE_LABELS, EXCUSED, jobs)
+    report["audio"] = "drum_only" if drums_only else "full_mix"
+    return report
+
+
+# --- StemGMD single hits -> generated grooves -----------------------------------------------------
+
+STEMGMD_BUNDLE = "stemgmd-hits.npz"
+HIT_SECONDS = 1.5  # hits are trimmed to this (with a fade); cymbals ring longer, but nothing scored needs it
+
+# 16-step bars per StemGMD class (plus "perc", the synthetic cowbell). Each groove is three bars of its
+# main pattern and one fill bar, played twice.
+GROOVES = {
+    "rock-fill": {
+        "main": {"kick": "x.....x.x.......", "snare": "....x.......x...", "hihat_closed": "x.x.x.x.x.x.x.x."},
+        "fill": {"kick": "x...............", "snare": "....x...", "hihat_closed": "x.x.x...",
+                 "hi_tom": "........xx......", "mid_tom": "..........xx....", "low_tom": "............xxxx"},
+    },
+    "floor-tom": {  # toms on the kick and snare, and some on their own
+        "main": {"kick": "x.......x.x.....", "snare": "....x.......x...", "ride": "x.x.x.x.x.x.x.x.",
+                 "low_tom": "x...x...x...x...", "mid_tom": "......x........x"},
+        "fill": {"kick": "x.......x.......", "snare": "....x.......x...", "low_tom": "x.x.x.x.x.x.x.x.",
+                 "hi_tom": ".x.x.x.x.x.x.x.x"},
+    },
+    "tribal": {
+        "main": {"kick": "x..x..x...x..x..", "low_tom": "x..x..x...x..x..", "hi_tom": "..x...x.x...x.x.",
+                 "hihat_closed": "x.x.x.x.x.x.x.x."},
+        "fill": {"kick": "x...x...x...x...", "mid_tom": "x.x.x.x.x.x.x.x.", "hi_tom": ".x.x.x.x.x.x.x.x"},
+    },
+    "disco-open-hat": {
+        "main": {"kick": "x...x...x...x...", "snare": "....x.......x...", "hihat_closed": "x...x...x...x...",
+                 "hihat_open": "..x...x...x...x."},
+        "fill": {"kick": "x...x...x...x...", "snare": "....x.......xxxx", "crash_left": "x...............",
+                 "hihat_open": "..x...x...x....."},
+    },
+    "perc-layer": {  # the synthetic cowbell on the kick, the snare and on its own
+        "main": {"kick": "x...x...x...x...", "snare": "....x.......x...", "hihat_closed": "..x...x...x...x.",
+                 "perc": "x..x..x...x.x..."},
+        "fill": {"kick": "x.......x.......", "snare": "....x.......x...", "perc": "x.x.x.xx.x.x.xxx"},
+    },
+}
+GROOVE_BPMS = (96, 124)
+
+
+def _read_hits(root: Path) -> dict[str, np.ndarray]:
+    """{"kit/class-i": mono hit at SR}, trimmed from where it starts sounding, from StemGMD_single_hits/."""
+    import librosa
+    import soundfile as sf
+
+    hits = {}
+    for wav in sorted((root / "StemGMD_single_hits").glob("*/*.wav")):
+        y, sr = sf.read(str(wav), always_2d=True)
+        y = librosa.resample(y.mean(axis=1), orig_sr=sr, target_sr=SR)
+        a = np.abs(y)
+        start = int(np.argmax(a > 1e-3 * a.max()))  # the files start with up to ~20 ms of silence
+        hits[f"{wav.parent.name}/{wav.stem}"] = _fade(y[start:start + int(HIT_SECONDS * SR)], SR).astype(np.float16)
+    if not hits:
+        raise FileNotFoundError(f"no StemGMD_single_hits/<kit>/*.wav under {root}")
+    return hits
+
+
+def write_stemgmd_bundle(root: str | Path) -> Path:
+    root = Path(root).expanduser()
+    out = root / STEMGMD_BUNDLE
+    np.savez(out, **_read_hits(root))
+    return out
+
+
+def _stemgmd_hits(root: Path) -> dict[str, dict[str, list[np.ndarray]]]:
+    """{kit: {class: [variants]}} from the bundle, or from the WAV files (slower) without one."""
+    bundle = root / STEMGMD_BUNDLE
+    data = np.load(bundle) if bundle.is_file() else _read_hits(root)
+    keys = data.files if bundle.is_file() else list(data)
+    kits: dict[str, dict[str, list[np.ndarray]]] = {}
+    for key in sorted(keys, key=lambda k: (k.rsplit("-", 1)[0], int(k.rsplit("-", 1)[1]))):
+        kit, name = key.split("/")
+        kits.setdefault(kit, {}).setdefault(name.rsplit("-", 1)[0], []).append(data[key].astype(np.float32))
+    return kits
+
+
+def make_groove(kit: dict[str, list[np.ndarray]], groove: dict, bpm: float, seed: int, perc: np.ndarray):
+    """(audio, {class: onset seconds}) for one groove on one kit: 3 main bars + 1 fill bar, twice.
+
+    Every hit picks one of the kit's recorded variants (they differ in velocity) with a fixed seed, and a
+    closed hat chokes a ringing open hat."""
+    rng = np.random.default_rng(seed)
+    step = 60.0 / bpm / 4
+    bars = [groove["main"]] * 3 + [groove["fill"]]
+    bars = bars * 2
+    y = np.zeros(int((len(bars) * 16 * step + HIT_SECONDS + 0.5) * SR), dtype=np.float32)
+    ref: dict[str, list[float]] = {}
+    for b, bar in enumerate(bars):
+        closed = [s for s, c in enumerate(bar.get("hihat_closed", "")) if c == "x"]
+        for cls, pat in bar.items():
+            for s, c in enumerate(pat):
+                if c != "x":
+                    continue
+                t = (b * 16 + s) * step
+                if cls == "perc":
+                    sig = perc * rng.uniform(0.6, 1.0)
+                else:
+                    variants = kit[cls]
+                    sig = variants[int(rng.integers(len(variants)))]
+                if cls == "hihat_open" and closed:
+                    nxt = min(((h - s) % 16 or 16) for h in closed)
+                    sig = _fade(sig[: int(nxt * step * SR)], SR)
+                i = int(round(t * SR))
+                y[i:i + sig.size] += sig[: y.size - i]
+                ref.setdefault(STEMGMD_CLASSES.get(cls, cls), []).append(round(t, 4))
+    y = y / (np.abs(y).max() + 1e-9) * 0.9
+    return y.astype(np.float32), {k: sorted(v) for k, v in ref.items()}
+
+
+def stemgmd_items(root: str | Path, limit: int | None = None):
+    """(id, audio, {class: onset seconds}) for every kit x groove x tempo, in a fixed order that spreads
+    a --limit over grooves and kits."""
+    root = Path(root).expanduser()
+    kits = _stemgmd_hits(root)
+    perc = drum_sounds(SR)["perc"].astype(np.float32)
+    combos = [(bpm, kit, g) for bpm in GROOVE_BPMS for k, kit in enumerate(sorted(kits))
+              for g in list(GROOVES)[k % len(GROOVES):] + list(GROOVES)[:k % len(GROOVES)]]
+    items = []
+    for n, (bpm, kit, g) in enumerate(combos[:limit or None]):
+        y, ref = make_groove(kits[kit], GROOVES[g], bpm, seed=n, perc=perc)
+        items.append((f"{kit}/{g}/{bpm}", y, ref))
+    return items
+
+
+def run_stemgmd(root: str | Path, limit: int | None = None, jobs: int = 1) -> dict:
+    report = run_onsets("stemgmd-mix", stemgmd_items(root, limit), LANE_LABELS, EXCUSED, jobs)
+    report["note"] = "perc is the synthetic cowbell from bench/synth.py layered over the real kits"
+    return report
+
+
+def write_bundle(suite: str, root: str | Path) -> Path:
+    """The one file a remote run of `suite` reads instead of walking the folder."""
+    root = Path(root).expanduser()
+    if suite == "stemgmd-mix":
+        return write_stemgmd_bundle(root)
+    if suite == "idmt":
+        out, ann = root / IDMT_BUNDLE, _idmt_annotations(root)
+        ann = {k: v for k, v in ann.items() if (root / "audio" / k).exists()}
+    elif suite == "mdb":
+        out, ann = root / MDB_BUNDLE, _mdb_annotations(root)
+    else:
+        raise ValueError(f"{suite} has nothing to bundle")
+    if not ann:
+        raise FileNotFoundError(f"no {suite} annotations under {root}")
+    out.write_text(json.dumps(ann))
+    return out
+
+
+def run(suite: str, root: str | Path | None = None, limit: int | None = None, jobs: int = 1,
+        drums_only: bool = False) -> dict:
+    if suite == "synth":
+        return run_synth()
+    if root is None:
+        raise ValueError(f"{suite} needs the dataset folder")
+    if suite == "idmt":
+        return run_idmt(root, limit, jobs)
+    if suite == "mdb":
+        return run_mdb(root, limit, jobs, drums_only)
+    if suite == "stemgmd-mix":
+        return run_stemgmd(root, limit, jobs)
+    raise ValueError(f"unknown drum suite {suite!r}; choose from {', '.join(SUITES)}")
+
+
+def format_report(report: dict) -> str:
+    lines = []
+    for k, v in report["summary"].items():
+        line = f"{k:9s} F {v['f']:.3f}  P {v['p']:.2f}  R {v['r']:.2f}  (n={v['n']})"
+        if "r_alone" in v:
+            line += f"  R alone {v['r_alone']:.2f} (n={v['n_alone']}), with kick/snare {v['r_with']:.2f} (n={v['n_with']})"
+            line += f"  lenient F {v['lenient']['f']:.2f} P {v['lenient']['p']:.2f} R {v['lenient']['r']:.2f}"
+        lines.append(line)
+    if "tracks" in report:
+        extra = ", ".join(f"{lane} {n}" for lane, n in report["unlabeled_onsets_per_ref"].items())
+        lines.append(f"tracks {report['tracks']} ({report['audio_seconds']:.0f} s of audio) in {report['seconds']:.0f} s"
+                     + (f"; unlabeled lanes fire per labeled onset: {extra}" if extra else ""))
+        if report.get("excused_cymbal_onsets"):
+            lines.append(f"hat-lane onsets on ride/crash hits (not counted): {report['excused_cymbal_onsets']}")
+        for label in ("tom", "perc"):
+            if report["fp_at"].get(label):
+                lines.append(f"{label} false positives at: " + ", ".join(f"{c} {n}" for c, n in report["fp_at"][label].items()))
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m tastr.engine.bench.drums", description=__doc__.split("\n\n")[0])
-    ap.add_argument("suite", choices=["synth", "idmt"])
-    ap.add_argument("path", nargs="?", help="IDMT-SMT-Drums folder (for idmt)")
+    ap.add_argument("suite", choices=SUITES)
+    ap.add_argument("path", nargs="?", help="dataset folder (idmt, mdb, stemgmd-mix)")
     ap.add_argument("--limit", type=int, help="first N tracks only")
+    ap.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel")
+    ap.add_argument("--drums-only", action="store_true", help="mdb: score the drum stems instead of the full mixes")
+    ap.add_argument("--write-bundle", action="store_true", help="save the file a remote run reads, next to the data")
     ap.add_argument("--out", help="write the full report as JSON")
     args = ap.parse_args(argv)
-    if args.suite == "idmt" and not args.path:
-        ap.error("idmt needs the dataset folder")
-    report = run_synth() if args.suite == "synth" else run_idmt(args.path, args.limit)
-    for k, v in report["summary"].items():
-        print(f"{k:9s} F {v['f']:.3f}  P {v['p']:.2f}  R {v['r']:.2f}  (n={v['n']})")
-    if "extra_onsets_per_ref" in report:
-        print(f"tracks {report['tracks']}, tom/perc onsets per labeled onset: {report['extra_onsets_per_ref']}")
+    if args.suite != "synth" and not args.path:
+        ap.error(f"{args.suite} needs the dataset folder")
+    if args.write_bundle:
+        print(f"wrote {write_bundle(args.suite, args.path)}")
+        return 0
+    report = run(args.suite, args.path, args.limit, args.jobs, args.drums_only)
+    print(format_report(report))
     if args.out:
-        Path(args.out).write_text(json.dumps(report, indent=2))
+        Path(args.out).write_text(json.dumps(report, indent=1))
     return 0
 
 

@@ -88,7 +88,7 @@ modal deploy tastr/cloud/modal_app.py
 
 Run it again after every engine change. The first deploy builds two images and takes several minutes;
 the stems image downloads PyTorch and the Demucs weights. The app then shows up as `tastr` in the
-Modal dashboard, with the functions `bench` and `stems`.
+Modal dashboard, with the functions `bench`, `spec_bench`, `drum_bench` and `stems`.
 
 ### 6. Check it
 
@@ -146,6 +146,32 @@ there, else the release's files.
 
 Upload only what the loaders read (audio and annotations), not result reports or feature caches. The
 bucket must stay private: Beatport EDM Key and GiantSteps are CC BY-SA and not ours to republish.
+
+### Drum lane benches
+
+`tastr drum-bench` runs the drum suites ([bench.md](bench.md#drum-lanes)) locally or, with `--remote`, as
+the `drum_bench` function (4 CPUs). Each suite reads one bundle file instead of walking the bucket: the
+annotations as one JSON file (IDMT: 95 XML files; MDB: 23 text files) or, for `stemgmd-mix`, the 900
+single hits trimmed to 1.5 s, mono at 22,050 Hz, in one 55 MB npz. Write them, then upload with the
+audio:
+
+```
+tastr drum-bench idmt ~/Development/tastr-data/idmt-smt-drums --write-bundle
+rclone copy ~/Development/tastr-data/idmt-smt-drums r2:tastr-data/idmt-smt-drums \
+  --include "audio/*#MIX.wav" --include "annotation_xml/*#MIX.xml" --include "idmt-annotations.json"
+tastr drum-bench mdb ~/Development/tastr-data/mdb-drums --write-bundle
+rclone copy ~/Development/tastr-data/mdb-drums r2:tastr-data/mdb-drums --include "audio/full_mix/**" \
+  --include "audio/drum_only/**" --include "annotations/**" --include "mdb-annotations.json"
+tastr drum-bench stemgmd-mix ~/Development/tastr-data/stemgmd-single-hits --write-bundle
+rclone copy ~/Development/tastr-data/stemgmd-single-hits r2:tastr-data/stemgmd-single-hits \
+  --include "StemGMD_single_hits/**" --include "stemgmd-hits.npz"
+tastr drum-bench mdb mdb-drums --remote
+tastr drum-bench synth --remote          # needs no dataset
+```
+
+With the bundle, a track's audio is read only when it is scored, so `--limit` reads only what it
+scores. IDMT-SMT-Drums (CC BY-NC-ND) and MDB Drums (CC BY-NC-SA) are non-commercial licenses; the
+bucket stays private.
 
 ## How it fits together
 

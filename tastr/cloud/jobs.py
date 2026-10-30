@@ -132,6 +132,18 @@ def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = No
     return report
 
 
+def run_analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
+    """Analyze one file's bytes; returns the card as a dict (its source names a temporary file)."""
+    import tempfile
+
+    from ..engine import analyze_file
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / f"track{suffix}"
+        src.write_bytes(audio)
+        return analyze_file(src, stages, options=options).to_dict()
+
+
 def run_stems(audio: bytes, suffix: str) -> dict[str, bytes]:
     """Separate one file's bytes with the local Demucs; returns {stem name: FLAC bytes}."""
     import tempfile

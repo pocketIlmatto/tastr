@@ -1,12 +1,15 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr set-owner EMAIL`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr set-owner EMAIL`, `tastr pack OUT --owner EMAIL`, `tastr unpack FILE`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
 `tastr vibe-bench`, `tastr vibe-fit`, `tastr fetch`."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tarfile
 import time
+from pathlib import Path
 
 from . import db
 from .engine.pipeline import registered_stages, resolve_order
@@ -30,6 +33,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("retag", help="re-read file tags for analyzed tracks without re-analyzing")
     so = sub.add_parser("set-owner", help="give tracks with no owner to EMAIL, to move a library to a hosted server")
     so.add_argument("email", help="the Access email whose library they join (docs/hosting.md)")
+    pk = sub.add_parser("pack", help="write the library, its audio and stems to one file, to move it to a hosted server")
+    pk.add_argument("out", help="the archive to write, e.g. library.tar")
+    pk.add_argument("--owner", required=True, help="the Access email the tracks belong to on the server (docs/deploy.md)")
+    up = sub.add_parser("unpack", help="on a hosted server: load a `tastr pack` archive into its empty library")
+    up.add_argument("archive")
     lk = sub.add_parser("lookup", help="look tracks up in online catalogs (TASTR_LOOKUP, see docs/lookup.md)")
     lk.add_argument("track_ids", nargs="*", type=int, help="tracks to look up (default: all)")
     lk.add_argument("--missing", action="store_true", help="skip providers that already answered for a track")
@@ -267,6 +275,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "set-owner":
         email = args.email.strip().lower()
         print(f"gave {db.set_owner(db.connect(args.db), email)} track(s) to {email}")
+        return 0
+
+    if args.cmd in ("pack", "unpack"):
+        from . import library
+
+        try:
+            if args.cmd == "pack":
+                r = library.pack(args.db, args.out, args.owner)
+                print(f"packed {r['tracks']} track(s) and {r['files']} file(s) into {args.out} ({r['bytes'] / 1e6:.0f} MB)")
+                if r["missing_audio"]:
+                    print(f"{r['missing_audio']} track(s) had no audio file on disk; they move without it")
+            else:
+                r = library.unpack(args.archive, os.environ.get("TASTR_HOME", Path.home() / ".tastr"), args.db)
+                print(f"unpacked {r['tracks']} track(s) and {r['files']} file(s)")
+        except (ValueError, OSError, tarfile.TarError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
         return 0
 
     if args.cmd == "lookup":

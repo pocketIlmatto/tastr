@@ -1,0 +1,37 @@
+# Fly.io config for a hosted Tastr (docs/deploy.md). `app` is the name you picked with `fly apps create`;
+# the Access settings, Modal token and R2 keys are Fly secrets, never in this file.
+app = "tastr"
+primary_region = "sjc"
+
+[env]
+  TASTR_HOSTED = "1"
+  TASTR_HOME = "/data"
+  # The engine runs on Modal (tastr/cloud/modal_web.py) in its own environment.
+  TASTR_ANALYSIS_BACKEND = "modal"
+  TASTR_STEMS_BACKEND = "modal"
+  TASTR_MODAL_APP = "tastr-web"
+  MODAL_ENVIRONMENT = "friends"
+
+# The library database, uploads and stems.
+[[mounts]]
+  source = "tastr_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Stops when nobody is using it and starts again on the next request (a few seconds).
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

@@ -639,6 +639,19 @@ let strudelAudio = true; // "Include the original audio", remembered for the ses
 let strudelMix = "full"; // "full" or "stems"
 const strudelStems = new Set(["vocals", "bass", "other"]); // Drums off: the sketch drums replace the original ones
 let strudelMine = true; // "Patterns: Your edits" (vs Detected) when the track has edits, remembered for the session
+let serverCfg = {}; // /api/config, filled in at startup
+const strudelLinks = new Map(); // track id -> signed audio URL on a shared server (null while it loads)
+// Where strudel.cc fetches the original audio (stems sit next to it). A shared server is behind a login strudel.cc
+// can't pass, so it hands out a signed link that works for a week; until that arrives the sketch has no audio.
+function strudelAudioUrl(c, repaint) {
+  if (!serverCfg.hosted) return `${location.origin}/api/tracks/${c.id}/audio`;
+  if (!strudelLinks.has(c.id)) {
+    strudelLinks.set(c.id, null);
+    api(`/api/tracks/${c.id}/strudel-link`).then((r) => { strudelLinks.set(c.id, location.origin + r.audio); repaint(); })
+      .catch(() => strudelLinks.delete(c.id));
+  }
+  return strudelLinks.get(c.id);
+}
 function strudelView(c) {
   const say = h("span", { class: "muted st-say", role: "status", "aria-live": "polite" });
   const pre = h("pre", { class: "st-code", tabindex: "0", "aria-label": "Generated Strudel code" });
@@ -648,7 +661,8 @@ function strudelView(c) {
   const srcRow = h("div", { class: "st-src", role: "radiogroup", "aria-label": "Which patterns to use" });
   let code = "";
   const paint = () => {
-    const audio = c.has_audio && strudelAudio, st = stemsOf(c);
+    const audioUrl = c.has_audio && strudelAudio ? strudelAudioUrl(c, paint) : null;
+    const audio = !!audioUrl, st = stemsOf(c);
     const useStems = audio && strudelMix === "stems" && st.state === "ready";
     const n = editedKeys(allEdits(c)).length;
     srcRow.hidden = !n;
@@ -657,13 +671,14 @@ function strudelView(c) {
       r.addEventListener("change", () => { strudelMine = val === "mine"; paint(); });
       return h("label", { class: "st-opt" }, r, " " + label);
     }));
-    code = strudelCode(c, audio ? `${location.origin}/api/tracks/${c.id}/audio` : null, useStems ? STRUDEL_STEMS.filter((n) => strudelStems.has(n)) : null,
+    code = strudelCode(c, audioUrl, useStems ? STRUDEL_STEMS.filter((n) => strudelStems.has(n)) : null,
       n && strudelMine ? allEdits(c) : null);
     pre.textContent = code;
     open.href = strudelLink(code);
     paintStems(audio, st);
     note.textContent = "Opens strudel.cc in a new tab with this code loaded. Drum sounds load from Strudel's sample library the first time you play." +
-      (audio ? ` The original ${useStems ? "stems stream" : "audio streams"} from your Tastr server, so keep it running; the first time, your browser may ask to allow strudel.cc to reach your local network.` : "");
+      (!audio ? "" : serverCfg.hosted ? ` The original ${useStems ? "stems stream" : "audio streams"} from this Tastr server through a private link that works for a week.`
+        : ` The original ${useStems ? "stems stream" : "audio streams"} from your Tastr server, so keep it running; the first time, your browser may ask to allow strudel.cc to reach your local network.`);
   };
   // Full mix / Stems, under the audio checkbox. Stems need a separation first; the code uses the full mix until it is done.
   const paintStems = (audio, st) => {
@@ -2123,6 +2138,7 @@ refresh().catch((e) => setStatus(e.message, true));
 // A shared (hosted) server turns off link analysis and the SQL box; hide them rather than let them fail.
 // Admins of a hosted server also get the Admin tab; everyone else never sees it, and #admin stays on the library.
 api("/api/config").then((cfg) => {
+  serverCfg = cfg;
   if (!cfg.links) $("url-form").hidden = true;
   if (!cfg.query) for (const id of ["sql-panel", "help-sql"]) $(id).hidden = true;
   if (cfg.admin) {

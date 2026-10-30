@@ -1,5 +1,6 @@
 """Hosted mode (tastr/web/hosted.py): Access logins, turned-off features, upload limits, security headers."""
 
+import os
 import time
 from types import SimpleNamespace
 
@@ -192,9 +193,10 @@ def test_access_verifier_checks_signature_audience_and_expiry():
         v(jwt.encode(claims, other, algorithm="RS256"))
 
 
-def save(db_path, owner, sha="abc", path="/x.wav"):
+def save(db_path, owner, sha="abc", path="/x.wav", uri=None):
     card = full_card()
     card.source.sha256, card.source.local_path = sha, path
+    card.source.uri = uri or card.source.uri
     conn = db.connect(db_path)
     tid = db.save_card(conn, card, owner)
     conn.close()
@@ -338,3 +340,87 @@ def test_old_databases_get_the_owner_column(tmp_path):
     assert db.track_owner(conn, tid) == (True, "pam@example.com")
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()
+
+
+def test_link_signer_tokens_are_per_track_and_expire():
+    s = hosted.LinkSigner("secret", days=7)
+    t = s.token(5, now=1000)
+    assert s.check(t, 5, now=1000 + 7 * 86400 - 1)
+    assert not s.check(t, 5, now=1000 + 7 * 86400 + 1)  # expired
+    assert not s.check(t, 6, now=1000)  # another track
+    exp, sig = t.split(".")
+    assert not s.check(f"{int(exp) + 86400}.{sig}", 5, now=1000)  # extended
+    assert not hosted.LinkSigner("other").check(t, 5, now=1000)
+    assert not s.check("junk", 5) and not s.check("", 5)
+
+
+def test_strudel_links_work_without_the_login(db_path, home, tmp_path):
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"RIFF....")
+    mine = save(db_path, "friend@example.com", path=str(audio))
+    theirs = save(db_path, "other@example.com", path=str(audio))
+    c = make_client(db_path, link_secret="s3cret")
+    r = c.get(f"/api/tracks/{mine}/strudel-link", headers=GOOD).json()
+    assert r["days"] == hosted.LINK_DAYS and r["audio"].startswith("/pub/") and r["audio"].endswith(f"/tracks/{mine}/audio")
+    assert c.get(f"/api/tracks/{theirs}/strudel-link", headers=GOOD).status_code == 404  # not yours, no link
+    got = c.get(r["audio"], headers={"origin": "https://strudel.cc"})  # no Access token, like strudel.cc
+    assert got.status_code == 200 and got.content == b"RIFF...."
+    assert got.headers["access-control-allow-origin"] == "https://strudel.cc"
+    assert c.options(r["audio"], headers={"origin": "https://strudel.cc"}).status_code == 204
+    stem = r["audio"].removesuffix("/audio") + "/stems/drums"
+    assert c.get(stem).status_code == 404  # not separated yet
+    folder = stems.stems_dir("abc", mine)
+    folder.mkdir(parents=True)
+    stems.stem_path(folder, "drums").write_bytes(b"fLaC")
+    assert c.get(stem).content == b"fLaC"
+    # The token is for one track: moving it to another, or tampering with it, finds nothing.
+    assert c.get(r["audio"].replace(f"/tracks/{mine}/", f"/tracks/{theirs}/")).status_code == 404
+    assert c.get(r["audio"].replace("/pub/", "/pub/1").replace(".", "x", 1)).status_code == 404
+    # The same link from a server with another secret (or after a restart without one) has expired.
+    assert make_client(db_path, link_secret="new").get(r["audio"]).status_code == 404
+
+
+def test_strudel_links_on_your_own_machine(db_path, home):
+    tid = save(db_path, None)
+    c = TestClient(create_app(db_path, Settings()))
+    assert c.get(f"/api/tracks/{tid}/strudel-link").json() == {"audio": f"/api/tracks/{tid}/audio", "days": None}
+    assert c.get(f"/pub/1.x/tracks/{tid}/audio").status_code == 404
+
+
+def test_old_uploaded_audio_expires_but_cards_stay(db_path, home):
+    up = home / "uploads"
+
+    def upload_file(name, age_days):
+        p = up / name / "song.wav"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b"x")
+        t = time.time() - age_days * 86400
+        os.utime(p, (t, t))
+        return p
+
+    old, fresh, admins, shared = (upload_file(n, d) for n, d in [("a", 40), ("b", 5), ("c", 40), ("d", 40)])
+    outside = home.parent / "elsewhere.wav"  # not one of Tastr's uploads: never touched
+    outside.write_bytes(b"x")
+    os.utime(outside, (0, 0))
+    ids = {
+        "old": save(db_path, "friend@example.com", sha="s1", path=str(old), uri=str(old)),
+        "fresh": save(db_path, "friend@example.com", sha="s2", path=str(fresh), uri=str(fresh)),
+        "admin": save(db_path, "pam@example.com", sha="s3", path=str(admins), uri=str(admins)),
+        "shared": save(db_path, "friend@example.com", sha="s3", path=str(shared), uri=str(shared)),
+        "outside": save(db_path, "friend@example.com", sha="s4", path=str(outside), uri=str(outside)),
+    }
+    for sha, key in [("s1", "old"), ("s3", "admin")]:
+        folder = stems.stems_dir(sha, ids[key])
+        folder.mkdir(parents=True)
+        (folder / "drums.flac").write_bytes(b"x")
+    conn = db.connect(db_path)
+    gone = hosted.expire_audio(conn, up, 30, keep=("pam@example.com",))
+    assert sorted(gone) == sorted([ids["old"], ids["shared"]])
+    assert not old.exists() and not old.parent.exists() and not shared.exists()
+    assert fresh.exists() and admins.exists() and outside.exists()
+    assert not stems.stems_dir("s1", ids["old"]).exists()
+    assert stems.stems_dir("s3", ids["admin"]).exists()  # the admin's copy of the same file keeps its stems
+    assert db.load_card(conn, ids["old"]) is not None  # the card stays
+    conn.close()
+    c = make_client(db_path)
+    assert c.get(f"/api/tracks/{ids['old']}", headers=GOOD).json()["has_audio"] is False

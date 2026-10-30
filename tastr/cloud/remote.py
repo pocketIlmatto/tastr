@@ -1,7 +1,12 @@
-"""Call the deployed Modal functions from the CLI."""
+"""Call the deployed Modal functions from the CLI and the app.
+
+TASTR_MODAL_APP picks the deployed app: `tastr` (modal_app.py, benchmarks and stems) by default, or
+`tastr-web` (modal_web.py, analysis and stems for a hosted server).
+"""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 APP_NAME = "tastr"  # modal_app.APP_NAME; that module needs deploy-time settings to import
@@ -17,10 +22,14 @@ def _call(name: str, *args, **kw):
     except ImportError as e:
         raise RemoteError("running on Modal needs it installed: pip install 'tastr[cloud]' (setup in docs/cloud.md)") from e
     try:
-        fn = modal.Function.from_name(APP_NAME, name)
+        fn = modal.Function.from_name(app_name(), name)
         return fn.remote(*args, **kw)
     except modal.exception.NotFoundError as e:
-        raise RemoteError("the tastr app isn't deployed on Modal yet: see docs/cloud.md") from e
+        raise RemoteError(f"the {app_name()} app isn't deployed on Modal yet: see docs/cloud.md") from e
+
+
+def app_name() -> str:
+    return os.environ.get("TASTR_MODAL_APP", APP_NAME)
 
 
 def bench(dataset: str, path: str | None, **kw) -> dict:
@@ -46,6 +55,14 @@ def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:
 
 def fetch(dataset: str, path: str, archives: list[int] | None = None) -> dict:
     return _call("fetch", dataset, path, archives)
+
+
+def analyze(audio_path: str | Path, stages: list[str] | None = None, options: dict | None = None):
+    """Analyze one file on Modal; returns its TrackCard (whose source the caller sets)."""
+    from ..engine.card import TrackCard
+
+    audio_path = Path(audio_path)
+    return TrackCard.from_dict(_call("analyze", audio_path.read_bytes(), audio_path.suffix, stages, options))
 
 
 def stems(audio_path: str | Path, out_dir: Path, progress=None) -> None:

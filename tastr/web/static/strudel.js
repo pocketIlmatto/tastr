@@ -23,7 +23,7 @@ function strudelLane(lane, p, beats = 4) {
 
 const STRUDEL_STEMS = ["vocals", "bass", "other", "drums"];
 
-// audioUrl: where strudel.cc can fetch the original file (the track's /audio endpoint). When given, the sketch
+// audioUrl: where strudel.cc can fetch the original file (the track's /audio endpoint, or a shared server's signed /pub/ link). When given, the sketch
 // adds the original audio cut into bars at the detected downbeats, layered under the drums.
 // stems: with audioUrl, the separated stems to play (names from STRUDEL_STEMS, served next to /audio at
 // /stems/<name>); every stem gets a line in stack(), and the ones not listed start commented out.
@@ -151,8 +151,10 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
   }
   const url = (n) => (n ? audioUrl.replace(/\/audio$/, `/stems/${n}`) : audioUrl).replace(/'/g, "%27");
   out.push(stems ? "// --- The original track as stems, cut into bars at the detected downbeats ---" : "// --- The original track, cut into bars at the detected downbeats ---",
-    `// Tastr serves the ${stems ? "audio" : "file"} from your computer, so keep \`tastr serve\` running. The first time,`,
-    "// your browser may ask whether strudel.cc may reach your local network: allow it.",
+    ...(/\/pub\/[^/]+\/tracks\//.test(audioUrl) // a shared server's signed link
+      ? ["// Tastr serves the audio through a private link that works for a week; after that, open the sketch from Tastr again."]
+      : [`// Tastr serves the ${stems ? "audio" : "file"} from your computer, so keep \`tastr serve\` running. The first time,`,
+        "// your browser may ask whether strudel.cc may reach your local network: allow it."]),
     "// Single quotes on purpose: in Strudel, double quotes mean a pattern.",
     ...(stems ? ["samples({", ...STRUDEL_STEMS.map((n) => `  ${n}: '${url(n)}',`), "})"] : [`samples({ orig: '${url()}' })`]),
     `const len = ${c.duration.toFixed(3)}, bar = ${bar.toFixed(4)}, first = ${first.toFixed(3)} // seconds: track, one bar, first downbeat`,

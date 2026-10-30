@@ -6,9 +6,11 @@ import logging
 import mimetypes
 import os
 import re
+import secrets
 import sqlite3
+import threading
 import uuid
-from contextlib import closing, nullcontext
+from contextlib import asynccontextmanager, closing, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,8 +25,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import db, lookup, service, stems
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url
-from .hosted import (HEALTH_PATH, TOKEN_HEADER, AccessVerifier, AnalysisSlots, Settings, file_bytes,
-                     inline_script_hashes, security_headers, stored_bytes, today)
+from .hosted import (HEALTH_PATH, LINK_DAYS, PUBLIC_PREFIX, TOKEN_HEADER, AccessVerifier, AnalysisSlots, LinkSigner,
+                     Settings, expire_audio, file_bytes, inline_script_hashes, security_headers, stored_bytes, today)
 
 STATIC_DIR = Path(__file__).parent / "static"
 log = logging.getLogger(__name__)
@@ -37,6 +39,7 @@ MAX_QUERY_ROWS = 5000
 STRUDEL_ORIGINS = ("https://strudel.cc",)
 # Every route about one track; on a hosted server only its owner gets past the login middleware.
 TRACK_PATH = re.compile(r"^/api/tracks/(\d+)(?:/|$)")
+EXPIRY_EVERY = 6 * 3600  # seconds between sweeps for expired audio on a hosted server
 
 
 def _strudel_cors(origin: str | None, preflight: bool = False) -> dict[str, str]:
@@ -113,9 +116,20 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     if hosted and verifier is None:
         verifier = AccessVerifier(settings.access_team_domain, settings.access_aud)
     slots = AnalysisSlots(settings.max_analyses) if hosted else None
+    # Without TASTR_LINK_SECRET the Strudel links last only until the server restarts.
+    signer = LinkSigner(settings.link_secret or secrets.token_bytes(32)) if hosted else None
     extra_headers = security_headers(inline_script_hashes((STATIC_DIR / "index.html").read_text())) if hosted else {}
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        stop = threading.Event()
+        if hosted and settings.audio_days > 0:
+            threading.Thread(target=expire_loop, args=(stop,), name="tastr-expiry", daemon=True).start()
+        yield
+        stop.set()
+
     app = FastAPI(title="Tastr", docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
-                  openapi_url=None if hosted else "/openapi.json")
+                  openapi_url=None if hosted else "/openapi.json", lifespan=lifespan)
     jobs = stems.Jobs()
     last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
 
@@ -131,7 +145,8 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         # Added last, so it runs first: nothing else sees a request without a valid Cloudflare Access login.
         @app.middleware("http")
         async def access_login(request, call_next):
-            if request.url.path != HEALTH_PATH:
+            # /pub/ links check their own signature instead (strudel.cc can't sign in).
+            if request.url.path != HEALTH_PATH and not request.url.path.startswith(PUBLIC_PREFIX):
                 token = request.headers.get(TOKEN_HEADER) or request.cookies.get("CF_Authorization")
                 user = None
                 if token:
@@ -155,6 +170,18 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
 
     def conn() -> sqlite3.Connection:
         return db.connect(db_path)
+
+    def expire_loop(stop: threading.Event) -> None:
+        while True:
+            try:
+                with closing(conn()) as c:
+                    gone = expire_audio(c, upload_dir(), settings.audio_days, settings.admins)
+                if gone:
+                    log.info("Deleted the audio of %d track(s) older than %g days", len(gone), settings.audio_days)
+            except Exception:  # noqa: BLE001 - try again next time
+                log.exception("Deleting expired audio failed")
+            if stop.wait(EXPIRY_EVERY):
+                return
 
     def count_blocked() -> None:
         with closing(conn()) as c:
@@ -339,6 +366,34 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
 
     @app.options("/api/tracks/{track_id}/stems/{name}", include_in_schema=False)
     def track_stem_preflight(track_id: int, name: str, origin: str | None = Header(None)):
+        return _preflight(origin)
+
+    @app.get("/api/tracks/{track_id}/strudel-link")
+    def strudel_link(track_id: int):
+        """Where strudel.cc can fetch this track's audio; its stems are next to it (`.../stems/<name>`). On a
+        shared server strudel.cc can't pass the login, so this is a signed link that works for LINK_DAYS days."""
+        _card_or_404(track_id)
+        if signer is None:
+            return {"audio": f"/api/tracks/{track_id}/audio", "days": None}
+        return {"audio": f"{PUBLIC_PREFIX}{signer.token(track_id)}/tracks/{track_id}/audio", "days": LINK_DAYS}
+
+    def _signed(token: str, track_id: int) -> None:
+        if signer is None or not signer.check(token, track_id):
+            raise HTTPException(404, "This link has expired. Open the sketch again from Tastr.")
+
+    @app.get(PUBLIC_PREFIX + "{token}/tracks/{track_id}/audio", include_in_schema=False)
+    def signed_audio(token: str, track_id: int, origin: str | None = Header(None)):
+        _signed(token, track_id)
+        return track_audio(track_id, origin)
+
+    @app.get(PUBLIC_PREFIX + "{token}/tracks/{track_id}/stems/{name}", include_in_schema=False)
+    def signed_stem(token: str, track_id: int, name: str, origin: str | None = Header(None)):
+        _signed(token, track_id)
+        return track_stem(track_id, name, origin)
+
+    @app.options(PUBLIC_PREFIX + "{token}/tracks/{track_id}/audio", include_in_schema=False)
+    @app.options(PUBLIC_PREFIX + "{token}/tracks/{track_id}/stems/{name}", include_in_schema=False)
+    def signed_preflight(token: str, track_id: int, origin: str | None = Header(None), name: str = ""):
         return _preflight(origin)
 
     def _stems_status(card, track_id: int) -> dict[str, Any]:

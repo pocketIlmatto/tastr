@@ -6,19 +6,21 @@ which sends a one-time code to each invited email address. Cloudflare decides wh
 Cloudflare's signed token on every request, so a request that reaches the server without going through
 Cloudflare gets nothing.
 
-This page covers what hosted mode changes and how to configure it. Deploying it (Docker image, host,
-storage on R2, analysis on Modal) comes in a later change.
+This page covers what hosted mode changes and how to configure it. [deploy.md](deploy.md) sets it up on
+Fly.io, with analysis on Modal and the library backed up to R2.
 
 ## What hosted mode changes
 
 | | Local (`tastr serve`) | Hosted (`TASTR_HOSTED=1`) |
 | --- | --- | --- |
-| Login | none | Cloudflare Access token required on every request except `/api/health` |
+| Login | none | Cloudflare Access token required on every request except `/api/health` and signed `/pub/` links |
 | Link analysis (yt-dlp) | on (with the `links` extra) | off; the link field is hidden |
 | SQL box (`/api/query`) | on | off; the box is hidden |
 | Uploads | any size | audio types only, size, count, per-person daily and total storage limits |
 | Library | one, yours | one per person: each sees and changes only the tracks they uploaded |
 | Deleting a track | removes its stems | also removes its uploaded audio |
+| Uploaded audio and stems | kept | deleted after `TASTR_AUDIO_DAYS` (cards stay; admins' audio is kept) |
+| Try this in Strudel | strudel.cc fetches audio from `tastr serve` | strudel.cc fetches it through a signed link that works for a week |
 | Admin view (`/api/admin/usage`) | none | usage per person, for `TASTR_ADMIN_EMAILS` |
 | Stem separation | unlimited | per-person daily limit |
 | Analyses at once | unlimited | capped; extra ones wait their turn |
@@ -48,6 +50,8 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_MAX_ANALYSES` | 2 | analyses that run at once |
 | `TASTR_DAILY_STEMS` | 10 | stem separations each person can start per UTC day |
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
+| `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
+| `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
 
 With `TASTR_HOSTED=1` but no team domain or AUD tag, `tastr serve` refuses to start rather than run
 without a login check.
@@ -68,6 +72,11 @@ You need a domain on Cloudflare (Tastr will live at a hostname on it, such as `t
    someone later, delete their address here.
 5. Save, then open the application's **Overview** and copy the **Application Audience (AUD) Tag** into
    `TASTR_ACCESS_AUD`.
+
+6. Add a second **Self-hosted** application for the same hostname with the path `pub`, and a policy with
+   action **Bypass**, include **Everyone**. strudel.cc fetches a track's audio from there without a login;
+   Tastr itself checks each of those links (see [Strudel links](#strudel-links)). Access applies the most
+   specific path, so the rest of the site still needs the login.
 
 Cloudflare then forwards each signed-in request with a `Cf-Access-Jwt-Assertion` header, which Tastr
 verifies against your team's public keys at `https://<team domain>/cdn-cgi/access/certs`.
@@ -90,18 +99,27 @@ storage, analyses running and an estimated 30-day Modal cost, a per-person chart
 the people table with today's quotas, the activity log, the limits and the blocked count. Nobody else
 gets the tab, and on your own machine there is none.
 
+## Strudel links
+
+"Try this in Strudel" opens strudel.cc with code that loads the track's audio and stems from Tastr, but
+strudel.cc can't pass the Access login. So on a hosted server the page asks
+`GET /api/tracks/{id}/strudel-link` (owner only) for a link under `/pub/<expiry>.<signature>/tracks/{id}/`
+that serves that one track's audio and stems for 7 days. The signature is an HMAC with `TASTR_LINK_SECRET`
+over the track id and expiry, so a link can't be moved to another track or extended. Anyone with the link
+can play the audio until it expires, the same as a shared Strudel sketch.
+
+## Expiring audio
+
+Every 6 hours (and when the server starts) uploaded files older than `TASTR_AUDIO_DAYS` are deleted, with
+their stems unless another track still has the same file. The track card stays, with everything except
+playback, waveform scrubbing, stems and re-analysis. Tracks owned by `TASTR_ADMIN_EMAILS` keep their audio.
+
 ## Moving your own library to a hosted server
 
-Tracks analyzed on your own machine have no owner, so on a hosted server nobody sees them. Once your
-database is on the server (the deploy change adds a script that moves the audio too), give its tracks to
-your Access email:
+`tastr pack` and `tastr unpack` move a whole library with its audio and stems; [deploy.md](deploy.md#9-move-your-own-library-optional)
+has the steps. If only the database is on the server already, give its tracks with no owner to your Access
+email:
 
 ```
 tastr set-owner you@example.com
 ```
-
-## Known gaps until the deploy change
-
-- **Try this in Strudel** can't load the original audio or stems: strudel.cc fetches them without the
-  Access login. Short-lived signed links fix this in the deploy change.
-- Uploaded audio stays until the track is deleted; the 30-day expiry comes with the deploy change.

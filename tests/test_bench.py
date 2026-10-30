@@ -318,3 +318,24 @@ def test_key_holdout_writes_calibration_rows():
     rows: list = []
     train_key.holdout({"major": tracks[0::2], "minor": tracks[1::2]}, [], rows=rows)  # both modes in each half
     assert len(rows) == 40 and all({"key_confidence", "key_correct", "dataset"} <= r.keys() for r in rows)
+
+
+def test_record_keeps_full_run_scores(tmp_path):
+    from tastr.engine.bench import scores
+
+    path = tmp_path / "scores.json"
+    assert scores.load(path) == {"scores": {}}
+    report = {"summary": {"tracks": 600, "failed": 1, "key_correct": 0.61234, "key_correct_n": 599}}
+    key, entry = scores.entry_from_report("bench", "giantsteps-key", report, run="2026-11-01")
+    scores.record(key, entry, path)
+    assert scores.load(path)["scores"]["giantsteps-key"] == {"exact": 0.612, "tracks": 599, "what": "tracks, exact key", "run": "2026-11-01"}
+    key, entry = scores.entry_from_report("downbeats", "gtzan", {"tracks": 933, "right": 0.66, "half_bar_off": 0.1})
+    scores.record(key, entry, path)
+    assert set(scores.load(path)["scores"]) == {"giantsteps-key", "downbeat"}
+    assert not scores.recordable("bench", "harmonix") and not scores.recordable("downbeats", "hjdb")
+
+
+def test_record_refuses_subset_runs(capsys):
+    assert main(["bench", "giantsteps-key", "/nowhere", "--limit", "20", "--record"]) == 2
+    assert "full run" in capsys.readouterr().err
+    assert main(["bench", "harmonix", "/nowhere", "--record"]) == 2

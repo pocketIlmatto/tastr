@@ -87,6 +87,21 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def health():
         return {"ok": True}
 
+    @app.get("/api/bench")
+    def bench_scores():
+        # Headline benchmark scores the Glossary quotes; `tastr bench ... --record` keeps the file current.
+        from ..engine.bench import scores
+
+        return scores.load()
+
+    @app.get("/api/patterns")
+    def patterns():
+        # The engine's template drum patterns per style, for the Glossary's pattern grids.
+        from ..engine.stages.suggestions import STYLE_LABELS, VARIATIONS
+
+        return [{"style": STYLE_LABELS[style], "name": name, "pattern": pat}
+                for style, items in VARIATIONS.items() for name, pat in items]
+
     @app.get("/api/tracks")
     def tracks():
         with closing(conn()) as c:

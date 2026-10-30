@@ -15,6 +15,21 @@ By default only the `core` and `sections` stages run (`--stages` to change).
 `--limit N` takes the first N tracks for a quick check. `--remote` runs it on Modal
 with the datasets in an R2 bucket instead of on this machine (see [cloud.md](cloud.md)).
 
+### Scores quoted in the app
+
+The Glossary quotes a few headline scores, read from `tastr/engine/bench_scores.json` (served at
+`GET /api/bench`): exact key on `giantsteps-key` and `beatport-key`, BPM within 4% on `beatport-tempo`
+and `giantsteps-tempo`, and bar 1 right on GTZAN downbeats (`downbeat`). Add `--record` to a full
+milestone run to update its entry with the score, track count and today's date:
+
+```
+tastr bench beatport-tempo BP --stages core --jobs 8 --record
+tastr spec-bench downbeats GTZAN --record          # dataset gtzan only
+```
+
+`--record` refuses `--limit` (a subset run is never quoted) and datasets the app doesn't quote. Commit
+the changed JSON with the run's write-up.
+
 ## What gets scored
 
 | Metric | Meaning |

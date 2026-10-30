@@ -34,7 +34,7 @@ tastr = "tastr.cli:main"
 include = ["tastr*"]
 
 [tool.setuptools.package-data]
-tastr = ["web/*", "web/static/*"]
+tastr = ["web/*", "web/static/*", "engine/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

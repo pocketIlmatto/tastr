@@ -20,6 +20,8 @@ nav button, button { font: inherit; background: var(--panel); color: var(--fg); 
 nav button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 main { padding: 16px; max-width: 1100px; margin: 0 auto; }
 .muted { color: var(--muted); }
+/* Text that updates itself (benchmark scores and run dates in the Glossary): a muted green. */
+.bench-asof.muted, [data-bench] { color: color-mix(in srgb, var(--sec1) 60%, var(--muted)); }
 .error { color: var(--warn); }
 .link { color: var(--accent); cursor: pointer; text-decoration: underline; }
 #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 16px; text-align: center; margin-bottom: 16px; }
@@ -306,6 +308,10 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 #track-list li.trk:hover:not(.active):not(.picked) { background: color-mix(in srgb, var(--fg) 4%, var(--panel)); }
 #track-list li.pending { background: color-mix(in srgb, var(--fg) 3%, var(--panel)); }
 #track-list li.active { box-shadow: inset 3px 0 0 var(--accent); }
+/* The track card shares the sidebar's frame: one panel, with the title block as its header band. */
+#card { border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 45%, var(--bg)); padding: 0 16px 16px; }
+#card > .card-head { margin: 0 -16px 4px; padding: 14px 16px 12px; background: var(--panel); border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; }
+#card > p.muted { margin: 16px 0 0; }
 .lib-collapsed #lib .lib-head { border-bottom: 0; padding: 8px 4px; align-items: center; }
 /* Drums, bass & chords: one section, three stacked parts */
 .groove-parts { display: grid; gap: 14px; }
@@ -358,13 +364,16 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 
 /* Edits in Drums, bass & chords: --edit (gold) marks what the user changed; it is not a section color and not the "changed vs previous section" outline */
 .sec-tab.edited::after { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-left: 6px; vertical-align: middle; opacity: .8; }
-.drum-grid i.mine.full { background: var(--edit); border-color: var(--edit); }
-.drum-grid i.mine.half { background: color-mix(in srgb, var(--edit) 45%, var(--panel)); border-color: var(--edit); }
-.drum-grid i.mine:not(.full):not(.half) { border-color: transparent; outline: 2px dashed var(--edit); outline-offset: -2px; }
+/* Edited steps: edit-color fill plus a ring outside the cell, so they read at a glance in every look.
+   The doubled class out-ranks the looks' i.full box-shadow. */
+:root .drum-grid i.mine.mine { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--edit); position: relative; z-index: 1; }
+:root .drum-grid i.mine.mine.full { background: var(--edit); border-color: var(--edit); }
+:root .drum-grid i.mine.mine.half { background: color-mix(in srgb, var(--edit) 50%, var(--bg)); border-color: var(--edit); }
+:root .drum-grid i.mine.mine:not(.full):not(.half) { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--edit) 35%, transparent) 0 2px, transparent 2px 5px); border: 1px dashed var(--edit); outline: 0; }
 .sw.mine { background: var(--edit); border-color: var(--edit); }
 .roll-note.mine { fill: var(--edit); }
-.bar-pick.mine select { border-color: var(--edit); box-shadow: inset 3px 0 0 var(--edit); }
-.chord-cell.mine { border-color: var(--edit); box-shadow: inset 0 3px 0 var(--edit); }
+.bar-pick.mine select { border: 2px solid var(--edit); box-shadow: inset 4px 0 0 var(--edit); }
+:root .chord-cell.mine { border: 2px solid var(--edit); box-shadow: inset 0 4px 0 var(--edit); }
 .mine-tag { color: var(--edit); font-weight: 600; }
 .edit-pill { font-size: 12px; color: var(--edit); border: 1px solid color-mix(in srgb, var(--edit) 50%, transparent); border-radius: 999px; padding: 0 8px; margin-left: auto; }
 .edit-pill .linklike { color: var(--edit); font-size: 12px; }
@@ -389,6 +398,73 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .seq-tools .linklike { padding: 0; font-size: inherit; }
 .ver-save button { font-size: 13px; padding: 4px 10px; }
 
+/* ---------- Glossary ---------- */
+.gl { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 28px; align-items: start; padding-block: 8px 40px; }
+.gl-toc { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.gl-toc b { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 6px; }
+.gl-toc a { color: var(--fg); text-decoration: none; padding: 4px 8px; border-left: 2px solid var(--line); }
+.gl-toc a:hover { border-left-color: var(--accent); color: var(--accent); }
+.gl-body { max-width: 860px; line-height: 1.5; font-size: 14px; }
+.gl-title { font-size: 22px; margin: 0 0 6px; }
+.gl-body h3 { font-size: 15px; margin: 32px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); scroll-margin-top: 12px; }
+.gl-dl { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 8px 16px; margin: 8px 0; }
+.gl-dl dt { font-weight: 600; } .gl-dl dd { margin: 0; }
+.gl-dl p.gl-lead { margin: 0 0 2px; }
+.gl-pts { color: var(--muted); }
+.gl-pts a { color: var(--accent); }
+.gl-pts { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.gl-split { display: flex; gap: 2px; margin: 4px 0 2px; max-width: 360px; font-size: 11px; }
+.gl-split span { background: var(--accent-soft); padding: 2px 6px; border-radius: 3px; text-align: center; }
+.gl-chips { display: inline-flex; gap: 4px; margin-left: 4px; vertical-align: middle; }
+.gl-chips span { border: 1px solid var(--line); border-radius: 3px; padding: 0 6px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
+.gl-chips span.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.gl-beats { display: grid; grid-template-columns: repeat(8, 28px); gap: 3px; margin: 2px 0 6px; }
+.gl-beats span { text-align: center; font-size: 11px; border: 1px solid var(--line); border-radius: 3px; padding: 2px 0; color: var(--muted); }
+.gl-beats span:nth-child(4) { margin-right: 6px; }
+.gl-beats span.one { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.gl-bars { display: grid; grid-template-columns: auto minmax(60px, 180px) auto; gap: 3px 8px; align-items: center; margin: 4px 0 2px; font-size: 12px; }
+.gl-bars i { height: 8px; border-radius: 2px; background: linear-gradient(90deg, var(--accent) calc(var(--v, 0) * 100%), var(--line) 0); }
+.gl-cam { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; align-items: start; }
+.gl-cam-note { font-size: 12px; margin: 6px 0 0; text-align: center; }
+.gl-wheel svg { width: 100%; max-width: 248px; display: block; }
+.cam-cell path { fill: var(--panel); stroke: var(--bg); stroke-width: 2; transition: fill .12s; }
+.cam-cell { cursor: pointer; outline: none; }
+.cam-cell:hover path, .cam-cell:focus-visible path { fill: color-mix(in srgb, var(--accent) 18%, var(--panel)); }
+.cam-cell.near path { fill: var(--accent-soft); }
+.cam-cell.sel path { fill: var(--accent); }
+.cam-cell text { text-anchor: middle; pointer-events: none; fill: var(--fg); }
+.cam-cell .cam-id { font-size: 9px; font-weight: 700; }
+.cam-cell .cam-key { font-size: 8px; fill: var(--muted); }
+.cam-cell.sel text { fill: #fff; }
+.cam-mid { text-anchor: middle; font-size: 9px; letter-spacing: .12em; text-transform: uppercase; fill: var(--muted); }
+@media (max-width: 700px) { .gl-cam { grid-template-columns: 1fr; } .gl-wheel svg { margin: 0 auto; } }
+.gl-table { width: 100%; margin: 8px 0 12px; font-size: 13px; }
+.gl-table th, .gl-table td { white-space: normal; vertical-align: top; padding: 6px 8px; }
+.gl-table td:first-child { font-weight: 600; white-space: nowrap; }
+.gl-compact { width: auto; }
+.gl-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 28px; align-items: start; margin-top: 8px; }
+.gl-two > div > p { margin: 0 0 8px; }
+.gl-two .gl-table { width: 100%; margin: 0; }
+@media (max-width: 700px) { .gl-two { grid-template-columns: minmax(0, 1fr); } }
+.gl-modes { margin: 6px 0 2px; color: var(--fg); }
+.gl-modes td:first-child { white-space: nowrap; }
+.gl-modes tr.gl-row { cursor: pointer; }
+.gl-modes tr.gl-row:hover td { background: var(--accent-soft); }
+.gl-hear { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 2px; color: var(--fg); }
+.gl-patterns { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin: 12px 0; }
+.gl-pat { margin: 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg); }
+.gl-pat figcaption { margin-bottom: 6px; font-size: 13px; }
+.gl-link { font-size: 12px; white-space: nowrap; }
+.gl-body a[target="_blank"]::after { content: " ↗"; font-size: .85em; }
+.gl-body a { color: var(--accent); }
+@media (max-width: 700px) {
+  .gl { grid-template-columns: 1fr; gap: 12px; }
+  .gl-toc { position: static; flex-direction: row; flex-wrap: wrap; gap: 4px; }
+  .gl-toc b { width: 100%; margin: 0; }
+  .gl-toc a { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+  .gl-dl { grid-template-columns: 1fr; gap: 2px; } .gl-dl dd { margin-bottom: 8px; }
+  .gl-table td:first-child { white-space: normal; }
+}
 /* ---------- Looks: 808 (default) and Technics. Picked in the header, saved in localStorage "tastr-look".
    To add one: a :root[data-look="x"] token block + overrides below, and a button in .look-pick. ---------- */
 h1 { white-space: nowrap; }
@@ -402,7 +478,9 @@ h1 { white-space: nowrap; }
 [data-look="808"] .look-pick button { background: #2a2826; color: #f4efe2; border-color: #3a3734; box-shadow: 0 2px 0 #000; }
 [data-look="808"] .look-pick button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); }
 [data-look="technics"] .look-pick button[aria-pressed="true"] { background: #121212; color: #e7e3db; border-color: #121212; }
-@media (max-width: 700px) { [data-look] h1::after { display: none; } .look-pick > span { display: none; } }
+@media (max-width: 700px) { [data-look] h1::after { display: none; } .look-pick > span { display: none; } header { flex-wrap: wrap; } .head-right { min-width: 0; } nav button { padding-inline: 8px; }
+  /* Phones: title and ? on the first row, look and views below. */
+  header h1 { flex: 1; } header .head-right { order: 1; flex-basis: 100%; margin-left: 0; justify-content: space-between; } }
 /* 808: drum-machine hardware. Cream panels, black body, orange/red/yellow keys, mono labels. */
 :root[data-look="808"] {
   --bg: #e9e3d3; --fg: #161514; --muted: #6d665a; --line: #c9c0ab; --panel: #f4efe2;
@@ -425,7 +503,7 @@ h1 { white-space: nowrap; }
 [data-look="808"] .beat-group:nth-child(3) { background: #e8d33a40; } [data-look="808"] .beat-group:nth-child(4) { background: #ffffff; }
 [data-look="808"] .drum-grid i { border-radius: 2px; border-color: #a99f88; background: #f4efe2; box-shadow: inset 0 -2px 0 #0001; }
 [data-look="808"] .drum-grid i.full { background: var(--accent); box-shadow: 0 0 6px #e2531d99; }
-[data-look="808"] #lib, [data-look="808"] .chord-cell { border: 2px solid #161514; border-radius: 4px; }
+[data-look="808"] #lib, [data-look="808"] #card, [data-look="808"] .chord-cell { border: 2px solid #161514; border-radius: 4px; }
 
 /* Technics: 70s hi-fi. Champagne aluminium, black engraved wide type, red LED strobe dots. */
 :root[data-look="technics"] {
@@ -448,7 +526,7 @@ h1 { white-space: nowrap; }
 [data-look="technics"] .drum-grid i.half { background: #9e2a24; box-shadow: 0 0 4px #ff3b3099; }
 [data-look="technics"] .beat-group { background: transparent; border-bottom: 1px solid #12121233; border-radius: 0; }
 [data-look="technics"] .stat b { font-family: "Michroma", sans-serif; font-size: 18px; }
-[data-look="technics"] #lib, [data-look="technics"] .chord-cell { border: 1px solid #8c867a; border-radius: 2px; }
+[data-look="technics"] #lib, [data-look="technics"] #card, [data-look="technics"] .chord-cell { border: 1px solid #8c867a; border-radius: 2px; }
 
 /* "Listed elsewhere" (catalog lookups) under the header stats */
 .lookup-line { margin: 0; flex-basis: 100%; font-size: 14px; }

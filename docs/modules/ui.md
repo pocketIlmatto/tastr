@@ -25,6 +25,8 @@ across the library.
 | GET / POST | `/api/tracks/{id}/edit-versions` | POST: `{"name", "edits"}` | saved versions, newest first: `[{"id", "name", "created_at", "sections"}]`; POST returns the new one (201) |
 | GET / DELETE | `/api/tracks/{id}/edit-versions/{vid}` | | one version with its `edits` / 204; 404 for an unknown track or version |
 | POST | `/api/tracks/{id}/reanalyze` | | `{"card", "edits_dropped"}`. Edits move to the new section with the same start and end bars; edits whose section is gone are dropped (in versions too), and `edits_dropped` counts them |
+| GET | `/api/bench` | | the benchmark scores the Glossary quotes, from `tastr/engine/bench_scores.json` (`{"scores": {key: {"exact", "tracks", "what", "run"}}}`); `{"scores": {}}` when the file is missing |
+| GET | `/api/patterns` | | the engine's template drum patterns, `[{"style", "name", "pattern"}]`, for the Glossary's pattern grids |
 | POST | `/api/query` | `{"sql": "..."}` | `{"columns": [...], "rows": [[...]]}`; opens the DB with `db.connect(path, readonly=True)` so writes fail; 400 on SQL error |
 | GET | `/` | | the static UI |
 

@@ -17,6 +17,7 @@
     <nav>
       <button data-view="library" class="active">Library</button>
       <button data-view="explore">Explore</button>
+      <button data-view="glossary">Glossary</button>
     </nav>
   </div>
   <button type="button" id="help-btn" aria-haspopup="dialog" aria-controls="help" aria-keyshortcuts="?" title="Keyboard and mouse shortcuts (?)">?</button>
@@ -135,6 +136,216 @@
     <button id="run-sql">Run</button>
     <p id="sql-error" class="error"></p>
     <div class="table-wrap"><table id="sql-result"></table></div>
+  </section>
+  <section id="view-glossary" hidden>
+    <div class="gl">
+      <nav class="gl-toc" aria-label="Glossary contents">
+        <b>Glossary</b>
+        <a href="#g-basics">Track basics</a>
+        <a href="#g-energy">Energy</a>
+        <a href="#g-vibes">Vibes</a>
+        <a href="#g-measures">Measurements behind vibes</a>
+        <a href="#g-sections">Sections</a>
+        <a href="#g-styles">Drum styles &amp; pattern ideas</a>
+        <a href="#g-detect">How parts are detected</a>
+        <a href="#g-terms">Other terms</a>
+      </nav>
+      <div class="gl-body">
+        <h2 class="gl-title">Glossary</h2>
+        <p class="muted">What each label, number and pattern in Tastr means, and how the app works it out. Everything here is measured from the audio file alone, not from metadata, genre tags or online lookups. (Optional catalog lookups are shown separately, as "Listed elsewhere".) The measurements are good starting points for making music, not a transcription.</p>
+
+        <h3 id="g-basics">Track basics</h3>
+        <dl class="gl-dl">
+          <dt>BPM (tempo)</dt><dd>
+            <p class="gl-lead">How fast the beat goes, in beats per minute.</p>
+            <ul class="gl-pts">
+              <li>Found from note onsets and the kick drum. Within 4% of the labeled tempo on <span data-bench="beatport-tempo">87%</span> of Beatport tracks and <span data-bench="giantsteps-tempo">72%</span> of GiantSteps tracks<span class="bench-asof muted" data-bench-asof="beatport-tempo giantsteps-tempo"></span>.</li>
+              <li>"95% likely right" means: of benchmark tracks whose beat looked this steady and clear, 95% got the right tempo. Most tracks read about 94%; very unsteady ones can drop to 10%. (Older cards show a raw "conf" score until re-analyzed.)</li>
+              <li>A track can still read at half or double speed (87 instead of 174), so both are kept as alternatives.</li>
+            </ul></dd>
+          <dt>Bar and downbeat</dt><dd>
+            <p class="gl-lead">The downbeat is beat 1 of each bar. Tastr currently supports only 4/4 time, so every bar is 4 beats.</p>
+            <ul class="gl-pts">
+              <li>Waltzes (3/4) and 6/8 tracks still get 4-beat bars for now. Support for other meters is planned, starting with 3/4.</li>
+              <li>Beat 1 is right <span data-bench="downbeat">64%</span> of the time on 4/4 songs<span class="bench-asof muted" data-bench-asof="downbeat"></span>; most misses are half a bar off.</li>
+            </ul></dd>
+          <dt>Key</dt><dd>
+            <p class="gl-lead">The home note and mode (major or minor) the track fits best.</p>
+            <ul class="gl-pts">
+              <li>From a small model trained on <a href="https://github.com/GiantSteps/giantsteps-key-dataset" target="_blank" rel="noopener">GiantSteps</a> and <a href="https://zenodo.org/records/1101082" target="_blank" rel="noopener">Beatport EDM Key</a>.</li>
+              <li>Exact on <span data-bench="giantsteps-key">60%</span> of GiantSteps and <span data-bench="beatport-key">49%</span> of Beatport<span class="bench-asof muted" data-bench-asof="giantsteps-key beatport-key"></span>.</li>
+              <li>Each track's key shows its own "likely right" figure the same way (about 30% to 86%).</li>
+              <li>The usual miss is a key a fifth away, which still mixes fine.</li>
+            </ul></dd>
+          <dt>Camelot (e.g. 8A)</dt><dd class="gl-cam">
+            <div>
+              <p class="gl-lead">A circle that organizes musical keys so you can quickly find tracks that mix in key.</p>
+              <ul class="gl-pts">
+                <li>Each key gets a number (1-12) and a letter: A is minor (inner ring), B is major (outer ring).</li>
+                <li>Safe moves: stay on the same code, step one number up or down on the same letter, or switch letters on the same number.</li>
+                <li>Mixed In Key also describes bolder moves, like the Energy Boost (two numbers up, 8A to 10A). Matching keys only shortlists tracks; still check the transition by ear.</li>
+                <li>Learn more: <a href="https://mixedinkey.com/workflows/how-to-use-the-camelot-wheel/" target="_blank" rel="noopener">How to use the Camelot Wheel</a> · <a href="https://mixedinkey.com/harmonic-mixing-guide/" target="_blank" rel="noopener">Harmonic mixing guide</a> (Mixed In Key)</li>
+              </ul>
+            </div>
+            <div class="gl-wheel-col"><div id="gl-wheel" class="gl-wheel"></div><p class="muted gl-cam-note" id="gl-cam-note"></p></div></dd>
+          <dt>Scale (mode)</dt><dd>
+            <p class="gl-lead">Which set of notes the track uses on top of its key.</p>
+            <ul class="gl-pts">
+              <li>Modes are scales built from the same notes as the major scale, each starting on a different note. There are seven; Tastr picks from six, plus Harmonic Minor (a scale, not a mode). The table below lists them.</li>
+              <li>Tastr puts it to work in two places. The Ableton setup tip names the root and scale to set in Live's Scale control, so the piano roll highlights the notes that fit. The harmony suggestions give a "safe" lead scale: the 5-note pentatonic version of the key, which leaves out the notes most likely to clash with the chords.</li>
+              <li>Learn more: <a href="https://learningmusic.ableton.com/" target="_blank" rel="noopener">Ableton Learning Music</a> (interactive, start with Notes and Scales) · <a href="https://www.musictheory.net/lessons" target="_blank" rel="noopener">musictheory.net lessons</a> (Scales and Modes) · <a href="https://en.wikipedia.org/wiki/Mode_(music)" target="_blank" rel="noopener">Mode (Wikipedia)</a></li>
+            </ul>
+            <table class="gl-table gl-compact gl-modes">
+                  <thead><tr><th>Scale</th><th>Feel</th><th>Tastr picks it when</th><th>Hear it in</th></tr></thead>
+                  <tbody>
+                    <tr><td>Major (Ionian)</td><td>bright, settled</td><td>major key, the default</td><td>"Let It Be", The Beatles</td></tr>
+                    <tr><td>Lydian</td><td>dreamy, floating</td><td>major key with a strong raised 4th</td><td>The Simpsons theme</td></tr>
+                    <tr><td>Mixolydian</td><td>bluesy, rock</td><td>major key with a strong flat 7th</td><td>"Norwegian Wood", The Beatles</td></tr>
+                    <tr><td>Minor (Aeolian)</td><td>sad, dark</td><td>minor key, the default</td><td>"All Along the Watchtower"</td></tr>
+                    <tr><td>Dorian</td><td>minor but lighter, funky</td><td>minor key with a strong raised 6th</td><td>"Oye Como Va", Santana; "Get Lucky", Daft Punk</td></tr>
+                    <tr><td>Phrygian</td><td>tense, Spanish/metal</td><td>minor key with a strong flat 2nd</td><td>"White Rabbit", Jefferson Airplane</td></tr>
+                    <tr><td>Harmonic Minor</td><td>exotic, dramatic</td><td>minor key with a strong raised 7th</td><td>"Hit the Road Jack", Ray Charles</td></tr>
+                    <tr><td>Locrian</td><td>unstable, rarely used</td><td>never (too rare to guess reliably)</td><td>"Army of Me", Björk (mostly)</td></tr>
+                  </tbody>
+                </table>
+                <p class="muted gl-cam-note" style="text-align:left">Songs are commonly cited examples; real songs often borrow a note or two from other scales.</p>
+                <div class="gl-hear" id="gl-hear"></div></dd>
+          <dt>Loudness</dt><dd>The average level of the whole file in dB (RMS). Mastered club tracks sit around −8 to −12 dB.</dd>
+        </dl>
+
+        <h3 id="g-energy">Energy</h3>
+        <p>Tastr has two kinds of energy, and they answer different questions.</p>
+        <table class="gl-table">
+          <thead><tr><th>Where you see it</th><th>What it means</th><th>How it is worked out</th></tr></thead>
+          <tbody>
+            <tr><td><b>Track energy</b> (the 0-1 number and meter at the top)</td><td>How loud, busy and intense the whole track is, comparable between tracks.</td><td>A weighted mix: 35% loudness (−30 dB maps to 0, −8 dB to 1), 25% note-onset rate (6 onsets per second or more counts as full), 20% brightness and 20% percussiveness.</td></tr>
+            <tr><td><b>Energy chart</b> (Energy &amp; sections)</td><td>How energy rises and falls inside this track, from bar to bar.</td><td>The average loudness (RMS in dB) of each bar, scaled so the track's quietest 5% of bars read 0 and its loudest 5% read 1. Because it is relative, a quiet ambient track still uses the full height of the chart.</td></tr>
+            <tr><td><b>Section energy</b></td><td>The mean of the chart over a section's bars. It decides the section labels.</td><td>Same 0-1 relative scale as the chart.</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="g-vibes">Vibes</h3>
+        <p>Each vibe gets a score from 0 to 1 from fixed rules over the measurements below. Vibes scoring under 0.20 are hidden; Show all scores under the vibes lists those between 0 and 0.20. A vibe that scores 0 or less, or whose measurements are missing, isn't listed at all. Vibes describe the sound, not a genre.</p>
+        <table class="gl-table gl-vibes">
+          <thead><tr><th>Vibe</th><th>Group</th><th>What it means</th><th>Score rule</th></tr></thead>
+          <tbody>
+            <tr><td>dark</td><td>Mood</td><td>Dull, low-treble sound, more so in a minor key.</td><td>(0.45 − brightness) ÷ 0.3, +0.25 if minor, −0.2 if major</td></tr>
+            <tr><td>bright</td><td>Mood</td><td>Lots of treble, more so in a major key.</td><td>(brightness − 0.5) ÷ 0.3, +0.15 if major, −0.15 if minor</td></tr>
+            <tr><td>melancholic</td><td>Mood</td><td>Minor key with low energy.</td><td>Minor and energy under 0.5: 0.5 + (0.4 − energy)</td></tr>
+            <tr><td>euphoric</td><td>Mood</td><td>Major key, high energy and a bright sound together.</td><td>Major only: (energy − 0.55) ÷ 0.25 + (brightness − 0.45)</td></tr>
+            <tr><td>high energy</td><td>Energy</td><td>Loud and dense overall.</td><td>(energy − 0.6) ÷ 0.3</td></tr>
+            <tr><td>chill</td><td>Energy</td><td>Low energy for its tempo, so it sits back.</td><td>Under 115 BPM: (0.45 − energy) ÷ 0.25; otherwise (0.35 − energy) ÷ 0.25</td></tr>
+            <tr><td>dynamic</td><td>Energy</td><td>Big contrast in energy between sections: real builds and drops.</td><td>(section contrast − 0.2) ÷ 0.15</td></tr>
+            <tr><td>driving</td><td>Rhythm</td><td>Strong, steady pulse at a dance tempo.</td><td>115-150 BPM only: (pulse clarity − 0.45) ÷ 0.35</td></tr>
+            <tr><td>danceable</td><td>Rhythm</td><td>Steady, regular rhythm that is easy to move to.</td><td>(danceability − 0.55) ÷ 0.3</td></tr>
+            <tr><td>hypnotic</td><td>Rhythm</td><td>Strong pulse with very little change between sections.</td><td>(pulse clarity − 0.4) ÷ 0.4 − 3 × section contrast + 0.3</td></tr>
+            <tr><td>percussive</td><td>Rhythm</td><td>Drum hits and sharp attacks dominate.</td><td>(percussiveness − 0.35) ÷ 0.25</td></tr>
+            <tr><td>swung</td><td>Rhythm</td><td>Off-beat 16ths land late, giving a shuffle.</td><td>Swing confidence over 0.3: (swing % − 54) ÷ 8</td></tr>
+            <tr><td>bass-heavy</td><td>Sound</td><td>A large share of the energy sits in the low end.</td><td>(low end − 0.25) ÷ 0.25</td></tr>
+            <tr><td>atmospheric</td><td>Sound</td><td>Few sharp attacks and a weak pulse, so washy and ambient.</td><td>(0.2 − percussiveness) ÷ 0.15 + (0.4 − pulse clarity)</td></tr>
+          </tbody>
+        </table>
+        <div class="gl-two">
+        <div>
+          <p><b>Tempo hints</b> (group Tempo) score a flat 0.5 when the BPM falls in a style's usual range.</p>
+          <ul class="gl-pts">
+            <li>They are hints, not genre calls.</li>
+            <li>Ranges overlap, so a track can get more than one: 140 BPM gets techno, dubstep/halftime and trap tempo, and 125 BPM gets house and techno tempo.</li>
+            <li>"Halftime" means the snare lands on beat 3 instead of 2 and 4, so a 140 BPM dubstep or trap track feels like 70 (see Drum styles below).</li>
+          </ul>
+        </div>
+        <table class="gl-table gl-compact">
+          <thead><tr><th>Tag</th><th>BPM range</th></tr></thead>
+          <tbody>
+            <tr><td>downtempo</td><td>70-100</td></tr><tr><td>trap tempo</td><td>130-170, or 65-85 when read at half tempo</td></tr><tr><td>hip-hop tempo</td><td>80-100</td></tr><tr><td>house tempo</td><td>118-130</td></tr>
+            <tr><td>techno tempo</td><td>125-145</td></tr><tr><td>dubstep/halftime tempo</td><td>138-150</td></tr><tr><td>drum &amp; bass tempo</td><td>160-180</td></tr>
+          </tbody>
+        </table>
+        </div>
+
+        <h3 id="g-measures">Measurements behind vibes</h3>
+        <p class="muted">The weights and cut-offs here and in the vibe rules are hand-picked starting points, not fitted to labeled data or benchmarked yet.</p>
+        <dl class="gl-dl">
+          <dt>Brightness (0-1)</dt><dd>The average spectral centroid (the "center of mass" of the frequencies) divided by 3.5 kHz. Higher means more treble.</dd>
+          <dt>Percussiveness (0-1)</dt><dd>The share of the track's energy in its percussive part after splitting the audio into harmonic (sustained) and percussive (short, sharp) layers.</dd>
+          <dt>Low end (0-1)</dt><dd>The share of the spectrum's power below 150 Hz.</dd>
+          <dt>Pulse clarity (0-1)</dt><dd>How much stronger the onsets on the beat are than the average onset. A clear four-on-the-floor kick scores high; a beatless pad scores near 0.</dd>
+          <dt>Danceability (0-1)</dt><dd>55% pulse clarity, 25% how close the tempo is to about 122 BPM (the middle of house and pop dance tempos; the fit fades over about ±30 BPM), 20% percussiveness.</dd>
+          <dt>Swing % and confidence</dt><dd>Where the off-beat 16th lands within each beat: 50% is straight, about 67% is a full triplet shuffle. Confidence is how consistent that position is from beat to beat.</dd>
+          <dt>Section contrast</dt><dd>The spread (standard deviation) of the section energies. High contrast means big builds and drops.</dd>
+        </dl>
+
+        <h3 id="g-sections">Sections</h3>
+        <p><b>Finding the boundaries.</b> For each bar Tastr measures its harmony (12-note chroma), timbre (MFCCs) and loudness. Bars are then grouped into runs that sound alike (temporally constrained clustering), aiming for roughly one section per 28 seconds (between 3 and 12). Boundaries snap to 4-bar phrases, and anything shorter than 4 bars merges into its neighbor. Tracks under 8 bars get one "full" section.</p>
+        <p><b>Letters.</b> Sections that sound alike share a letter: "Drop C" and a later "Drop C" are the same material coming back, while "Build B" after "Intro A" is new material. Section colors in the chart and tabs follow the letter, so repeats share a color. The boundary confidence is how different a section sounds from the one before it.</p>
+        <p><b>Labels</b> come from each section's energy relative to the rest of the track, checked in this order:</p>
+        <table class="gl-table">
+          <thead><tr><th>Label</th><th>What it usually is</th><th>Rule</th></tr></thead>
+          <tbody>
+            <tr><td>Intro</td><td>The opening, before the track gets going.</td><td>First section, energy under 0.5</td></tr>
+            <tr><td>Outro</td><td>The ending, winding down (often DJ-friendly drums).</td><td>Last section, energy under 0.5</td></tr>
+            <tr><td>Drop</td><td>The peak of an electronic track, where the full beat and bass hit.</td><td>Energy 0.68 or more, in an electronic track (over 105 BPM and percussiveness over 0.25)</td></tr>
+            <tr><td>Chorus</td><td>The peak of a song that isn't drum-led.</td><td>Energy 0.68 or more, not electronic</td></tr>
+            <tr><td>Build</td><td>The rise into a peak: risers, snare rolls, filters opening.</td><td>The next section is 0.6 or more and over 0.2 higher</td></tr>
+            <tr><td>Breakdown</td><td>A stripped-back dip, often without kick or bass.</td><td>Energy under 0.38</td></tr>
+            <tr><td>Verse</td><td>Everything in between: a steady middle part.</td><td>None of the above</td></tr>
+          </tbody>
+        </table>
+        <p class="muted">Labels are guesses from loudness alone. A quiet chorus can read as a verse, and section edges can be 1-4 bars away from where a part really comes in.</p>
+
+        <h3 id="g-styles">Drum styles &amp; pattern ideas</h3>
+        <p>The Pattern picker in the Drums part offers ready-made patterns next to the detected groove. Tastr picks a style <b>from the tempo only</b>; it does not check whether the track's actual rhythm matches. Lanes map to the default Drum Rack pads.</p>
+        <table class="gl-table">
+          <thead><tr><th>Style</th><th>Chosen when</th><th>What it is</th></tr></thead>
+          <tbody>
+            <tr><td>Four on the floor</td><td>118-135 BPM</td><td>A kick on every beat (all four "on the floor"), claps or snares on 2 and 4, off-beat hats. The backbone of house, techno and disco.</td></tr>
+            <tr><td>Halftime</td><td>136-152 BPM and percussiveness over 0.25</td><td>The snare moves to beat 3, so a fast tempo feels half as fast. Dubstep, trap and halftime DnB.</td></tr>
+            <tr><td>Drum and bass</td><td>160-185 BPM</td><td>A fast, syncopated kick and snare (the two-step), often built from chopped breakbeats like the Amen break.</td></tr>
+            <tr><td>Hip-hop</td><td>80-104 BPM</td><td>A laid-back, syncopated kick with a backbeat snare on 2 and 4; boom bap or trap-style hats.</td></tr>
+            <tr><td>Generic backbeat</td><td>Any other tempo</td><td>Kick on 1 and 3-ish, snare on 2 and 4. The basic rock and pop beat.</td></tr>
+          </tbody>
+        </table>
+        <div id="gl-patterns" class="gl-patterns"></div>
+
+        <h3 id="g-detect">How parts are detected</h3>
+        <p>Drums, bass and chords are read from a 16-step grid: each bar is split into 4 beats and each beat into 4 sixteenths. Patterns are measured per section, averaged over the section's bars.</p>
+        <p><b>Steps</b>: a filled step (x) is a hit at least 72% as strong as the lane's loudest; a soft step (o) is at least 50%; anything quieter is empty (.).</p>
+        <table class="gl-table">
+          <thead><tr><th>Part</th><th>What it picks up</th><th>How it is detected</th><th>Drum Rack pad</th></tr></thead>
+          <tbody>
+            <tr><td>Kick</td><td>Kick drum, 808 boom</td><td>Low hits whose energy sits below about 120 Hz.</td><td>C1</td></tr>
+            <tr><td>Snare</td><td>Snare</td><td>Noisy mid hits (400 Hz-5 kHz), usually with some body around 200 Hz.</td><td>D1</td></tr>
+            <tr><td>Clap</td><td>Hand claps</td><td>Noisy mid hits with little body, made of several quick bursts.</td><td>D#1</td></tr>
+            <tr><td>Hat</td><td>Closed hi-hat, shaker</td><td>Short hits above 6 kHz.</td><td>F#1</td></tr>
+            <tr><td>Open hat</td><td>Open hi-hat, ride, crash</td><td>Hits above 6 kHz that keep ringing.</td><td>A#1</td></tr>
+            <tr><td>Tom</td><td>Toms</td><td>Low hits pitched above about 120 Hz, higher than a kick.</td><td>A1</td></tr>
+            <tr><td>Perc</td><td>Cowbell, rim, conga, wood block</td><td>Pitched mid hits without body.</td><td>G#1</td></tr>
+            <tr><td>Bass notes</td><td>The bass line's note in each bar</td><td>The strongest note in the harmonic layer from C1 up three octaves, per bar. A bar counts as having no bass when its power in the two lowest octaves (about 32-123 Hz) is over 7 dB below the track's bassiest bars; a section with no bass is one whose typical bar is over 7.5 dB below.</td><td>-</td></tr>
+            <tr><td>Bass rhythm</td><td>Where bass notes start</td><td>Jumps in low-frequency energy at each of the 16 steps, averaged over the section's bars with bass.</td><td>-</td></tr>
+            <tr><td>Chords</td><td>One chord per bar</td><td>Each bar's 12-note pitch profile is matched against all 24 major and minor triads. A match scoring under 0.6 counts as unsure and shows as "—". Only plain major and minor triads are recognised, so a 7th or sus chord reads as its nearest triad.</td><td>-</td></tr>
+          </tbody>
+        </table>
+        <p><b>How the hits are separated.</b> The drums are first split from the sustained sounds. That percussive layer is divided into low, mid and high parts (a learning method called NMF), the bleed between them is measured and subtracted for each track, and every hit is sorted into a lane by its pitch, length and texture. A lane is shown only when it has a clear, repeating pattern, and quieter lanes (clap, open hat, tom, perc) also need at least 20% of the loudest lane's level.</p>
+        <dl class="gl-dl">
+          <dt>Bass movement</dt><dd><b>Pedal</b>: one note over 70% of the time. <b>Stepwise</b>: mostly moves by 1-2 semitones. <b>Fourths/fifths</b>: mostly jumps of 5 or 7 semitones (classic root motion). <b>Leaps</b>: bigger, mixed jumps. <b>Static</b>: never changes.</dd>
+          <dt>Loop (bass or chords)</dt><dd>The 4-bar window that repeats most often in the section. If the section is shorter than 4 bars, its first bars.</dd>
+        </dl>
+
+        <h3 id="g-terms">Other terms</h3>
+        <dl class="gl-dl">
+          <dt>Roman numerals (i, VI, III, VII)</dt><dd>Each chord's position in the key: uppercase is major, lowercase is minor. In A minor, i-VI-III-VII is Am-F-C-G. Numerals let you move a progression to any key.</dd>
+          <dt>Scale degree</dt><dd>A note's position in the scale, counted from the tonic (1).</dd>
+          <dt>Detected vs template</dt><dd>Detected patterns are measured from this track. Templates are pattern ideas chosen by tempo, not by listening.</dd>
+          <dt>Your edits</dt><dd>Changes you make to drums, bass or chords, highlighted in the edit color. They save automatically, and Versions keeps named snapshots.</dd>
+          <dt>Δ (delta)</dt><dd>"Δ Build B" on a bar means it differs from the same bar in the previous section, Build B. It is not an edit. "Outline Δ from the previous section" outlines every step, note and chord that differs.</dd>
+          <dt>Sidechain</dt><dd>Ducking the bass (or pads) each time the kick hits so the kick cuts through. Tastr suggests a release time from the track's 8th-note length.</dd>
+          <dt>Warp mode</dt><dd>How Live stretches audio to a new tempo: Beats for drum-heavy material, Complex Pro for full mixes and vocals. Tastr suggests one from the percussiveness.</dd>
+          <dt>Listed elsewhere</dt><dd>BPM and key from online catalogs (GetSongBPM, FreqBlog), found by artist and title. Off unless you turn them on; a mark shows whether each agrees with what Tastr measured. They never change the measured values.</dd>
+          <dt>Stems</dt><dd>The track split into drums, bass, vocals and other (with the optional Demucs install), run on demand per track.</dd>
+          <dt>Waveform and spectrogram</dt><dd>The waveform shows loudness over time. The spectrogram shows which frequencies sound when: low at the bottom, bright at the top.</dd>
+        </dl>
+      </div>
+    </div>
   </section>
 </main>
 <script src="/static/strudel.js"></script>

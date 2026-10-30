@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
     sb.add_argument("--limit", type=int, help="first N tracks")
     sb.add_argument("--out", help="write the JSON report here")
     sb.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
+    sb.add_argument("--record", action="store_true",
+                    help="save the score to tastr/engine/bench_scores.json, quoted in the UI (full gtzan downbeat runs only)")
     sb.add_argument("--write-originals", action="store_true",
                     help="save the original recordings' spectrograms and annotations as <dataset>-originals.npz "
                          "and <dataset>-annotations.json, the files to upload")
@@ -85,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="save the local folder's track list to tastr-index-DATASET.json for fast --remote runs")
     b.add_argument("--remote", action="store_true",
                    help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
+    b.add_argument("--record", action="store_true",
+                   help="save the headline score to tastr/engine/bench_scores.json, quoted in the UI (full runs only)")
 
     args = p.parse_args(argv)
 
@@ -94,6 +98,12 @@ def main(argv: list[str] | None = None) -> int:
         return _key_profiles(args)
     if args.cmd == "drum-bench":
         return _drum_bench(args)
+
+    if args.cmd in ("bench", "spec-bench") and args.record:
+        err = _record_error(args)
+        if err:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
 
     if args.cmd == "bench" and args.write_index:
         from .cloud import jobs
@@ -132,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         print(runner.format_summary(report, baseline))
         if args.out:
             runner.save(report, args.out)
-        return 0
+        return _record(args, "bench", report)
 
     if args.cmd == "bench":
         from .engine import bench
@@ -157,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         print(runner.format_summary(report, baseline))
         if args.out:
             runner.save(report, args.out)
-        return 0
+        return _record(args, "bench", report)
 
     if args.cmd == "stages":
         for st in resolve_order():
@@ -226,6 +236,37 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
+def _record_error(args) -> str | None:
+    """Why `--record` can't be used with these arguments, or None."""
+    from .engine.bench import scores
+
+    if args.limit:
+        return "--record saves milestone scores, so it needs a full run (drop --limit)"
+    if args.cmd == "spec-bench":
+        bench, dataset = args.bench, args.dataset or ("hjdb" if args.bench == "tempo" else "gtzan")
+    else:
+        bench, dataset = "bench", args.dataset
+    if not scores.recordable(bench, dataset):
+        return f"--record has no score to keep for {dataset}; the UI quotes {', '.join(scores.BENCH_METRICS)} and gtzan downbeats"
+    return None
+
+
+def _record(args, bench: str, report: dict, dataset: str | None = None) -> int:
+    """With --record, save the run's headline score to bench_scores.json (served at /api/bench)."""
+    if not args.record:
+        return 0
+    from .engine.bench import scores
+
+    try:
+        key, entry = scores.entry_from_report(bench, dataset or args.dataset, report)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    scores.record(key, entry)
+    print(f"recorded {key}: {entry['exact']:.3f} on {entry['tracks']} {entry['what']} in {scores.SCORES_PATH}")
+    return 0
+
+
 def _lookup(args) -> int:
     import os
 
@@ -279,7 +320,7 @@ def _spec_bench(args) -> int:
     print(mod.format_report(report))
     if args.out:
         Path(args.out).write_text(json.dumps(report, indent=1))
-    return 0
+    return _record(args, args.bench, report, dataset)
 
 
 def _key_profiles(args) -> int:

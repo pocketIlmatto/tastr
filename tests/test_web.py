@@ -107,7 +107,7 @@ def test_ui_has_one_drums_bass_and_chords_section():
     js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
     for needle in ('origin === "template"', '"Drums, bass & chords"', "grooveView", "Pattern ideas (by tempo)", "Use in every section",
                    "drumsrc", "partEdits", "by_section", "bassRoll", "miniKeys", "noteOptions", "midiMulti", "startLoop",
-                   "Strong", "beat-group", "STYLE_INFO", "sec-link", "Export MIDI", "Copy as text", "Reset edits", "Outline what changed"):
+                   "Strong", "beat-group", "STYLE_INFO", "sec-link", "Export MIDI", "Copy as text", "Reset edits", "Outline Δ from the previous section"):
         assert needle in js
     # Template patterns live in the Pattern picker only: no separate grids or reveal button.
     for gone in ("ideasShown", "Suggest pattern ideas", "drumGrid(", "midiBytes(", "startPlayer("):
@@ -415,3 +415,35 @@ def test_reanalysis_moves_edits_to_the_section_with_the_same_bars(db_path):
     vid = db.list_edit_versions(conn, tid)[0]["id"]
     assert db.get_edit_version(conn, tid, vid)["edits"] == {"chords": {"2": "drop chords"}}
     conn.close()
+
+
+def test_bench_scores_are_served(client, monkeypatch, tmp_path):
+    from tastr.engine.bench import scores
+
+    data = client.get("/api/bench").json()
+    for key in ("giantsteps-key", "beatport-key", "beatport-tempo", "giantsteps-tempo", "downbeat"):
+        r = data["scores"][key]
+        assert 0 < r["exact"] <= 1 and r["tracks"] > 0 and r["run"]
+    # A missing file serves no scores, so the Glossary keeps the numbers in its HTML.
+    monkeypatch.setattr(scores, "SCORES_PATH", tmp_path / "missing.json")
+    assert client.get("/api/bench").json() == {"scores": {}}
+
+
+def test_pattern_ideas_come_from_the_engine(client):
+    from tastr.engine.stages.suggestions import VARIATIONS
+
+    pats = client.get("/api/patterns").json()
+    assert len(pats) == sum(len(v) for v in VARIATIONS.values())
+    assert {"style": "four on the floor", "name": "Classic house/techno", "pattern": VARIATIONS["four_floor"][0][1]} in pats
+
+
+def test_ui_has_the_glossary():
+    from pathlib import Path
+
+    static = Path(__file__).parents[1] / "tastr/web/static"
+    html, js = (static / "index.html").read_text(), (static / "app.js").read_text()
+    assert 'data-view="glossary"' in html and 'id="view-glossary"' in html
+    for key in ("giantsteps-key", "beatport-key", "beatport-tempo", "giantsteps-tempo", "downbeat"):
+        assert f'data-bench="{key}"' in html
+    for needle in ("openGlossary", "camelotWheel", "glPlay", "/api/bench", "/api/patterns", '"What the vibes mean"'):
+        assert needle in js

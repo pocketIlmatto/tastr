@@ -41,5 +41,10 @@ const W = 1100; // CSS pixels; shots are taken at 1.5x and shown smaller in the 
   // 4. The Strudel sketch.
   await shotOf("strudel", body("Try this in"));
 
+  // 5. The Glossary's Camelot entry, with the wheel set to the open track's key.
+  await page.evaluate(() => openGlossary("g-basics"));
+  await page.waitForTimeout(500);
+  await shotOf("glossary", page.locator("dd.gl-cam"));
+
   await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });

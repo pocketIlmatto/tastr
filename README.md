@@ -37,7 +37,8 @@ optionally run on a cloud GPU.
   16-step grid per section. Template patterns that fit the tempo are one click
   away.
 - **Per-section bass and chords:** the bass note and rhythm for each bar, the
-  chord loop with Roman numerals, and what changed from one section to the next.
+  chord loop with Roman numerals, and what changed from the previous section
+  (marked Δ).
 - **Edit and play it.** Click steps, pick bass notes and chords, and hear it
   in the browser. Export MIDI or copy it as text.
 - **Saved edits and versions.** Edits save automatically with the track. Name
@@ -68,8 +69,13 @@ optionally run on a cloud GPU.
   separate stems or delete, for one track or a whole selection.
 - **Explore tab** for running SQL against your library in the browser.
 - **Keyboard shortcuts** for most things; press `?` for the list.
+- **Glossary tab** explaining every label and number and how it's measured:
+  a clickable Camelot wheel, scales you can hear, the drum style patterns,
+  and benchmark scores that update after each milestone run.
 
 <img src="docs/images/spectrogram.png" width="560" alt="Spectrogram view with sections and playback">
+
+<img src="docs/images/glossary.png" width="560" alt="The Glossary's Camelot wheel, showing which keys mix with the open track's key">
 
 ### Measured, not guessed
 

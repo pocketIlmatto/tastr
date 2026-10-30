@@ -1,0 +1,34 @@
+{
+  "scores": {
+    "beatport-key": {
+      "exact": 0.491,
+      "tracks": 1275,
+      "what": "tracks, exact key",
+      "run": "2026-10-29"
+    },
+    "beatport-tempo": {
+      "exact": 0.872,
+      "tracks": 774,
+      "what": "tracks, BPM within 4%",
+      "run": "2026-10-30"
+    },
+    "downbeat": {
+      "exact": 0.64,
+      "tracks": 933,
+      "what": "songs, bar 1 right",
+      "run": "2026-10-29"
+    },
+    "giantsteps-key": {
+      "exact": 0.599,
+      "tracks": 599,
+      "what": "tracks, exact key",
+      "run": "2026-10-29"
+    },
+    "giantsteps-tempo": {
+      "exact": 0.721,
+      "tracks": 43,
+      "what": "tracks, BPM within 4%",
+      "run": "2026-10-30"
+    }
+  }
+}

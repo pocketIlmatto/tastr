@@ -7,6 +7,7 @@ looked up by name in the registry (`tastr.lookup.register`), so adding a source 
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
@@ -107,8 +108,12 @@ class Provider:
     def lookup(self, q: TrackQuery) -> LookupResult:
         raise NotImplementedError
 
-    def get_json(self, url: str, params: dict[str, str] | None = None, headers: dict[str, str] | None = None) -> tuple[int, Any]:
-        """(HTTP status, parsed JSON body) for a GET. 4xx/5xx raise ProviderError with the body's message."""
+    def get_json(self, url: str, params: dict[str, str] | None = None, headers: dict[str, str] | None = None,
+                 source: str | None = None) -> tuple[int, Any]:
+        """(HTTP status, parsed JSON body) for a GET. 4xx/5xx raise ProviderError with the body's message.
+        `source` names the service in error messages when it isn't the provider itself (AcousticBrainz asks
+        MusicBrainz)."""
+        who = source or self.label
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})})
@@ -121,11 +126,13 @@ class Provider:
         except urllib.error.HTTPError as e:
             status, resp_headers = e.code, e.headers
             detail = e.read()[:300].decode("utf-8", "replace").strip()
-            raise ProviderError(f"{self.label} answered HTTP {e.code}" + (f": {detail}" if detail else ""), e.code) from None
+            raise ProviderError(f"{who} answered HTTP {e.code}" + (f": {detail}" if detail else ""), e.code) from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise ProviderError(f"Couldn't reach {self.label}: {getattr(e, 'reason', e)}") from None
+            raise ProviderError(f"Couldn't reach {who}: {getattr(e, 'reason', e)}") from None
+        except http.client.HTTPException as e:  # e.g. IncompleteRead: the response was cut off
+            raise ProviderError(f"{who}'s response was cut off ({type(e).__name__})") from None
         except json.JSONDecodeError:
-            raise ProviderError(f"{self.label} sent a response that isn't JSON") from None
+            raise ProviderError(f"{who} sent a response that isn't JSON") from None
         finally:
             self.guard.after_response(status, dict(resp_headers.items()) if resp_headers else None)
 
@@ -170,12 +177,17 @@ def same_text(a: str | None, b: str | None) -> bool:
 _ARTIST_SEP = re.compile(r"\s*(?:,|&|\band\b|\bx\b|\bvs\.?|\bfeat\.?|\bft\.?|\bfeaturing\b)\s*", re.IGNORECASE)
 
 
+def artist_names(credit: str | None) -> list[str]:
+    """The artists in a credit, in order: "A, B & C feat. D" -> [A, B, C, D]."""
+    return [n.strip() for n in _ARTIST_SEP.split(credit or "") if n.strip()]
+
+
 def same_artists(a: str | None, b: str | None) -> bool:
     """Artist credits match: same_text, or every artist in the shorter credit is in the longer one, in any
     order and however joined ("A, B & C" vs "A, C, B"; "A feat. B" vs "A")."""
     if same_text(a, b):
         return True
-    xs, ys = ([n for n in _ARTIST_SEP.split(s or "") if n.strip()] for s in (a, b))
+    xs, ys = artist_names(a), artist_names(b)
     if not xs or not ys:
         return False
     short, long = sorted((xs, ys), key=len)

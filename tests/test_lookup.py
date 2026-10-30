@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tastr import db, lookup
-from tastr.lookup import freqblog, getsongbpm
+from tastr.lookup import acousticbrainz, freqblog, getsongbpm
 from tastr.lookup.base import LookupResult, Provider, ProviderError, TrackQuery, same_artists, same_text
 from tastr.web.server import create_app
 from test_foundation import full_card
@@ -356,3 +356,134 @@ def test_lookup_track_limited_and_recent(db_path, fake, monkeypatch):
     calls = fake.calls
     assert lookup.lookup_track(conn, tid, tagged_card(), [fake]) == [{"provider": "fake", "status": "recent"}]
     assert fake.calls == calls
+
+
+# --- AcousticBrainz: MusicBrainz search, then the dump index ---------------------------------------------
+
+MB_ONE, MB_TWO, MB_LIVE = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222", \
+    "33333333-3333-3333-3333-333333333333"
+
+
+def mb_search(*recs):
+    return 200, {"count": len(recs), "recordings": list(recs)}
+
+
+def mb_rec(mbid, title="One More Time", credit=(("Daft Punk", ""),), length=320000):
+    return {"id": mbid, "score": 100, "title": title, "length": length,
+            "artist-credit": [{"name": n, "joinphrase": j, "artist": {"name": n}} for n, j in credit]}
+
+
+def write_dump(folder, name, header, rows):
+    p = folder / name
+    p.write_text("\n".join([",".join(header), *(",".join(map(str, r)) for r in rows)]) + "\n")
+    return p
+
+
+@pytest.fixture
+def ab_index(tmp_path, monkeypatch):
+    """An index built from rhythm and tonal CSVs, in the dump's column layout; one in a tar archive."""
+    import tarfile
+
+    rhythm = write_dump(tmp_path, "rhythm.csv", ["mbid", "submission_offset", "bpm", "danceability"], [
+        (MB_ONE, 0, 123.1, 1.2), (MB_ONE, 1, 61.5, 1.0), (MB_LIVE, 0, 118.0, 1.1), ("not-a-uuid", 0, 90, 1)])
+    tonal = write_dump(tmp_path, "tonal.csv", ["mbid", "submission_offset", "key_key", "key_scale", "tuning_frequency"], [
+        (MB_ONE, 0, "C#", "minor", 440), (MB_ONE, 1, "E", "major", 440), (MB_TWO, 0, "Bb", "major", 441)])
+    tar = tmp_path / "tonal.tar"
+    with tarfile.open(tar, "w") as t:
+        t.add(tonal, arcname="acousticbrainz-lowlevel-features-20220623/tonal.csv")
+    out = tmp_path / "home" / acousticbrainz.INDEX_NAME
+    result = acousticbrainz.build_index([rhythm, tar], out, progress=lambda *_: None)
+    monkeypatch.setenv("ACOUSTICBRAINZ_INDEX", str(out))
+    monkeypatch.delenv("ACOUSTICBRAINZ_API_BASE", raising=False)
+    return result
+
+
+def test_acousticbrainz_index_keeps_first_submissions(ab_index):
+    assert (ab_index["rows_read"], ab_index["recordings"]) == (7, 3)
+    got = acousticbrainz.read_index(acousticbrainz.default_index(), [MB_ONE, MB_TWO, "nope"])
+    assert got[MB_ONE] == {"bpm": 123.1, "key_key": "C#", "key_scale": "minor"}
+    assert got[MB_TWO] == {"bpm": None, "key_key": "Bb", "key_scale": "major"}
+
+
+def test_acousticbrainz_found_through_musicbrainz(ab_index, monkeypatch):
+    p = acousticbrainz.AcousticBrainz()
+    assert p.configured() and p.may_store()
+    calls = canned(monkeypatch, p, mb_search(
+        mb_rec(MB_LIVE, title="One More Time (live)", length=600000),  # too long to be this file
+        mb_rec("44444444-4444-4444-4444-444444444444", credit=(("Someone Else", ""),)),
+        mb_rec(MB_TWO, length=330000), mb_rec(MB_ONE, length=321000)))
+    r = lookup.normalize(p.lookup(TrackQuery(artist="Daft Punk", title="One More Time", duration=320.4)))
+    assert (r.status, r.bpm, r.key, r.tonic, r.mode) == ("found", 123.1, "C# minor", 1, "minor")
+    assert r.extra == {"mbid": MB_ONE, "candidates": 2} and r.url == f"https://musicbrainz.org/recording/{MB_ONE}"
+    assert (r.matched_artist, r.matched_title) == ("Daft Punk", "One More Time")
+    url, params, _ = calls[0]
+    assert url == "https://musicbrainz.org/ws/2/recording" and len(calls) == 1  # the index is local
+    assert params["query"] == 'recording:"One More Time" AND artist:"Daft Punk"' and params["fmt"] == "json"
+
+
+def test_acousticbrainz_not_found(ab_index, monkeypatch):
+    p = acousticbrainz.AcousticBrainz()
+    canned(monkeypatch, p, mb_search(), mb_search(mb_rec("55555555-5555-5555-5555-555555555555")))
+    assert p.lookup(Q).status == "not_found"  # not on MusicBrainz
+    r = p.lookup(Q)  # on MusicBrainz, never analyzed by AcousticBrainz
+    assert r.status == "not_found" and r.extra["mbids"] == ["55555555-5555-5555-5555-555555555555"]
+
+
+def test_acousticbrainz_matches_credits_and_escapes_quotes(ab_index, monkeypatch):
+    p = acousticbrainz.AcousticBrainz()
+    calls = canned(monkeypatch, p, mb_search(mb_rec(MB_ONE, title='Say "Hi"', credit=(("Beta", " & "), ("Alpha", "")))))
+    r = p.lookup(TrackQuery(artist="Alpha, Beta", title='Say "Hi"'))
+    assert r.status == "found" and r.matched_artist == "Beta & Alpha"
+    assert calls[0][1]["query"] == 'recording:"Say \\"Hi\\"" AND artist:"Alpha, Beta"'
+
+
+def test_acousticbrainz_api_server_instead_of_an_index(tmp_path, monkeypatch):
+    p = acousticbrainz.AcousticBrainz()
+    monkeypatch.setenv("ACOUSTICBRAINZ_INDEX", str(tmp_path / "missing.sqlite"))
+    monkeypatch.delenv("ACOUSTICBRAINZ_API_BASE", raising=False)
+    assert not p.configured() and "tastr fetch acousticbrainz" in p.setup_hint()
+    monkeypatch.setenv("ACOUSTICBRAINZ_API_BASE", "https://ab.example/")
+    calls = canned(monkeypatch, p, mb_search(mb_rec(MB_TWO), mb_rec(MB_ONE)), (200, {
+        MB_ONE: {"0": {"rhythm": {"bpm": 122.9}, "tonal": {"key_key": "F", "key_scale": "minor"}}}, "mbid_mapping": {}}))
+    r = p.lookup(Q)
+    assert (r.status, r.bpm, r.key, r.extra["mbid"]) == ("found", 122.9, "F minor", MB_ONE)
+    assert calls[1][0] == "https://ab.example/api/v1/low-level"
+    assert calls[1][1] == {"recording_ids": f"{MB_TWO};{MB_ONE}", "features": "rhythm.bpm;tonal.key_key;tonal.key_scale"}
+
+
+def test_acousticbrainz_is_enabled_by_its_index_and_stored(ab_index, db_path, monkeypatch):
+    monkeypatch.setenv("TASTR_LOOKUP", "acousticbrainz")
+    (p,) = lookup.enabled()
+    canned(monkeypatch, p, mb_search(mb_rec(MB_ONE, length=None)))
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, tagged_card())
+    (r,) = lookup.lookup_track(conn, tid, tagged_card())
+    assert r["status"] == "found" and "transient" not in r
+    assert tuple(conn.execute("SELECT provider, bpm, key_name, camelot FROM lookups").fetchone()) == \
+        ("acousticbrainz", 123.1, "C# minor", "12A")
+    assert acousticbrainz.AcousticBrainz.min_interval >= 1.0 and p.guard.limits()["daily"] == 1000  # MusicBrainz: 1 req/s
+
+
+def test_fetch_acousticbrainz_downloads_the_dumps_and_builds_the_index(tmp_path, monkeypatch):
+    zstandard = pytest.importorskip("zstandard")
+    import io
+    import tarfile
+
+    from tastr.cloud import fetch
+
+    src = tmp_path / "mirror"
+    src.mkdir()
+    for name, header, row in [(acousticbrainz.DUMP_FILES[0], "mbid,submission_offset,bpm", f"{MB_ONE},0,128.0"),
+                              (acousticbrainz.DUMP_FILES[1], "mbid,submission_offset,key_key,key_scale", f"{MB_ONE},0,A,minor")]:
+        data, buf = f"{header}\n{row}\n".encode(), io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            info = tarfile.TarInfo(f"dump/{name}.csv")
+            info.size = len(data)
+            t.addfile(info, io.BytesIO(data))
+        (src / name).write_bytes(zstandard.ZstdCompressor().compress(buf.getvalue()))
+    dest = tmp_path / "bucket" / "acousticbrainz"
+    monkeypatch.setattr(acousticbrainz, "DUMP_BASE", src.as_uri())
+    result = fetch.fetch("acousticbrainz", dest, progress=lambda *_: None)
+    assert result["recordings"] == 1 and set(result["bytes"]) == {*acousticbrainz.DUMP_FILES, acousticbrainz.INDEX_NAME}
+    assert acousticbrainz.read_index(dest / acousticbrainz.INDEX_NAME, [MB_ONE])[MB_ONE] == \
+        {"bpm": 128.0, "key_key": "A", "key_scale": "minor"}

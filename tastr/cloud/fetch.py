@@ -7,6 +7,11 @@ DEAM is one 1.3 GB zip of 45 s clips plus a small annotations zip; both are kept
 
 Both are for non-commercial research only (docs/vibes.md): keep them in the private bucket, and commit
 only what's learned from them.
+
+`acousticbrainz` isn't a benchmark: it's the 2022 AcousticBrainz rhythm and tonal feature dumps (CC0)
+plus the SQLite index the AcousticBrainz lookup provider reads (tastr/lookup/acousticbrainz.py). The
+index is built in a temporary folder and copied next to the archives, since the bucket mount can't take
+SQLite's random writes.
 """
 
 from __future__ import annotations
@@ -135,15 +140,39 @@ def fetch_deam(dest: str | Path, urls: list[str] = DEAM_URLS, progress=print) ->
     return {"dataset": "deam", "files": files}
 
 
+def fetch_acousticbrainz(dest: str | Path, base: str | None = None, progress=print) -> dict:
+    """The rhythm and tonal feature archives (skipped when already there) and the lookup index built from them."""
+    from ..lookup import acousticbrainz as ab
+
+    dest = Path(dest)
+    base = (base or ab.DUMP_BASE).rstrip("/")
+    archives = []
+    for name in ab.DUMP_FILES:
+        out = dest / name
+        if out.is_file() and out.stat().st_size > 0:
+            progress(f"have {name}")
+        else:
+            progress(f"downloading {base}/{name}")
+            _save(f"{base}/{name}", out)
+        archives.append(out)
+    with tempfile.TemporaryDirectory() as tmp:
+        result = ab.build_index(archives, Path(tmp) / ab.INDEX_NAME, progress=progress)
+        shutil.copyfile(result["index"], dest / ab.INDEX_NAME)
+    sizes = {p.name: p.stat().st_size for p in [*archives, dest / ab.INDEX_NAME]}
+    return {"dataset": "acousticbrainz", **result, "index": str(dest / ab.INDEX_NAME), "bytes": sizes}
+
+
 def fetch(dataset: str, dest: str | Path, archives: list[int] | None = None, progress=print) -> dict:
     """Fetch `dataset` into `dest` and write its item index (tastr/cloud/jobs.py) for fast remote runs."""
     from .jobs import write_index
 
+    if dataset == "acousticbrainz":  # a lookup index, not a benchmark: no item index
+        return fetch_acousticbrainz(dest, progress=progress)
     if dataset == "mtg-moods":
         result = fetch_mtg(dest, archives if archives is not None else list(range(6)), progress=progress)
     elif dataset == "deam":
         result = fetch_deam(dest, progress=progress)
     else:
-        raise ValueError(f"unknown dataset {dataset!r}; choose from mtg-moods, deam")
+        raise ValueError(f"unknown dataset {dataset!r}; choose from mtg-moods, deam, acousticbrainz")
     result["index"] = str(write_index(dataset, dest))
     return result

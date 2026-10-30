@@ -97,8 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     vf.add_argument("results", nargs="+", help="JSON files written by vibe-bench --out")
     vf.add_argument("--out", help="write the fit results as JSON here")
 
-    fe = sub.add_parser("fetch", help="download a vibe dataset (mtg-moods, deam), locally or on Modal into the bucket")
-    fe.add_argument("dataset", choices=["mtg-moods", "deam"])
+    fe = sub.add_parser("fetch", help="download a vibe dataset (mtg-moods, deam) or the AcousticBrainz lookup dump "
+                                      "(acousticbrainz), locally or on Modal into the bucket")
+    fe.add_argument("dataset", choices=["mtg-moods", "deam", "acousticbrainz"])
     fe.add_argument("path", help="destination folder (a bucket folder with --remote)")
     fe.add_argument("--archives", default="0-5",
                     help="mtg-moods: which of the 100 audio archives, about 1.6 GB each, e.g. 0-5 or 0,7,9 (default 0-5)")
@@ -313,7 +314,7 @@ def _lookup(args) -> int:
         os.environ["TASTR_LOOKUP"] = args.providers
     providers = lookup.enabled()
     if not providers:
-        print("no lookup providers enabled: set TASTR_LOOKUP and each provider's API key (docs/lookup.md)", file=sys.stderr)
+        print("no lookup providers enabled: set TASTR_LOOKUP and set each provider up (docs/lookup.md)", file=sys.stderr)
         return 1
     conn = db.connect(args.db)
     if args.usage:

@@ -120,7 +120,7 @@ class Guard:
                 self.backoff = min(BACKOFF_MAX, max(BACKOFF_START, self.backoff * 2))
                 self._pause(now + (retry if retry is not None else self.backoff), f"HTTP {status}")
             elif status in (401, 403):
-                self._pause(now + AUTH_PAUSE, f"HTTP {status}, check {self.p.key_env}")
+                self._pause(now + AUTH_PAUSE, f"HTTP {status}" + (f", check {self.p.key_env}" if self.p.key_env else ""))
             elif status is not None and status < 400:
                 self.backoff = 0.0
             used, limit = _int(h.get("x-quota-used")), _int(h.get("x-quota-limit"))

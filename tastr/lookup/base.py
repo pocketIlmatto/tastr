@@ -95,6 +95,10 @@ class Provider:
     def configured(self) -> bool:
         return self.key_env is None or bool(self.api_key())
 
+    def setup_hint(self) -> str:
+        """Why `configured()` is False, for the warning when the provider is enabled anyway."""
+        return f"{self.key_env} is not set"
+
     def may_store(self) -> bool:
         """Whether the provider's terms allow keeping its answers. When False, results are shown for the
         lookup that fetched them and not saved, and analysis doesn't look the provider up."""

@@ -24,9 +24,9 @@ optionally run on a cloud GPU.
 - **Vibe tags.** Scored tags such as bass-heavy, dark or percussive, grouped by
   kind (energy, mood, rhythm, sound...) and tinted by how strongly they apply.
 - **File tags.** Title, artist and album from MP3, FLAC and m4a tags.
-- **Listed elsewhere (optional).** With your own API keys, the BPM and key that
-  [GetSongBPM](https://getsongbpm.com) and FreqBlog list for the track, shown next to
-  Tastr's figures with a mark when they disagree. Off by default; see
+- **Listed elsewhere (optional).** The BPM and key that [GetSongBPM](https://getsongbpm.com)
+  and FreqBlog (your own API keys) or AcousticBrainz's public-domain dump list for the
+  track, shown next to Tastr's figures with a mark when they disagree. Off by default; see
   [docs/lookup.md](docs/lookup.md).
 
 ### Drums, bass and chords
@@ -316,7 +316,9 @@ Third-party pieces it uses or links to:
 - **Catalog lookups** (optional, your own API keys): [GetSongBPM](https://getsongbpm.com)
   requires a link back wherever its data is shown, which the card does. FreqBlog's API
   allows storing results only on paid plans, so Tastr keeps them only with
-  `FREQBLOG_PLAN=paid`. See [docs/lookup.md](docs/lookup.md).
+  `FREQBLOG_PLAN=paid`. [AcousticBrainz](https://acousticbrainz.org) dumps and
+  [MusicBrainz](https://musicbrainz.org) core data are public domain (CC0); Tastr reads a
+  local index of the 2022 AcousticBrainz dump. See [docs/lookup.md](docs/lookup.md).
 - **ADTOF** (optional drum model): its code and model weights are **CC BY-NC-SA
   4.0, non-commercial and share-alike**. Tastr doesn't include either. The weights
   download on first use from the ADTOF repository; the network and preprocessing

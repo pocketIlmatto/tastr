@@ -1,8 +1,8 @@
 """Look tracks up in online metadata catalogs and compare their BPM / key with ours.
 
 Opt-in: nothing leaves the machine unless TASTR_LOOKUP names providers (comma-separated, e.g.
-"getsongbpm,freqblog") and each one's API key is set. Lookups send the track's artist and title from
-its tags, never audio. Results are stored per provider in the `lookups` table and shown next to the
+"getsongbpm,freqblog") and each one is set up (its API key, or AcousticBrainz's index). Lookups send
+the track's artist and title from its tags, never audio. Results are stored per provider in the `lookups` table and shown next to the
 engine's values; they never replace them. See docs/lookup.md.
 
 Adding a provider: a module with a `base.Provider` subclass that calls `register(...)`, imported at the
@@ -33,7 +33,7 @@ def register(provider: Provider) -> Provider:
 
 
 def enabled() -> list[Provider]:
-    """Providers named in TASTR_LOOKUP (in that order) that have their API key set."""
+    """Providers named in TASTR_LOOKUP (in that order) that are set up (API key, index...)."""
     names = [n.strip().lower() for n in os.environ.get("TASTR_LOOKUP", "").split(",") if n.strip()]
     out = []
     for n in names:
@@ -41,7 +41,7 @@ def enabled() -> list[Provider]:
         if p is None:
             log.warning("TASTR_LOOKUP names unknown provider %r (known: %s)", n, ", ".join(PROVIDERS))
         elif not p.configured():
-            log.warning("lookup provider %s is enabled but %s is not set", n, p.key_env)
+            log.warning("lookup provider %s is enabled but %s", n, p.setup_hint())
         else:
             out.append(p)
     return out
@@ -184,4 +184,4 @@ def compare(card, res: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-from . import freqblog, getsongbpm  # noqa: E402,F401  registers the built-in providers
+from . import acousticbrainz, freqblog, getsongbpm  # noqa: E402,F401  registers the built-in providers

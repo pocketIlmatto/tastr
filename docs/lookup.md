@@ -13,13 +13,15 @@ title tags are skipped.
 Set these in the shell you run `tastr serve` / `tastr analyze` from, never in the repo:
 
 ```bash
-export TASTR_LOOKUP=getsongbpm,freqblog     # providers to ask, in order
+export TASTR_LOOKUP=getsongbpm,freqblog,acousticbrainz   # providers to ask, in order
 export GETSONGBPM_API_KEY=...               # https://getsongbpm.com/api (free; requires a link back)
 export FREQBLOG_API_KEY=...                 # https://api.freqblog.com/docs (free tier 1,000 requests a month)
 export FREQBLOG_PLAN=paid                   # only on a paid FreqBlog plan: lets Tastr store its answers (see below)
 ```
 
-A provider named in `TASTR_LOOKUP` without its key is skipped with a warning.
+AcousticBrainz needs no key but a local index of its dump; see [AcousticBrainz](#acousticbrainz)
+below. A provider named in `TASTR_LOOKUP` that isn't set up (no key, no index) is skipped with a
+warning.
 
 Then:
 
@@ -56,8 +58,8 @@ not a hostile visitor once Tastr is shared. Every request a provider sends goes 
 
 | Guardrail | Default | Override |
 |---|---|---|
-| Spacing: one request at a time per provider, at least this far apart | 1 s | `TASTR_LOOKUP_<NAME>_INTERVAL` |
-| Requests per UTC day | FreqBlog 60, GetSongBPM 1,000 (its own limit is 3,000 an hour) | `TASTR_LOOKUP_<NAME>_DAILY` |
+| Spacing: one request at a time per provider, at least this far apart | 1 s (AcousticBrainz 1.1 s, for MusicBrainz's one a second) | `TASTR_LOOKUP_<NAME>_INTERVAL` |
+| Requests per UTC day | FreqBlog 60, GetSongBPM 1,000 (its own limit is 3,000 an hour), AcousticBrainz 1,000 (MusicBrainz searches) | `TASTR_LOOKUP_<NAME>_DAILY` |
 | Requests per calendar month | FreqBlog 900 (its free tier is 1,000), GetSongBPM none | `TASTR_LOOKUP_<NAME>_MONTHLY` |
 | The provider's own quota headers (`x-quota-used` / `x-quota-limit`, `x-ratelimit-remaining`) | pause 20 requests short of its limit until its reset time | |
 | HTTP 429 / 5xx | pause for Retry-After, else 1 min doubling to 1 h | |
@@ -80,15 +82,58 @@ scripts and curl still get through, so a server other people can reach needs rea
 |---|---|---|
 | `getsongbpm` | tempo, key (`key_of`), time signature, Open Key | Free with a key, sent in the `X-API-KEY` header. A visible link back to getsongbpm.com is "REQUIRED (website or store listing)", or the account can be suspended; the card links each listing to its GetSongBPM page and the README links the site, but whether that satisfies them for a local app is worth confirming with GetSongBPM. Search hits use `song_title` / `song_id` (also read: `title` / `id`). Host override: `GETSONGBPM_API_BASE`. |
 | `freqblog` | BPM, half-time BPM, key, Camelot, Open Key | Key in an `X-API-Key` header. Fields per its OpenAPI spec (`track_name`, `artist_name`, ...). It returns its closest match, so a different song is treated as not found. Unknown tracks may come back 202 "queued". Caching results is allowed only on paid plans: answers are stored only with `FREQBLOG_PLAN=paid`. Host override: `FREQBLOG_API_BASE`. |
+| `acousticbrainz` | BPM, key and scale (Essentia estimates from 2022 and earlier) | Public domain (CC0), so answers are stored. Looked up by MusicBrainz recording id from a local index of the dump; only the MusicBrainz search goes online. See below. |
 
 Both catalogs' figures are estimates too (theirs or their users'), so a disagreement means "check this
 track", not "Tastr is wrong". The provider modules were written from each API's published examples;
 check them against a live key after an API change.
 
+## AcousticBrainz
+
+[AcousticBrainz](https://acousticbrainz.org) analyzed millions of recordings with Essentia and keyed
+them by MusicBrainz recording id (MBID). It stopped taking submissions in 2022 and its API has shut
+down, but its data was released as public-domain dumps. Tastr uses two of them, the low-level
+"rhythm" (`bpm`) and "tonal" (`key_key`, `key_scale`) feature CSVs, which hold one row per submission;
+the index keeps each recording's first submission. Anything released after mid-2022 isn't there.
+
+A lookup is:
+
+1. a [MusicBrainz](https://musicbrainz.org/doc/MusicBrainz_API) recording search by title and artist
+   (no key; one request a second at most, with a user agent naming Tastr). A hit must match the title,
+   the artist credit (in any order, as for the other providers) and, when both sides know it, the
+   length within 15 s, so a live or extended version isn't taken for the album one;
+2. those MBIDs, closest length first, in the local index. The first with a BPM or key is the answer,
+   linked to its MusicBrainz page. A recording on MusicBrainz that AcousticBrainz never analyzed is
+   "not found".
+
+Build the index once:
+
+```bash
+tastr fetch acousticbrainz acousticbrainz --remote      # on Modal, into the R2 bucket (docs/cloud.md)
+# or on this machine (needs `pip install zstandard` or the zstd tool):
+tastr fetch acousticbrainz ~/Development/tastr-data/acousticbrainz
+```
+
+Both download the two `.tar.zst` archives from data.metabrainz.org (kept whole, skipped when already
+there) and write `acousticbrainz-index.sqlite` beside them. Put the index at
+`~/.tastr/acousticbrainz-index.sqlite` (from the bucket, download it in the Cloudflare dashboard or
+with any S3 client), or point `ACOUSTICBRAINZ_INDEX` at it. The provider counts as set up when the
+index exists.
+
+| Setting | Default |
+|---|---|
+| `ACOUSTICBRAINZ_INDEX` | `$TASTR_HOME/acousticbrainz-index.sqlite` |
+| `ACOUSTICBRAINZ_API_BASE` | unset. Instead of an index: a server that still speaks the AcousticBrainz API (its bulk `/api/v1/low-level` endpoint), asked for up to 25 MBIDs at once |
+| `MUSICBRAINZ_API_BASE` | `https://musicbrainz.org/ws/2` (a mirror also works) |
+
+The dump URLs and file names are in `tastr/lookup/acousticbrainz.py` (`DUMP_BASE`, `DUMP_FILES`); the
+column layout comes from AcousticBrainz's own dump code (`db/dump.py` in metabrainz/acousticbrainz-server).
+
 ## Adding a provider
 
 1. Add `tastr/lookup/<name>.py` with a `base.Provider` subclass: set `name`, `label`, `homepage` and
-   `key_env`, and implement `lookup(TrackQuery) -> LookupResult` (status `found` / `not_found` /
+   `key_env` (or override `configured()` and `setup_hint()` when it needs something other than a key),
+   and implement `lookup(TrackQuery) -> LookupResult` (status `found` / `not_found` /
    `pending`; raise `ProviderError` for anything else). Return the key as the provider spells it;
    `lookup_track` parses it into tonic / mode / Camelot. Override `may_store()` if the provider's terms
    forbid keeping results, and set `min_interval` / `daily_limit` / `monthly_limit` to fit its quota. `Provider.get_json` does the HTTP with a timeout

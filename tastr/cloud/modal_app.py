@@ -33,7 +33,7 @@ PINS = ["numpy<2.3", "numba==0.61.2", "llvmlite==0.44.0", "librosa==0.11.0", "sc
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
-    .pip_install(*ENGINE_DEPS, *PINS)
+    .pip_install(*ENGINE_DEPS, *PINS, "zstandard")  # zstandard: `fetch acousticbrainz` reads .tar.zst dumps
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
     .add_local_python_source("tastr")
 )

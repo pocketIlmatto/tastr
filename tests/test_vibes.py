@@ -54,11 +54,11 @@ def fake_rows(n=300, seed=0):
         pulse, perc = rng.random(), rng.random() * 0.5
         loud, onset = rng.uniform(-28, -8), rng.uniform(0, 6)
         rows.append({"id": f"t{i}", "errors": {}, "bpm": rng.uniform(80, 170), "loudness_db": loud, "energy": 0.5,
-                     "labels": {"danceable": int(perc / 0.5 + rng.gauss(0, 0.2) > 0.5),
+                     "labels": {"danceable": int(pulse + rng.gauss(0, 0.2) > 0.5),
                                 "arousal": (loud + 30) / 22 + rng.gauss(0, 0.1)},
                      "features": {"pulse_clarity": pulse, "percussiveness": perc, "onset_rate": onset,
-                                  "brightness": rng.random(), "danceability": 0.55 * pulse},
-                     "tags": {"danceable": 0.3} if perc > 0.25 else {}})
+                                  "brightness": rng.random(), "danceability": perc / 0.5},
+                     "tags": {"danceable": 0.3} if pulse > 0.5 else {}})
     return rows
 
 
@@ -76,14 +76,14 @@ def test_score_reports_agreement_and_shown_precision():
     by = {(c["measure"], c["label"]): c for c in report["checks"]}
     tag = by[("tag:danceable", "danceable")]
     assert tag["auc"] > 0.8 and tag["precision"] > tag["base_rate"]
-    assert by[("danceability", "danceable")]["auc"] < 0.65  # pulse clarity carries no signal in these rows
+    assert by[("danceability", "danceable")]["auc"] < 0.65  # percussiveness carries no signal in these rows
     assert "AUC" in vibes.format_report(report)
 
 
 def test_fit_finds_the_signal_and_holds_out_tracks():
     results = {(r["measure"], r["label"]): r for r in vibes.fit(fake_rows())}
     dance = results[("danceability", "danceable")]
-    assert dance["fitted"]["weights"][2] >= 0.7  # percussiveness made the labels
+    assert dance["fitted"]["weights"][0] >= 0.7  # pulse clarity made the labels, unlike the shipped weights
     assert dance["fitted"]["test"] > dance["baseline"]["test"]
     assert dance["n_train"] + dance["n_test"] == 300 and 150 < dance["n_train"] < 250
     energy = results[("energy", "arousal")]

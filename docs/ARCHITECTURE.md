@@ -51,7 +51,7 @@ being missing (a stage can fail or be a stub).
 | `percussiveness` | 0..1 | core | percussive energy / total energy after HPSS |
 | `low_end` | 0..1 | core | share of power below 150 Hz |
 | `pulse_clarity` | 0..1 | core | how strongly onsets line up with beats |
-| `danceability` | 0..1 | core | pulse clarity + tempo fit + percussiveness |
+| `danceability` | 0..1 | core | 0.75 percussiveness + 0.25 tempo fit (bell around 135 BPM), fitted in docs/vibes.md |
 | `onset_rate` | per second | core | detected onsets per second |
 | `dynamic_range_db` | dB | core | p95 - p10 of frame RMS in dB |
 | `swing_percent` | 50..75 | core | where the off-beat 16th lands; 50 straight, ~66 triplet |

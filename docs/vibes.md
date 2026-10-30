@@ -6,7 +6,7 @@ said about real tracks, and refits the weights where the labels allow it.
 
 | Number | Where | Checked against |
 | --- | --- | --- |
-| danceability = 0.55 pulse clarity + 0.25 tempo fit (bell around 122 BPM, width 30) + 0.20 percussiveness | `stages/core.py` | MTG-Jamendo danceable, party |
+| danceability = 0.75 percussiveness (/0.5) + 0.25 tempo fit (bell around 135 BPM, width 45); until 2026-10-30 it was 0.55 pulse clarity + 0.25 tempo fit (122 BPM, width 30) + 0.20 percussiveness | `stages/core.py` | MTG-Jamendo danceable, party (fitted, see Results) |
 | energy = 0.35 loudness ((dB+30)/22) + 0.25 onset rate (/6 per s) + 0.20 brightness + 0.20 percussiveness (/0.5) | `stages/core.py` | DEAM arousal; MTG-Jamendo aggressive, energetic, relaxed |
 | mood-like tags: high energy, chill, melancholic, dark, bright, euphoric, danceable, atmospheric | `stages/tags.py` | MTG-Jamendo yes/no moods and mood/theme tags, DEAM valence |
 | descriptive tags: bass-heavy, percussive, swung, dynamic, driving, hypnotic | `stages/tags.py` | no public labels; meant to be set from the spread of your own library |
@@ -108,3 +108,41 @@ Reading it:
   energy weights are close enough to keep until DEAM's arousal ratings can settle it.
 - None of this is in the engine yet. Jamendo is mixed genre, so check any change on dance music before
   shipping it.
+
+### 2026-10-30: larger subset, 2,466 tracks
+
+Archives 00-08, plus 137 clips from archive 09 that were stored before Freesound's CDN stalled, 0 failed.
+Archives 09-11 and DEAM are waiting for their servers to come back. The bench took 22 min on Modal.
+Rebuilding the index from the bucket (`remote.fetch("mtg-moods", "mtg-moods", [])`, no audio download) took
+about 15 min, because it checks every labeled path on the mount.
+
+| Measure vs label | n | AUC today |
+| --- | --- | --- |
+| danceability vs danceable | 414 | 0.702 |
+| danceability vs party | 692 | 0.679 |
+| energy vs aggressive | 722 | 0.860 |
+| energy vs mood: energetic | 1,894 | 0.749 |
+| tag: high energy vs aggressive | 722 | 0.852 |
+| tag: melancholic vs sad | 539 | 0.684 |
+| tag: dark vs mood: dark | 1,894 | 0.498 |
+
+The tag findings from the first run all hold.
+
+| Refit vs label | Held out | Today | Fitted | Fitted weights |
+| --- | --- | --- | --- | --- |
+| danceability vs danceable | 128 | 0.741 | 0.828 | pulse clarity 0, tempo fit 0.25, percussiveness 0.75; bell 135 +/- 45 |
+| danceability vs party | 216 | 0.663 | 0.802 | pulse clarity 0, tempo fit 0.30, percussiveness 0.70; bell 135 +/- 15 |
+| energy vs aggressive | 226 | 0.754 | 0.857 | loudness 0.55, onset rate 0, brightness 0.35, percussiveness 0.10 |
+| energy vs mood: energetic | 571 | 0.768 | 0.774 | loudness 0.35, onset rate 0.15, brightness 0.40, percussiveness 0.10 |
+
+With 60% more tracks, the danceability refit barely moved: pulse clarity 0, percussiveness 0.70-0.75, bell
+centered at 135 BPM. It still gains 0.09-0.14 AUC on held-out tracks. Both energy fits now shift weight from
+onset rate to brightness, but only the "aggressive" one gains much.
+
+### 2026-10-30: danceability refit shipped
+
+Danceability is now 0.75 percussiveness + 0.25 tempo fit, with the bell at 135 BPM and width 45. That's the
+"danceable" fit above, and it scored 0.828 held out against 0.741 before. Pulse clarity is still computed
+and still feeds driving, hypnotic and atmospheric. Energy keeps its hand-picked weights until DEAM can
+check them. `vibes.DANCE_WEIGHTS` now holds the shipped weights, so later `vibe-fit` runs compare against
+them.

@@ -115,6 +115,10 @@ def test_index_round_trip(tmp_path, monkeypatch):
     items = jobs.load_items("beatport-key", moved)
     assert len(loaded) == 1
     assert items[0].path == str(moved / "audio" / "1 a.mp3") and items[0].truth.mode == "minor"
-    # Another dataset's index is ignored.
-    jobs.load_items("giantsteps-key", moved)
+    # Another dataset in the same folder has its own index; without one it falls back to the loader.
+    jobs.load_items("beatport-tempo", moved)
     assert len(loaded) == 2
+    assert (moved / "tastr-index-beatport-key.json").is_file()
+    # An index under #61's single name still counts for its own dataset.
+    (moved / "tastr-index-beatport-key.json").rename(moved / "tastr-index.json")
+    assert jobs.load_items("beatport-key", moved)[0].id == "bp-key-1" and len(loaded) == 2

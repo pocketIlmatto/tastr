@@ -7,9 +7,11 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-# A dataset folder's item list, written next to the data so a remote run reads one file instead of
-# walking the bucket (minutes over the R2 mount on a cold container). Rewrite it when the folder changes.
-INDEX = "tastr-index.json"
+# A dataset's item list, written next to the data so a remote run reads one file instead of walking
+# the bucket (minutes over the R2 mount on a cold container). One per dataset, since some share a
+# folder (beatport-key and beatport-tempo). Rewrite it when the folder changes.
+def index_name(dataset: str) -> str:
+    return f"tastr-index-{dataset}.json"
 
 
 def write_index(dataset: str, folder: str | Path) -> Path:
@@ -22,7 +24,7 @@ def write_index(dataset: str, folder: str | Path) -> Path:
         raise ValueError(f"no labeled tracks with audio found for {dataset} at {folder}")
     rows = [{"id": it.id, "path": str(Path(it.path).relative_to(folder)), "truth": asdict(it.truth),
              "meta": it.meta} for it in items]
-    out = folder / INDEX
+    out = folder / index_name(dataset)
     out.write_text(json.dumps({"dataset": dataset, "items": rows}))
     return out
 
@@ -32,8 +34,9 @@ def load_items(dataset: str, folder: Path) -> list:
     from ..engine import bench
     from ..engine.bench.datasets import Item, Truth
 
-    index = folder / INDEX
-    if index.is_file():
+    for index in (folder / index_name(dataset), folder / "tastr-index.json"):  # the second: #61's name
+        if not index.is_file():
+            continue
         data = json.loads(index.read_text())
         if data.get("dataset") == dataset:
             return [Item(id=r["id"], path=str(folder / r["path"]), truth=Truth(**r["truth"]), meta=r.get("meta", {}))

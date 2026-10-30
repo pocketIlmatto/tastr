@@ -103,18 +103,23 @@ its loader expects ([bench.md](bench.md#datasets)). With [rclone](https://rclone
 
 ```
 rclone config create r2 s3 provider=Cloudflare access_key_id=<id> secret_access_key=<secret> \
-  endpoint=https://<account id>.r2.cloudflarestorage.com
+  endpoint=https://<account id>.r2.cloudflarestorage.com no_check_bucket=true
 tastr bench beatport-key ~/Development/tastr-data/beatport-key --write-index
 rclone copy ~/Development/tastr-data/beatport-key r2:tastr-data/beatport-key --progress
 tastr bench giantsteps-key ~/Development/tastr-data/giantsteps-key --write-index
 rclone copy -L ~/Development/tastr-data/giantsteps-key r2:tastr-data/giantsteps-key --progress
 ```
 
-`--write-index` saves the loader's track list as `tastr-index.json` in the folder. A remote run reads
+`--write-index` saves the loader's track list as `tastr-index-<dataset>.json` in the folder (one per
+dataset, since beatport-key and beatport-tempo share a folder). A remote run reads
 that one file instead of walking the bucket: on a cold container the walk took about 5 minutes for
 Beatport (3,000 files), the same for 5 tracks as for 200. Without an index the remote run still works,
 just slowly. Rewrite and re-upload the index whenever the folder's contents change. `-L` follows
 symlinks, which the GiantSteps staging uses.
+
+`no_check_bucket=true` matters: a token scoped to one bucket can't create buckets, and without it
+`rclone copyto` fails with `CreateBucket ... 403 AccessDenied`. For a remote made without it, add
+`no_check_bucket = true` under `[r2]` in `~/.config/rclone/rclone.conf`, or pass `--s3-no-check-bucket`.
 
 Each remote run prints where its time went: container start, imports, loading the dataset, analysis.
 

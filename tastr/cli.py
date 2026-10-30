@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--out", help="write the full JSON report here")
     b.add_argument("--baseline", help="earlier report to compare against")
     b.add_argument("--write-index", action="store_true",
-                   help="save the local dataset folder's track list to tastr-index.json for fast --remote runs")
+                   help="save the local folder's track list to tastr-index-DATASET.json for fast --remote runs")
     b.add_argument("--remote", action="store_true",
                    help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
 

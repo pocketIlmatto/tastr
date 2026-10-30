@@ -90,6 +90,12 @@ def _unprefixed(title: str | None, uri: str | None) -> str | None:
     return title.removeprefix(legacy_upload_prefix(uri)) if title and uri else title
 
 
+def _failure_reason(error: str | None) -> str:
+    """A short reason for the admin log, without the error text (which can name server paths)."""
+    kind = (error or "").split(":", 1)[0]
+    return "it couldn't be decoded as audio" if kind == "DecodeError" else f"the analysis hit an error ({kind or 'unknown'})"
+
+
 def _cross_site(request) -> bool:
     """A browser request sent by a page on another site (Sec-Fetch-Site, else an Origin for another host).
     Requests without either header (curl, scripts, tests) aren't browser cross-site requests."""
@@ -149,6 +155,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                     except Exception as e:  # expired, wrong audience, bad signature, keys unreachable
                         log.info("rejected an Access token: %s", type(e).__name__)
                 if not user:
+                    await run_in_threadpool(count_blocked)
                     return JSONResponse({"detail": "Sign in through the Tastr link you were invited to."},
                                         status_code=401, headers=extra_headers)
                 request.state.user = user
@@ -176,6 +183,21 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if stop.wait(EXPIRY_EVERY):
                 return
 
+    def count_blocked() -> None:
+        with closing(conn()) as c:
+            db.add_blocked(c, today())
+
+    def event(user: str | None, kind: str, detail: str, ok: bool = True) -> None:
+        """A line in the admin activity log (hosted only; your own machine keeps no log)."""
+        if hosted:
+            with closing(conn()) as c:
+                db.add_event(c, user, kind, detail, ok)
+
+    def refuse(user: str, status: int, message: str, limit: str):
+        """Refuse a request over one of the hosted limits, and log which limit it hit."""
+        event(user, "limit", f"Hit the {limit}", ok=False)
+        return HTTPException(status, message)
+
     def owns(user: str, track_id: int) -> bool:
         with closing(conn()) as c:
             exists, owner = db.track_owner(c, track_id)
@@ -185,11 +207,13 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         """Whose library a request reads and writes: the signed-in email when hosted, else everything."""
         return request.state.user if hosted else None
 
-    def results(rs) -> dict[str, Any]:
+    def results(rs, user: str | None = None) -> dict[str, Any]:
         if hosted:  # error text can name server paths; keep it in the log
             for r in rs:
                 if r.error:
                     log.warning("analysis failed for %s: %s", r.source.uri, r.error)
+                    event(user, "failed", f"Analysis failed: {Path(r.source.uri or 'upload').name}, {_failure_reason(r.error)}",
+                          ok=False)
                     r.error = "Couldn't analyze this file."
         return _results(rs)
 
@@ -203,14 +227,17 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         user = getattr(request.state, "user", None)
         if hosted:
             with closing(conn()) as c:
+                first = not db.has_usage(c, user)
                 db.add_usage(c, user, "visits", today())
+            if first:
+                event(user, "signin", "Signed in for the first time")
         return {"hosted": hosted, "links": not hosted, "query": not hosted, "user": user,
                 "admin": hosted and user in settings.admins, "limits": settings.limits() if hosted else None}
 
     @app.get("/api/admin/usage")
     def admin_usage(request: Request):
-        """Usage per person, the server's limits and analyses running or waiting, for the admin view. Hosted servers only, and only for
-        TASTR_ADMIN_EMAILS; everyone else gets 404."""
+        """Usage per person, the server's limits, analyses running or waiting, the last 20 events and today's blocked requests,
+        for the admin view. Hosted servers only, and only for TASTR_ADMIN_EMAILS; everyone else gets 404."""
         if not hosted or request.state.user not in settings.admins:
             raise HTTPException(404, "Not Found")
         day = today()
@@ -233,6 +260,8 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 p["last_upload"] = max(p["last_upload"] or "", at)
             history = [{"day": d, "user": u, "kind": k, "n": n} for d, u, k, n in c.execute(
                 "SELECT day, user, kind, n FROM user_usage WHERE day >= date('now', '-29 days') ORDER BY day, user, kind")]
+            recent = db.recent_events(c)
+            blocked = db.blocked_on(c, day)
         for h in history:
             p = person(h["user"])
             if h["day"] == day:
@@ -241,7 +270,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             person(email)
         users = sorted(people.values(), key=lambda p: (p["email"] is None, p["email"] or ""))
         return {"today": day, "users": users, "history": history, "admins": list(settings.admins),
-                "limits": settings.limits(),
+                "limits": settings.limits(), "recent": recent, "blocked_today": blocked,
                 "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(settings.storage_gb * 1024 ** 3)},
                 "active_stem_jobs": jobs.active(), "analyses": slots.status()}
 
@@ -390,8 +419,10 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 user = request.state.user
                 with closing(conn()) as c:
                     if db.usage_today(c, user, "stems", today()) >= settings.daily_stems:
-                        raise HTTPException(429, f"You've reached today's limit of {settings.daily_stems} stem separations.")
+                        raise refuse(user, 429, f"You've reached today's limit of {settings.daily_stems} stem separations.",
+                                     f"daily stem limit ({settings.daily_stems})")
                     db.add_usage(c, user, "stems", today())
+                event(user, "stems", "Started separating stems for 1 track")
             jobs.start(path, folder)
         return _stems_status(card, track_id)
 
@@ -432,7 +463,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         return {"changed": result == "changed", "tags_found": bool(body["source"].get("file_tags")), "card": body}
 
     @app.post("/api/tracks/{track_id}/reanalyze")
-    def reanalyze(track_id: int, meter: str | None = None):
+    def reanalyze(track_id: int, request: Request, meter: str | None = None):
         """Run the full engine again on the track's stored audio file (same id, fresh card).
 
         `?meter=3/4` or `4/4` sets the time signature, `auto` goes back to detecting it; without it a meter
@@ -454,8 +485,10 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if result.error:
                 if hosted:
                     log.warning("re-analysis of track %s failed: %s", track_id, result.error)
+                    event(request.state.user, "failed", f"Re-analysis failed, {_failure_reason(result.error)}", ok=False)
                     raise HTTPException(422, "Couldn't analyze the file.")
                 raise HTTPException(422, f"Couldn't analyze the file: {result.error}")
+            event(owner_of(request), "reanalyze", "Re-analyzed 1 track")
             return {"card": card_body(c, track_id), "edits_dropped": result.edits_dropped}
 
     @app.post("/api/tracks/{track_id}/lookup")
@@ -580,30 +613,35 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 for p in [dest, *map(Path, paths)]:  # nothing from a refused request stays on disk
                     p.unlink(missing_ok=True)
                     p.parent.rmdir()
-                raise HTTPException(413, f"{name} is larger than {settings.max_upload_mb:g} MB.")
+                raise refuse(request.state.user, 413, f"{name} is larger than {settings.max_upload_mb:g} MB.",
+                             f"upload size limit ({settings.max_upload_mb:g} MB)")
             paths.append(str(dest))
         with closing(conn()) as c:
             if hosted:
                 db.add_usage(c, request.state.user, "tracks", today(), len(paths))
+                event(request.state.user, "upload", f"Uploaded {len(paths)} track{'s' if len(paths) != 1 else ''}")
             try:
                 with analysis_slot():
-                    return results(service.analyze_inputs(c, paths, owner=owner_of(request)))
+                    return results(service.analyze_inputs(c, paths, owner=owner_of(request)), owner_of(request))
             except TimeoutError:
                 raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.")
 
     def check_upload(user: str, files: list[UploadFile]) -> None:
         if len(files) > settings.max_files:
-            raise HTTPException(400, f"Upload at most {settings.max_files} files at a time.")
+            raise refuse(user, 400, f"Upload at most {settings.max_files} files at a time.",
+                         f"files-per-upload limit ({settings.max_files})")
         for f in files:
             if Path(f.filename or "").suffix.lower() not in AUDIO_EXTENSIONS:
                 raise HTTPException(415, f"{Path(f.filename or 'upload').name} isn't an audio file Tastr can read.")
         if stored_bytes(tastr_home()) >= settings.storage_gb * 1024 ** 3:
-            raise HTTPException(507, "This server is out of space for new uploads. Ask whoever invited you.")
+            raise refuse(user, 507, "This server is out of space for new uploads. Ask whoever invited you.",
+                         f"storage cap ({settings.storage_gb:g} GB)")
         with closing(conn()) as c:
             used = db.usage_today(c, user, "tracks", today())
         if used + len(files) > settings.daily_tracks:
             left = max(0, settings.daily_tracks - used)
-            raise HTTPException(429, f"You can analyze {settings.daily_tracks} tracks a day; {left} left today.")
+            raise refuse(user, 429, f"You can analyze {settings.daily_tracks} tracks a day; {left} left today.",
+                         f"daily track limit ({settings.daily_tracks})")
 
     @app.post("/api/analyze-url")
     def analyze_url(body: UrlBody):

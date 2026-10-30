@@ -70,10 +70,11 @@ def _refresh_seconds() -> float:
 
 
 def _recently_asked(stored: dict[str, dict], track_id: int, p: Provider, now: float) -> bool:
-    """Whether this provider was asked about this track within the refresh window (any outcome)."""
+    """Whether this provider answered about this track within the refresh window. An error doesn't count,
+    so the track can be asked again right away; the guardrails still pace and pause the provider."""
     last = _asked.get((track_id, p.name), 0.0)
     r = stored.get(p.name)
-    if r and r.get("fetched_at"):
+    if r and r.get("fetched_at") and r.get("status") != "error":
         try:
             last = max(last, datetime.fromisoformat(r["fetched_at"]).timestamp())
         except ValueError:
@@ -91,7 +92,8 @@ def lookup_track(conn: sqlite3.Connection, track_id: int, card, providers: list[
 
     Guardrails (guard.py) can hold a request back: that comes back as status "limited" and is never
     stored. Neither an error nor "limited" replaces an answer already stored. A provider asked about the
-    track within the last REFRESH_MINUTES is skipped ("recent"), so repeated clicks cost nothing.
+    track within the last REFRESH_MINUTES is skipped ("recent"), so repeated clicks cost nothing; one that
+    failed isn't, since the guardrails already pause a provider that pushes back.
     """
     from .. import db
 
@@ -119,8 +121,10 @@ def lookup_track(conn: sqlite3.Connection, track_id: int, card, providers: list[
                     out.append({"provider": p.name, "status": "limited", "error": str(e)})
                     continue
                 except ProviderError as e:
+                    _asked.pop((track_id, p.name), None)
                     res = {"provider": p.name, "status": "error", "error": str(e)}
                 except Exception as e:  # a provider bug shouldn't break analysis
+                    _asked.pop((track_id, p.name), None)
                     log.warning("lookup %s failed: %s", p.name, e)
                     res = {"provider": p.name, "status": "error", "error": f"{type(e).__name__}: {e}"}
             if not p.may_store():

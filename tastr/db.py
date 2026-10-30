@@ -153,8 +153,26 @@ CREATE TABLE IF NOT EXISTS user_usage (
     PRIMARY KEY (user, day, kind)
 );
 
+-- What people did on a hosted server, for the admin view's activity log (kept about 90 days, see add_event).
+-- kind: upload, stems, reanalyze, signin, limit or failed; ok = 0 for limits hit and failures.
+CREATE TABLE IF NOT EXISTS events (
+    id     INTEGER PRIMARY KEY,
+    at     TEXT NOT NULL,
+    user   TEXT,
+    kind   TEXT NOT NULL,
+    ok     INTEGER NOT NULL DEFAULT 1,
+    detail TEXT
+);
+
+-- Requests a hosted server refused for a missing or invalid Cloudflare Access token, per UTC day.
+CREATE TABLE IF NOT EXISTS blocked_requests (
+    day TEXT PRIMARY KEY,
+    n   INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
 CREATE INDEX IF NOT EXISTS idx_tracks_owner ON tracks(owner);
+CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
 CREATE INDEX IF NOT EXISTS idx_tracks_camelot ON tracks(camelot);
 CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
 CREATE INDEX IF NOT EXISTS idx_features_name ON features(name, value);
@@ -484,3 +502,34 @@ def add_usage(conn: sqlite3.Connection, user: str, kind: str, day: str, n: int =
     conn.execute("INSERT INTO user_usage VALUES (?, ?, ?, ?) ON CONFLICT (user, day, kind) DO UPDATE SET n = n + ?",
                  (user, day, kind, n, n))
     conn.commit()
+
+
+def has_usage(conn: sqlite3.Connection, user: str) -> bool:
+    """Whether `user` has any usage row yet, i.e. has opened the app before."""
+    return conn.execute("SELECT 1 FROM user_usage WHERE user = ? LIMIT 1", (user,)).fetchone() is not None
+
+
+EVENT_DAYS = 90
+
+
+def add_event(conn: sqlite3.Connection, user: str | None, kind: str, detail: str, ok: bool = True) -> None:
+    """One line for the admin activity log; rows older than EVENT_DAYS go at the same time."""
+    with conn:
+        conn.execute("INSERT INTO events (at, user, kind, ok, detail) VALUES (?, ?, ?, ?, ?)",
+                     (_now(), user, kind, int(ok), detail))
+        conn.execute("DELETE FROM events WHERE at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)", (f"-{EVENT_DAYS} days",))
+
+
+def recent_events(conn: sqlite3.Connection, n: int = 20) -> list[dict[str, Any]]:
+    rows = conn.execute("SELECT at, user, kind, ok, detail FROM events ORDER BY at DESC, id DESC LIMIT ?", (n,))
+    return [{"at": at, "user": user, "kind": kind, "ok": bool(ok), "detail": detail} for at, user, kind, ok, detail in rows]
+
+
+def add_blocked(conn: sqlite3.Connection, day: str) -> None:
+    with conn:
+        conn.execute("INSERT INTO blocked_requests VALUES (?, 1) ON CONFLICT (day) DO UPDATE SET n = n + 1", (day,))
+
+
+def blocked_on(conn: sqlite3.Connection, day: str) -> int:
+    row = conn.execute("SELECT n FROM blocked_requests WHERE day = ?", (day,)).fetchone()
+    return row[0] if row else 0

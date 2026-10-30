@@ -466,6 +466,50 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
   .gl-dl { grid-template-columns: 1fr; gap: 2px; } .gl-dl dd { margin-bottom: 8px; }
   .gl-table td:first-child { white-space: normal; }
 }
+/* ---------- Admin (hosted mode, admins only) ---------- */
+.adm { display: grid; gap: 16px; padding-block: 8px 40px; }
+.adm-head h2 { font-size: 22px; margin: 0 0 4px; }
+.adm-head p { margin: 0; }
+#adm-error:empty { display: none; }
+.adm-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.adm-tile { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); display: grid; gap: 6px; align-content: start; }
+.adm-meter { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.adm-meter i { display: block; height: 100%; width: calc(var(--v, 0) * 100%); background: var(--accent); }
+.adm-meter.hot i { background: var(--warn); }
+.adm-panel { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; min-width: 0; }
+.adm-panel h2 { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.adm-panel h2 .muted { font-size: 12px; font-weight: 400; }
+.adm-panel h2.adm-sub { margin-top: 16px; }
+.adm-seg { margin-left: auto; display: inline-flex; gap: 2px; font-size: 12px; }
+.adm-seg button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.adm-chart svg { width: 100%; height: auto; display: block; }
+.adm-chart .bar { transition: opacity .12s; }
+.adm-chart.focus .bar:not(.on) { opacity: .2; }
+.adm-chart text { font-size: 10px; fill: var(--muted); }
+.adm-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; margin-top: 6px; color: var(--muted); }
+.adm-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.adm-people { width: 100%; }
+.adm-people td, .adm-people th { padding: 6px 8px; vertical-align: middle; }
+.adm-people tbody tr { cursor: pointer; }
+.adm-people tr.adm-none { cursor: default; color: var(--muted); }
+.adm-people tr.adm-none:hover td { background: none; }
+.adm-people tbody tr:hover td { background: var(--accent-soft); }
+.adm-people tr.sel td { background: var(--accent-soft); }
+.adm-people td.num, .adm-people th.num { text-align: right; }
+.adm-quota { display: grid; grid-template-columns: auto 60px; gap: 8px; align-items: center; }
+.adm-who { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.adm-two { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.adm-log { list-style: none; margin: 0; padding: 0; display: grid; font-size: 13px; }
+.adm-log li { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.adm-log li:first-child { border-top: 0; }
+.adm-log li.warn span:last-child { color: var(--warn); }
+.adm-log time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.adm-kv { width: 100%; }
+.adm-kv td { white-space: normal; padding: 5px 8px; }
+.adm-kv td:nth-child(2) { font-weight: 600; text-align: right; white-space: nowrap; }
+.adm-kv code { font-size: 11px; color: var(--muted); }
+.adm-panel p { margin: 6px 0 0; font-size: 13px; }
+@media (max-width: 700px) { .adm-two { grid-template-columns: minmax(0, 1fr); } .adm-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 /* ---------- Looks: 808 (default) and Technics. Picked in the header, saved in localStorage "tastr-look".
    To add one: a :root[data-look="x"] token block + overrides below, and a button in .look-pick. ---------- */
 h1 { white-space: nowrap; }
@@ -504,7 +548,7 @@ h1 { white-space: nowrap; }
 [data-look="808"] .beat-group:nth-child(3) { background: #e8d33a40; } [data-look="808"] .beat-group:nth-child(4) { background: #ffffff; }
 [data-look="808"] .drum-grid i { border-radius: 2px; border-color: #a99f88; background: #f4efe2; box-shadow: inset 0 -2px 0 #0001; }
 [data-look="808"] .drum-grid i.full { background: var(--accent); box-shadow: 0 0 6px #e2531d99; }
-[data-look="808"] #lib, [data-look="808"] #card, [data-look="808"] .chord-cell { border: 2px solid #161514; border-radius: 4px; }
+[data-look="808"] #lib, [data-look="808"] #card, [data-look="808"] .chord-cell, [data-look="808"] .adm-panel, [data-look="808"] .adm-tile { border: 2px solid #161514; border-radius: 4px; }
 
 /* Technics: 70s hi-fi. Champagne aluminium, black engraved wide type, red LED strobe dots. */
 :root[data-look="technics"] {
@@ -527,7 +571,7 @@ h1 { white-space: nowrap; }
 [data-look="technics"] .drum-grid i.half { background: #9e2a24; box-shadow: 0 0 4px #ff3b3099; }
 [data-look="technics"] .beat-group { background: transparent; border-bottom: 1px solid #12121233; border-radius: 0; }
 [data-look="technics"] .stat b { font-family: "Michroma", sans-serif; font-size: 18px; }
-[data-look="technics"] #lib, [data-look="technics"] #card, [data-look="technics"] .chord-cell { border: 1px solid #8c867a; border-radius: 2px; }
+[data-look="technics"] #lib, [data-look="technics"] #card, [data-look="technics"] .chord-cell, [data-look="technics"] .adm-panel, [data-look="technics"] .adm-tile { border: 1px solid #8c867a; border-radius: 2px; }
 
 /* "Listed elsewhere" (catalog lookups) under the header stats */
 .lookup-line { margin: 0; flex-basis: 100%; font-size: 14px; }

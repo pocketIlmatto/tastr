@@ -64,7 +64,7 @@ not a hostile visitor once Tastr is shared. Every request a provider sends goes 
 | The provider's own quota headers (`x-quota-used` / `x-quota-limit`, `x-ratelimit-remaining`) | pause 20 requests short of its limit until its reset time | |
 | HTTP 429 / 5xx | pause for Retry-After, else 1 min doubling to 1 h | |
 | HTTP 401 / 403 (bad key) | pause 1 h | |
-| The same track asked again (menu clicks, bulk re-runs) | skipped for 10 min | `TASTR_LOOKUP_REFRESH_MINUTES` |
+| The same track asked again (menu clicks, bulk re-runs) | skipped for 10 min after an answer (not after an error) | `TASTR_LOOKUP_REFRESH_MINUTES` |
 
 Usage is counted per provider and day in the `lookup_usage` table, so restarting doesn't reset it
 (`tastr lookup --usage` shows it). A request a guardrail holds back is never sent; the lookup comes back
@@ -98,13 +98,23 @@ the index keeps each recording's first submission. Anything released after mid-2
 
 A lookup is:
 
-1. a [MusicBrainz](https://musicbrainz.org/doc/MusicBrainz_API) recording search by title and artist
-   (no key; one request a second at most, with a user agent naming Tastr). A hit must match the title,
-   the artist credit (in any order, as for the other providers) and, when both sides know it, the
-   length within 15 s, so a live or extended version isn't taken for the album one;
+1. a [MusicBrainz](https://musicbrainz.org/doc/MusicBrainz_API) recording search by title and the
+   first-listed artist (no key; one request a second at most, with a user agent naming Tastr). A hit
+   must match the title, the whole artist credit (in any order, as for the other providers) and, when
+   both sides know it, the length within 15 s, so a live or extended version isn't taken for the album
+   one. Up to 25 results are read;
 2. those MBIDs, closest length first, in the local index. The first with a BPM or key is the answer,
-   linked to its MusicBrainz page. A recording on MusicBrainz that AcousticBrainz never analyzed is
-   "not found".
+   linked to its MusicBrainz page;
+3. when none of them is in the index, one more search for the other recordings with the same ISRCs.
+   MusicBrainz often lists one song as several recordings and AcousticBrainz analyzed only some.
+
+A song still missing after that is "not found" (`result_json` lists the MBIDs tried and how many came
+from the ISRC search). A dropped or cut-off MusicBrainz response, or a 503 (MusicBrainz is busy), is tried
+once more; a second failure comes back as an error naming MusicBrainz. MusicBrainz's `x-ratelimit-*`
+headers count its global load, not Tastr's requests, so the guard doesn't pause on them.
+
+In a test on a small library of mostly 2019-2022 house releases (October 2026), no track was found:
+AcousticBrainz's coverage of recent electronic releases is thin. It suits older catalogs better.
 
 Build the index once:
 

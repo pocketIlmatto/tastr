@@ -275,6 +275,41 @@ def test_admin_usage(db_path, home, tmp_path):
     assert {h["kind"] for h in body["history"]} == {"tracks", "visits"}
     local = TestClient(create_app(db_path, Settings()))
     assert local.get("/api/admin/usage").status_code == 404
+    assert body["recent"] == [] and body["blocked_today"] == 0  # friend had usage before their first page load here
+
+
+def test_admin_activity_log_and_blocked_requests(db_path, home):
+    c = make_client(db_path, admins=("friend@example.com",), daily_tracks=1)
+    c.get("/api/config", headers=GOOD)
+    c.get("/api/config", headers=GOOD)  # only the first visit counts as a first sign-in
+    assert upload(c, ("broken.wav", b"not audio at all")).status_code == 200
+    assert upload(c, ("again.wav", b"RIFF")).status_code == 429
+    for _ in range(3):
+        assert c.get("/api/tracks").status_code == 401
+    assert c.get("/api/tracks", headers={"cf-access-jwt-assertion": "forged"}).status_code == 401
+    body = c.get("/api/admin/usage", headers=GOOD).json()
+    assert body["blocked_today"] == 4
+    log = [(e["kind"], e["ok"], e["detail"]) for e in body["recent"]]  # newest first
+    assert log == [("limit", False, "Hit the daily track limit (1)"),
+                   ("failed", False, "Analysis failed: broken.wav, it couldn't be decoded as audio"),
+                   ("upload", True, "Uploaded 1 track"),
+                   ("signin", True, "Signed in for the first time")]
+    assert all(e["user"] == "friend@example.com" and e["at"] for e in body["recent"])
+    assert str(home) not in str(body["recent"])  # no server paths
+
+
+def test_local_mode_keeps_no_activity_log(db_path, home):
+    c = TestClient(create_app(db_path, Settings()))
+    c.get("/api/config")
+    c.post("/api/analyze", files=[("files", ("broken.wav", b"nope", "audio/wav"))])
+    assert db.recent_events(db.connect(db_path)) == []
+
+
+def test_old_events_are_pruned(db_path):
+    conn = db.connect(db_path)
+    conn.execute("INSERT INTO events (at, user, kind, detail) VALUES ('2000-01-01T00:00:00+00:00', 'a', 'upload', 'old')")
+    db.add_event(conn, "b", "upload", "new")
+    assert [e["detail"] for e in db.recent_events(conn)] == ["new"]
 
 
 def test_old_databases_get_the_owner_column(tmp_path):

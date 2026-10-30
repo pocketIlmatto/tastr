@@ -88,6 +88,17 @@ audio and stem bytes, last upload, last request since the server started, and to
 and visits (page loads), plus 30 days of daily counts, the limits, total storage against the cap and
 the stem jobs and analyses running or waiting. Everyone else gets 404. `/api/config` says `"admin": true` for admins.
 
+It also returns `recent`, the last 20 lines of the activity log, and `blocked_today`, how many requests
+were refused today (UTC) for a missing or invalid Access token. The log (`events` table) records uploads,
+stem jobs started, re-analyses, first sign-ins, limits hit and failed analyses. A failure keeps only the file
+name and a short reason, never the error text, which can name server paths. Rows older than 90 days are
+dropped as new ones come in. Your own machine keeps no log.
+
+Admins see an **Admin** tab in the header with all of this: tiles for people, tracks, stem jobs,
+storage, analyses running and an estimated 30-day Modal cost, a per-person chart of the last 30 days,
+the people table with today's quotas, the activity log, the limits and the blocked count. Nobody else
+gets the tab, and on your own machine there is none.
+
 ## Strudel links
 
 "Try this in Strudel" opens strudel.cc with code that loads the track's audio and stems from Tastr, but

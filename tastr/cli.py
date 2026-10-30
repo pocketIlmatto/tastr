@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     w = sub.add_parser("serve", help="run the web UI")
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=8000)
+    w.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"],
+                   help="debug adds stage tracebacks and uvicorn's details (default: info)")
 
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
     b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, harmonix or manifest")
@@ -98,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "serve":
         from .web.server import run
 
-        run(args.host, args.port, args.db)
+        run(args.host, args.port, args.db, log_level=args.log_level)
         return 0
 
     if args.cmd == "analyze":

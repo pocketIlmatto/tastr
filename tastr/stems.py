@@ -13,9 +13,11 @@ Modal GPU instead (`tastr[cloud]`, docs/cloud.md) and only the stems come back h
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
 import shutil
 import threading
+import time
 import types
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -26,6 +28,7 @@ MODEL = "htdemucs"
 INSTALL_HINT = "Stem separation needs Demucs, an optional install (about 2 GB with PyTorch): pip install 'tastr[stems]'"
 
 Progress = Callable[[float], None]
+log = logging.getLogger(__name__)  # `tastr serve` prints it (see web.server.configure_logging)
 
 
 def backend() -> str:
@@ -170,10 +173,15 @@ class Jobs:
             cancelled = self._state[folder].get("cancelled")
         if not cancelled:
             self._set(folder, state="running")
+            log.info("Separating stems for %s", audio_path)
+            start = time.monotonic()
             try:
                 separate_track(audio_path, folder, lambda p: self._set(folder, progress=round(min(max(p, 0.0), 1.0), 3)))
             except Exception as e:  # noqa: BLE001 - the error is shown in the UI
+                log.exception("Stem separation failed for %s", audio_path)
                 self._set(folder, state="error", error=f"{type(e).__name__}: {e}")
+            else:
+                log.info("Stems ready for %s (%.0f s)", audio_path, time.monotonic() - start)
         with self._lock:
             job = self._state[folder]
             if job.get("cancelled"):  # the track was deleted meanwhile

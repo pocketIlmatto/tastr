@@ -127,16 +127,19 @@ def test_separation_runs_in_background_then_serves_stems(client, track, stub, ga
     assert client.post(f"/api/tracks/{track}/stems").json()["state"] == "ready" and len(stub) == 1
 
 
-def test_failed_separation_reports_error_and_can_retry(client, track, monkeypatch, stub):
+def test_failed_separation_reports_error_and_can_retry(client, track, monkeypatch, stub, caplog):
     def broken(audio_path, out_dir, progress=None):
         out_dir.mkdir(parents=True)
         stems.stem_path(out_dir, "vocals").write_bytes(b"x")  # half done, then it fails
         raise MemoryError("out of memory")
 
     monkeypatch.setattr(stems, "separate", broken)
-    client.post(f"/api/tracks/{track}/stems")
-    st = wait_for(client, track, "error")
+    with caplog.at_level("INFO", logger="tastr.stems"):
+        client.post(f"/api/tracks/{track}/stems")
+        st = wait_for(client, track, "error")
     assert "out of memory" in st["error"]
+    failed = [r for r in caplog.records if r.getMessage().startswith("Stem separation failed for")]
+    assert failed and failed[0].exc_info and "song.wav" in failed[0].getMessage()  # with the traceback, for the terminal
     assert client.get(f"/api/tracks/{track}/stems/vocals").status_code == 404  # nothing half-done is served
     assert client.get(f"/api/tracks/{track}").json()["stems_state"] == "error"
 

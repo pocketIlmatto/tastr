@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 import re
@@ -284,14 +285,34 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     return app
 
 
-def run(host: str = "127.0.0.1", port: int = 8000, db_path: str | None = None) -> None:
+class _UvicornStyle(logging.Formatter):
+    """`INFO:     message`, the same padded prefix uvicorn prints, so the lines line up."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.levelprefix = f"{record.levelname}:".ljust(9)
+        return super().format(record)
+
+
+def configure_logging(level: str = "info") -> None:
+    """Print Tastr's own log lines (failed analyses, stem jobs, and stage tracebacks at debug) next to uvicorn's."""
+    handler = logging.StreamHandler()
+    handler.setFormatter(_UvicornStyle("%(levelprefix)s %(name)s: %(message)s"))
+    logger = logging.getLogger("tastr")
+    logger.handlers[:] = [handler]
+    logger.setLevel(level.upper())
+    logger.propagate = False
+
+
+def run(host: str = "127.0.0.1", port: int = 8000, db_path: str | None = None, log_level: str = "info") -> None:
     import uvicorn
 
     from .. import filemeta
+
+    configure_logging(log_level)
 
     if filemeta.mutagen is None:
         print("Warning: mutagen is not installed, so file tags and audio info can't be read. Run: pip install -e .")
     n = db.refresh_file_meta(db.connect(db_path), only_if_stale=True)  # once per tag reader change
     if n:
         print(f"Refreshed file tags for {n} track(s)")
-    uvicorn.run(create_app(db_path), host=host, port=port)
+    uvicorn.run(create_app(db_path), host=host, port=port, log_level=log_level)

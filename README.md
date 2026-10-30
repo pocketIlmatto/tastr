@@ -42,6 +42,7 @@ tastr retag                      # re-read file tags for analyzed tracks (`tastr
 tastr query "SELECT title, bpm, camelot FROM tracks ORDER BY bpm"
 tastr stages                     # pipeline stages in run order
 tastr serve --host 127.0.0.1 --port 8000   # web UI (defaults shown)
+tastr serve --log-level debug    # also print stage tracebacks and request details
 tastr bench synth                # score the engine on labeled tracks (docs/bench.md)
 ```
 

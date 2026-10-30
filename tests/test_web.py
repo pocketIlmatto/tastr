@@ -291,3 +291,23 @@ def test_audio_allows_strudel_cc_and_no_other_origin(client, db_path, tmp_path):
         assert client.options(url, headers=headers).status_code == 403
     # other endpoints stay same-origin only
     assert "access-control-allow-origin" not in client.get(f"/api/tracks/{tid}", headers={"Origin": "https://strudel.cc"}).headers
+
+
+def test_serve_log_level_shows_tastr_debug_lines(capsys):
+    import logging
+
+    from tastr.web.server import configure_logging
+
+    try:
+        configure_logging("debug")
+        logging.getLogger("tastr.engine.pipeline").debug("stage traceback here")
+        configure_logging("info")
+        logging.getLogger("tastr.engine.pipeline").debug("hidden at info")
+        logging.getLogger("tastr.service").warning("failed to analyze x")
+    finally:
+        logging.getLogger("tastr").handlers[:] = []
+        logging.getLogger("tastr").propagate = True
+        logging.getLogger("tastr").setLevel(logging.NOTSET)
+    err = capsys.readouterr().err
+    assert "DEBUG:    tastr.engine.pipeline: stage traceback here" in err
+    assert "hidden at info" not in err and "WARNING:  tastr.service: failed to analyze x" in err

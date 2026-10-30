@@ -69,11 +69,26 @@ optionally run on a cloud GPU.
   separate stems or delete, for one track or a whole selection.
 - **Explore tab** for running SQL against your library in the browser.
 - **Keyboard shortcuts** for most things; press `?` for the list.
-- **Glossary tab** explaining every label and number and how it's measured:
-  a clickable Camelot wheel, scales you can hear, the drum style patterns,
-  and benchmark scores that update after each milestone run.
 
 <img src="docs/images/spectrogram.png" width="560" alt="Spectrogram view with sections and playback">
+
+### Glossary
+
+A built-in reference for every label, number and pattern on a track card,
+and how Tastr works each one out. Open it from the **Glossary** tab, or from
+"What the vibes mean" under a track's vibes.
+
+- **Camelot wheel:** click a key to see which keys mix with it. Opening the
+  Glossary from a track starts on that track's key.
+- **Scales you can hear:** pick a key and scale and play it, or click a row
+  of the modes table (Dorian, Phrygian...) to hear that mode.
+- **Drum styles:** the pattern ideas for each style, drawn from the engine's
+  own templates so they always match what the Pattern picker offers.
+- **The rules behind the numbers:** vibe scores, section labels, energy and
+  how drums, bass and chords are detected, with the actual thresholds.
+- **Accuracy that stays current:** the BPM, key and downbeat scores it quotes
+  come from the latest full benchmark run (`tastr bench ... --record`), with
+  the run date, so they update without touching the page.
 
 <img src="docs/images/glossary.png" width="560" alt="The Glossary's Camelot wheel, showing which keys mix with the open track's key">
 
@@ -206,10 +221,20 @@ The web app and everyday analysis stay local. Setup and costs are in
 
 ### README screenshots
 
-The images in `docs/images/` are generated, so they follow the UI. Add the `readme-shots`
-label to a PR that changes how the UI looks; after it merges, a workflow retakes them and
-opens a PR with the new images. To retake them yourself, run `python scripts/readme_shots.py`
-(it needs node and the playwright npm package; see the script).
+The screenshots in this README are generated, not taken by hand, so they follow the UI.
+
+- **How they're made:** `scripts/readme_shots.py` builds a throwaway library of three
+  synthetic tracks (nothing touches your own library), starts `tastr serve` on it, and
+  `scripts/readme-shots.js` takes each shot with Playwright in the default 808 look: the
+  library with an open card, the spectrogram, drums, bass and chords, the Strudel sketch
+  and the Glossary's Camelot wheel. They land in `docs/images/`.
+- **When they update:** add the `readme-shots` label to a PR that changes how the UI looks.
+  After it merges, the `readme-shots` GitHub workflow retakes them on `main` and opens a PR
+  with the new images if any changed. It never runs on ordinary pushes, so it only spends
+  Actions minutes when the UI changed (details in [docs/ci.md](docs/ci.md#readme-screenshots-workflow)).
+- **By hand:** run `python scripts/readme_shots.py` (it needs ffmpeg, node and the
+  playwright npm package; see the script). To add a shot, add a step to
+  `scripts/readme-shots.js` and an `<img>` here.
 
 ## Layout
 

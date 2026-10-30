@@ -1,9 +1,17 @@
 __pycache__/
 *.egg-info/
 .venv/
+venv/
+env/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 *.db
 *.db-journal
+*.sqlite
+*.sqlite3
 data/
 build/
 dist/
@@ -16,3 +24,16 @@ dist/
 *.flac
 *.aiff
 *.ogg
+.idea/
+.vscode/
+node_modules/
+*.log
+# Bench caches, spectrogram bundles and reports belong next to the datasets, not in the repo.
+*.npz
+*.npy
+# Model weights (Demucs, ADTOF) download to ~/.tastr/models.
+*.pt
+*.pth
+*.onnx
+*.h5
+*.safetensors

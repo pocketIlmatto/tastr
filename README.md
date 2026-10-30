@@ -267,7 +267,23 @@ DB tables, and `docs/modules/` for per-module specs.
 
 ## Licenses
 
-Tastr doesn't have a license file yet. Third-party pieces it uses or links to:
+Tastr's code is under the MIT License ([LICENSE](LICENSE)). Security reports: see
+[SECURITY.md](SECURITY.md).
+
+Two generated files hold numbers fitted on public datasets, so they also carry the
+datasets' terms:
+
+- `tastr/engine/key_model.py` (the learned key model) was fitted on GiantSteps Key and
+  the Beatport EDM Key dataset (Zenodo 1101082), both CC BY-SA 4.0. Treat these weights
+  as derived from that data: credit the datasets and share changes to the weights alike.
+- `tastr/engine/calibration_table.py` (the "N% likely right" tables) was fitted on
+  GiantSteps and Beatport tempo/key results and HJDB from the Beat This! release
+  (Zenodo 13922116, CC BY 4.0).
+
+Third-party pieces it uses or links to:
+
+- **mutagen** (file tags, a required dependency) is GPL-2.0-or-later. Tastr doesn't
+  bundle it; pip installs it alongside.
 
 - **Strudel** is AGPL-3.0. Tastr doesn't bundle it: "Open in Strudel" opens
   the generated sketch on strudel.cc.

@@ -7,6 +7,7 @@ name = "tastr"
 version = "0.1.0"
 description = "Drop in audio, get a track card: BPM, key, energy, sections, vibe tags and Ableton ideas."
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

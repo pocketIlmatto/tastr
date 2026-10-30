@@ -7,3 +7,12 @@ __pycache__/
 data/
 build/
 dist/
+.env
+.env.*
+.DS_Store
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.aiff
+*.ogg

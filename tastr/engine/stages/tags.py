@@ -8,8 +8,11 @@ from ..pipeline import AnalysisContext, register_stage
 MIN_SCORE = 0.2
 
 # Rough tempo homes for common styles. These are hints, not genre classification.
+# A style can have more than one row; the tag shows if any of its ranges match.
 TEMPO_STYLES = [
     ("downtempo", 70, 100),
+    ("trap tempo", 65, 85),  # trap's halftime feel often reads as half its tempo
+    ("trap tempo", 130, 170),
     ("hip-hop tempo", 80, 100),
     ("house tempo", 118, 130),
     ("techno tempo", 125, 145),

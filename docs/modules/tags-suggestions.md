@@ -31,7 +31,7 @@ Tag vocabulary (exactly these strings) and rules, from the draft `tags.py`:
 | `atmospheric` | (0.2 - percussiveness) / 0.15 + (0.4 - pulse_clarity) |
 | `dynamic` | (section_contrast - 0.2) / 0.15 |
 | `swung` | swing_confidence > 0.3: (swing_percent - 54) / 8 |
-| tempo hints, 0.5 each | `downtempo` 70-100, `hip-hop tempo` 80-100, `house tempo` 118-130, `techno tempo` 125-145, `dubstep/halftime tempo` 138-150, `drum & bass tempo` 160-180 (inclusive) |
+| tempo hints, 0.5 each | `downtempo` 70-100, `hip-hop tempo` 80-100, `house tempo` 118-130, `techno tempo` 125-145, `dubstep/halftime tempo` 138-150, `trap tempo` 130-170 or 65-85 (a half-tempo read of trap's halftime feel), `drum & bass tempo` 160-180 (inclusive). Ranges overlap on purpose: a 140 BPM track gets `techno tempo`, `dubstep/halftime tempo` and `trap tempo` |
 
 A rule whose inputs are missing (None / absent feature) is skipped, not treated as 0.
 

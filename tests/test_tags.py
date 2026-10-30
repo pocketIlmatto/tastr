@@ -56,3 +56,15 @@ def test_scores_under_cutoff_are_kept_but_not_listed():
     assert all(scores[t.tag] == t.score for t in card.tags)
     assert list(scores.values()) == sorted(scores.values(), reverse=True)
     assert scores == vibe_scores(None, None, 0.62, {})
+
+
+def test_trap_tempo_covers_full_and_half_tempo_reads():
+    # 140 sits in trap, dubstep/halftime and techno ranges at once: tempo tags are hints, not a genre call
+    assert set(run(bpm=140)[0]) == {"trap tempo", "dubstep/halftime tempo", "techno tempo"}
+    assert set(run(bpm=165)[0]) == {"trap tempo", "drum & bass tempo"}
+    assert set(run(bpm=132)[0]) == {"trap tempo", "techno tempo"}
+    # trap's halftime feel often comes out at half tempo
+    assert set(run(bpm=70)[0]) == {"trap tempo", "downtempo"}
+    assert "trap tempo" not in run(bpm=110)[0]
+    assert "trap tempo" not in run(bpm=172)[0]
+    assert run(bpm=140)[0]["trap tempo"] == 0.5

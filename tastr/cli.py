@@ -150,187 +150,191 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--record", action="store_true",
                    help="save the headline score to tastr/engine/bench_scores.json, quoted in the UI (full runs only)")
 
+    for name, parser in sub.choices.items():
+        parser.set_defaults(func=COMMANDS[name])
     args = p.parse_args(argv)
+    return args.func(args)
 
-    if args.cmd == "spec-bench":
-        return _spec_bench(args)
-    if args.cmd == "key-profiles":
-        return _key_profiles(args)
-    if args.cmd == "drum-bench":
-        return _drum_bench(args)
-    if args.cmd == "drum-model":
-        return _drum_model(args)
-    if args.cmd == "vibe-bench":
-        return _vibe_bench(args)
-    if args.cmd == "vibe-fit":
-        return _vibe_fit(args)
-    if args.cmd == "fetch":
-        return _fetch(args)
 
-    if args.cmd in ("bench", "spec-bench") and args.record:
+def _bench(args) -> int:
+    if args.record:
         err = _record_error(args)
         if err:
             print(f"error: {err}", file=sys.stderr)
             return 2
+    if args.write_index:
+        return _bench_write_index(args)
+    if args.remote:
+        return _bench_remote(args)
+    return _bench_local(args)
 
-    if args.cmd == "bench" and args.write_index:
-        from .cloud import jobs
 
-        try:
-            out = jobs.write_index(args.dataset, args.path or "")
-        except (ValueError, FileNotFoundError) as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 2
-        print(f"wrote {out}; upload it with the folder (docs/cloud.md)")
-        return 0
+def _bench_write_index(args) -> int:
+    from .cloud import jobs
 
-    if args.cmd == "bench" and args.remote:
-        from .cloud import remote
-        from .engine.bench import runner
+    try:
+        out = jobs.write_index(args.dataset, args.path or "")
+    except (ValueError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(f"wrote {out}; upload it with the folder (docs/cloud.md)")
+    return 0
 
-        print(f"running {args.dataset} on Modal...", file=sys.stderr)
-        stages = args.stages.split(",") if args.stages else None
-        t0 = time.time()
-        try:
-            report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
-                                  jobs=args.jobs if args.jobs > 1 else None,
-                                  **({"engine": args.engine} if args.engine else {}))
-        except (remote.RemoteError, ValueError) as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 2
-        timing = report.get("timing", {})
-        if timing:
-            # Where the wall time went: waiting for a container, loading the dataset index, analysis.
-            # (container times come from Modal's clock, so they're off by any clock skew)
-            ready = timing.get("container_started", t0) - t0
-            wait = timing.get("called", t0) - t0
-            print(f"wall {time.time() - t0:.0f} s: container ready after {ready:.0f} s, call started after {wait:.0f} s, "
-                  f"imports {timing.get('import_seconds', 0):.0f} s, loading the dataset {timing['load_seconds']:.0f} s, analysis {report['seconds']:.0f} s"
-                  f" ({timing['jobs']} workers)", file=sys.stderr)
-        baseline = runner.load_report(args.baseline) if args.baseline else None
-        print(runner.format_summary(report, baseline))
-        if args.out:
-            runner.save(report, args.out)
-        return _record(args, "bench", report)
 
-    if args.cmd == "bench":
-        from .engine import bench
-        from .engine.bench import runner
+def _bench_remote(args) -> int:
+    from .cloud import remote
+    from .engine.bench import runner
 
-        try:
-            items = bench.load(args.dataset, args.path)
-        except (ValueError, FileNotFoundError) as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 2
-        if not items:
-            print(f"error: no labeled tracks with audio found for {args.dataset} at {args.path}", file=sys.stderr)
-            return 2
+    print(f"running {args.dataset} on Modal...", file=sys.stderr)
+    stages = args.stages.split(",") if args.stages else None
+    t0 = time.time()
+    try:
+        report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
+                              jobs=args.jobs if args.jobs > 1 else None,
+                              **({"engine": args.engine} if args.engine else {}))
+    except (remote.RemoteError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    timing = report.get("timing", {})
+    if timing:
+        # Where the wall time went: waiting for a container, loading the dataset index, analysis.
+        # (container times come from Modal's clock, so they're off by any clock skew)
+        ready = timing.get("container_started", t0) - t0
+        wait = timing.get("called", t0) - t0
+        print(f"wall {time.time() - t0:.0f} s: container ready after {ready:.0f} s, call started after {wait:.0f} s, "
+              f"imports {timing.get('import_seconds', 0):.0f} s, loading the dataset {timing['load_seconds']:.0f} s, analysis {report['seconds']:.0f} s"
+              f" ({timing['jobs']} workers)", file=sys.stderr)
+    baseline = runner.load_report(args.baseline) if args.baseline else None
+    print(runner.format_summary(report, baseline))
+    if args.out:
+        runner.save(report, args.out)
+    return _record(args, "bench", report)
 
-        def progress(i, n, row):
-            print(f"\r{i}/{n} {row['id'][:50]:50}", end="", file=sys.stderr, flush=True)
 
-        if args.engine:
-            os.environ["TASTR_ENGINE"] = args.engine
-        stages = args.stages.split(",") if args.stages else None
-        report = runner.run(items, stages=stages, jobs=args.jobs, limit=args.limit, progress=progress)
-        print(file=sys.stderr)
-        baseline = runner.load_report(args.baseline) if args.baseline else None
-        print(runner.format_summary(report, baseline))
-        if args.out:
-            runner.save(report, args.out)
-        return _record(args, "bench", report)
+def _bench_local(args) -> int:
+    from .engine import bench
+    from .engine.bench import runner
 
-    if args.cmd == "stages":
-        for st in resolve_order():
-            print(f"{st.name:12} {st.version:14} requires={','.join(st.requires) or '-'}")
-        return 0
+    try:
+        items = bench.load(args.dataset, args.path)
+    except (ValueError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if not items:
+        print(f"error: no labeled tracks with audio found for {args.dataset} at {args.path}", file=sys.stderr)
+        return 2
 
-    if args.cmd == "serve":
-        from .web.server import run
+    def progress(i, n, row):
+        print(f"\r{i}/{n} {row['id'][:50]:50}", end="", file=sys.stderr, flush=True)
 
-        run(args.host, args.port, args.db, log_level=args.log_level)
-        return 0
+    if args.engine:
+        os.environ["TASTR_ENGINE"] = args.engine
+    stages = args.stages.split(",") if args.stages else None
+    report = runner.run(items, stages=stages, jobs=args.jobs, limit=args.limit, progress=progress)
+    print(file=sys.stderr)
+    baseline = runner.load_report(args.baseline) if args.baseline else None
+    print(runner.format_summary(report, baseline))
+    if args.out:
+        runner.save(report, args.out)
+    return _record(args, "bench", report)
 
-    if args.cmd == "analyze":
-        from .ingest import IngestError
-        from .service import analyze_inputs
 
-        conn = db.connect(args.db)
-        stages = args.stages.split(",") if args.stages else None
-        try:
-            results = analyze_inputs(conn, args.inputs, stages)
-        except IngestError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 2
-        failed = 0
-        for r in results:
-            if r.error:
-                failed += 1
-                print(f"FAIL {r.source.uri}: {r.error}", file=sys.stderr)
-            elif args.json:
-                print(r.card.to_json(indent=2))
-            else:
-                print(_summary_line(r.track_id, r.card))
-        return 1 if failed else 0
+def _stages(args) -> int:
+    for st in resolve_order():
+        print(f"{st.name:12} {st.version:14} requires={','.join(st.requires) or '-'}")
+    return 0
 
-    if args.cmd == "list":
-        for t in db.list_tracks(db.connect(args.db)):
-            print(_fmt_row(t))
-        return 0
 
-    if args.cmd == "show":
-        card = db.load_card(db.connect(args.db), args.track_id)
-        if card is None:
-            print(f"no track {args.track_id}", file=sys.stderr)
-            return 1
-        if "views" in card.extras:  # hundreds of KB of base64 picture data; the web UI is where it's useful
-            card.extras["views"] = f"<waveform + spectrogram data, {len(json.dumps(card.extras['views'])) // 1024} KB>"
-        print(card.to_json(indent=2))
-        return 0
+def _serve(args) -> int:
+    from .web.server import run
 
-    if args.cmd == "stems":
-        return _stems(args)
+    run(args.host, args.port, args.db, log_level=args.log_level)
+    return 0
 
-    if args.cmd == "retag":
-        print(f"updated {db.refresh_file_meta(db.connect(args.db))} track(s)")
-        return 0
 
-    if args.cmd == "set-owner":
-        email = args.email.strip().lower()
-        print(f"gave {db.set_owner(db.connect(args.db), email)} track(s) to {email}")
-        return 0
+def _analyze(args) -> int:
+    from .ingest import IngestError
+    from .service import analyze_inputs
 
-    if args.cmd in ("pack", "unpack"):
-        from . import library
+    conn = db.connect(args.db)
+    stages = args.stages.split(",") if args.stages else None
+    try:
+        results = analyze_inputs(conn, args.inputs, stages)
+    except IngestError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    failed = 0
+    for r in results:
+        if r.error:
+            failed += 1
+            print(f"FAIL {r.source.uri}: {r.error}", file=sys.stderr)
+        elif args.json:
+            print(r.card.to_json(indent=2))
+        else:
+            print(_summary_line(r.track_id, r.card))
+    return 1 if failed else 0
 
-        try:
-            if args.cmd == "pack":
-                r = library.pack(args.db, args.out, args.owner)
-                print(f"packed {r['tracks']} track(s) and {r['files']} file(s) into {args.out} ({r['bytes'] / 1e6:.0f} MB)")
-                if r["missing_audio"]:
-                    print(f"{r['missing_audio']} track(s) had no audio file on disk; they move without it")
-            else:
-                r = library.unpack(args.archive, os.environ.get("TASTR_HOME", Path.home() / ".tastr"), args.db)
-                print(f"unpacked {r['tracks']} track(s) and {r['files']} file(s)")
-        except (ValueError, OSError, tarfile.TarError) as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 1
-        return 0
 
-    if args.cmd == "lookup":
-        return _lookup(args)
+def _list(args) -> int:
+    for t in db.list_tracks(db.connect(args.db)):
+        print(_fmt_row(t))
+    return 0
 
-    if args.cmd in ("labels", "review"):
-        return _labels(args)
 
-    if args.cmd == "query":
-        db.connect(args.db).close()  # make sure the file and schema exist
-        rows = db.query(db.connect(args.db, readonly=True), args.sql)
-        for r in rows:
-            print(json.dumps(r, default=str))
-        return 0
-    return 2
+def _show(args) -> int:
+    card = db.load_card(db.connect(args.db), args.track_id)
+    if card is None:
+        print(f"no track {args.track_id}", file=sys.stderr)
+        return 1
+    if "views" in card.extras:  # hundreds of KB of base64 picture data; the web UI is where it's useful
+        card.extras["views"] = f"<waveform + spectrogram data, {len(json.dumps(card.extras['views'])) // 1024} KB>"
+    print(card.to_json(indent=2))
+    return 0
 
+
+def _retag(args) -> int:
+    print(f"updated {db.refresh_file_meta(db.connect(args.db))} track(s)")
+    return 0
+
+
+def _set_owner(args) -> int:
+    email = args.email.strip().lower()
+    print(f"gave {db.set_owner(db.connect(args.db), email)} track(s) to {email}")
+    return 0
+
+
+def _pack(args) -> int:
+    from . import library
+
+    try:
+        r = library.pack(args.db, args.out, args.owner)
+    except (ValueError, OSError, tarfile.TarError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"packed {r['tracks']} track(s) and {r['files']} file(s) into {args.out} ({r['bytes'] / 1e6:.0f} MB)")
+    if r["missing_audio"]:
+        print(f"{r['missing_audio']} track(s) had no audio file on disk; they move without it")
+    return 0
+
+
+def _unpack(args) -> int:
+    from . import library
+
+    try:
+        r = library.unpack(args.archive, os.environ.get("TASTR_HOME", Path.home() / ".tastr"), args.db)
+    except (ValueError, OSError, tarfile.TarError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"unpacked {r['tracks']} track(s) and {r['files']} file(s)")
+    return 0
+
+
+def _query(args) -> int:
+    db.connect(args.db).close()  # make sure the file and schema exist
+    rows = db.query(db.connect(args.db, readonly=True), args.sql)
+    for r in rows:
+        print(json.dumps(r, default=str))
+    return 0
 
 def _record_error(args) -> str | None:
     """Why `--record` can't be used with these arguments, or None."""
@@ -663,6 +667,16 @@ def _summary_line(track_id, card) -> str:
 def _fmt_row(t: dict) -> str:
     bpm = f"{t['bpm']:.1f}" if t["bpm"] else "?"
     return f"[{t['id']}] {t['title']}  bpm={bpm} key={t['key_name'] or '?'} camelot={t['camelot'] or '?'}"
+
+
+# Each subcommand's handler; main() checks that every subcommand has one.
+COMMANDS = {
+    "analyze": _analyze, "list": _list, "show": _show, "query": _query, "retag": _retag,
+    "set-owner": _set_owner, "pack": _pack, "unpack": _unpack, "lookup": _lookup, "labels": _labels,
+    "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
+    "key-profiles": _key_profiles, "drum-model": _drum_model, "drum-bench": _drum_bench,
+    "vibe-bench": _vibe_bench, "vibe-fit": _vibe_fit, "fetch": _fetch, "bench": _bench,
+}
 
 
 if __name__ == "__main__":

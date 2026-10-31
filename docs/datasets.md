@@ -30,6 +30,23 @@ Notes:
   score only `<name>/track`. Its other zips: Ballroom 4.8 GB, Hainsworth 2.7 GB, SMC 2.1 GB, Harmonix 45 GB.
 - StemGMD and E-GMD are far too big to download whole; take a subset of kits or sessions.
 
+## From the mirdata list (2026-10-31)
+
+[mirdata](https://github.com/mir-dataset-loaders/mirdata)'s dataset table, checked against the gaps above:
+
+- **FMA Keys** (FMAK, Zenodo 10719860): 5,489 Free Music Archive songs across 17 genres, key and mode
+  labeled by one expert annotator (a sample cross-annotated), 2,812 major / 2,677 minor. Full songs, 39 GB
+  in 10 zips split by track id. A non-EDM held-out key set with many major keys, where the learned model's
+  "major read as IV" weakness would show. The record is CC BY 4.0; the dataset's notes say the labels are
+  for non-commercial research. `tastr fetch fma-keys` ([cloud.md](cloud.md#fma-keys)).
+- **Ballroom with audio** (698 excerpts, CC0): the held-out 3/4 and tempo check, without the 4.8 GB
+  spectrogram zip. Its audio host (mtg.upf.edu) is refused from cloud sessions.
+- **Slakh2100-redux** (1,710 synthesized multitracks with aligned MIDI, CC BY 4.0, 104 GB in one tarball):
+  ground truth for bass lines and chords, if those suggestions get a benchmark.
+- BRID (367 samba percussion excerpts, beats and tempo, CC BY 4.0, 0.94 GB): far from dance music.
+- Most others have no downloadable audio (Billboard, SALAMI, RWC, Beatles, Queen, Cuidado, Hainsworth) or
+  cover classical, Indian art music, vocals or pitch tracking.
+
 ## Considered, lower priority
 
 - Extended Ballroom (4,180 tempo/beat excerpts): ballroom genres, not dance music.

@@ -12,6 +12,12 @@ only what's learned from them.
 plus the SQLite index the AcousticBrainz lookup provider reads (tastr/lookup/acousticbrainz.py). The
 index is built in a temporary folder and copied next to the archives, since the bucket mount can't take
 SQLite's random writes.
+
+`fma-keys` is FMA Keys (FMAK, Zenodo 10719860): expert key and mode labels for 5,489 Free Music Archive
+songs across 17 genres, about half major. The audio is full songs in 10 zips of 1.7 to 5 GB, split by FMA
+folder (track id // 1000); `archives` picks which (0 is `000-019.zip`, 695 labeled songs). Each zip is
+checked against Zenodo's MD5 before it's unpacked. The record is CC BY 4.0, but the dataset's notes put
+the labels to non-commercial research use, so they are treated like the vibe sets: bucket only.
 """
 
 from __future__ import annotations
@@ -35,6 +41,10 @@ MTG_TAR_SHA256 = "data/download/raw_30s_audio-low_sha256_tars.txt"  # in MTG_REP
 DEAM_URLS = ["https://cvml.unige.ch/databases/DEAM/DEAM_audio.zip",
              "https://cvml.unige.ch/databases/DEAM/DEAM_Annotations.zip"]
 CLIP_SECONDS = 60
+FMAK_RECORD = "https://zenodo.org/api/records/10719860"
+FMAK_LABELS = "fma_keys_metadata.csv"
+FMAK_ZIPS = ["000-019.zip", "020-039.zip", "040-049.zip", "050-059.zip", "060-069.zip", "070-079.zip",
+             "080-089.zip", "090-099.zip", "100-109.zip", "110-124.zip"]
 
 
 def _get(url: str):
@@ -162,17 +172,58 @@ def fetch_acousticbrainz(dest: str | Path, base: str | None = None, progress=pri
     return {"dataset": "acousticbrainz", **result, "index": str(dest / ab.INDEX_NAME), "bytes": sizes}
 
 
+def fetch_fma_keys(dest: str | Path, archives: list[int], record: str = FMAK_RECORD, progress=print) -> dict:
+    """The FMA Keys labels plus the songs in the given zips (indexes into FMAK_ZIPS), unpacked into `dest`/audio."""
+    import json
+
+    dest = Path(dest)
+    with _get(record) as r:
+        files = {f["key"]: f for f in json.load(r)["files"]}
+    _save(files[FMAK_LABELS]["links"]["self"], dest / FMAK_LABELS)
+    kept = skipped = 0
+    bad = []
+    for n in archives:
+        name = FMAK_ZIPS[n]
+        progress(f"downloading {name} ({files[name]['size'] / 1e9:.2f} GB)")
+        with tempfile.TemporaryDirectory() as tmp:
+            # Download to local disk first: unzipping needs seeks, which the bucket mount can't do.
+            z = _save(files[name]["links"]["self"], Path(tmp) / name)
+            md5 = hashlib.md5()
+            with z.open("rb") as fh:
+                for b in iter(lambda: fh.read(1 << 20), b""):
+                    md5.update(b)
+            if files[name].get("checksum") != f"md5:{md5.hexdigest()}":
+                bad.append(name)  # a cut-off download: rerun this archive
+                continue
+            with zipfile.ZipFile(z) as zf:
+                for m in zf.infolist():
+                    if m.is_dir() or not m.filename.endswith(".mp3") or Path(m.filename).name.startswith("._"):
+                        continue
+                    out = dest / "audio" / Path(*Path(m.filename).parts[-2:])  # <folder>/<track id>.mp3
+                    if out.exists():
+                        skipped += 1
+                        continue
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(m) as fh, out.open("wb") as w:
+                        shutil.copyfileobj(fh, w)
+                    kept += 1
+        progress(f"{name}: unpacked")
+    return {"dataset": "fma-keys", "kept": kept, "already_there": skipped, "checksum_mismatch": bad}
+
+
 def fetch(dataset: str, dest: str | Path, archives: list[int] | None = None, progress=print) -> dict:
     """Fetch `dataset` into `dest` and write its item index (tastr/cloud/jobs.py) for fast remote runs."""
     from .jobs import write_index
 
     if dataset == "acousticbrainz":  # a lookup index, not a benchmark: no item index
         return fetch_acousticbrainz(dest, progress=progress)
+    if dataset == "fma-keys":  # no bench loader yet, so no item index
+        return fetch_fma_keys(dest, archives if archives is not None else [0], progress=progress)
     if dataset == "mtg-moods":
         result = fetch_mtg(dest, archives if archives is not None else list(range(6)), progress=progress)
     elif dataset == "deam":
         result = fetch_deam(dest, progress=progress)
     else:
-        raise ValueError(f"unknown dataset {dataset!r}; choose from mtg-moods, deam, acousticbrainz")
+        raise ValueError(f"unknown dataset {dataset!r}; choose from mtg-moods, deam, acousticbrainz, fma-keys")
     result["index"] = str(write_index(dataset, dest))
     return result

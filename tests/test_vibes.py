@@ -147,6 +147,32 @@ def test_fetch_deam_unpacks_zips(tmp_path):
     assert result["files"] == 1 and (tmp_path / "deam/MEMD_audio/2.mp3").read_bytes() == b"x"
 
 
+def test_fetch_fma_keys_checks_md5_and_unpacks(tmp_path):
+    import hashlib
+    import json
+
+    z = tmp_path / "000-019.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("fma_full/000/000010.mp3", b"x")
+        zf.writestr("fma_full/000/._000010.mp3", b"junk")
+    labels = tmp_path / "labels.csv"
+    labels.write_text("track_id,spotify_uri,key_and_mode\n10,,F# Major\n")
+    md5 = hashlib.md5(z.read_bytes()).hexdigest()
+    files = [{"key": "000-019.zip", "size": z.stat().st_size, "checksum": f"md5:{md5}", "links": {"self": f"file://{z}"}},
+             {"key": fetch.FMAK_LABELS, "size": 1, "checksum": "", "links": {"self": f"file://{labels}"}}]
+    record = tmp_path / "record.json"
+    record.write_text(json.dumps({"files": files}))
+    dest = tmp_path / "fmak"
+    result = fetch.fetch_fma_keys(dest, [0], record=f"file://{record}", progress=lambda *_: None)
+    assert result["kept"] == 1 and result["checksum_mismatch"] == []
+    assert (dest / "audio/000/000010.mp3").read_bytes() == b"x"
+    assert (dest / fetch.FMAK_LABELS).read_text().startswith("track_id")
+    files[0]["checksum"] = "md5:0"
+    record.write_text(json.dumps({"files": files}))
+    again = fetch.fetch_fma_keys(tmp_path / "other", [0], record=f"file://{record}", progress=lambda *_: None)
+    assert again["checksum_mismatch"] == ["000-019.zip"] and again["kept"] == 0
+
+
 @pytest.mark.audio
 def test_vibe_bench_end_to_end_on_a_folder(tmp_path, synth_wav, capsys):
     root = mtg_tsvs(tmp_path / "mtg")

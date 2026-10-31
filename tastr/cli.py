@@ -109,12 +109,13 @@ def main(argv: list[str] | None = None) -> int:
     vf.add_argument("results", nargs="+", help="JSON files written by vibe-bench --out")
     vf.add_argument("--out", help="write the fit results as JSON here")
 
-    fe = sub.add_parser("fetch", help="download a vibe dataset (mtg-moods, deam) or the AcousticBrainz lookup dump "
-                                      "(acousticbrainz), locally or on Modal into the bucket")
-    fe.add_argument("dataset", choices=["mtg-moods", "deam", "acousticbrainz"])
+    fe = sub.add_parser("fetch", help="download a vibe dataset (mtg-moods, deam), FMA Keys (fma-keys) or the "
+                                      "AcousticBrainz lookup dump (acousticbrainz), locally or on Modal into the bucket")
+    fe.add_argument("dataset", choices=["mtg-moods", "deam", "acousticbrainz", "fma-keys"])
     fe.add_argument("path", help="destination folder (a bucket folder with --remote)")
-    fe.add_argument("--archives", default="0-5",
-                    help="mtg-moods: which of the 100 audio archives, about 1.6 GB each, e.g. 0-5 or 0,7,9 (default 0-5)")
+    fe.add_argument("--archives",
+                    help="mtg-moods: which of the 100 audio archives, about 1.6 GB each, e.g. 0-5 or 0,7,9 "
+                         "(default 0-5); fma-keys: which of its 10 zips, 1.7-5 GB each (default 0)")
     fe.add_argument("--remote", action="store_true", help="run on Modal, writing into the R2 bucket (docs/cloud.md)")
 
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
@@ -551,7 +552,8 @@ def _vibe_fit(args) -> int:
 def _fetch(args) -> int:
     from .cloud import fetch, remote
 
-    archives = sorted({n for part in args.archives.split(",") for n in
+    spec = args.archives or ("0" if args.dataset == "fma-keys" else "0-5")
+    archives = sorted({n for part in spec.split(",") for n in
                        (range(int(part.split("-")[0]), int(part.split("-")[1]) + 1) if "-" in part else [int(part)])})
     try:
         if args.remote:

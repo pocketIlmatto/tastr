@@ -1,5 +1,5 @@
 """The Rust engine (engine-rs/, docs/rust-engine.md): its native and WebAssembly builds give identical output,
-and its HPSS matches the Python engine's. Skips unless both builds exist:
+and its HPSS and shared signals match the Python engine's. Skips unless both builds exist:
 
     cd engine-rs && cargo build --release && cargo build --release --lib --target wasm32-unknown-unknown
 """
@@ -23,15 +23,18 @@ WASM = ROOT / "target" / "wasm32-unknown-unknown" / "release" / "tastr_engine.wa
 pytestmark = pytest.mark.skipif(not (NATIVE.exists() and WASM.exists() and shutil.which("node")),
                                 reason="needs the Rust engine built natively and for WebAssembly, and Node")
 
-ARRAYS = ("y", "harmonic", "percussive")
 # The C maths functions engine-rs/src/detmath.rs defines; the native build must not take any from the system.
 MATHS = {"sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "exp", "exp2", "exp10",
          "expm1", "log", "log2", "log10", "log1p", "cbrt", "pow", "hypot", "fmod", "sincos"}
 
 
 def run(cmd, out: Path) -> dict[str, np.ndarray]:
+    """Every output the build writes, by name, shaped (rows, cols) or flat for one row."""
     subprocess.run(cmd + [str(out)], check=True, capture_output=True)
-    return {a: np.fromfile(out / f"{a}.f32", dtype="<f4") for a in ARRAYS}
+    shapes = json.loads((out / "manifest.json").read_text())
+    arrays = {name: np.fromfile(out / f"{name}.f32", dtype="<f4").reshape(rows, cols)
+              for name, (rows, cols) in shapes.items()}
+    return {name: a[0] if a.shape[0] == 1 else a for name, a in arrays.items()}
 
 
 def native(path: Path, out: Path):
@@ -76,7 +79,8 @@ def test_native_build_takes_no_maths_from_the_system():
 def test_native_and_wasm_give_identical_bits(stereo_44k, tmp_path):
     for path in stereo_44k:
         a, b = native(path, tmp_path / "n" / path.name), wasm(path, tmp_path / "w" / path.name)
-        for name in ARRAYS:
+        assert a.keys() == b.keys() and len(a) > 3
+        for name in a:
             assert a[name].tobytes() == b[name].tobytes(), f"{path.name}: {name} differs"
 
 
@@ -92,6 +96,72 @@ def test_hpss_matches_the_python_engine(tmp_path):
         for got, want in ((ours["harmonic"], h), (ours["percussive"], p)):
             assert got.shape == want.shape
             assert np.abs(got - want).max() < 1e-5 * np.abs(want).max()
+
+
+def python_signals(y: np.ndarray) -> dict[str, np.ndarray]:
+    import librosa
+
+    from tastr.engine import drums
+
+    ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri="x")))
+    env = drums._envelopes(ctx)
+    return {"onset_envelope": signals.onset_envelope(ctx), "rms": signals.rms(ctx), "mfcc": signals.mfcc(ctx),
+            "centroid": librosa.feature.spectral_centroid(S=np.abs(librosa.stft(y)), sr=SR)[0],
+            "mel_percussive": signals.mel_percussive(ctx)[0], "low_band_flux": signals.low_band_flux(ctx),
+            "air_flux": drums._air_flux(ctx), "log_mel": signals.log_mel(ctx)[0],
+            "envelope_mid": env["mid"], "envelope_air": env["air"]}
+
+
+def test_shared_signals_match_the_python_engine(tmp_path):
+    rng = np.random.default_rng(2)
+    y = make_track(bpm=124, bars_per_section=(4, 4))[0]
+    y = (y + 1e-3 * rng.standard_normal(y.size)).astype(np.float32)
+    raw = tmp_path / "y.f32"
+    y.astype("<f4").tofile(raw)
+    ours = native(raw, tmp_path / "out")
+    for name, want in python_signals(y).items():
+        got = ours[name]
+        assert got.shape == want.shape, name
+        err = np.abs(got - want).max()
+        if name.startswith("envelope_"):  # dB of the 4 ms envelope; tiny HPSS differences show near silence
+            assert err < 0.01, name
+        else:  # float32 throughout, as librosa; only the summation order and maths library differ
+            assert err <= 2e-6 * np.abs(want).max(), name
+
+
+def test_butterworth_tables_are_scipys():
+    """engine-rs/src/features.rs holds drums._envelopes' filters as numbers; they must still be what scipy designs."""
+    import re
+
+    from scipy import signal
+
+    src = (ROOT / "src" / "features.rs").read_text()
+
+    def table(name):
+        body = re.search(rf"const {name}: [^=]+= \[(.*?)\];", src, re.S).group(1)
+        return np.array([[float(v) for v in row.split(",") if v.strip()] for row in re.findall(r"\[([^\[\]]+)\]", body)])
+
+    nyq = SR / 2
+    mid = signal.butter(4, [800, min(3000, nyq * 0.9)], btype="bandpass", fs=SR, output="sos")
+    air = signal.butter(4, min(6000, nyq * 0.8), btype="highpass", fs=SR, output="sos")
+    for name, sos in (("MID", mid), ("AIR", air)):
+        assert np.array_equal(table(f"{name}_SOS"), sos)
+        assert np.array_equal(table(f"{name}_ZI"), signal.sosfilt_zi(sos))
+
+
+def test_aac_priming_is_trimmed(stereo_44k, tmp_path):
+    """The M4A edit list says how much encoder priming to skip; the decoded audio lines up with the WAV it came from."""
+    m4a = [p for p in stereo_44k if p.suffix == ".m4a"]
+    if not m4a:
+        pytest.skip("no AAC encoder")
+    wav = native(stereo_44k[0], tmp_path / "wav")["y"]
+    aac = native(m4a[0], tmp_path / "aac")["y"]
+    assert abs(len(aac) - len(wav)) < 30
+    n = min(len(wav), len(aac)) - 200
+    seg = slice(2000, n)
+    lags = range(-8, 9)
+    best = max(lags, key=lambda k: float(np.dot(wav[seg], aac[seg.start + k:seg.stop + k])))
+    assert best == 0
 
 
 def test_decoding_and_resampling_match_librosa_below_10_khz(stereo_44k, tmp_path):

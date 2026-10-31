@@ -1,0 +1,4 @@
+# WebAssembly SIMD (every current browser has it) lets the compiler vectorise the fixed-order lanes in
+# resample.rs and elsewhere; results are the same bits with or without it.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

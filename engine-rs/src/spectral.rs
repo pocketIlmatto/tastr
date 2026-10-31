@@ -16,54 +16,108 @@ const KERNEL: usize = 31;
 /// Frames x bins, row-major by frame.
 pub struct Spectrogram {
     pub frames: usize,
+    pub bins: usize,
     pub data: Vec<Complex<f32>>,
 }
 
-fn hann() -> Vec<f64> {
+fn hann(n: usize) -> Vec<f64> {
     // scipy.signal.get_window("hann", N, fftbins=True): 0.5 - 0.5 cos(2 pi k / N)
-    (0..N_FFT).map(|k| 0.5 - 0.5 * libm::cos(2.0 * core::f64::consts::PI * k as f64 / N_FFT as f64)).collect()
+    (0..n).map(|k| 0.5 - 0.5 * libm::cos(2.0 * core::f64::consts::PI * k as f64 / n as f64)).collect()
 }
 
-pub fn n_frames(len: usize) -> usize {
-    1 + len / HOP
-}
-
+/// librosa.stft(y) with the defaults: n_fft 2048, hop 512.
 pub fn stft(y: &[f32]) -> Spectrogram {
-    let win = hann();
-    let frames = n_frames(y.len());
-    let fft = FftPlannerScalar::<f64>::new().plan_fft_forward(N_FFT);
-    let mut buf = vec![Complex::new(0.0f64, 0.0); N_FFT];
+    stft_with(y, N_FFT, HOP)
+}
+
+/// librosa.stft(y, n_fft=n_fft, hop_length=hop): centred frames, zero padding, periodic Hann window.
+pub fn stft_with(y: &[f32], n_fft: usize, hop: usize) -> Spectrogram {
+    let bins = n_fft / 2 + 1;
+    let mut data = Vec::with_capacity((1 + y.len() / hop) * bins);
+    let frames = stft_frames(y, n_fft, hop, |_, col| data.extend_from_slice(col));
+    Spectrogram { frames, bins, data }
+}
+
+/// The same STFT handed over one frame at a time, `each(frame, bins)`, without keeping it. Returns the frame count.
+pub fn stft_frames(y: &[f32], n_fft: usize, hop: usize, mut each: impl FnMut(usize, &[Complex<f32>])) -> usize {
+    let win = hann(n_fft);
+    let bins = n_fft / 2 + 1;
+    let frames = 1 + y.len() / hop;
+    let fft = FftPlannerScalar::<f64>::new().plan_fft_forward(n_fft);
+    let mut buf = vec![Complex::new(0.0f64, 0.0); n_fft];
     let mut scratch = vec![Complex::new(0.0f64, 0.0); fft.get_inplace_scratch_len()];
-    let mut data = Vec::with_capacity(frames * BINS);
-    let pad = (N_FFT / 2) as isize;
+    let mut col = vec![Complex::new(0.0f32, 0.0); bins];
+    let pad = (n_fft / 2) as isize;
     for f in 0..frames {
-        let start = (f * HOP) as isize - pad;
+        let start = (f * hop) as isize - pad;
         for (k, c) in buf.iter_mut().enumerate() {
             let i = start + k as isize;
             let v = if i >= 0 && (i as usize) < y.len() { y[i as usize] as f64 } else { 0.0 };
             *c = Complex::new(win[k] * v, 0.0);
         }
         fft.process_with_scratch(&mut buf, &mut scratch);
-        data.extend(buf[..BINS].iter().map(|c| Complex::new(c.re as f32, c.im as f32)));
+        for (o, c) in col.iter_mut().zip(&buf[..bins]) {
+            *o = Complex::new(c.re as f32, c.im as f32);
+        }
+        each(f, &col);
     }
-    Spectrogram { frames, data }
+    frames
 }
 
-/// librosa.istft(D, length=len) for a centred STFT with the defaults above.
-pub fn istft(spec: &Spectrogram, len: usize) -> Vec<f32> {
-    let win = hann();
-    let padded = len + 2 * (N_FFT / 2);
-    let frames = spec.frames.min(padded.div_ceil(HOP));
-    let fft = FftPlannerScalar::<f32>::new().plan_fft_inverse(N_FFT);
-    let mut buf = vec![Complex::new(0.0f32, 0.0); N_FFT];
-    let mut scratch = vec![Complex::new(0.0f32, 0.0); fft.get_inplace_scratch_len()];
-    // Overlap-add over the padded timeline, then drop the first n_fft/2 samples.
-    let total = N_FFT + HOP * (frames.max(1) - 1);
-    let mut acc = vec![0.0f32; total.max(len + N_FFT / 2)];
-    let mut wss = vec![0.0f32; acc.len()];
-    let scale = 1.0f32 / N_FFT as f32;
-    for f in 0..frames {
-        let col = &spec.data[f * BINS..(f + 1) * BINS];
+/// |D| ** power, as librosa's _spectrogram does in float32 (hypot, then square for power 2).
+pub fn magnitude(spec: &Spectrogram, power: u32) -> Vec<f32> {
+    spec.data
+        .iter()
+        .map(|c| {
+            let m = libm::hypotf(c.re, c.im);
+            if power == 2 {
+                m * m
+            } else {
+                m
+            }
+        })
+        .collect()
+}
+
+/// librosa.istft(D, length=len) for a centred STFT with the defaults above, fed one frame at a time so the
+/// whole spectrogram never has to be held.
+pub struct Istft {
+    len: usize,
+    frames: usize,
+    win: Vec<f64>,
+    fft: std::sync::Arc<dyn rustfft::Fft<f32>>,
+    buf: Vec<Complex<f32>>,
+    scratch: Vec<Complex<f32>>,
+    acc: Vec<f32>,
+}
+
+impl Istft {
+    /// For a signal of `len` samples whose STFT has `frames` frames.
+    pub fn new(len: usize, frames: usize) -> Self {
+        let padded = len + 2 * (N_FFT / 2);
+        let frames = frames.min(padded.div_ceil(HOP));
+        let fft = FftPlannerScalar::<f32>::new().plan_fft_inverse(N_FFT);
+        let scratch = vec![Complex::new(0.0f32, 0.0); fft.get_inplace_scratch_len()];
+        // Overlap-add over the padded timeline; the first n_fft/2 samples are dropped at the end.
+        let total = N_FFT + HOP * (frames.max(1) - 1);
+        Istft {
+            len,
+            frames,
+            win: hann(N_FFT),
+            fft,
+            buf: vec![Complex::new(0.0f32, 0.0); N_FFT],
+            scratch,
+            acc: vec![0.0f32; total.max(len + N_FFT / 2)],
+        }
+    }
+
+    /// Adds frame `f` (BINS values); frames past the ones librosa uses are ignored.
+    #[allow(clippy::needless_range_loop)]
+    pub fn push(&mut self, f: usize, col: &[Complex<f32>]) {
+        if f >= self.frames {
+            return;
+        }
+        let buf = &mut self.buf;
         // Hermitian spectrum -> real signal (scipy.fft.irfft ignores the imaginary part of DC and Nyquist).
         buf[0] = Complex::new(col[0].re, 0.0);
         buf[N_FFT / 2] = Complex::new(col[BINS - 1].re, 0.0);
@@ -71,25 +125,45 @@ pub fn istft(spec: &Spectrogram, len: usize) -> Vec<f32> {
             buf[k] = col[k];
             buf[N_FFT - k] = col[k].conj();
         }
-        fft.process_with_scratch(&mut buf, &mut scratch);
+        self.fft.process_with_scratch(buf, &mut self.scratch);
+        let scale = 1.0f32 / N_FFT as f32;
         let off = f * HOP;
         for k in 0..N_FFT {
-            let v = win[k] * (buf[k].re * scale) as f64;
-            acc[off + k] = (acc[off + k] as f64 + v) as f32;
-            wss[off + k] = (wss[off + k] as f64 + win[k] * win[k]) as f32;
+            let v = self.win[k] * (buf[k].re * scale) as f64;
+            self.acc[off + k] = (self.acc[off + k] as f64 + v) as f32;
         }
     }
-    let tiny = f32::MIN_POSITIVE;
-    (0..len)
-        .map(|i| {
-            let j = i + N_FFT / 2;
-            if wss[j] > tiny {
-                acc[j] / wss[j]
-            } else {
-                acc[j]
+
+    /// The signal, divided by the summed squared window where that isn't ~0.
+    #[allow(clippy::needless_range_loop)]
+    pub fn finish(self) -> Vec<f32> {
+        let mut wss = vec![0.0f32; self.acc.len()];
+        for f in 0..self.frames {
+            for k in 0..N_FFT {
+                let i = f * HOP + k;
+                wss[i] = (wss[i] as f64 + self.win[k] * self.win[k]) as f32;
             }
-        })
-        .collect()
+        }
+        let tiny = f32::MIN_POSITIVE;
+        (0..self.len)
+            .map(|i| {
+                let j = i + N_FFT / 2;
+                if wss[j] > tiny {
+                    self.acc[j] / wss[j]
+                } else {
+                    self.acc[j]
+                }
+            })
+            .collect()
+    }
+}
+
+pub fn istft(spec: &Spectrogram, len: usize) -> Vec<f32> {
+    let mut out = Istft::new(len, spec.frames);
+    for f in 0..spec.frames {
+        out.push(f, &spec.data[f * spec.bins..(f + 1) * spec.bins]);
+    }
+    out.finish()
 }
 
 /// scipy.ndimage "reflect" index: (d c b a | a b c d | d c b a), periodic with period 2n.
@@ -144,25 +218,17 @@ fn softmask(x: f32, x_ref: f32) -> f32 {
 /// (harmonic, percussive) audio, as tastr.engine.signals.hpss.
 pub fn hpss(y: &[f32]) -> (Vec<f32>, Vec<f32>) {
     let d = stft(y);
-    let frames = d.frames;
-    // librosa.magphase: |D| (hypot) and D / |D|, with phase 1 where |D| is 0.
-    let mag: Vec<f32> = d.data.iter().map(|c| libm::hypotf(c.re, c.im)).collect();
-    let phase: Vec<Complex<f32>> = d
-        .data
-        .iter()
-        .zip(&mag)
-        .map(|(c, &m)| {
-            let z = if m == 0.0 { 1.0f32 } else { 0.0 };
-            let nz = m + z;
-            Complex::new(c.re / nz + z, c.im / nz)
-        })
-        .collect();
+    let mag = magnitude(&d, 1);
+    hpss_from(&d, &mag, y.len())
+}
 
+/// HPSS from the default STFT of a `len`-sample signal and its magnitude (librosa.magphase's).
+pub fn hpss_from(d: &Spectrogram, mag: &[f32], len: usize) -> (Vec<f32>, Vec<f32>) {
+    let frames = d.frames;
+    // Harmonic medians run along time, per frequency bin (each bin copied out first: storage is by frame).
     let mut harm = vec![0.0f32; mag.len()];
-    let mut perc = vec![0.0f32; mag.len()];
     let (mut col, mut out) = (vec![0.0f32; frames], vec![0.0f32; frames]);
     for b in 0..BINS {
-        // harmonic: along time, per frequency bin (copied out first: the spectrogram is stored frame by frame)
         for f in 0..frames {
             col[f] = mag[f * BINS + b];
         }
@@ -171,23 +237,26 @@ pub fn hpss(y: &[f32]) -> (Vec<f32>, Vec<f32>) {
             harm[f * BINS + b] = out[f];
         }
     }
+    // Then frame by frame: the percussive medians along frequency, both soft masks, and both inverse STFTs.
+    let (mut h_out, mut p_out) = (Istft::new(len, frames), Istft::new(len, frames));
+    let mut perc = vec![0.0f32; BINS];
+    let (mut h_col, mut p_col) = (vec![Complex::new(0.0f32, 0.0); BINS], vec![Complex::new(0.0f32, 0.0); BINS]);
     for f in 0..frames {
-        // percussive: along frequency, per frame
         let row = &mag[f * BINS..(f + 1) * BINS];
-        let out = &mut perc[f * BINS..(f + 1) * BINS];
-        median_line(BINS, |b| row[b], |b, v| out[b] = v);
+        median_line(BINS, |b| row[b], |b, v| perc[b] = v);
+        for b in 0..BINS {
+            let (i, c, m) = (f * BINS + b, d.data[f * BINS + b], row[b]);
+            // librosa.magphase's phase: D / |D|, and 1 where |D| is 0.
+            let z = if m == 0.0 { 1.0f32 } else { 0.0 };
+            let nz = m + z;
+            let phase = Complex::new(c.re / nz + z, c.im / nz);
+            let sh = m * softmask(harm[i], perc[b]);
+            let sp = m * softmask(perc[b], harm[i]);
+            h_col[b] = Complex::new(sh * phase.re, sh * phase.im);
+            p_col[b] = Complex::new(sp * phase.re, sp * phase.im);
+        }
+        h_out.push(f, &h_col);
+        p_out.push(f, &p_col);
     }
-
-    let part = |mask_of: &dyn Fn(usize) -> f32| -> Vec<f32> {
-        let data = (0..mag.len())
-            .map(|i| {
-                let s = mag[i] * mask_of(i);
-                Complex::new(s * phase[i].re, s * phase[i].im)
-            })
-            .collect();
-        istft(&Spectrogram { frames, data }, y.len())
-    };
-    let h = part(&|i| softmask(harm[i], perc[i]));
-    let p = part(&|i| softmask(perc[i], harm[i]));
-    (h, p)
+    (h_out.finish(), p_out.finish())
 }

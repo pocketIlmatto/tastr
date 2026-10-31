@@ -2776,7 +2776,7 @@ api("/api/config").then((cfg) => {
 // Cloud cost is an estimate: Modal bills about $0.001 per analysis and $0.008 per stem job (T4, ~50 s), against the
 // friends environment's monthly budget, which is set in Modal and not known to the server.
 const ADM_TRACK_COST = 0.001, ADM_STEM_COST = 0.008, ADM_BUDGET = 10;
-let admData = null, admKind = "tracks", admFocus = null;
+let admData = null, admKind = "tracks", admLog = "all", admFocus = null;
 const admColor = (i) => `var(--sec${i % 5})`;
 const admMeter = (v, hot) => h("div", { class: "adm-meter" + (hot ? " hot" : ""), style: `--v:${Math.min(1, v || 0)}` }, h("i"));
 const admGB = (bytes) => `${(bytes / 1024 ** 3).toFixed(bytes >= 1024 ** 3 ? 1 : 2)} GB`;
@@ -2865,9 +2865,16 @@ function renderAdmin() {
         h("td", { class: "num" }, String(p.tracks30)), h("td", { class: "num" }, String(p.tracks)),
         h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", { class: "num" }, `$${p.cost.toFixed(2)}`));
     })));
-  $("adm-log").replaceChildren(...(A.recent.length ? A.recent.map((e) => h("li", { class: e.ok ? "" : "warn" },
+  // All activity, or only the problems (failures, limits hit, restarts), each with links to dig into the logs.
+  const links = A.log_links || {}, rows = admLog === "problems" ? A.problems || [] : A.recent;
+  const linkEls = () => [links.fly && h("a", { href: links.fly, target: "_blank", rel: "noopener" }, "Fly logs"),
+    links.modal && h("a", { href: links.modal, target: "_blank", rel: "noopener" }, "Modal")].filter(Boolean);
+  const dig = (e) => (e.ok ? null : h("span", { class: "adm-dig" }, ...linkEls().flatMap((a, i) => (i ? [" · ", a] : [a]))));
+  $("adm-logseg").querySelector('[data-k="problems"]').textContent = `Problems${A.problems && A.problems.length ? ` (${A.problems.length})` : ""}`;
+  $("adm-log").replaceChildren(...(rows.length ? rows.map((e) => h("li", { class: e.ok ? "" : "warn" },
     h("time", { datetime: e.at, title: e.at }, admAgo(e.at)),
-    h("span", {}, e.user ? h("b", { title: e.user }, admName(e.user) + " ") : null, h("span", {}, e.detail)))) : [h("li", { class: "muted" }, "Nothing yet.")]));
+    h("span", {}, e.user ? h("b", { title: e.user }, admName(e.user) + " ") : null, h("span", {}, e.detail), dig(e)))) : [h("li", { class: "muted" }, admLog === "problems" ? "No problems logged." : "Nothing yet.")]));
+  $("adm-loglinks").replaceChildren(...(linkEls().length ? ["Full logs: ", ...linkEls().flatMap((a, i) => (i ? [" · ", a] : [a])), ". Search them for an upload's ref."] : []));
   const kv = [["Upload size", `${L.max_upload_mb} MB`, "TASTR_MAX_UPLOAD_MB"], ["Track length", `${L.max_minutes} min`, "TASTR_MAX_MINUTES"], ["Files per upload", L.max_files, "TASTR_MAX_FILES"],
     ["Tracks per person per day", L.daily_tracks, "TASTR_DAILY_TRACKS"], ["Stem jobs per person per day", L.daily_stems, "TASTR_DAILY_STEMS"],
     ["Total storage", `${L.storage_gb} GB`, "TASTR_STORAGE_GB"], ["Analyses at once", L.max_analyses, "TASTR_MAX_ANALYSES"],
@@ -2875,7 +2882,12 @@ function renderAdmin() {
   $("adm-limits").replaceChildren(h("tbody", {}, ...kv.map(([a, b, c]) => h("tr", {}, h("td", {}, a, h("br"), h("code", {}, c)), h("td", {}, String(b))))));
   $("adm-blocked").textContent = `Blocked today: ${A.blocked_today} request${A.blocked_today === 1 ? "" : "s"} without a valid Access token.`;
 }
-document.querySelectorAll(".adm-seg button").forEach((b) => b.addEventListener("click", () => {
+document.querySelectorAll("#adm-logseg button").forEach((b) => b.addEventListener("click", () => {
+  admLog = b.dataset.k;
+  document.querySelectorAll("#adm-logseg button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  renderAdmin();
+}));
+document.querySelectorAll(".adm-seg:not(#adm-logseg) button").forEach((b) => b.addEventListener("click", () => {
   admKind = b.dataset.k;
   document.querySelectorAll(".adm-seg button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
   renderAdmin();

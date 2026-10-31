@@ -181,8 +181,10 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 
 These have defaults and change only if you set a Fly secret of the same name ([hosting.md](hosting.md#settings)):
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
-`TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`. `TASTR_BROWSER_SIGNALS=1` (off by default) has the browser run HPSS
-before uploading.
+`TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`, and `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin
+tab's Modal link opens the app). `TASTR_BROWSER_SIGNALS=1` (off by default) has the browser run HPSS
+before uploading. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
+(a change since the last start is logged as a deploy) on its own.
 
 ### Dashboards
 

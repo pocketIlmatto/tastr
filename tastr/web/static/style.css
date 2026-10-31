@@ -598,6 +598,10 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .adm-log li { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
 .adm-log li:first-child { border-top: 0; }
 .adm-log li.warn span:last-child { color: var(--warn); }
+.adm-log .adm-dig { display: block; margin-top: 2px; font-size: 12px; }
+.adm-log li.warn span.adm-dig, .adm-log li.warn .adm-dig a { color: var(--muted); }
+.adm-loglinks { margin: 8px 0 0; font-size: 12px; }
+.adm-loglinks a { color: inherit; }
 .adm-log time { color: var(--muted); font-variant-numeric: tabular-nums; }
 .adm-kv { width: 100%; }
 .adm-kv td { white-space: normal; padding: 5px 8px; }

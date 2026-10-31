@@ -601,8 +601,10 @@ def add_event(conn: sqlite3.Connection, user: str | None, kind: str, detail: str
         conn.execute("DELETE FROM events WHERE at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)", (f"-{EVENT_DAYS} days",))
 
 
-def recent_events(conn: sqlite3.Connection, n: int = 20) -> list[dict[str, Any]]:
-    rows = conn.execute("SELECT at, user, kind, ok, detail FROM events ORDER BY at DESC, id DESC LIMIT ?", (n,))
+def recent_events(conn: sqlite3.Connection, n: int = 20, problems: bool = False) -> list[dict[str, Any]]:
+    """The last `n` admin log lines; with `problems`, only failures, limits hit and restarts that cut work off."""
+    where = "WHERE ok = 0 " if problems else ""
+    rows = conn.execute(f"SELECT at, user, kind, ok, detail FROM events {where}ORDER BY at DESC, id DESC LIMIT ?", (n,))
     return [{"at": at, "user": user, "kind": kind, "ok": bool(ok), "detail": detail} for at, user, kind, ok, detail in rows]
 
 

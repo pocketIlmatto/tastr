@@ -159,7 +159,7 @@ def test_too_long_upload_is_refused_before_analysis(db_path, home):
     assert r.status_code == 413 and "mix.wav" in r.json()["detail"] and "minutes" in r.json()["detail"]
     assert [p for p in (home / "uploads").rglob("*") if p.is_file()] == []
     conn = db.connect(db_path)
-    assert "track length limit" in db.recent_events(conn)[0]["detail"]
+    assert db.recent_events(conn)[0]["detail"] == "Hit the track length limit (0.05 min): mix.wav, 0 min"
     assert db.usage_today(conn, "friend@example.com", "tracks", hosted.today()) == 0
 
 
@@ -360,8 +360,10 @@ def test_admin_activity_log_and_blocked_requests(db_path, home):
     log = [(e["kind"], e["ok"], e["detail"]) for e in body["recent"]]  # newest first
     assert log == [("limit", False, "Hit the daily track limit (1)"),
                    ("failed", False, "Analysis failed: broken.wav, it couldn't be decoded as audio"),
-                   ("upload", True, "Uploaded 1 track"),
+                   ("upload", True, "Uploaded broken.wav"),
                    ("signin", True, "Signed in for the first time")]
+    assert [e["kind"] for e in body["problems"]] == ["limit", "failed"]
+    assert body["log_links"]["modal"].startswith("https://modal.com/")
     assert all(e["user"] == "friend@example.com" and e["at"] for e in body["recent"])
     assert str(home) not in str(body["recent"])  # no server paths
 
@@ -529,4 +531,36 @@ def test_background_jobs_are_each_persons_own_and_count_only_successes(db_path, 
     assert c.get(f"/api/analyze/jobs/{job['id']}", headers={"cf-access-jwt-assertion": "other"}).status_code == 404
     conn = db.connect(db_path)
     assert db.usage_today(conn, "friend@example.com", "tracks", hosted.today()) == 0  # a failure doesn't count
+    tag = f"(ref {job['id'][:8]})"  # the same ref in the upload and failure lines, and in the server log
+    upload_line, failed_line = [e["detail"] for e in reversed(db.recent_events(conn))]
+    assert upload_line == f"Uploaded broken.wav {tag}"
+    assert failed_line.startswith("Analysis failed: broken.wav at step ") and failed_line.endswith(tag)
     conn.close()
+
+
+def test_restart_logs_cut_off_analyses_and_deploys(db_path, home):
+    import json
+
+    folder = home / "analysis-jobs"
+    folder.mkdir(parents=True)
+    (folder / "abc123ff00.json").write_text(json.dumps({"id": "abc123ff00", "owner": "friend@example.com", "state": "running",
+                                                        "stage": "sections", "files": ["mix.mp3"]}))
+    s = dict(hosted=True, access_team_domain=TEAM, access_aud=AUD)
+    with TestClient(create_app(db_path, Settings(**s, fly_image="img:1"), verifier=stub_verifier)):
+        pass
+    conn = db.connect(db_path)
+    log = [(e["kind"], e["ok"], e["detail"], e["user"]) for e in db.recent_events(conn)]
+    assert log == [("failed", False, "Cut off by the restart: mix.mp3, while at step sections (ref abc123ff)", "friend@example.com"),
+                   ("restart", False, "The server restarted in the middle of an analysis (it crashed or its machine was stopped)", None)]
+    for image in ("img:1", "img:2"):  # a wake-up with the same version logs nothing; a new one logs the deploy
+        with TestClient(create_app(db_path, Settings(**s, fly_image=image), verifier=stub_verifier)):
+            pass
+    assert [e["detail"] for e in db.recent_events(conn)][0] == "Deployed a new version (the server restarted)"
+    assert len(db.recent_events(conn)) == 3
+
+
+def test_log_links():
+    s = Settings(fly_app="tastr-x", modal_env="friends", modal_workspace="me")
+    assert s.log_links("tastr-web") == {"fly": "https://fly.io/apps/tastr-x/monitoring",
+                                        "modal": "https://modal.com/apps/me/friends/deployed/tastr-web"}
+    assert Settings().log_links("tastr-web") == {"modal": "https://modal.com/apps"}

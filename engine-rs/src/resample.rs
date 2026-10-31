@@ -64,19 +64,38 @@ pub fn resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
 
     let n_out = (x.len() as u64 * up as u64).div_ceil(down as u64) as usize;
     let mut out = Vec::with_capacity(n_out);
+    let xf: Vec<f64> = x.iter().map(|&v| v as f64).collect();
     for n in 0..n_out {
         let pos = n * down; // in units of 1/up input samples
         let (i, p) = (pos / up, pos % up);
         let taps = &bank[p * taps_per..(p + 1) * taps_per];
         let start = i as isize - (half as isize - 1);
-        let mut acc = 0.0f64;
-        for (j, &h) in taps.iter().enumerate() {
-            let k = start + j as isize;
-            if k >= 0 && (k as usize) < x.len() {
-                acc += h * x[k as usize] as f64;
-            }
+        // Taps that fall outside the input see zeros: trim them, then sum what is left.
+        let lo = (-start).max(0) as usize;
+        let hi = taps_per.min((xf.len() as isize - start).max(0) as usize);
+        if lo >= hi {
+            out.push(0.0);
+            continue;
         }
-        out.push(acc as f32);
+        let s0 = (start + lo as isize) as usize;
+        out.push(dot(&taps[lo..hi], &xf[s0..s0 + (hi - lo)]) as f32);
     }
     out
+}
+
+/// A dot product in a fixed order: eight running sums (lane j takes every eighth term from j), added up at the
+/// end. The order is spelled out, so it is the same whether or not the compiler turns the lanes into SIMD.
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    let mut lanes = [0.0f64; 8];
+    let chunks = a.len() / 8;
+    for c in 0..chunks {
+        let (ca, cb) = (&a[c * 8..c * 8 + 8], &b[c * 8..c * 8 + 8]);
+        for j in 0..8 {
+            lanes[j] += ca[j] * cb[j];
+        }
+    }
+    for k in chunks * 8..a.len() {
+        lanes[k % 8] += a[k] * b[k];
+    }
+    ((lanes[0] + lanes[4]) + (lanes[1] + lanes[5])) + ((lanes[2] + lanes[6]) + (lanes[3] + lanes[7]))
 }

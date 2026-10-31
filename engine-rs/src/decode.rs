@@ -16,6 +16,7 @@ pub struct Decoded {
 }
 
 pub fn decode(bytes: Vec<u8>) -> Result<Decoded, String> {
+    let edit = mp4_edit(&bytes);
     let mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
     // Gapless trims the encoder delay and padding MP3/AAC files declare, as libsndfile/mpg123 do.
     let fmt = FormatOptions { enable_gapless: true, ..Default::default() };
@@ -68,5 +69,90 @@ pub fn decode(bytes: Vec<u8>) -> Result<Decoded, String> {
     if sr == 0 || samples.is_empty() {
         return Err("no audio decoded".into());
     }
+    if let Some(e) = edit {
+        // symphonia 0.5 ignores MP4 edit lists, which is where AAC files say how much priming to drop.
+        let skip = ((e.skip as f64) * sr as f64 / e.media_timescale as f64).round() as usize;
+        let keep = (e.seconds * sr as f64).round() as usize;
+        let end = (skip + keep).min(samples.len());
+        samples = samples[skip.min(end)..end].to_vec();
+    }
     Ok(Decoded { samples, sr })
+}
+
+/// The first edit of an MP4's sound track: skip `skip` units of `media_timescale`, then play `seconds`.
+struct Mp4Edit {
+    skip: u64,
+    media_timescale: u64,
+    seconds: f64,
+}
+
+fn be32(b: &[u8], i: usize) -> Option<u64> {
+    b.get(i..i + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as u64)
+}
+
+fn be64(b: &[u8], i: usize) -> Option<u64> {
+    b.get(i..i + 8).map(|s| u64::from_be_bytes(s.try_into().unwrap()))
+}
+
+/// The boxes directly inside `b`: (type, contents).
+fn boxes(b: &[u8]) -> Vec<(&[u8], &[u8])> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 8 <= b.len() {
+        let (mut size, mut head) = (be32(b, i).unwrap_or(0) as usize, 8);
+        if size == 1 {
+            size = be64(b, i + 8).unwrap_or(0) as usize;
+            head = 16;
+        } else if size == 0 {
+            size = b.len() - i;
+        }
+        if size < head || i + size > b.len() {
+            break;
+        }
+        out.push((&b[i + 4..i + 8], &b[i + head..i + size]));
+        i += size;
+    }
+    out
+}
+
+fn child<'a>(b: &'a [u8], kind: &[u8]) -> Option<&'a [u8]> {
+    boxes(b).into_iter().find(|(k, _)| *k == kind).map(|(_, c)| c)
+}
+
+/// The timescale field of an mvhd or mdhd box, version 0 or 1.
+fn timescale(full: &[u8]) -> Option<u64> {
+    if full.first()? == &1 {
+        be32(full, 20)
+    } else {
+        be32(full, 12)
+    }
+}
+
+fn mp4_edit(bytes: &[u8]) -> Option<Mp4Edit> {
+    if bytes.get(4..8)? != b"ftyp" {
+        return None;
+    }
+    let moov = child(bytes, b"moov")?;
+    let movie_ts = timescale(child(moov, b"mvhd")?)?;
+    for (kind, trak) in boxes(moov) {
+        if kind != b"trak" {
+            continue;
+        }
+        let mdia = child(trak, b"mdia")?;
+        if child(mdia, b"hdlr").and_then(|h| h.get(8..12)) != Some(b"soun") {
+            continue;
+        }
+        let media_ts = timescale(child(mdia, b"mdhd")?)?;
+        let elst = child(child(trak, b"edts")?, b"elst")?;
+        let v1 = elst.first()? == &1;
+        if be32(elst, 4)? < 1 {
+            return None;
+        }
+        let (dur, skip) = if v1 { (be64(elst, 8)?, be64(elst, 16)?) } else { (be32(elst, 8)?, be32(elst, 12)?) };
+        if movie_ts == 0 || media_ts == 0 || skip == u32::MAX as u64 || skip == u64::MAX {
+            return None; // an empty edit (a gap); leave the track as it is
+        }
+        return Some(Mp4Edit { skip, media_timescale: media_ts, seconds: dur as f64 / movie_ts as f64 });
+    }
+    None
 }

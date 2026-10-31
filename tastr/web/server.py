@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
                ".ogg": "audio/ogg", ".aif": "audio/aiff", ".aiff": "audio/aiff", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
 MAX_QUERY_ROWS = 5000
+QUERY_SECONDS = 2.0  # hosted: a query that runs longer is stopped
 # The Strudel sketch ("Try this in Strudel") loads the original audio and its stems from strudel.cc, so only
 # those endpoints answer CORS, and only for that origin.
 STRUDEL_ORIGINS = ("https://strudel.cc",)
@@ -246,7 +247,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 db.add_usage(c, user, "visits", today())
             if first:
                 event(user, "signin", "Signed in for the first time")
-        return {"hosted": hosted, "links": not hosted, "query": not hosted, "user": user,
+        return {"hosted": hosted, "links": not hosted, "query": True, "query_scope": "all" if not hosted or user in settings.admins else "mine", "user": user,
                 "admin": hosted and user in settings.admins, "limits": settings.limits() if hosted else None}
 
     @app.get("/api/admin/usage")
@@ -673,16 +674,23 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 raise HTTPException(400, str(e))
         return _results(results)
 
+    query_slot = threading.Semaphore(1)  # hosted: one SQL query at a time, so nobody's query slows everyone else
+
     @app.post("/api/query")
-    def run_query(body: QueryBody):
-        if hosted:
-            raise HTTPException(403, "The SQL query box is turned off on this server.")
-        path = db_path or db.default_db_path()
+    def run_query(body: QueryBody, request: Request):
+        # Hosted: admins query the whole database; everyone else a copy of their own library (db.LIBRARY_TABLES).
+        owner = request.state.user if hosted and request.state.user not in settings.admins else None
+        if hosted and not query_slot.acquire(blocking=False):
+            raise HTTPException(429, "Another SQL query is running. Try again in a few seconds.")
         try:
-            columns, rows = db.run_query(path, body.sql, MAX_QUERY_ROWS)
+            columns, rows = db.run_query(db_path or db.default_db_path(), body.sql, MAX_QUERY_ROWS,
+                                         QUERY_SECONDS if hosted else 5.0, owner=owner)
         except sqlite3.Error as e:
             msg = "The query took too long and was stopped." if str(e) == "interrupted" else str(e)
             raise HTTPException(400, msg)
+        finally:
+            if hosted:
+                query_slot.release()
         return {"columns": columns, "rows": rows}
 
     page = versioned_index()

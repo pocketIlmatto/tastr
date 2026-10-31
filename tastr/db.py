@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import time
 from contextlib import closing
@@ -500,10 +501,33 @@ def retag_track(conn: sqlite3.Connection, track_id: int) -> str:
 _QUERY_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, getattr(sqlite3, "SQLITE_RECURSIVE", 33)}
 
 
-def run_query(path: str | os.PathLike, sql: str, max_rows: int, seconds: float = 5.0) -> tuple[list[str], list[list]]:
-    """Run one SELECT on a read-only connection: only the actions above, stopped after `seconds`, at most `max_rows` rows."""
+# A friend's SQL on a hosted server runs on an in-memory copy of their own library: these tables, their rows only,
+# without the columns that name people or server paths. Tables the query doesn't mention are copied empty.
+LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups")
+_PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_json"}
+
+
+def _library_copy(path: str | os.PathLike, owner: str, sql: str) -> sqlite3.Connection:
+    mem = sqlite3.connect("file::memory:", uri=True, check_same_thread=False)
+    mem.execute("ATTACH DATABASE ? AS src", (f"file:{Path(path)}?mode=ro",))
+    cols = ", ".join(f'"{r[1]}"' for r in mem.execute("PRAGMA src.table_info(tracks)") if r[1] not in _PRIVATE_COLUMNS)
+    mem.execute(f"CREATE TABLE tracks AS SELECT {cols} FROM src.tracks WHERE owner = ?", (owner,))
+    for t in LIBRARY_TABLES[1:]:
+        used = re.search(rf"\b{t}\b", sql, re.IGNORECASE)
+        mem.execute(f"CREATE TABLE {t} AS SELECT * FROM src.{t} WHERE {'track_id IN (SELECT id FROM tracks)' if used else '0'}")
+    mem.commit()
+    mem.execute("DETACH DATABASE src")
+    return mem
+
+
+def run_query(path: str | os.PathLike, sql: str, max_rows: int, seconds: float = 5.0,
+              owner: str | None = None) -> tuple[list[str], list[list]]:
+    """Run one SELECT: only the actions above, stopped after `seconds`, at most `max_rows` rows.
+
+    With `owner`, it runs on a copy of that person's library (see LIBRARY_TABLES) instead of the database itself.
+    """
     deadline = time.monotonic() + seconds
-    with closing(connect(path, readonly=True)) as conn:
+    with closing(_library_copy(path, owner, sql) if owner else connect(path, readonly=True)) as conn:
         conn.set_authorizer(lambda action, *_: sqlite3.SQLITE_OK if action in _QUERY_ACTIONS else sqlite3.SQLITE_DENY)
         conn.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)  # a true return interrupts the query
         cur = conn.execute(sql)

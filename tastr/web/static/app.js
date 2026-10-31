@@ -2213,12 +2213,15 @@ $("run-sql").addEventListener("click", runSql);
 
 const startView = location.hash.slice(1);  // read before anything can change the hash
 refresh().catch((e) => setStatus(e.message, true));
-// A shared (hosted) server turns off link analysis and the SQL box; hide them rather than let them fail.
+// A shared (hosted) server turns off link analysis; hide it rather than let it fail. Its SQL box reads only your own library.
 // Admins of a hosted server also get the Admin tab; everyone else never sees it, and #admin stays on the library.
 api("/api/config").then((cfg) => {
   serverCfg = cfg;
   if (!cfg.links) $("url-form").hidden = true;
   if (!cfg.query) for (const id of ["sql-panel", "help-sql"]) $(id).hidden = true;
+  $("sql-scope").textContent = cfg.query_scope === "mine"
+    ? "Runs on a copy of your own library: tracks, tags, sections, features, series, suggestions, lookups. One SELECT, stopped after 2 seconds."
+    : `One read-only SELECT, stopped after ${cfg.hosted ? 2 : 5} seconds.${cfg.hosted ? " As an admin you query the whole database, everyone's tracks included." : ""}`;
   if (cfg.admin) {
     document.querySelector("nav button[data-view=admin]").hidden = false;
     if (startView === "admin") switchTo("admin");

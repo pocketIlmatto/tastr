@@ -198,3 +198,29 @@ def test_retag_track_refreshes_only_that_track(tmp_path, db_path):
     a.unlink()
     assert db.retag_track(conn, ids[0]) == "no_file"
     assert db.retag_track(conn, 999) == "missing"
+
+
+def test_id3_isrc_and_musicbrainz_recording(tagged_wav):
+    from mutagen.id3 import TSRC, UFID
+    from mutagen.wave import WAVE
+
+    w = WAVE(tagged_wav)
+    w.tags.add(TSRC(encoding=3, text="GBDUW0000059"))
+    w.tags.add(UFID(owner="http://musicbrainz.org", data=b"11111111-1111-1111-1111-111111111111"))
+    w.save()
+    tags, _ = read_file_meta(tagged_wav)
+    assert tags["isrc"] == "GBDUW0000059"
+    assert tags["musicbrainz_recording"] == "11111111-1111-1111-1111-111111111111"
+
+
+@needs_ffmpeg
+def test_m4a_isrc_and_musicbrainz_recording(tmp_path):
+    from mutagen.mp4 import MP4, MP4FreeForm
+
+    p = _make(tmp_path, "m4a")
+    m = MP4(p)
+    m["----:com.apple.iTunes:ISRC"] = [MP4FreeForm(b"GBDUW0000059")]
+    m["----:com.apple.iTunes:MusicBrainz Track Id"] = [MP4FreeForm(b"11111111-1111-1111-1111-111111111111")]
+    m.save()
+    tags, _ = read_file_meta(p)
+    assert (tags["isrc"], tags["musicbrainz_recording"]) == ("GBDUW0000059", "11111111-1111-1111-1111-111111111111")

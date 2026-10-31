@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime
@@ -54,9 +55,13 @@ def query_for(card) -> TrackQuery | None:
     artist, title = s.artist or tags.get("artist"), tags.get("title") or (s.title if s.kind != "file" else None)
     if not (artist and title):
         return None
-    return TrackQuery(artist=artist, title=title, album=s.album or tags.get("album"), duration=card.duration)
+    mbid = (tags.get("musicbrainz_recording") or "").strip().lower()
+    isrc = re.sub(r"[^A-Z0-9]", "", (tags.get("isrc") or "").upper())
+    return TrackQuery(artist=artist, title=title, album=s.album or tags.get("album"), duration=card.duration,
+                      mbid=mbid if MBID.fullmatch(mbid) else None, isrc=isrc if len(isrc) == 12 else None)
 
 
+MBID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 SETTLED = ("found", "not_found")  # answers worth keeping; pending, no_tags and error are asked again
 REFRESH_MINUTES = 10.0  # a track isn't asked about again sooner than this (TASTR_LOOKUP_REFRESH_MINUTES)
 _asked: dict[tuple[int, str], float] = {}  # (track id, provider) -> last ask, for providers we can't store

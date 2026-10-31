@@ -98,6 +98,10 @@ the index keeps each recording's first submission. Anything released after mid-2
 
 A lookup is:
 
+0. when the file is tagged with a MusicBrainz recording id (MusicBrainz Picard writes one; ID3 `UFID`,
+   MP4 `MusicBrainz Track Id`, Vorbis `MUSICBRAINZ_TRACKID`), that id read straight from the index, with
+   no search. With an ISRC tag (`TSRC` / `ISRC`), one search for the recordings listed under it, taken
+   without title matching. If neither gives an answer, the steps below run as usual;
 1. a [MusicBrainz](https://musicbrainz.org/doc/MusicBrainz_API) recording search by title and the
    first-listed artist (no key; one request a second at most, with a user agent naming Tastr). A hit
    must match the title, the whole artist credit (in any order, as for the other providers) and, when

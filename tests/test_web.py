@@ -1,5 +1,7 @@
 """Tests for the web API and static UI."""
 
+import shutil
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -107,10 +109,12 @@ def test_ui_has_one_drums_bass_and_chords_section():
     js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
     for needle in ('origin === "template"', '"Drums, bass & chords"', "grooveView", "Pattern ideas (by tempo)", "Use in every section",
                    "drumsrc", "partEdits", "by_section", "bassRoll", "miniKeys", "noteOptions", "midiMulti", "startLoop",
-                   "Strong", "beat-group", "STYLE_INFO", "sec-link", "Export MIDI", "Copy as text", "Reset edits", "Outline Δ from the previous section"):
+                   "Strong", "beat-group", "STYLE_INFO", "sec-link", "Export MIDI ▾", "exp-part", "Reset edits", "Reset this section", "Reset whole track", "Outline Δ from the previous section",
+                   "dragNumber(bpmIn)", "smBtns(", "laneCtl", "partOn(", "audible(lane)", "sw playing"):
         assert needle in js
     # Template patterns live in the Pattern picker only: no separate grids or reveal button.
-    for gone in ("ideasShown", "Suggest pattern ideas", "drumGrid(", "midiBytes(", "startPlayer("):
+    # Part chips and "Copy as text" gave way to solo/mute and the Export MIDI picker.
+    for gone in ("ideasShown", "Suggest pattern ideas", "drumGrid(", "midiBytes(", "startPlayer(", "Copy as text", "part-chip"):
         assert gone not in js
 
 
@@ -484,3 +488,31 @@ def test_ui_has_the_glossary():
 def test_cross_site_writes_are_refused(client, headers, status):
     assert client.delete("/api/tracks/999", headers=headers).status_code == status
     assert client.get("/api/tracks", headers=headers).status_code == 200  # reads are unaffected
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_ui_roman_numerals_match_the_engine_for_in_key_chords():
+    """romanOf in app.js counts from the key's own scale, like music.roman_numeral: in A minor, F is VI."""
+    import json
+    import re
+    import subprocess
+
+    from tastr.engine import music
+    from tastr.web.server import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text()
+    defs = [re.search(rf"^const {n} = .*?;$", js, re.M | re.S).group(0) for n in ("NOTES", "ROMAN", "pcOf", "parseChord", "romanOf")]
+    cases = []
+    for mode, scale in (("major", "Major"), ("minor", "Minor")):
+        for tonic in (0, 9, 4):
+            for deg, iv in enumerate(music.MODES[scale]):
+                root = (tonic + iv) % 12
+                quality = "min" if (mode, deg) in {("major", 1), ("major", 2), ("major", 5), ("minor", 0), ("minor", 3), ("minor", 4)} else "maj"
+                if (mode, deg) in {("major", 6), ("minor", 1)}:
+                    continue  # diminished: the chord picker leaves it out
+                name = music.NOTE_NAMES[root] + ("m" if quality == "min" else "")
+                cases.append([name, tonic, mode, music.roman_numeral(root, quality, tonic, scale)])
+    script = "\n".join(defs) + f"\nconsole.log(JSON.stringify({json.dumps(cases)}.map(([n, t, m]) => romanOf(n, t, m))));"
+    got = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert got == [c[3] for c in cases]
+    assert got[[c[:3] for c in cases].index(["F", 9, "minor"])] == "VI"

@@ -47,7 +47,9 @@ optionally run on a cloud GPU.
   chord loop with Roman numerals, and what changed from the previous section
   (marked Δ).
 - **Edit and play it.** Click steps, pick bass notes and chords, and hear it
-  in the browser. Export MIDI or copy it as text.
+  in the browser with a playhead on every part. Solo or mute each drum lane and
+  part, drag the BPM box up or down to change the tempo, and export the parts
+  you pick as one MIDI file.
 - **Saved edits and versions.** Edits save automatically with the track. Name
   a version to come back to later. Re-analyzing keeps your edits for sections
   that didn't move.

@@ -58,6 +58,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
 | `TASTR_CF_ACCOUNT_ID` | none | your Cloudflare account id (32 hex characters, from the dashboard URL); the Admin tab then links to Access's applications and its log of blocked requests. Not secret, but keep it out of the repository |
 | `TASTR_GITHUB_REPO` | none | `owner/name` of the repository whose GitHub Actions runs on main the Admin log shows (fly.toml sets it) |
+| `TASTR_GITHUB_WORKFLOWS` | none | which workflows' runs the Admin log shows, comma-separated names or file names (fly.toml: `tests,deploy`); none logs no runs |
 | `TASTR_GITHUB_TOKEN` | none | a fine-grained token with read-only Actions access, needed only while that repository is private |
 | `TASTR_WATCH_MINUTES` | 15 | how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off |
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
@@ -120,7 +121,8 @@ UTC days, both included. Blocked requests come back as one Cloudflare line per d
 server when it starts on Fly.
 
 Every `TASTR_WATCH_MINUTES` the server also logs (tastr/web/watch.py): each GitHub Actions run that finished on
-main ("tests passed on main (3 min): ..."), linked to the run, when `TASTR_GITHUB_REPO` is set; and each new
+main ("tests passed on main (3 min): ..."), linked to the run, for the workflows in `TASTR_GITHUB_WORKFLOWS`
+when `TASTR_GITHUB_REPO` is set; and each new
 Litestream snapshot in R2, when `LITESTREAM_BUCKET` is set. A failed check of the backup, or no snapshot for 30
 hours, logs one problem line a day. The first check logs only the last day of runs and the newest snapshot. A
 machine Fly stopped for being idle catches up when it wakes.

@@ -51,9 +51,16 @@ def fetch_runs(repo: str, token: str = "", timeout: float = 10) -> list[dict[str
         return json.load(r).get("workflow_runs", [])
 
 
-def run_events(runs: list[dict[str, Any]], last_id: int | None, now: datetime) -> tuple[list[Event], int | None]:
-    """Log lines for the runs newer than `last_id`, oldest first, and the newest run id seen."""
-    new = [r for r in runs if isinstance(r.get("id"), int) and (last_id is None or r["id"] > last_id)]
+def allowed(run: dict[str, Any], workflows: tuple[str, ...]) -> bool:
+    """Whether `run` is from one of `workflows`, each a workflow's name ("tests") or its file ("test.yml")."""
+    names = {(run.get("name") or "").lower(), (run.get("path") or "").rsplit("/", 1)[-1].lower()}
+    return any(w.lower() in names for w in workflows)
+
+
+def run_events(runs: list[dict[str, Any]], last_id: int | None, now: datetime,
+               workflows: tuple[str, ...]) -> tuple[list[Event], int | None]:
+    """Log lines for the runs of `workflows` newer than `last_id`, oldest first, and the newest run id seen."""
+    new = [r for r in runs if isinstance(r.get("id"), int) and (last_id is None or r["id"] > last_id) and allowed(r, workflows)]
     if last_id is None:
         new = [r for r in new if (_when(r.get("updated_at")) or now) >= now - FIRST_LOOK]
     newest = max([r["id"] for r in runs if isinstance(r.get("id"), int)] + ([last_id] if last_id else []), default=None)

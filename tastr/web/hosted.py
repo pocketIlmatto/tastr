@@ -78,6 +78,7 @@ class Settings:
     # token, needed only while the repository is private. Checked with the R2 backup every `watch_minutes`.
     github_repo: str = ""
     github_token: str = ""
+    github_workflows: tuple[str, ...] = ()  # only these workflows' runs are logged (names or file names); none = nothing
     watch_minutes: float = 15
 
     @classmethod
@@ -109,6 +110,7 @@ class Settings:
             cf_account_id=env.get("TASTR_CF_ACCOUNT_ID", "").strip(),
             github_repo=env.get("TASTR_GITHUB_REPO", "").strip(),
             github_token=env.get("TASTR_GITHUB_TOKEN", "").strip(),
+            github_workflows=tuple(w.strip() for w in env.get("TASTR_GITHUB_WORKFLOWS", "").split(",") if w.strip()),
             watch_minutes=float(env.get("TASTR_WATCH_MINUTES", cls.watch_minutes)),
         )
         if hosted and not (s.access_team_domain and s.access_aud):

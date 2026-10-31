@@ -39,5 +39,5 @@ def load_audio(path: str | os.PathLike, sr: int, mono: bool = True) -> np.ndarra
                 capture_output=True,
             )
             if proc.returncode != 0:
-                raise DecodeError(f"ffmpeg could not decode {path}: {proc.stderr.decode(errors='replace')[:300]}")
+                raise DecodeError(f"ffmpeg could not decode {path}: {proc.stderr.decode(errors='replace')[:300]}") from first_error
             return read(wav)

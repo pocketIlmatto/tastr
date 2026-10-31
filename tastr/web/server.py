@@ -858,9 +858,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 with analysis_slot():
                     result = service.reanalyze_track(c, track_id, beats)
             except FileNotFoundError:
-                raise HTTPException(410, "The original audio file is no longer on disk.")
+                raise HTTPException(410, "The original audio file is no longer on disk.") from None
             except TimeoutError:
-                raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.")
+                raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.") from None
             if result is None:
                 raise HTTPException(404, "no such track")
             if result.error:
@@ -1069,7 +1069,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 with analysis_slot():
                     rs = service.analyze_inputs(c, paths, owner=owner_of(request), cards=sig)
             except TimeoutError:
-                raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.")
+                raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.") from None
             finally:
                 drop_cards(sig)
             if hosted:  # only tracks that analyzed count toward the daily limit, so a failed try can be retried
@@ -1130,7 +1130,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 try:
                     sources = resolve_inputs(inputs)
                 except IngestError as e:
-                    raise JobError(str(e))
+                    raise JobError(str(e)) from e
                 progress.stage("waiting")
                 rs, failed_at = [], []
                 try:
@@ -1143,7 +1143,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                             rs.append(r)
                             failed_at.append(progress.last_stage if r.error else None)
                 except TimeoutError:
-                    raise JobError("The server is busy analyzing other tracks. Try again in a few minutes.")
+                    raise JobError("The server is busy analyzing other tracks. Try again in a few minutes.") from None
                 if hosted:  # as for a plain upload: only tracks that analyzed count toward the daily limit
                     db.add_usage(c, user, "tracks", today(), sum(r.track_id is not None for r in rs))
             out = results(rs, user, job_id, failed_at)
@@ -1192,7 +1192,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             try:
                 results = service.analyze_inputs(c, [body.url])
             except IngestError as e:
-                raise HTTPException(400, str(e))
+                raise HTTPException(400, str(e)) from e
         return _results(results)
 
     query_slot = threading.Semaphore(1)  # hosted: one SQL query at a time, so nobody's query slows everyone else
@@ -1208,7 +1208,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                                          QUERY_SECONDS if hosted else 5.0, owner=owner)
         except sqlite3.Error as e:
             msg = "The query took too long and was stopped." if str(e) == "interrupted" else str(e)
-            raise HTTPException(400, msg)
+            raise HTTPException(400, msg) from e
         finally:
             if hosted:
                 query_slot.release()
@@ -1282,7 +1282,7 @@ def run(host: str = "127.0.0.1", port: int = 8000, db_path: str | None = None, l
     try:
         settings = Settings.from_env()
     except ValueError as e:
-        raise SystemExit(f"Error: {e}")
+        raise SystemExit(f"Error: {e}") from e
     if settings.hosted:
         print(f"Hosted mode: logins checked against {settings.access_team_domain}; link analysis and SQL are off.")
     n = db.refresh_file_meta(db.connect(db_path), only_if_stale=True)  # once per tag reader change

@@ -110,7 +110,7 @@ def drum_sounds(sr: int = SR, seed: int = 1) -> dict:
     snare_t = t(0.2)
     snare = 0.5 * np.exp(-snare_t * 30) * np.sin(2 * np.pi * 190 * snare_t) + 0.5 * np.exp(-snare_t * 22) * _noise(0.2, sr, rng, 400, 9000)
     clap = np.zeros(int(0.25 * sr))
-    for k, d in enumerate((0.0, 0.009, 0.019)):
+    for d in (0.0, 0.009, 0.019):
         burst = _noise(0.008, sr, rng, 900, 2800) * np.exp(-t(0.008) * 300)
         i = int(d * sr)
         clap[i:i + burst.size] += burst

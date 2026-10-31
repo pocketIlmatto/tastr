@@ -84,6 +84,16 @@ To run the tests:
 python -m pytest -q
 ```
 
+CI also lints, and a PR fails if any of these complain:
+
+```bash
+ruff check .                                         # Python; rules in [tool.ruff] in pyproject.toml
+npx eslint@10.12.0 tastr/web/static                  # web UI scripts; rules in eslint.config.mjs
+(cd engine-rs && cargo clippy --release --all-targets -- -D warnings)   # Rust engine
+```
+
+`ruff check --fix .` fixes the simple ones (unused imports).
+
 `tests/test_strudel_runtime.py` plays the generated Strudel sketches in Strudel itself.
 It skips unless Strudel's packages are installed for it (Node 22.15 or newer):
 `npm ci --ignore-scripts --prefix tests/strudel-runtime`. CI installs them when the

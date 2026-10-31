@@ -273,10 +273,10 @@ def test_access_verifier_checks_signature_audience_and_expiry():
     claims = {"email": "Friend@Example.com", "aud": [AUD], "iss": f"https://{TEAM}", "iat": now, "exp": now + 600}
     assert v(jwt.encode(claims, key, algorithm="RS256")) == "friend@example.com"
     for bad in [{"aud": ["other"]}, {"iss": "https://evil.cloudflareaccess.com"}, {"exp": now - 10}, {"email": None}]:
-        with pytest.raises(Exception):
+        with pytest.raises((jwt.PyJWTError, ValueError)):
             v(jwt.encode({**claims, **bad}, key, algorithm="RS256"))
     other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    with pytest.raises(Exception):
+    with pytest.raises((jwt.PyJWTError, ValueError)):
         v(jwt.encode(claims, other, algorithm="RS256"))
 
 

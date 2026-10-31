@@ -24,6 +24,10 @@ The Rust engine (`engine-rs/`) builds natively and for WebAssembly only when it,
 `tastr/engine/browser_card.py`, `tastr/web/static/engine.js`) change: about 50 s from clean, less with the cargo
 cache.
 
+Lint runs in the same job, before the tests: `ruff check` (a second or two) whenever code changes,
+eslint through `npx` (a few seconds) only when a web UI script or `eslint.config.mjs` changes, and
+`cargo clippy -D warnings` inside the Rust step, so only when the Rust engine is built.
+
 Already in place: pip cache, docs-only PRs skip everything after the scope step, UI-only PRs
 skip the audio tests, perf budget only on main. Node and the Strudel test packages
 (`npm ci` in `tests/strudel-runtime`, npm cache, a few seconds) install only when

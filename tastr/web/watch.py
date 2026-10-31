@@ -11,7 +11,7 @@ import json
 import shutil
 import subprocess
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Callable
 
 GITHUB_API = "https://api.github.com"

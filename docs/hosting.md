@@ -56,6 +56,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
+| `TASTR_BROWSER_SIGNALS` | off | `1` has each visitor's browser run HPSS before uploading, so the analysis skips it ([ARCHITECTURE.md](ARCHITECTURE.md#browser-signals)). Works on your own machine too |
 
 With `TASTR_HOSTED=1` but no team domain or AUD tag, `tastr serve` refuses to start rather than run
 without a login check.

@@ -57,16 +57,20 @@ def fetch(dataset: str, path: str, archives: list[int] | None = None) -> dict:
     return _call("fetch", dataset, path, archives)
 
 
-def analyze(audio_path: str | Path, stages: list[str] | None = None, options: dict | None = None, on_stage=None):
+def analyze(audio_path: str | Path, stages: list[str] | None = None, options: dict | None = None, on_stage=None,
+            signals: bytes | None = None):
     """Analyze one file on Modal; returns its TrackCard (whose source the caller sets). With the drum model
     asked for ({"drum_model": True}), it runs in `analyze_drums`, whose image has PyTorch and the weights.
 
     Otherwise, with `on_stage`, it calls `analyze_stream`, which reports each stage as it starts; an app
-    deployed before that function existed falls back to `analyze`, without stages."""
+    deployed before that function existed falls back to `analyze`, without stages.
+
+    `signals` (what the browser measured, tastr/engine/browser_signals.py) go along only when there are some, so
+    a call without them works with a deployed app from before they existed."""
     from ..engine.card import TrackCard
 
     audio_path = Path(audio_path)
-    args = (audio_path.read_bytes(), audio_path.suffix, stages, options)
+    args = (audio_path.read_bytes(), audio_path.suffix, stages, options) + ((signals,) if signals is not None else ())
     if (options or {}).get("drum_model"):
         return TrackCard.from_dict(_call("analyze_drums", *args))
     if on_stage:

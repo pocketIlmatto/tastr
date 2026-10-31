@@ -2272,7 +2272,7 @@ async function runBatch(items, rows) {
     const row = rows[i], link = !!items[i].link;
     Object.assign(row, { active: true, t0: Date.now(), secs: 0, frac: 0, stage: null, say: link ? "Fetching from the link" : "Uploading 0%" });
     rows.slice(i + 1).forEach((q, k) => { q.say = k ? `Waiting · ${k} ahead of it` : "Up next"; });
-    let uploaded = link ? 1 : 0;
+    let uploaded = link ? 1 : 0, measured = null;  // measured: 0-1 while the browser runs HPSS (browser signals), else null
     const update = () => {
       row.secs = (Date.now() - row.t0) / 1000;
       const a = row.stage ? analysisFrac(row) : 0;
@@ -2280,6 +2280,7 @@ async function runBatch(items, rows) {
       const left = (1 - row.frac) * perFile + (n - i - 1) * perFile;
       const step = A_STEPS.find(([k]) => k === row.stage);
       const what = row.stage === "fetch" ? "fetching from the link" : step ? step[1].toLowerCase()
+        : measured != null ? `measuring in your browser ${Math.round(measured * 100)}%`
         : uploaded < 1 ? `uploading ${Math.round(uploaded * 100)}%` : "analyzing";
       const el = $("status");
       el.className = "muted";
@@ -2292,8 +2293,12 @@ async function runBatch(items, rows) {
     let results;
     try {
       let r = await items[i].send((f) => {
-        uploaded = f;
+        uploaded = f; measured = null;
         row.say = f < 1 ? `Uploading ${Math.round(f * 100)}%` : "Analyzing…";  // "Analyzing…" until the job says which step
+        update();
+      }, (f) => {
+        measured = f;
+        row.say = `Measuring in your browser ${Math.round(f * 100)}%`;
         update();
       });
       uploaded = 1;
@@ -2337,8 +2342,23 @@ function postWithProgress(path, body, onProgress) {
 function uploadFiles(files) {
   analyzeBatch(files.map((f) => ({
     name: f.name,
-    send: (onProgress) => { const fd = new FormData(); fd.append("files", f); return postWithProgress("/api/analyze?background=1", fd, onProgress); },
+    send: async (onProgress, onMeasure) => {
+      const fd = new FormData();
+      fd.append("files", f);
+      const sig = serverCfg.browser_signals ? await measureInBrowser(f, onMeasure) : null;
+      if (sig) fd.append("signals", sig, "signals.tsg");
+      return postWithProgress("/api/analyze?background=1", fd, onProgress);
+    },
   })));
+}
+// TASTR_BROWSER_SIGNALS: run HPSS here (static/signals.js, in a worker loaded from the same versioned URL as the
+// page's copy) and send it with the file, so the server skips it. Any failure just leaves the work to the server.
+async function measureInBrowser(file, onMeasure) {
+  const script = document.querySelector('script[src*="/static/signals.js"]');
+  if (!script || typeof browserSignals !== "function") return null;
+  onMeasure(0);
+  try { return await browserSignals(file, script.src, onMeasure); }
+  catch (e) { console.warn("browser signals failed; the server will do that work", e); return null; }
 }
 const drop = $("drop");
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));

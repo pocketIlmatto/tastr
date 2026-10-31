@@ -79,11 +79,14 @@ sequenceDiagram
   C->>W: request + Cf-Access-Jwt-Assertion
   W->>W: verify the token, read the email
   Note over W: a stopped machine wakes here (a few seconds)
-  B->>C: upload a track
+  opt TASTR_BROWSER_SIGNALS is on
+    B->>B: decode the file, run HPSS in a worker (signals.js)
+  end
+  B->>C: upload a track (+ its signals file)
   C->>W: upload + token
   W->>W: check limits, save the file on the volume
   W-->>B: a job id (the upload is done)
-  W->>M: audio bytes
+  W->>M: audio bytes (+ signals)
   Note over M: cold start about 30 s after a quiet spell
   loop every 1-2 s until done
     M--)W: the step it's on (decode, core, sections...)
@@ -96,6 +99,11 @@ sequenceDiagram
   B->>W: GET /api/analyze/jobs/{id}
   W-->>B: done, with the track id
 ```
+
+With `TASTR_BROWSER_SIGNALS` on, the page first decodes the file and runs HPSS, the costliest step, in a worker,
+and uploads the result next to the audio (`signals.tsg` in the upload's folder, deleted once read). Modal's
+`analyze_stream` then analyzes that audio and skips HPSS; if the signals don't fit the file, it does the work
+itself. Off by default; see [ARCHITECTURE.md](ARCHITECTURE.md#browser-signals).
 
 The job's state is a small file under `analysis-jobs/` on the volume too, so if the machine stops mid-analysis,
 the page hears that it failed and can upload again. An app deployed before `analyze_stream` existed still
@@ -117,6 +125,7 @@ volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops an
 | Checking the login | Tastr on Fly | `AccessVerifier` in `tastr/web/hosted.py` checks the token on every request and takes the email from it. |
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
+| HPSS (optional) | The visitor's browser | With `TASTR_BROWSER_SIGNALS` on, `tastr/web/static/signals.js` runs it in a worker and the upload carries it. |
 | Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
@@ -171,7 +180,8 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 
 These have defaults and change only if you set a Fly secret of the same name ([hosting.md](hosting.md#settings)):
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
-`TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`.
+`TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`. `TASTR_BROWSER_SIGNALS=1` (off by default) has the browser run HPSS
+before uploading.
 
 ### Dashboards
 

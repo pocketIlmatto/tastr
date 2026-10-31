@@ -29,13 +29,15 @@ class AnalyzeResult:
 
 
 def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] | None = None,
-                   options: dict | None = None, owner: str | None = None, on_stage=None) -> AnalyzeResult:
-    """`on_stage(name, i, n)`: told as each step starts ("decode", then the engine's stages), for progress."""
+                   options: dict | None = None, owner: str | None = None, on_stage=None,
+                   signals: str | Path | None = None) -> AnalyzeResult:
+    """`on_stage(name, i, n)`: told as each step starts ("decode", then the engine's stages), for progress.
+    `signals`: a file of what the browser measured from this audio (tastr/engine/browser_signals.py)."""
     try:
         if not source.local_path:
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
-        card = _analyze(source, stages, options, on_stage)
+        card = _analyze(source, stages, options, on_stage, signals)
         if (options or {}).get("drum_model_required") and not card.extras.get("drum_model"):
             # Asked for the drum model but it didn't run (not installed, or no network for the weights):
             # fail rather than quietly store the built-in lanes.
@@ -48,15 +50,17 @@ def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] |
         return AnalyzeResult(source, None, None, f"{type(e).__name__}: {e}")
 
 
-def _analyze(source: Source, stages: list[str] | None, options: dict | None, on_stage=None):
-    """The engine, here or (TASTR_ANALYSIS_BACKEND=modal, a hosted server) on Modal, where only the audio goes."""
+def _analyze(source: Source, stages: list[str] | None, options: dict | None, on_stage=None, signals=None):
+    """The engine, here or (TASTR_ANALYSIS_BACKEND=modal, a hosted server) on Modal, where only the audio
+    (and the browser's signals, if any) go."""
+    data = Path(signals).read_bytes() if signals else None
     if os.environ.get("TASTR_ANALYSIS_BACKEND", "local") == "modal":
         from .cloud import remote
 
-        card = remote.analyze(source.local_path, stages, options, on_stage)
+        card = remote.analyze(source.local_path, stages, options, on_stage, signals=data)
         card.source = source
         return card
-    return analyze_file(source.local_path, stages, source=source, options=options, on_stage=on_stage)
+    return analyze_file(source.local_path, stages, source=source, options=options, on_stage=on_stage, signals=data)
 
 
 def _lookup(conn: sqlite3.Connection, track_id: int, card: TrackCard) -> None:
@@ -72,9 +76,11 @@ def _lookup(conn: sqlite3.Connection, track_id: int, card: TrackCard) -> None:
 
 
 def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], stages: list[str] | None = None,
-                   owner: str | None = None) -> list[AnalyzeResult]:
-    """`owner`: whose library the tracks go in on a hosted server (None on your own machine)."""
-    return [analyze_source(conn, s, stages, owner=owner) for s in resolve_inputs(inputs)]
+                   owner: str | None = None, signals: dict[str, str] | None = None) -> list[AnalyzeResult]:
+    """`owner`: whose library the tracks go in on a hosted server (None on your own machine).
+    `signals`: {audio file path: its browser signals file} for uploads that came with them."""
+    signals = {str(Path(k).resolve()): v for k, v in (signals or {}).items()}
+    return [analyze_source(conn, s, stages, owner=owner, signals=signals.get(s.local_path)) for s in resolve_inputs(inputs)]
 
 
 KEEP = "keep"

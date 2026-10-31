@@ -110,7 +110,7 @@ type StageFn = fn(&mut Ctx, &mut Card) -> Result<(), String>;
 const STAGES: [(&str, &str, &[&str], StageFn); 5] = [
     ("core", "0.3.0", &[], core::run),
     ("sections", "0.2.0", &["core"], sections::run),
-    ("tags", "0.1.0", &["core", "sections"], tags::run),
+    ("tags", "0.2.0", &["core", "sections"], tags::run),
     ("suggestions", "0.5.0", &["core", "sections", "tags"], suggestions::run),
     ("views", "0.1.0", &[], views::run),
 ];

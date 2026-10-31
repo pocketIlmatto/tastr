@@ -51,17 +51,17 @@ def vibe_scores(bpm, mode, energy, f: dict) -> dict[str, float]:
         if energy is not None and not minor:
             add("euphoric", (energy - 0.55) / 0.25 + (bright - 0.45))
     if pulse is not None and bpm is not None and 115 <= bpm <= 150:
-        add("driving", (pulse - 0.45) / 0.35)
+        add("driving", (pulse - 0.73) / 0.35)
     if dance is not None:
         add("danceable", (dance - 0.55) / 0.3)
     if pulse is not None and contrast is not None:
-        add("hypnotic", (pulse - 0.4) / 0.4 - 3 * contrast + 0.3)
+        add("hypnotic", (pulse - 0.4) / 0.4 - 3 * contrast - 0.3)
     if low is not None:
         add("bass-heavy", (low - 0.25) / 0.25)
     if perc is not None:
         add("percussive", (perc - 0.35) / 0.25)
         if pulse is not None:
-            add("atmospheric", (0.2 - perc) / 0.15 + (0.4 - pulse))
+            add("atmospheric", (0.2 - perc) / 0.15 + (0.4 - pulse) - 0.6)
     if contrast is not None:
         add("dynamic", (contrast - 0.2) / 0.15)
     swing_conf, swing_pct = f.get("swing_confidence"), f.get("swing_percent")
@@ -82,7 +82,7 @@ def vibe_tags(bpm, mode, energy, f: dict) -> list[Tag]:
 
 class TagsStage:
     name = "tags"
-    version = "0.1.0"
+    version = "0.2.0"
     requires = ("core", "sections")
 
     def run(self, ctx: AnalysisContext) -> None:

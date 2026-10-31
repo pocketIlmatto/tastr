@@ -46,5 +46,16 @@ const W = 1100; // CSS pixels; shots are taken at 1.5x and shown smaller in the 
   await page.waitForTimeout(500);
   await shotOf("glossary", page.locator("dd.gl-cam"));
 
+  // 6. Explore > Find tracks: the Simple builder (the first example, keys that mix with 8A at 120-128 BPM) and its results.
+  await page.locator("nav button[data-view=explore]").click();
+  await page.locator("#q-mode button[data-mode=simple]").click();
+  await page.getByRole("button", { name: "Examples ▾" }).click();
+  await page.getByRole("menuitem", { name: /^Mixes with 8A/ }).click();
+  await page.waitForTimeout(800);
+  await page.locator(".q-head").scrollIntoViewIfNeeded();
+  const top = await page.locator(".q-head").boundingBox(), end = await page.locator("#sql-result").boundingBox();
+  const sy = await page.evaluate(() => window.scrollY);
+  await shot("find-tracks", { fullPage: true, clip: { x: top.x - PAD, y: top.y + sy - PAD, width: W - 2 * (top.x - PAD), height: end.y + end.height - top.y + 2 * PAD } });
+
   await browser.close();
 })().catch((e) => { console.error(e); process.exit(1); });

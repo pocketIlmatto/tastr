@@ -549,3 +549,19 @@ def test_ui_roman_numerals_match_the_engine_for_in_key_chords():
     got = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
     assert got == [c[3] for c in cases]
     assert got[[c[:3] for c in cases].index(["F", 9, "minor"])] == "VI"
+
+
+def test_saved_searches_save_replace_and_delete(client):
+    put = lambda **b: client.put("/api/searches", json=b)
+    a = put(mode="simple", name="Warm-up", data={"groups": [], "join": "and", "sort": ["bpm", "asc"]}).json()
+    put(mode="sql", name="warm-up", data={"sql": "SELECT 1"})  # same name, other mode: a separate search
+    b = put(mode="simple", name="WARM-UP", data={"groups": [], "join": "or", "sort": ["energy", "desc"]}).json()
+    assert b["id"] == a["id"] and b["name"] == "WARM-UP"  # same name, any case, replaces it in place
+    got = client.get("/api/searches").json()
+    assert [(s["mode"], s["name"]) for s in got] == [("simple", "WARM-UP"), ("sql", "warm-up")]
+    assert got[0]["data"]["join"] == "or"
+    assert put(mode="other", name="x", data={}).status_code == 422
+    assert put(mode="sql", name="  ", data={"sql": "x"}).status_code == 422
+    assert client.delete(f"/api/searches/{a['id']}").status_code == 204
+    assert client.delete(f"/api/searches/{a['id']}").status_code == 404
+    assert [s["mode"] for s in client.get("/api/searches").json()] == ["sql"]

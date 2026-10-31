@@ -101,6 +101,10 @@
       <aside id="lib">
         <div class="lib-head"><span class="lib-title">Tracks <span id="lib-total" class="muted"></span></span>
           <button type="button" id="lib-collapse" aria-expanded="true" aria-controls="lib-body" title="Hide the track list">«</button></div>
+        <div id="lib-quick">
+          <input id="lib-quick-q" type="search" placeholder="Jump to a track…" aria-label="Find a track and open it" aria-controls="lib-quick-list" autocomplete="off">
+          <ul id="lib-quick-list" role="listbox" aria-label="Matching tracks" hidden></ul>
+        </div>
         <div id="lib-body">
         <div id="lib-tools">
           <input id="lib-q" type="search" placeholder="Search title or artist" aria-label="Search tracks">
@@ -131,14 +135,23 @@
       <label>BPM <input id="f-min" type="number" placeholder="min"> – <input id="f-max" type="number" placeholder="max"></label>
     </div>
     <div id="scatter-wrap"></div>
-    <div id="sql-panel">
-      <h2>SQL</h2>
-      <div id="examples"></div>
-      <textarea id="sql" rows="4" spellcheck="false">SELECT title, bpm, camelot, energy FROM tracks ORDER BY bpm</textarea>
-      <button id="run-sql">Run</button> <span id="sql-scope" class="muted"></span>
-      <p id="sql-error" class="error"></p>
-      <div class="table-wrap"><table id="sql-result"></table></div>
+    <div class="q-head">
+      <h2>Find tracks</h2>
+      <div class="q-mode" id="q-mode" role="tablist" aria-label="Query style">
+        <button type="button" role="tab" data-mode="simple" aria-selected="true">Simple</button>
+        <button type="button" role="tab" data-mode="sql" aria-selected="false">SQL</button>
+      </div>
     </div>
+    <div id="examples" class="q-saved"></div>
+    <div id="q-simple"></div>
+    <div id="q-sql" hidden>
+      <textarea id="sql" rows="4" spellcheck="false" aria-label="SQL query">SELECT title, bpm, camelot, energy FROM tracks ORDER BY bpm</textarea>
+      <div class="q-sql-bar"><button id="run-sql">Run</button><span id="q-save-sql"></span><span id="sql-scope" class="muted"></span></div>
+      <details class="q-schema"><summary>Tables and columns</summary><div id="q-schema-body"></div></details>
+    </div>
+    <p id="sql-error" class="error"></p>
+    <p id="q-count" class="muted"></p>
+    <div class="table-wrap"><table id="sql-result"></table></div>
   </section>
   <section id="view-glossary" hidden>
     <div class="gl">

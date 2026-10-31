@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import mimetypes
 import os
@@ -14,7 +15,7 @@ import uuid
 from contextlib import asynccontextmanager, closing, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
@@ -36,6 +37,7 @@ AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", 
                ".ogg": "audio/ogg", ".aif": "audio/aiff", ".aiff": "audio/aiff", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
 MAX_QUERY_ROWS = 5000
 QUERY_SECONDS = 2.0  # hosted: a query that runs longer is stopped
+MAX_SEARCHES, MAX_SEARCH_BYTES = 100, 20_000  # saved searches per person, and the size of one
 # The Strudel sketch ("Try this in Strudel") loads the original audio and its stems from strudel.cc, so only
 # those endpoints answer CORS, and only for that origin.
 STRUDEL_ORIGINS = ("https://strudel.cc",)
@@ -62,6 +64,14 @@ class UrlBody(BaseModel):
 
 class QueryBody(BaseModel):
     sql: str
+    mine: bool = False  # hosted admins: only your own library, like everyone else (the Simple search, whose rows open cards)
+
+
+class SearchBody(BaseModel):
+    mode: Literal["simple", "sql"]
+    name: str = Field(min_length=1, max_length=40)
+    # simple: {groups, join, sort}; sql: {sql}. Stored as given; the page builds the SQL itself.
+    data: dict[str, Any]
 
 
 class VersionBody(BaseModel):
@@ -679,7 +689,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     @app.post("/api/query")
     def run_query(body: QueryBody, request: Request):
         # Hosted: admins query the whole database; everyone else a copy of their own library (db.LIBRARY_TABLES).
-        owner = request.state.user if hosted and request.state.user not in settings.admins else None
+        owner = request.state.user if hosted and (body.mine or request.state.user not in settings.admins) else None
         if hosted and not query_slot.acquire(blocking=False):
             raise HTTPException(429, "Another SQL query is running. Try again in a few seconds.")
         try:
@@ -692,6 +702,33 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if hosted:
                 query_slot.release()
         return {"columns": columns, "rows": rows}
+
+    # Saved searches (Explore > Find tracks), each person's own: the signed-in email when hosted, else everyone's.
+    @app.get("/api/searches")
+    def searches(request: Request):
+        with closing(conn()) as c:
+            return db.list_searches(c, owner_of(request))
+
+    @app.put("/api/searches")
+    def save_search(body: SearchBody, request: Request):
+        if len(json.dumps(body.data)) > MAX_SEARCH_BYTES:
+            raise HTTPException(413, "That search is too big to save.")
+        name, owner = body.name.strip(), owner_of(request)
+        if not name:
+            raise HTTPException(422, "Give the search a name.")
+        with closing(conn()) as c:
+            have = db.list_searches(c, owner)
+            replaces = any(s["mode"] == body.mode and s["name"].lower() == name.lower() for s in have)
+            if len(have) >= MAX_SEARCHES and not replaces:
+                raise HTTPException(409, f"You have {MAX_SEARCHES} saved searches. Delete one first.")
+            return db.save_search(c, owner, body.mode, name, body.data)
+
+    @app.delete("/api/searches/{search_id}", status_code=204)
+    def delete_search(search_id: int, request: Request):
+        with closing(conn()) as c:
+            if not db.delete_search(c, owner_of(request), search_id):
+                raise HTTPException(404, "no such search")
+        return Response(status_code=204)
 
     page = versioned_index()
 

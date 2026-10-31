@@ -30,7 +30,9 @@ across the library.
 | POST | `/api/tracks/{id}/reanalyze` | | `{"card", "edits_dropped"}`. Edits move to the new section with the same start and end bars; edits whose section is gone are dropped (in versions too), and `edits_dropped` counts them |
 | GET | `/api/bench` | | the benchmark scores the Glossary quotes, from `tastr/engine/bench_scores.json` (`{"scores": {key: {"exact", "tracks", "what", "run"}}}`); `{"scores": {}}` when the file is missing |
 | GET | `/api/patterns` | | the engine's template drum patterns, `[{"style", "name", "pattern"}]`, for the Glossary's pattern grids |
-| POST | `/api/query` | `{"sql": "..."}` | `{"columns": [...], "rows": [[...]]}`; opens the DB with `db.connect(path, readonly=True)` so writes fail; 400 on SQL error; 403 in hosted mode |
+| POST | `/api/query` | `{"sql": "...", "mine": false}` | `{"columns": [...], "rows": [[...]]}`; one read-only SELECT (`db.run_query`), 400 on SQL error or when it runs too long. Hosted: admins query the whole database unless `mine` is true (the Simple search sends it, since its rows open cards); everyone else a copy of their own library (docs/hosting.md) |
+| GET / PUT | `/api/searches` | PUT: `{"mode": "simple"\|"sql", "name", "data"}` | your saved Find tracks searches, oldest first: `[{"id", "mode", "name", "data"}]` (`data` is `{groups, join, sort}` or `{sql}`); PUT returns the saved one, replacing one with the same name (any case) in the same mode. Each person's own when hosted |
+| DELETE | `/api/searches/{id}` | | 204 / 404 (also for someone else's) |
 | GET | `/` | | the static UI |
 
 Analysis is CPU-bound and slow (tens of seconds); run it in FastAPI's threadpool (plain `def` endpoint) so the server stays responsive.
@@ -47,7 +49,10 @@ Render from the card JSON, tolerating any field being null/empty:
 ## Explore view
 - Scatter of BPM (x) vs energy (y) for all tracks, point label on hover, click opens the card.
 - Filter by tag and BPM range.
-- A SQL box posting to `/api/query`, results as a table, with 3 example queries from `docs/ARCHITECTURE.md` as buttons.
+- **Find tracks**, with a Simple / SQL toggle (remembered in localStorage `tastr-query-mode`):
+  - Simple: conditions (BPM, key or the keys that mix with it, energy, vibe, length, section, text) in groups one level deep; AND/OR inside each group and between groups. The page builds the SQL (`qSql()` in app.js) and runs it through `/api/query` with `mine: true`; "Edit as SQL" opens that SQL in the SQL box.
+  - SQL: the box posting to `/api/query`, and a "Tables and columns" reference (`Q_SCHEMA`; a friend's copy leaves out the private columns).
+  - Saved searches as chips (`/api/searches`), and built-in examples in an "Examples ▾" menu, separate for each mode.
 
 ## Admin view (hosted mode, admins only)
 - The Admin header button shows only when `/api/config` says `"admin": true`; `#admin` opens it, and falls back to the Library for everyone else.

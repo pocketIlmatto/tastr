@@ -167,6 +167,19 @@ CREATE TABLE IF NOT EXISTS events (
     detail TEXT
 );
 
+-- Searches people saved in Explore > Find tracks, per person (owner is the Access email on a hosted server,
+-- NULL on your own machine). mode: simple (json is {groups, join, sort}) or sql (json is {sql}).
+-- A name is unique per owner and mode, ignoring case: saving under the same name replaces it.
+CREATE TABLE IF NOT EXISTS saved_searches (
+    id         INTEGER PRIMARY KEY,
+    owner      TEXT,
+    mode       TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    json       TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_saved_searches_owner ON saved_searches(owner);
+
 -- Requests a hosted server refused for a missing or invalid Cloudflare Access token, per UTC day.
 CREATE TABLE IF NOT EXISTS blocked_requests (
     day TEXT PRIMARY KEY,
@@ -405,6 +418,32 @@ def delete_edit_version(conn: sqlite3.Connection, track_id: int, version_id: int
     with conn:
         return conn.execute("DELETE FROM track_edits WHERE id = ? AND track_id = ? AND name IS NOT NULL",
                             (version_id, track_id)).rowcount > 0
+
+
+def list_searches(conn: sqlite3.Connection, owner: str | None) -> list[dict[str, Any]]:
+    """One person's saved searches, oldest first (the order they show as chips)."""
+    rows = conn.execute("SELECT id, mode, name, json FROM saved_searches WHERE owner IS ? ORDER BY id", (owner,))
+    return [{"id": r["id"], "mode": r["mode"], "name": r["name"], "data": json.loads(r["json"])} for r in rows]
+
+
+def save_search(conn: sqlite3.Connection, owner: str | None, mode: str, name: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Save a search; one with the same name (any case) in the same mode is replaced, keeping its place."""
+    with conn:
+        r = conn.execute("SELECT id FROM saved_searches WHERE owner IS ? AND mode = ? AND lower(name) = lower(?)",
+                         (owner, mode, name)).fetchone()
+        if r:
+            sid = r[0]
+            conn.execute("UPDATE saved_searches SET name = ?, json = ?, updated_at = ? WHERE id = ?",
+                         (name, json.dumps(data), _now(), sid))
+        else:
+            sid = conn.execute("INSERT INTO saved_searches (owner, mode, name, json, updated_at) VALUES (?, ?, ?, ?, ?)",
+                               (owner, mode, name, json.dumps(data), _now())).lastrowid
+    return {"id": sid, "mode": mode, "name": name, "data": data}
+
+
+def delete_search(conn: sqlite3.Connection, owner: str | None, search_id: int) -> bool:
+    with conn:
+        return conn.execute("DELETE FROM saved_searches WHERE id = ? AND owner IS ?", (search_id, owner)).rowcount > 0
 
 
 def remap_edits(conn: sqlite3.Connection, track_id: int, old_bars: dict[int, tuple], new_bars: dict[int, tuple],

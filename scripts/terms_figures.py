@@ -17,11 +17,13 @@ import librosa.display
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
-from scipy import signal  # noqa: E402
+import itertools
 
-from tastr.engine.bench.synth import make_track  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy import signal
+
+from tastr.engine.bench.synth import make_track
 
 OUT = Path(__file__).resolve().parent.parent / "docs" / "images" / "terms"
 SR, HOP, N_FFT = 22050, 512, 2048
@@ -195,7 +197,7 @@ def fig_sections(y, truth):
     n = min(chroma.shape[1], mfcc.shape[1], db.size)
     feats = np.vstack([chroma[:, :n], mfcc[1:, :n], db[None, :n]])
     edges = librosa.time_to_frames(np.arange(n_bars + 1) * bar, sr=SR, hop_length=HOP)
-    per_bar = np.stack([feats[:, a:b].mean(axis=1) for a, b in zip(edges[:-1], edges[1:])], axis=1)
+    per_bar = np.stack([feats[:, a:b].mean(axis=1) for a, b in itertools.pairwise(edges)], axis=1)
     z = (per_bar - per_bar.mean(axis=1, keepdims=True)) / (per_bar.std(axis=1, keepdims=True) + 1e-9)
     bounds = librosa.segment.agglomerative(z, 3)
     fig, a = plt.subplots(figsize=(8, 3.6))

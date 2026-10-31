@@ -17,6 +17,9 @@ const MAX_BPM: f64 = 180.0;
 const MIN_BEATS: usize = 8;
 const THREE_TWO_RATIO: f64 = 0.8;
 const THREE_TWO_MAX_METER: f64 = 0.0;
+/// Pulse clarity: (onset on the tracker's beats / mean onset - 1) / PULSE_SCALE, read before the kick
+/// alignment (core.py PULSE_SCALE).
+const PULSE_SCALE: f64 = 4.0;
 const METER_CUE_SCALES: [(&str, f64); 6] =
     [("timbre_lag", 0.1), ("bass_lag", 0.27), ("kick", 0.3), ("snare", 0.25), ("change", 0.17), ("bass_change", 0.22)];
 const METER_THRESHOLD: f64 = 1.0;
@@ -193,14 +196,14 @@ fn tempo_and_beats(ctx: &mut Ctx, n_frames: usize) -> (Option<f64>, Vec<f64>, f6
     let ibis: Vec<f64> = diffs(&frames).iter().map(|d| d * hop / sr).collect();
     let stability = if ibis.is_empty() { 0.0 } else { clip(1.0 - std(&ibis) / (mean(&ibis) + 1e-9) * 4.0, 0.0, 1.0) };
     frames = regularize(&frames, n_frames);
+    let picked: Vec<f32> =
+        frames.iter().map(|&f| onset[clip(round_half_even(f), 0.0, n_frames as f64 - 1.0) as usize]).collect();
+    let ratio = mean_f32(&picked) / (mean_f32(&onset) + 1e-9);
+    let pulse = clip(((ratio - 1.0) as f64) / PULSE_SCALE, 0.0, 1.0);
     frames = align_to_kick(&frames, &ctx.low_flux);
     if frames.len() > 1 {
         bpm = 60.0 * sr / (hop * median(&diffs(&frames)));
     }
-    let picked: Vec<f32> =
-        frames.iter().map(|&f| onset[clip(round_half_even(f), 0.0, n_frames as f64 - 1.0) as usize]).collect();
-    let ratio = mean_f32(&picked) / (mean_f32(&onset) + 1e-9);
-    let pulse = clip(((ratio - 1.0) / 1.5) as f64, 0.0, 1.0);
     (Some(bpm), frames, 0.5 * stability + 0.5 * pulse, stability, pulse)
 }
 

@@ -27,7 +27,7 @@ jobs:
           elif git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
             files=$(git diff --name-only "${{ github.event.before }}" HEAD)
           else
-            echo "code=true" >> "$GITHUB_OUTPUT"; echo "audio=true" >> "$GITHUB_OUTPUT"; echo "strudel=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "code=true" >> "$GITHUB_OUTPUT"; echo "audio=true" >> "$GITHUB_OUTPUT"; echo "strudel=true" >> "$GITHUB_OUTPUT"; echo "rust=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           code=$(echo "$files" | grep -Ev '^docs/|\.md$' | grep . || true)
           audio=$(echo "$code" | grep -Ev '^tastr/web/' | grep . || true)
@@ -35,6 +35,8 @@ jobs:
           echo "audio=$([ -n "$audio" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           strudel=$(echo "$code" | grep -E '^tastr/web/static/strudel\.js$|^tests/(test_strudel.*\.py|strudel-runtime/)' | grep . || true)
           echo "strudel=$([ -n "$strudel" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          rust=$(echo "$code" | grep -E '^engine-rs/|^tests/test_rust_engine\.py$' | grep . || true)
+          echo "rust=$([ -n "$rust" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Docs-only change, tests skipped
         if: steps.scope.outputs.code != 'true'
         run: echo "Only docs/ and Markdown files changed; nothing to test."
@@ -58,6 +60,23 @@ jobs:
           cache-dependency-path: tests/strudel-runtime/package-lock.json
       - if: steps.scope.outputs.strudel == 'true'
         run: npm ci --ignore-scripts --prefix tests/strudel-runtime
+      # The Rust engine (engine-rs/), native and WebAssembly, so tests/test_rust_engine.py can compare the two
+      # builds; only when it or its test changes. Without the builds that test skips. The runner image already
+      # has Rust and Node.
+      - uses: actions/cache@v4
+        if: steps.scope.outputs.rust == 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            engine-rs/target
+          key: rust-${{ hashFiles('engine-rs/Cargo.lock') }}
+      - name: Build the Rust engine
+        if: steps.scope.outputs.rust == 'true'
+        working-directory: engine-rs
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build --release --locked
+          cargo build --release --locked --lib --target wasm32-unknown-unknown
       - name: Tests
         if: steps.scope.outputs.audio == 'true'
         run: python -m pytest -q -n auto -m "not perf"

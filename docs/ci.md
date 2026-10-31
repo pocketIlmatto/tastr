@@ -19,6 +19,9 @@ A typical audio run (about 2.5 minutes, billed 3):
 | pytest, `-n auto` | 80–100 s |
 | perf budget (main only) | ~28 s |
 
+The Rust engine (`engine-rs/`) builds natively and for WebAssembly only when it or
+`tests/test_rust_engine.py` changes: about 50 s from clean, less with the cargo cache.
+
 Already in place: pip cache, docs-only PRs skip everything after the scope step, UI-only PRs
 skip the audio tests, perf budget only on main. Node and the Strudel test packages
 (`npm ci` in `tests/strudel-runtime`, npm cache, a few seconds) install only when

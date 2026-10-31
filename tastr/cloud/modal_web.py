@@ -70,6 +70,14 @@ def analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options:
     return run_analyze(audio, suffix, stages, options)
 
 
+# The same, reporting each stage as it starts (the app's progress bars): yields {"stage", "i", "n"}, then {"card"}.
+@app.function(image=image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=5 * 60)
+def analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None):
+    from tastr.cloud.jobs import run_analyze_stream
+
+    yield from run_analyze_stream(audio, suffix, stages, options)
+
+
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)
 def stems(audio: bytes, suffix: str) -> dict[str, bytes]:
     from tastr.cloud.jobs import run_stems

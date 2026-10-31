@@ -23,12 +23,15 @@ from .pipeline import SR, register_stage, registered_stages, run_pipeline  # noq
 
 
 def analyze_file(path: str | os.PathLike, stages: list[str] | None = None, source: Source | None = None,
-                 options: dict | None = None) -> TrackCard:
+                 options: dict | None = None, on_stage=None) -> TrackCard:
     """Decode `path` and run the pipeline over it. A failing stage is recorded in
     card.errors rather than raised; a file that can't be decoded raises DecodeError.
-    `options` reach the stages (e.g. {"beats_per_bar": 3} sets the meter instead of detecting it)."""
+    `options` reach the stages (e.g. {"beats_per_bar": 3} sets the meter instead of detecting it).
+    `on_stage(name, i, n)` hears "decode" first, then each pipeline stage as it starts (see run_pipeline)."""
     from pathlib import Path
 
     p = Path(path)
     source = source or Source(kind="file", uri=str(p), local_path=str(p), title=p.stem)
-    return run_pipeline(load_audio(p, SR), SR, TrackCard(source=source), stages=stages, options=options)
+    if on_stage:
+        on_stage("decode", 0, 1)
+    return run_pipeline(load_audio(p, SR), SR, TrackCard(source=source), stages=stages, options=options, on_stage=on_stage)

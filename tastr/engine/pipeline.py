@@ -98,14 +98,21 @@ def resolve_order(names: list[str] | None = None) -> list[Stage]:
     return order
 
 
+# Told about each stage as it starts: (stage name, its position from 0, how many there are). For progress bars.
+OnStage = Callable[[str, int, int], None]
+
+
 def run_pipeline(y: np.ndarray, sr: int, card: TrackCard, stages: list[str] | None = None,
-                 options: dict[str, Any] | None = None) -> TrackCard:
+                 options: dict[str, Any] | None = None, on_stage: OnStage | None = None) -> TrackCard:
     """Run stages over decoded audio. A failing stage is recorded in card.errors and
     stages that depend on it are skipped; the rest still run. `options` go to AnalysisContext.options."""
     card.duration = round(y.size / sr, 3)
     card.sample_rate = sr
     ctx = AnalysisContext(y=y, sr=sr, card=card, options=dict(options or {}))
-    for stage in resolve_order(stages):
+    order = resolve_order(stages)
+    for i, stage in enumerate(order):
+        if on_stage:
+            on_stage(stage.name, i, len(order))
         failed_deps = [d for d in stage.requires if d in card.errors or d not in card.stages_run]
         if failed_deps:
             card.errors[stage.name] = f"skipped: required stage(s) {failed_deps} did not complete"

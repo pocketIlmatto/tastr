@@ -181,12 +181,20 @@ class Jobs:
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tastr-stems")
         self._lock = threading.Lock()
         self._state: dict[Path, dict] = {}
+        self._seq = 0
 
     def status(self, folder: Path) -> dict:
+        """The job's state; a queued one also says how many jobs are ahead of it (`position`), a running one
+        how long it has been running (`elapsed`, seconds), so the page can show time left."""
         with self._lock:
             job = self._state.get(folder)
             if job and job["state"] in ("queued", "running", "error"):
-                return dict(job)
+                out = {k: v for k, v in job.items() if not k.startswith("_")}
+                if job["state"] == "queued":
+                    out["position"] = sum(j["state"] in ("queued", "running") and j["_seq"] < job["_seq"] for j in self._state.values())
+                elif job["state"] == "running" and "_started" in job:
+                    out["elapsed"] = round(time.monotonic() - job["_started"], 1)
+                return out
         if is_ready(folder):
             return {"state": "ready", "stems": list(STEM_NAMES)}
         return {"state": "none"}
@@ -196,7 +204,8 @@ class Jobs:
             job = self._state.get(folder)
             if job and job["state"] in ("queued", "running"):
                 return dict(job)
-            self._state[folder] = {"state": "queued", "progress": 0.0}
+            self._seq += 1
+            self._state[folder] = {"state": "queued", "progress": 0.0, "_seq": self._seq}
         folder.parent.mkdir(parents=True, exist_ok=True)
         job_marker(folder).write_text(str(audio_path))
         self._pool.submit(self._run, audio_path, folder)
@@ -237,7 +246,7 @@ class Jobs:
         with self._lock:
             cancelled = self._state[folder].get("cancelled")
         if not cancelled:
-            self._set(folder, state="running")
+            self._set(folder, state="running", _started=time.monotonic())
             log.info("Separating stems for %s", audio_path)
             start = time.monotonic()
             try:

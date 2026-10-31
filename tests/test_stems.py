@@ -266,3 +266,23 @@ def test_stale_job_markers_are_dropped(home):
     root.mkdir(parents=True)
     (root / "gone.job").write_text(str(home / "missing.wav"))
     assert stems.Jobs().resume() == 0 and not (root / "gone.job").exists()
+
+
+def test_queued_jobs_say_how_many_are_ahead(home, tmp_path, stub, gate):
+    """For the page's "N ahead" and time left: a queued job's position, a running job's elapsed seconds."""
+    gate.clear()
+    jobs = stems.Jobs()
+    a, b = tmp_path / "a.wav", tmp_path / "b.wav"
+    for p in (a, b):
+        p.write_bytes(b"RIFF")
+    fa, fb = stems.stems_root() / "a", stems.stems_root() / "b"
+    jobs.start(a, fa)
+    second = jobs.start(b, fb)
+    assert second["state"] == "queued" and second["position"] == 1
+    for _ in range(100):
+        if jobs.status(fa)["state"] == "running":
+            break
+        time.sleep(0.02)
+    first = jobs.status(fa)
+    assert first["state"] == "running" and first["elapsed"] >= 0 and "_seq" not in first
+    gate.set()

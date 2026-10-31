@@ -105,6 +105,28 @@ function mmss(sec) {
   const s = Math.round(sec);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
+// ---------- job progress (analysis, stems, bulk actions) ----------
+function fmtLeft(s) { return s < 8 ? "almost done" : s < 60 ? `about ${Math.max(5, Math.round(s / 5) * 5)} s left` : `about ${Math.round(s / 60)} min left`; }
+function progBar(frac, label) {
+  const pct = Math.round(Math.min(1, Math.max(0, frac || 0)) * 100);
+  return h("span", { class: "pbar", role: "progressbar", "aria-label": label, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) }, h("i", { style: `width:${pct}%` }));
+}
+// While a long job runs, the tab title shows how far along it is, so a background tab still says. One entry per kind of job.
+const baseTitle = document.title, titleJobs = new Map();
+function jobTitle(key, frac) {
+  if (frac == null) titleJobs.delete(key); else titleJobs.set(key, frac);
+  const f = [...titleJobs.values()][0];
+  document.title = f == null ? baseTitle : `(${Math.round(Math.min(1, f) * 100)}%) ${baseTitle}`;
+}
+// A pause between polls that ends early when the tab comes back to the front (background tabs barely run timers).
+function nap(ms) {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(t); document.removeEventListener("visibilitychange", vis); resolve(); };
+    const vis = () => { if (!document.hidden) done(); };
+    const t = setTimeout(done, ms);
+    document.addEventListener("visibilitychange", vis);
+  });
+}
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) {
@@ -179,6 +201,26 @@ function shortError(err) {
   const line = err.split("\n")[0].replace(/\S*[\\/]uploads[\\/]\w{8}_/g, "");
   return line.length > 120 ? line.slice(0, 117) + "…" : line;
 }
+// One placeholder row: the step it's on, elapsed time and a bar while it runs; where it stopped if it failed.
+function pendingLi(p) {
+  if (p.failed) {
+    const at = p.stage && A_STEPS.find(([k]) => k === p.stage);
+    return h("li", { class: "pending failed", "aria-label": `${cleanName(p.name)}: could not be analyzed` },
+      h("div", { class: "t" }, cleanName(p.name)),
+      h("div", { class: "s" }, `Couldn't analyze this file${at ? ` (it stopped while ${at[3]})` : ""}. `, h("button", { type: "button", class: "linklike", onclick: () => { pending.splice(pending.indexOf(p), 1); renderList(); } }, "Dismiss")),
+      p.error ? h("div", { class: "s why", title: p.error }, shortError(p.error)) : null);
+  }
+  return h("li", { class: "pending", "aria-busy": "true" },
+    h("div", { class: "t" }, h("span", { class: "spin" + (p.active ? "" : " idle"), "aria-hidden": "true" }), cleanName(p.name)),
+    h("div", { class: "s" }, h("span", {}, p.say || "Waiting…"), p.active && p.secs != null ? h("span", { class: "p-time", title: "Elapsed" }, mmss(p.secs)) : null),
+    p.active && p.frac != null ? progBar(p.frac, `${cleanName(p.name)} progress`) : null);
+}
+// Repaint just the placeholder rows (every second while analyzing), so the rest of the list keeps focus, hover and scroll.
+function paintPending() {
+  const lis = $("track-list").querySelectorAll("li.pending");
+  if (lis.length !== pending.length) { renderList(); return; }
+  pending.forEach((p, i) => lis[i].replaceWith(pendingLi(p)));
+}
 function renderList() {
   const ul = $("track-list"), top = ul.scrollTop;
   // Rows are rebuilt while bulk jobs run, so put keyboard focus back on the same track afterwards.
@@ -192,16 +234,7 @@ function renderList() {
   $("lib-tools").hidden = !tracks.length;
   if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
   else if (!shown.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
-  for (const p of pending) {
-    ul.append(p.failed
-      ? h("li", { class: "pending failed", "aria-label": `${cleanName(p.name)}: could not be analyzed` },
-          h("div", { class: "t" }, cleanName(p.name)),
-          h("div", { class: "s" }, "Couldn't analyze this file. ", h("button", { type: "button", class: "linklike", onclick: () => { pending.splice(pending.indexOf(p), 1); renderList(); } }, "Dismiss")),
-          p.error ? h("div", { class: "s why", title: p.error }, shortError(p.error)) : null)
-      : h("li", { class: "pending", "aria-busy": "true" },
-          h("div", { class: "t" }, h("span", { class: "spin" + (p.active ? "" : " idle"), "aria-hidden": "true" }), cleanName(p.name)),
-          h("div", { class: "s" }, p.active ? "Analyzing…" : "Waiting…")));
-  }
+  for (const p of pending) ul.append(pendingLi(p));
   for (const t of shown) {
     const picked = sel.has(t.id), job = jobs.get(t.id);
     ul.append(h("li", { class: "trk" + (t.id === currentId ? " active" : "") + (picked ? " picked" : ""), "data-id": t.id, tabindex: "0",
@@ -210,7 +243,8 @@ function renderList() {
       selecting ? h("span", { class: "pick" + (picked ? " on" : ""), "aria-hidden": "true" }) : null,
       h("div", { class: "trk-main" },
         h("div", { class: "t", title: t.title }, t.title || `Track ${t.id}`),
-        job ? h("div", { class: "s job" + (job.error ? " fail" : ""), title: job.error || null }, job.error ? null : h("span", { class: "spin" + (job.active ? "" : " idle"), "aria-hidden": "true" }), job.text)
+        job ? [h("div", { class: "s job" + (job.error ? " fail" : ""), title: job.error || null }, job.error ? null : h("span", { class: "spin" + (job.active ? "" : " idle"), "aria-hidden": "true" }), job.text),
+            job.frac != null ? progBar(job.frac, `${t.title || "Track"} progress`) : null]
           : h("div", { class: "s" }, h("span", { class: "s-txt" }, [t.artist, isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, mmss(t.duration)].filter(Boolean).join(" · ")),
             h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` }))))));
   }
@@ -263,7 +297,7 @@ function renderBulk(shown) {
       sel.size ? h("button", { type: "button", class: "linklike", onclick: () => { sel.clear(); renderList(); } }, "Clear") : null),
       bulkMenu());
   }
-  if (bulkMsg || jobs.size) kids.push(h("div", { class: "bulk-say muted", role: "status", "aria-live": "polite" }, bulkBusy ? h("span", { class: "spin", "aria-hidden": "true" }) : null, bulkMsg,
+  if (bulkMsg || jobs.size) kids.push(h("div", { class: "bulk-say muted", role: "status", "aria-live": "polite" }, bulkBusy ? h("span", { class: "spin", "aria-hidden": "true" }) : null, h("span", { class: "bulk-msg" }, bulkMsg),
     // Failed rows keep their note until the next run or until dismissed here.
     !bulkBusy && jobs.size ? h("button", { type: "button", class: "linklike", onclick: () => { jobs.clear(); sayBulk(""); renderList(); } }, "Dismiss") : null));
   box.replaceChildren(...kids);
@@ -272,11 +306,13 @@ const plural = (n) => `${n} track${n === 1 ? "" : "s"}`;
 // Each action calls the per-track endpoint; `run` resolves to the track's fresh card (or null).
 const editsGone = new Set(); // tracks whose re-analysis dropped some saved edits
 let lookupProviders = []; // enabled catalogs (TASTR_LOOKUP), from the last card the server sent
+const A_TYPICAL_BULK = 40; // a re-analysis, like A_TYPICAL (the upload aside)
 const BULK = {
-  reload: { label: "Reload metadata", doing: "Reloading metadata…", fail: "Couldn't reload metadata",
+  // typical: seconds per track to start the time left from, until the batch's own average is known
+  reload: { label: "Reload metadata", doing: "Reloading metadata…", fail: "Couldn't reload metadata", typical: 2,
     done: (n) => `Reloaded metadata for ${plural(n)}.`,
     run: async (id) => (await api(`/api/tracks/${id}/retag`, { method: "POST" })).card },
-  reanalyze: { label: "Re-analyze", doing: "Re-analyzing…", fail: "Couldn't re-analyze",
+  reanalyze: { label: "Re-analyze", doing: "Re-analyzing…", fail: "Couldn't re-analyze", typical: A_TYPICAL_BULK,
     done: (n) => { const d = editsGone.size; editsGone.clear(); return `Re-analyzed ${plural(n)}.` + (d ? ` Some edits no longer match the new sections in ${plural(d)}, so they were dropped.` : ""); },
     run: async (id) => {
       await flushEdits(id);
@@ -285,18 +321,18 @@ const BULK = {
       if (r.edits_dropped) editsGone.add(id);
       return r.card;
     } },
-  lookup: { label: "Look up BPM & key online", doing: "Looking up…", fail: "Couldn't look up",
+  lookup: { label: "Look up BPM & key online", doing: "Looking up…", fail: "Couldn't look up", typical: 3,
     when: () => lookupProviders.length > 0,
     done: (n) => `Looked up ${plural(n)}.`,
     run: async (id) => (await api(`/api/tracks/${id}/lookup`, { method: "POST" })).card },
-  stems: { label: "Separate stems", note: "slow", doing: "Separating stems…", fail: "Couldn't separate stems",
+  stems: { label: "Separate stems", note: "slow", doing: "Separating stems…", fail: "Couldn't separate stems", typical: 180,
     done: (n) => `Stems ready for ${plural(n)}.`,
     // The server separates in the background; wait for this track before starting the next one.
     run: async (id, say) => {
       let st = await api(`/api/tracks/${id}/stems`, { method: "POST" });
       setStems(id, st);
       while (stemsBusy(st)) {
-        say(stemsLabel(st));
+        say(stemsLabel(st), st);
         await new Promise((r) => setTimeout(r, 2500));
         st = await api(`/api/tracks/${id}/stems`);
         setStems(id, st);
@@ -346,29 +382,48 @@ async function runBulk(kind, ids) {
   if (!ids.length || bulkBusy) return;
   bulkBusy = true;
   jobs.clear();
-  ids.forEach((id) => jobs.set(id, { text: "Queued", active: false }));
-  let failed = 0;
+  const doing = b.doing.replace("…", "");
+  let failed = 0, per = b.typical, timed = 0;
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i];
     if (!tracks.some((t) => t.id === id)) { jobs.delete(id); continue; }
+    ids.slice(i + 1).forEach((x, k) => jobs.set(x, { text: k ? `Queued · ${k} ahead of it` : "Up next", active: false }));
     jobs.set(id, { text: b.doing, active: true });
-    sayBulk(`${b.doing.replace("…", "")} ${i + 1} of ${ids.length}…`);
+    // The bulk line: which track, and the time left for the whole batch
+    const t0 = Date.now();
+    let eta = null;  // {frac, left} when the job reports its own progress (stems)
+    const sayLeft = () => {
+      const el = (Date.now() - t0) / 1000, cur = eta ? eta.left : Math.max(0, per - el);
+      sayBulk(`${doing} ${i + 1} of ${ids.length} · ${fmtLeft(cur + (ids.length - i - 1) * per)}${ids.length > 1 ? " in all" : ""}`);
+      jobTitle("bulk", (i + (eta ? eta.frac : Math.min(0.95, el / per))) / ids.length);
+    };
+    sayLeft();
     renderList();
+    // Each second, only the bulk line's text changes (and only when it reads differently), so nothing else repaints
+    const tick = setInterval(() => { sayLeft(); const m = $("lib-bulk").querySelector(".bulk-msg"); if (m && m.textContent !== bulkMsg) m.textContent = bulkMsg; }, 1000);
     try {
-      const card = await b.run(id, (text) => {
-        jobs.set(id, { text, active: true });
+      const card = await b.run(id, (text, st) => {
+        eta = st && st.state === "running" ? stemsEta(st) : null;
+        jobs.set(id, { text, active: st ? st.state === "running" : true, frac: eta ? eta.frac : null });
+        sayLeft();
         // Update the row in place so a periodic progress update doesn't steal focus from the list.
-        const el = $("track-list").querySelector(`li.trk[data-id="${id}"] .s.job`);
-        if (el) el.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), text); else renderList();
+        const li = $("track-list").querySelector(`li.trk[data-id="${id}"]`), el = li && li.querySelector(".s.job"), bar = li && li.querySelector(".pbar");
+        if (el && (bar || !eta)) {
+          el.replaceChildren(h("span", { class: "spin" + (jobs.get(id).active ? "" : " idle"), "aria-hidden": "true" }), text);
+          if (bar) bar.replaceWith(progBar(eta.frac, `${text}`));
+        } else renderList();
       });
       jobs.delete(id);
+      per = (per * (timed + 1) + (Date.now() - t0) / 1000) / (timed + 2); timed++;  // running average, seeded with the typical time
       if (card && currentId === id) renderCard(card);
     } catch (e) {
       failed++;
       jobs.set(id, { text: b.fail, error: e.message });
     }
+    clearInterval(tick);
   }
   bulkBusy = false;
+  jobTitle("bulk", null);
   try { await loadTracks(); } catch (_) {}
   const ok = ids.length - failed;
   sayBulk(b.done(ok) + (failed ? ` ${plural(failed)} failed.` : ""), failed ? 0 : 5000);
@@ -731,9 +786,11 @@ function strudelView(c) {
         h("code", {}, "pip install 'tastr[stems]'"), ", then restart ", h("code", {}, "tastr serve"), ". The code uses the full mix.")));
     } else if (strudelMix === "stems") {
       const go = h("button", { type: "button", ...(busy ? { disabled: "" } : {}) },
-        ...(busy ? [h("span", { class: "spin", "aria-hidden": "true" }), stemsLabel(st)] : ["Separate stems"]));
-      const say = h("span", { class: "muted st-say", role: "status" }, busy ? "A few minutes per track. The code uses the full mix until then."
-        : "Splits this track into vocals, bass, other and drums, once (a few minutes). The code uses the full mix until then.");
+        ...(busy ? [h("span", { class: "spin" + (st.state === "queued" ? " idle" : ""), "aria-hidden": "true" }), stemsLabel(st)] : ["Separate stems"]));
+      // While it runs, a progress bar takes the explainer's place
+      const say = st.state === "running" ? progBar(stemsEta(st).frac, "Stem separation progress")
+        : h("span", { class: "muted st-say", role: "status" }, busy ? "The code uses the full mix until the stems are ready."
+          : "Splits this track into vocals, bass, other and drums, once (a few minutes). The code uses the full mix until then.");
       go.onclick = async () => {
         go.disabled = true;
         try { await startStems(c); } catch (e) { go.disabled = false; say.className = "error st-say"; say.textContent = e.message; }
@@ -1929,11 +1986,25 @@ function stemsOf(c) {
   return stemStatus.get(c.id);
 }
 const stemsBusy = (st) => st.state === "running" || st.state === "queued";
-const stemsLabel = (st) => st.state === "queued" ? "Waiting for another separation…"
-  : `Separating stems…${isNum(st.progress) && st.progress > 0 ? ` ${Math.round(st.progress * 100)}%` : ""}`;
+const STEM_TYPICAL = 180; // seconds for one track's separation, until the job's own progress rate is known
+// How far along a running separation is, and the seconds left. Demucs on this machine reports real progress; a Modal
+// job reports none until it ends, so that one goes by its running time against STEM_TYPICAL.
+function stemsEta(st) {
+  const p = isNum(st.progress) ? st.progress : 0, el = isNum(st.elapsed) ? st.elapsed : null;
+  if (el == null) return { frac: p, left: (1 - p) * STEM_TYPICAL };
+  if (p > 0.05 && el >= 10) return { frac: p, left: (el * (1 - p)) / p };
+  return { frac: Math.min(0.95, Math.max(p, el / STEM_TYPICAL)), left: Math.max(0, STEM_TYPICAL - el) };
+}
+const stemsLabel = (st) => {
+  if (st.state === "queued") return `Waiting for another separation${st.position ? ` · ${st.position} ahead` : "…"}`;
+  const { frac, left } = stemsEta(st);
+  return `Separating stems ${Math.round(frac * 100)}% · ${fmtLeft(left)}`;
+};
 function setStems(id, st) {
   const was = stemStatus.get(id);
   stemStatus.set(id, st);
+  const running = [...stemStatus.values()].find((x) => x.state === "running");
+  jobTitle("stems", running ? stemsEta(running).frac : null);
   for (const l of [...stemListeners]) {
     if (!l.el.isConnected) stemListeners.delete(l);
     else if (l.id === id) l.fn(st, was);
@@ -2104,6 +2175,14 @@ function setStatus(msg, isErr, busy) {
 }
 // The server analyzes one request's files one after another, so send one request per file:
 // each placeholder can then turn into a track (or a failure) as soon as its own file is done.
+// Each request starts a background job (?background=1), polled for the step it's on; an older server that answers
+// with the results straight away still works, without steps.
+const A_TYPICAL = 40;  // seconds per track to start the time left from (hosted on Modal, upload included); then the running average
+const UP_SHARE = 0.15; // the part of a row's bar the upload takes
+// [stage, step name, share of the analysis, "while ..."]: the engine's stages (tastr/engine/stages) and the steps around them
+const A_STEPS = [["waiting", "Waiting for a worker", 0.06, "waiting for a worker"], ["decode", "Decoding audio", 0.08, "decoding the audio"],
+  ["core", "Finding tempo, key and beats", 0.34, "finding tempo, key and beats"], ["sections", "Finding sections", 0.2, "finding sections"],
+  ["tags", "Tagging vibes", 0.1, "tagging vibes"], ["suggestions", "Writing patterns", 0.16, "writing patterns"], ["views", "Drawing views", 0.06, "drawing views"]];
 let queue = Promise.resolve();
 function analyzeBatch(items) {
   if (!items.length) return;
@@ -2112,32 +2191,105 @@ function analyzeBatch(items) {
   renderList();
   queue = queue.then(() => runBatch(items, rows));
 }
+// How far through the analysis a row is (0-1): the steps before its current one, and a slow creep through the current one.
+function analysisFrac(row) {
+  let acc = 0;
+  for (const [k, , share] of A_STEPS) {
+    if (k === row.stage) return acc + share * Math.min(0.9, (Date.now() - row.stageAt) / 1000 / (A_TYPICAL * share));
+    acc += share;
+  }
+  return row.stage ? acc : 0;
+}
+async function followJob(job, row, update) {
+  for (let misses = 0; ;) {
+    if (job.state === "done") return job;
+    if (job.state === "error") throw new Error(job.error || "The analysis failed.");
+    if (job.stage !== row.stage) { row.stage = job.stage; row.stageAt = Date.now(); }
+    const step = A_STEPS.find(([k]) => k === job.stage);
+    row.say = job.stage === "fetch" ? "Fetching from the link"
+      : job.state === "queued" ? `Waiting for a worker${job.position ? ` · ${job.position} ahead` : ""}` : step ? `${step[1]}…` : "Analyzing…";
+    update();
+    await nap(1200);
+    try { job = await api(`/api/analyze/jobs/${job.id}`); misses = 0; }
+    catch (e) {
+      if (/no such job/.test(e.message)) throw new Error("The server lost track of this analysis (it may have restarted). Try again.");
+      if (++misses > 20) throw e;  // offline for a while; otherwise keep the last state and try again
+    }
+  }
+}
 async function runBatch(items, rows) {
-  let done = 0, failed = 0, lastId = null;
-  for (let i = 0; i < items.length; i++) {
-    const row = rows[i];
-    row.active = true;
-    setStatus(`Analyzing ${items.length} file(s)… this can take a while.`, false, true);
-    renderList();
+  const n = items.length;
+  let done = 0, failed = 0, lastId = null, perFile = A_TYPICAL, timed = 0;
+  for (let i = 0; i < n; i++) {
+    const row = rows[i], link = !!items[i].link;
+    Object.assign(row, { active: true, t0: Date.now(), secs: 0, frac: 0, stage: null, say: link ? "Fetching from the link" : "Uploading 0%" });
+    rows.slice(i + 1).forEach((q, k) => { q.say = k ? `Waiting · ${k} ahead of it` : "Up next"; });
+    let uploaded = link ? 1 : 0;
+    const update = () => {
+      row.secs = (Date.now() - row.t0) / 1000;
+      const a = row.stage ? analysisFrac(row) : 0;
+      row.frac = UP_SHARE * uploaded + (1 - UP_SHARE) * a;
+      const left = (1 - row.frac) * perFile + (n - i - 1) * perFile;
+      const step = A_STEPS.find(([k]) => k === row.stage);
+      const what = row.stage === "fetch" ? "fetching from the link" : step ? step[1].toLowerCase()
+        : uploaded < 1 ? `uploading ${Math.round(uploaded * 100)}%` : "analyzing";
+      const el = $("status");
+      el.className = "muted";
+      el.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), `Analyzing ${i + 1} of ${n} · ${what} · ${fmtLeft(left)}`, progBar((i + row.frac) / n, "Overall progress"));
+      jobTitle("analyze", (i + row.frac) / n);
+      paintPending();
+    };
+    update();
+    const tick = setInterval(update, 1000);
     let results;
-    try { results = (await items[i].send()).results || []; }
-    catch (e) { results = [{ track_id: null, title: row.name, error: e.message }]; }
+    try {
+      let r = await items[i].send((f) => {
+        uploaded = f;
+        row.say = f < 1 ? `Uploading ${Math.round(f * 100)}%` : "Analyzing…";  // "Analyzing…" until the job says which step
+        update();
+      });
+      uploaded = 1;
+      if (r && r.id && !r.results) r = await followJob(r, row, update);
+      results = (r && r.results) || [];
+    } catch (e) { results = [{ track_id: null, title: row.name, error: e.message, stage: row.stage }]; }
+    clearInterval(tick);
     const bad = results.filter((r) => r.error);
     const ok = results.filter((r) => r.track_id != null);
     done += ok.length; failed += bad.length;
-    if (ok.length) lastId = ok[ok.length - 1].track_id;
+    if (ok.length) {
+      lastId = ok[ok.length - 1].track_id;
+      perFile = (perFile * (timed + 1) + (Date.now() - row.t0) / 1000) / (timed + 2); timed++;  // running average, seeded with A_TYPICAL
+    }
     // Keep a failed row only for what failed; a single result keeps the name the user gave (the server's title carries a hash prefix).
-    pending.splice(pending.indexOf(row), 1, ...bad.map((r) => ({ name: results.length === 1 ? row.name : r.title, failed: true, error: r.error })));
+    pending.splice(pending.indexOf(row), 1, ...bad.map((r) => ({ name: results.length === 1 ? row.name : r.title, failed: true, error: r.error, stage: r.stage })));
     try { await loadTracks(); } catch (_) {}
     renderList();
   }
+  jobTitle("analyze", null);
   setStatus(`Analyzed ${done} track(s)` + (failed ? `, ${failed} failed` : "") + ".", failed > 0);
   if (lastId != null) await refresh(lastId);
+}
+// POST with XMLHttpRequest, for its upload progress (fetch has none). Errors read like api()'s.
+function postWithProgress(path, body, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", path);
+    x.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    x.upload.onload = () => { if (onProgress) onProgress(1); };
+    x.onload = () => {
+      let j = null;
+      try { j = JSON.parse(x.responseText); } catch (_) {}
+      if (x.status >= 200 && x.status < 300) resolve(j);
+      else reject(new Error(j && j.detail ? (typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)) : x.statusText || `Error ${x.status}`));
+    };
+    x.onerror = () => reject(new Error("Couldn't reach the server."));
+    x.send(body);
+  });
 }
 function uploadFiles(files) {
   analyzeBatch(files.map((f) => ({
     name: f.name,
-    send: () => { const fd = new FormData(); fd.append("files", f); return api("/api/analyze", { method: "POST", body: fd }); },
+    send: (onProgress) => { const fd = new FormData(); fd.append("files", f); return postWithProgress("/api/analyze?background=1", fd, onProgress); },
   })));
 }
 const drop = $("drop");
@@ -2187,7 +2339,7 @@ $("url-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const url = $("url-input").value.trim();
   if (!url) return;
-  analyzeBatch([{ name: url, send: () => api("/api/analyze-url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) }) }]);
+  analyzeBatch([{ name: url, link: true, send: () => api("/api/analyze-url?background=1", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) }) }]);
   $("url-input").value = "";
 });
 

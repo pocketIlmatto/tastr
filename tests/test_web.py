@@ -565,3 +565,67 @@ def test_saved_searches_save_replace_and_delete(client):
     assert client.delete(f"/api/searches/{a['id']}").status_code == 204
     assert client.delete(f"/api/searches/{a['id']}").status_code == 404
     assert [s["mode"] for s in client.get("/api/searches").json()] == ["sql"]
+
+
+def wait_job(client, job_id, until=("done", "error"), headers=None):
+    import time
+    for _ in range(200):
+        job = client.get(f"/api/analyze/jobs/{job_id}", headers=headers).json()
+        if job["state"] in until:
+            return job
+        time.sleep(0.02)
+    raise AssertionError(job)
+
+
+def test_background_analysis_reports_each_step(client, monkeypatch):
+    """?background=1 answers with a job at once; polling it shows the step, then the results."""
+    import threading
+
+    from tastr import service
+
+    go, seen = threading.Event(), []
+
+    def fake(source, stages, options, on_stage=None):
+        for name in ("decode", "core", "sections"):
+            on_stage(name, 0, 1)
+            seen.append(name)
+            if name == "core":
+                assert go.wait(5)
+        card = full_card()
+        card.source = source
+        return card
+
+    monkeypatch.setattr(service, "_analyze", fake)
+    monkeypatch.setenv("TASTR_LOOKUP", "")
+    r = client.post("/api/analyze?background=1", files=[("files", ("song.wav", b"RIFF", "audio/wav"))])
+    assert r.status_code == 202 and r.json()["file_count"] == 1
+    job = wait_job(client, r.json()["id"], until=("running",))
+    while job["stage"] != "core":
+        job = wait_job(client, job["id"], until=("running",))
+    assert job["file_index"] == 0 and "results" not in job
+    go.set()
+    job = wait_job(client, job["id"])
+    assert job["state"] == "done" and job["results"][0]["track_id"] and job["results"][0]["error"] is None
+    assert seen == ["decode", "core", "sections"]
+    assert client.get("/api/analyze/jobs/nosuchjob").status_code == 404
+
+
+def test_background_analysis_names_the_step_it_failed_at(client, monkeypatch):
+    r = client.post("/api/analyze?background=1", files=[("files", ("broken.wav", b"not audio at all", "audio/wav"))])
+    job = wait_job(client, r.json()["id"])
+    res = job["results"][0]
+    assert job["state"] == "done" and res["track_id"] is None and res["error"] and res["stage"] == "decode"
+
+
+def test_unfinished_jobs_read_as_failed_after_a_restart(db_path, tmp_path, monkeypatch):
+    import json
+
+    from tastr.web.analysis_jobs import RESTARTED
+
+    monkeypatch.setenv("TASTR_HOME", str(tmp_path / "home"))
+    folder = tmp_path / "home" / "analysis-jobs"
+    folder.mkdir(parents=True)
+    (folder / "abc123.json").write_text(json.dumps({"id": "abc123", "owner": None, "state": "running", "stage": "core"}))
+    with TestClient(create_app(db_path)) as c:  # `with` runs the startup, which marks it failed
+        job = c.get("/api/analyze/jobs/abc123").json()
+    assert job["state"] == "error" and job["error"] == RESTARTED

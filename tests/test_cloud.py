@@ -345,7 +345,7 @@ def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
     sys.modules.pop("tastr.cloud.modal_web", None)
     importlib.import_module("tastr.cloud.modal_web")
     sys.modules.pop("tastr.cloud.modal_web", None)
-    assert len(images) == 2 and all(i.local for i in images)
+    assert len(images) == 3 and all(i.local for i in images)
 
 
 def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):
@@ -372,6 +372,55 @@ def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):
     assert calls == [("analyze", (b"mp3 bytes", ".mp3", ["core"], {"beats_per_bar": 3}), {})]
     assert r.card.source is src and r.card.core.bpm == 124.0
     assert db.load_card(db.connect(db_path), r.track_id).source.local_path == str(song)
+
+
+def test_remote_analyze_reports_stages_from_analyze_stream(monkeypatch, tmp_path):
+    """With a stage callback the server calls the generator `analyze_stream`; an app without it falls back to `analyze`."""
+    from tastr.cloud import remote
+    from test_foundation import full_card
+
+    card = full_card().to_dict()
+    calls, missing = [], set()
+
+    class Fn:
+        def __init__(self, name):
+            self.name = name
+
+        def hydrate(self):
+            if self.name in missing:
+                raise LookupError(self.name)
+
+        def remote_gen(self, *a):
+            calls.append(self.name)
+            yield {"stage": "decode", "i": 0, "n": 1}
+            yield {"stage": "core", "i": 0, "n": 5}
+            yield {"card": card}
+
+        def remote(self, *a):
+            calls.append(self.name)
+            return card
+
+    fake = types.SimpleNamespace(Function=types.SimpleNamespace(from_name=lambda app, name: Fn(name)),
+                                 exception=types.SimpleNamespace(NotFoundError=LookupError))
+    monkeypatch.setitem(sys.modules, "modal", fake)
+    song = tmp_path / "song.wav"
+    song.write_bytes(b"wav")
+    seen = []
+    assert remote.analyze(song, on_stage=lambda s, i, n: seen.append(s)).core.bpm == 124.0
+    assert seen == ["decode", "core"] and calls == ["analyze_stream"]
+    missing.add("analyze_stream")
+    calls.clear()
+    assert remote.analyze(song, on_stage=seen.append).core.bpm == 124.0 and calls == ["analyze"]
+
+
+@pytest.mark.audio
+def test_run_analyze_stream_yields_stages_then_the_card(synth_wav):
+    from tastr.engine.card import TrackCard
+
+    path, _ = synth_wav
+    events = list(jobs.run_analyze_stream(path.read_bytes(), ".wav", ["core"]))
+    assert [e["stage"] for e in events[:-1]] == ["decode", "core"]
+    assert TrackCard.from_dict(events[-1]["card"]).core.bpm
 
 
 @pytest.mark.audio

@@ -144,6 +144,36 @@ def run_analyze(audio: bytes, suffix: str, stages: list[str] | None = None, opti
         return analyze_file(src, stages, options=options).to_dict()
 
 
+def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None):
+    """run_analyze, yielding {"stage", "i", "n"} as each stage starts and then {"card": ...}, for progress bars."""
+    import queue
+    import tempfile
+    import threading
+
+    from ..engine import analyze_file
+
+    events: queue.Queue = queue.Queue()
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / f"track{suffix}"
+        src.write_bytes(audio)
+
+        def work():
+            try:
+                card = analyze_file(src, stages, options=options, on_stage=lambda s, i, n: events.put({"stage": s, "i": i, "n": n}))
+                events.put({"card": card.to_dict()})
+            except BaseException as e:  # noqa: BLE001 - raised again below, in the caller's thread
+                events.put({"error": e})
+
+        threading.Thread(target=work, daemon=True).start()
+        while True:
+            event = events.get()
+            if "error" in event:
+                raise event["error"]
+            yield event
+            if "card" in event:
+                return
+
+
 def run_stems(audio: bytes, suffix: str) -> dict[str, bytes]:
     """Separate one file's bytes with the local Demucs; returns {stem name: FLAC bytes}."""
     import tempfile

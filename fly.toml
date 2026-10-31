@@ -11,6 +11,8 @@ primary_region = "sjc"
   TASTR_STEMS_BACKEND = "modal"
   TASTR_MODAL_APP = "tastr-web"
   MODAL_ENVIRONMENT = "friends"
+  # The Admin tab's activity log shows GitHub Actions runs on main from this repository (tastr/web/watch.py).
+  TASTR_GITHUB_REPO = "pocketIlmatto/tastr"
 
 # The library database, uploads and stems.
 [[mounts]]

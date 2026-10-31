@@ -753,6 +753,16 @@ def has_usage(conn: sqlite3.Connection, user: str) -> bool:
     return conn.execute("SELECT 1 FROM user_usage WHERE user = ? LIMIT 1", (user,)).fetchone() is not None
 
 
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (key, value))
+
+
 # ---- per-person daily limits (hosted) ----
 
 def get_override(conn: sqlite3.Connection, email: str, day: str) -> dict[str, Any] | None:
@@ -815,7 +825,8 @@ def first_storage_day(conn: sqlite3.Connection) -> str | None:
 EVENT_DAYS = 90
 # The admin log's filter groups (type) for each kind of event, and where events come from (source).
 EVENT_TYPE_OF = {"upload": "upload", "reanalyze": "analysis", "drums": "analysis", "stems": "stems", "limit": "limit",
-                 "failed": "error", "restart": "error", "signin": "signin", "deploy": "deploy", "admin": "admin"}
+                 "failed": "error", "restart": "error", "signin": "signin", "deploy": "deploy", "ci": "deploy",
+                 "backup": "backup", "admin": "admin"}
 EVENT_TYPES = ("upload", "analysis", "stems", "limit", "error", "signin", "blocked", "deploy", "backup", "admin")
 EVENT_SOURCES = ("app", "modal", "flyio", "github", "cloudflare", "r2")
 

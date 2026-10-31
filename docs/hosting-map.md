@@ -56,6 +56,8 @@ flowchart TB
   WEB -.->|artist + title| CAT
   GH -->|modal deploy| MOD
   GH -->|fly deploy, with the commit and run link| FLY
+  WEB -.->|every 15 min: runs on main, for the Admin log| GH
+  WEB -.->|every 15 min: litestream snapshots, for the Admin log| R2
 ```
 
 Audio has no storage of its own: uploads and stems live only on the Fly volume and expire after
@@ -170,7 +172,7 @@ Modal environment keeps the app's spending apart from benchmarks.
 
 | File | What it sets |
 | --- | --- |
-| `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT` |
+| `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT`, `TASTR_GITHUB_REPO` (whose GitHub Actions runs the Admin log shows) |
 | `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image, the restore-then-replicate start, and the backup target |
 | `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
 | `.github/workflows/deploy.yml` | The deploy order, which repository secrets it uses, and the commit and run link it builds into the Fly image |
@@ -187,13 +189,15 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 | `TASTR_STORAGE_GB` | The upload cap, kept below the volume size |
 | `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | The server's Modal token |
 | `LITESTREAM_BUCKET`, `LITESTREAM_ENDPOINT`, `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY` | The R2 backup |
+| `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log while the repository is private: a fine-grained token with read-only Actions access to the repository |
 | `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#9b-catalog-lookups-optional)) |
 
 These have defaults and change only if you set a Fly secret of the same name ([hosting.md](hosting.md#settings)):
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
 `TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`, `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin
 tab's Modal link opens the app) and `TASTR_CF_ACCOUNT_ID` (your Cloudflare account id, so the Admin tab links to
-Access's applications and its log of blocked requests; without it those links are hidden). `TASTR_BROWSER_ENGINE=1` (off by default) has the browser make the whole card
+Access's applications and its log of blocked requests; without it those links are hidden) and `TASTR_WATCH_MINUTES`
+(default 15: how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off). `TASTR_BROWSER_ENGINE=1` (off by default) has the browser make the whole card
 with the Rust engine, and `TASTR_ENGINE=python` (default `rust`) has Modal analyze with the Python reference engine. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
 (a change since the last start is logged as a deploy) on its own. The deploy workflow builds `TASTR_COMMIT`,
 `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` into the image (Docker build arguments, not secrets), so the

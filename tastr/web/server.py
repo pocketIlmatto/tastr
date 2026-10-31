@@ -13,12 +13,12 @@ import sqlite3
 import threading
 import uuid
 from contextlib import asynccontextmanager, closing, nullcontext
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from fastapi import Body, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
+from fastapi import Body, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -77,6 +77,18 @@ class SearchBody(BaseModel):
     name: str = Field(min_length=1, max_length=40)
     # simple: {groups, join, sort}; sql: {sql}. Stored as given; the page builds the SQL itself.
     data: dict[str, Any]
+
+
+class LimitsBody(BaseModel):
+    daily_tracks: int | None = Field(None, ge=0, le=10_000)  # None = the server default
+    daily_stems: int | None = Field(None, ge=0, le=1_000)
+    scope: Literal["today", "standing"] = "today"  # today only (ends at 00:00 UTC), or until an admin changes it
+
+
+EMAIL = re.compile(r"^[^@\s/]{1,64}@[^@\s/]{1,190}$")
+DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+VISIT_IDLE = 30 * 60  # seconds without a request before the next one counts as a new visit
+USAGE_RANGES = {"1": 1, "7": 7, "30": 30, "all": 365}  # the admin chart's ranges in days; "all" stops at a year
 
 
 class VersionBody(BaseModel):
@@ -206,6 +218,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
 
     drum_runs = drum_jobs.Jobs(run_drum_model)
     last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
+    snapshot_day = [""]  # the UTC day storage was last recorded for (storage_days)
 
     @app.middleware("http")
     async def same_origin_writes(request, call_next):
@@ -233,7 +246,14 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                     return JSONResponse({"detail": "Sign in through the Tastr link you were invited to."},
                                         status_code=401, headers=extra_headers)
                 request.state.user = user
-                last_seen[user] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                now = datetime.now(timezone.utc)
+                before = last_seen.get(user)
+                last_seen[user] = now.isoformat(timespec="seconds")
+                if before is None or (now - datetime.fromisoformat(before)).total_seconds() > VISIT_IDLE:
+                    await run_in_threadpool(count_visit, user)
+                if snapshot_day[0] != today():
+                    snapshot_day[0] = today()
+                    await run_in_threadpool(snapshot_storage)
                 m = TRACK_PATH.match(request.url.path)
                 if m and not await run_in_threadpool(owns, user, int(m[1])):
                     # 404, not 403: someone else's track looks the same as one that doesn't exist.
@@ -250,6 +270,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             try:
                 with closing(conn()) as c:
                     gone = expire_audio(c, upload_dir(), settings.audio_days, settings.admins)
+                snapshot_storage()
                 if gone:
                     log.info("Deleted the audio of %d track(s) older than %g days", len(gone), settings.audio_days)
             except Exception:  # noqa: BLE001 - try again next time
@@ -257,15 +278,63 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if stop.wait(EXPIRY_EVERY):
                 return
 
+    def count_visit(user: str) -> None:
+        """A visit is a person's first request after VISIT_IDLE without one; their very first is a first sign-in."""
+        with closing(conn()) as c:
+            first = not db.has_usage(c, user)
+            db.add_usage(c, user, "visits", today())
+        if first:
+            event(user, "signin", "Signed in for the first time", source="cloudflare")
+
+    def snapshot_storage(rows: list[dict[str, Any]] | None = None) -> None:
+        """Record today's bytes stored per person (storage_days), for the admin view's Storage chart."""
+        try:
+            with closing(conn()) as c:
+                rows = rows if rows is not None else scan_library(c)
+                by: dict[str | None, int] = {}
+                for r in rows:
+                    by[r["owner"]] = by.get(r["owner"], 0) + r["bytes"]
+                db.snapshot_storage(c, today(), by)
+        except Exception:  # noqa: BLE001 - the chart misses a day; nothing else depends on it
+            log.exception("Recording storage per person failed")
+
+    def scan_library(c: sqlite3.Connection) -> list[dict[str, Any]]:
+        """Each track's owner, upload time, last analysis and bytes on disk (audio, and stems separately)."""
+        rows = []
+        for owner, tid, sha, path, at, created in c.execute(
+                "SELECT owner, id, sha256, local_path, analyzed_at, created_at FROM tracks"):
+            audio, folder = file_bytes(path), stems.stems_dir(sha, tid)
+            stem_b = sum(f.stat().st_size for f in folder.iterdir() if f.is_file()) if folder.is_dir() else 0
+            rows.append({"owner": owner, "analyzed_at": at, "created_at": created or at, "audio": audio,
+                         "stems": stem_b, "bytes": audio + stem_b})
+        return rows
+
     def count_blocked() -> None:
         with closing(conn()) as c:
             db.add_blocked(c, today())
 
-    def event(user: str | None, kind: str, detail: str, ok: bool = True, link: str | None = None) -> None:
-        """A line in the admin activity log (hosted only; your own machine keeps no log)."""
+    def event(user: str | None, kind: str, detail: str, ok: bool = True, link: str | None = None,
+              source: str = "app") -> None:
+        """A line in the admin activity log (hosted only; your own machine keeps no log). `source`: where it
+        happened, one of db.EVENT_SOURCES."""
         if hosted:
             with closing(conn()) as c:
-                db.add_event(c, user, kind, detail, ok, link)
+                db.add_event(c, user, kind, detail, ok, link, source)
+
+    def runs_on(backend: str) -> str:
+        return "modal" if backend == "modal" else "app"
+
+    def analysis_source() -> str:
+        return runs_on(os.environ.get("TASTR_ANALYSIS_BACKEND", "local"))
+
+    def cap(c: sqlite3.Connection, user: str, kind: str) -> int:
+        """Today's cap on `kind` ("tracks" or "stems") for `user`: an admin's change to it, else the server's."""
+        return db.daily_cap(c, user, kind, today(), settings.daily_tracks if kind == "tracks" else settings.daily_stems)
+
+    def require_admin(request: Request) -> str:
+        if not hosted or request.state.user not in settings.admins:
+            raise HTTPException(404, "Not Found")
+        return request.state.user
 
     def refuse(user: str, status: int, message: str, limit: str, name: str | None = None):
         """Refuse a request over one of the hosted limits, and log which limit it hit (and for which file)."""
@@ -276,6 +345,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         """Admin log lines when the server starts: a new version deployed, and each analysis a restart cut off.
         A plain wake-up after Fly stopped an idle machine logs nothing."""
         marker, version = tastr_home() / "server-version", settings.fly_image or settings.commit
+        host = "flyio" if settings.fly_app else "app"
         try:
             before = marker.read_text().strip()
         except OSError:
@@ -289,10 +359,11 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 pass
         if deployed:
             what = f"{settings.commit[:7]}: {settings.commit_subject[:100]}" if settings.commit_subject else settings.commit[:7]
-            event(None, "deploy", f"Deployed {what or 'a new version'} (the server restarted)", link=settings.deploy_run or None)
+            event(None, "deploy", f"Deployed {what or 'a new version'} (the server restarted)", link=settings.deploy_run or None,
+                  source=host)
         elif cut:
             event(None, "restart", "The server restarted in the middle of an analysis (it crashed or its machine was stopped)",
-                  ok=False)
+                  ok=False, source=host)
         for job in cut:
             event(job.get("owner"), "failed", f"Cut off by the restart: {names(job.get('files') or ['upload'])}, "
                   f"while at step {job.get('stage') or 'waiting'} (ref {ref(job['id'])})", ok=False)
@@ -314,7 +385,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                     log.warning("analysis failed for %s%s: %s", r.source.uri, tag, r.error)
                     at = f" at step {stages[i]}" if stages and i < len(stages) and stages[i] else ""
                     event(user, "failed", f"Analysis failed: {Path(r.source.uri or 'upload').name}{at}, "
-                          f"{_failure_reason(r.error)}{tag}", ok=False)
+                          f"{_failure_reason(r.error)}{tag}", ok=False, source=analysis_source())
                     r.error = _hosted_error(r.error, settings)
         return _results(rs)
 
@@ -323,18 +394,18 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
 
     @app.get("/api/config")
     def config(request: Request):
-        """What this server allows, so the UI can hide what's turned off. The UI asks once per page load,
-        so on a hosted server this also counts each person's visits for the admin view."""
+        """What this server allows, so the UI can hide what's turned off. On a hosted server the daily limits are
+        the caller's own (an admin may have changed theirs), and admins also get the Cloudflare dashboard links."""
         user = getattr(request.state, "user", None)
+        admin = hosted and user in settings.admins
+        out = {"hosted": hosted, "links": not hosted, "query": True, "query_scope": "all" if not hosted or user in settings.admins else "mine", "user": user,
+               "admin": admin, "limits": settings.limits() if hosted else None, "browser_engine": browser_engine_cfg()}
         if hosted:
-            with closing(conn()) as c:
-                first = not db.has_usage(c, user)
-                db.add_usage(c, user, "visits", today())
-            if first:
-                event(user, "signin", "Signed in for the first time")
-        return {"hosted": hosted, "links": not hosted, "query": True, "query_scope": "all" if not hosted or user in settings.admins else "mine", "user": user,
-                "admin": hosted and user in settings.admins, "limits": settings.limits() if hosted else None,
-                "browser_engine": browser_engine_cfg()}
+            with closing(conn()) as c:  # this person's own caps, with any change an admin made for them
+                out["limits"] |= {"daily_tracks": cap(c, user, "tracks"), "daily_stems": cap(c, user, "stems")}
+        if admin:
+            out["cf_links"] = settings.cf_links()  # {} without TASTR_CF_ACCOUNT_ID
+        return out
 
     def browser_engine_cfg() -> dict | None:
         """Where the page gets the engine's WebAssembly build and which build it is, when browser cards are on."""
@@ -351,11 +422,13 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                             headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
     @app.get("/api/admin/usage")
-    def admin_usage(request: Request):
+    def admin_usage(request: Request, rng: str = Query("30", alias="range")):
         """Usage per person, the server's limits, analyses running or waiting, the last 20 events and today's blocked requests,
-        for the admin view. Hosted servers only, and only for TASTR_ADMIN_EMAILS; everyone else gets 404."""
-        if not hosted or request.state.user not in settings.admins:
-            raise HTTPException(404, "Not Found")
+        for the admin view, plus `series`: each person's tracks, stem jobs, visits and bytes stored per day of `range`
+        (7, 30 or all) or per hour of today (1). Hosted servers only, and only for TASTR_ADMIN_EMAILS; everyone else gets 404."""
+        require_admin(request)
+        if rng not in USAGE_RANGES:
+            raise HTTPException(400, f"range is one of {', '.join(USAGE_RANGES)}.")
         day = today()
         people: dict[str | None, dict[str, Any]] = {}
 
@@ -365,32 +438,142 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                                              "today": {"tracks": 0, "stems": 0, "drums": 0, "visits": 0}})
 
         with closing(conn()) as c:
-            for owner, tid, sha, path, at in c.execute(
-                    "SELECT owner, id, sha256, local_path, analyzed_at FROM tracks"):
-                p = person(owner)
+            library = scan_library(c)
+            for r in library:
+                p = person(r["owner"])
                 p["tracks"] += 1
-                p["audio_bytes"] += file_bytes(path)
-                folder = stems.stems_dir(sha, tid)
-                if folder.is_dir():
-                    p["stems_bytes"] += sum(f.stat().st_size for f in folder.iterdir() if f.is_file())
-                p["last_upload"] = max(p["last_upload"] or "", at)
+                p["audio_bytes"] += r["audio"]
+                p["stems_bytes"] += r["stems"]
+                p["last_upload"] = max(p["last_upload"] or "", r["analyzed_at"])
+            snapshot_storage(library)
             history = [{"day": d, "user": u, "kind": k, "n": n} for d, u, k, n in c.execute(
                 "SELECT day, user, kind, n FROM user_usage WHERE day >= date('now', '-29 days') ORDER BY day, user, kind")]
             recent = db.recent_events(c)
             problems = db.recent_events(c, problems=True)
             blocked = db.blocked_on(c, day)
+            changed = db.overrides(c, day)
+            series = usage_series(c, rng, day, library)
         for h in history:
             p = person(h["user"])
             if h["day"] == day:
                 p["today"][h["kind"]] = h["n"]
-        for email in settings.admins:
+        for email in [*settings.admins, *changed]:
             person(email)
+        for p in people.values():
+            if p["email"]:
+                o = changed.get(p["email"])
+                p["override"] = o
+                p["caps"] = {k: settings.daily_tracks if k == "tracks" else settings.daily_stems for k in ("tracks", "stems")}
+                for k in p["caps"]:
+                    if o and o[f"daily_{k}"] is not None:
+                        p["caps"][k] = o[f"daily_{k}"]
         users = sorted(people.values(), key=lambda p: (p["email"] is None, p["email"] or ""))
         return {"today": day, "users": users, "history": history, "admins": list(settings.admins),
                 "limits": settings.limits(), "recent": recent, "problems": problems, "blocked_today": blocked,
                 "log_links": settings.log_links(os.environ.get("TASTR_MODAL_APP", "tastr-web")),
                 "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(settings.storage_gb * 1024 ** 3)},
-                "active_stem_jobs": jobs.active(), "active_drum_jobs": drum_runs.active(), "analyses": slots.status()}
+                "active_stem_jobs": jobs.active(), "active_drum_jobs": drum_runs.active(), "analyses": slots.status(),
+                "series": series}
+
+    def usage_series(c: sqlite3.Connection, rng: str, day: str, library: list[dict[str, Any]]) -> dict[str, Any]:
+        """Per person: tracks, stems, visits and storage (bytes) for each bucket of the range, oldest first.
+        Today: 24 UTC hours; storage there counts each track from the hour it was uploaded, at today's size.
+        Days: storage is each day's last snapshot (storage_days), carried forward over days without one."""
+        kinds = ("tracks", "stems", "visits")
+        out: dict[str, dict[str, list]] = {}
+        if rng == "1":
+            n, now_hour = 24, datetime.now(timezone.utc).hour
+
+            def row(email):
+                return out.setdefault(email, {k: [0] * n for k in (*kinds, "storage")})
+            for x in db.usage_hours(c, day):
+                if x["kind"] in kinds:
+                    row(x["user"])[x["kind"]][x["hour"]] += x["n"]
+            for r in library:
+                if not r["owner"]:
+                    continue
+                created = r["created_at"] or ""
+                first = int(created[11:13]) if created[:10] == day and created[11:13].isdigit() else 0
+                if created[:10] > day:
+                    continue
+                st = row(r["owner"])["storage"]
+                for i in range(first, now_hour + 1):
+                    st[i] += r["bytes"]
+            return {"range": rng, "hourly": True, "now_hour": now_hour, "labels": list(range(n)), "people": out}
+        span = USAGE_RANGES[rng]
+        start = (datetime.fromisoformat(day) - timedelta(days=span - 1)).date().isoformat()
+        if rng == "all":  # from the first day anything was counted, at most a year back
+            first = min(filter(None, [c.execute("SELECT min(day) FROM user_usage").fetchone()[0], db.first_storage_day(c), day]))
+            start = max(start, first)
+        labels = []
+        d = datetime.fromisoformat(start)
+        while d.date().isoformat() <= day:
+            labels.append(d.date().isoformat())
+            d += timedelta(days=1)
+        at = {lab: i for i, lab in enumerate(labels)}
+
+        def row(email):
+            return out.setdefault(email, {k: [0] * len(labels) for k in (*kinds, "storage")})
+        for dd, u, k, nn in c.execute("SELECT day, user, kind, n FROM user_usage WHERE day >= ?", (start,)):
+            if k in kinds and dd in at:
+                row(u)[k][at[dd]] += nn
+        # the last snapshot on or before the range start carries into it
+        before = {o or None: b for o, b in c.execute(
+            "SELECT owner, bytes FROM storage_days WHERE day = (SELECT max(day) FROM storage_days WHERE day < ?)", (start,))}
+        snaps: dict[str | None, dict[str, int]] = {}
+        for x in db.storage_history(c, start):
+            snaps.setdefault(x["owner"], {})[x["day"]] = x["bytes"]
+        for owner in {*before, *snaps}:
+            if not owner:
+                continue
+            st, last = row(owner)["storage"], before.get(owner, 0)
+            for i, lab in enumerate(labels):
+                last = snaps.get(owner, {}).get(lab, last)
+                st[i] = last
+        return {"range": rng, "hourly": False, "labels": labels, "people": out}
+
+    @app.get("/api/admin/events")
+    def admin_events(request: Request, type: str = "", who: str = "", source: str = "", since: str = Query("", alias="from"),
+                     until: str = Query("", alias="to"), problems: bool = False, limit: int = Query(200, ge=1, le=1000)):
+        """The admin activity log, filtered on the server: type (db.EVENT_TYPES), who (an email, or "-" for lines
+        with no person), source (db.EVENT_SOURCES), from/to (UTC days, both included) and problems (not OK only).
+        Blocked requests show as one Cloudflare line per day. Admins only."""
+        require_admin(request)
+        if type and type not in db.EVENT_TYPES:
+            raise HTTPException(400, f"type is one of {', '.join(db.EVENT_TYPES)}.")
+        if source and source not in db.EVENT_SOURCES:
+            raise HTTPException(400, f"source is one of {', '.join(db.EVENT_SOURCES)}.")
+        if any(v and not DAY.match(v) for v in (since, until)):
+            raise HTTPException(400, "from and to are days, like 2026-10-31.")
+        with closing(conn()) as c:
+            return db.find_events(c, type, who, source, since, until, problems, limit)
+
+    @app.put("/api/admin/limits/{email}")
+    def set_limits(email: str, body: LimitsBody, request: Request):
+        """Change one person's daily track and stem job limits, today only or until changed (None = the default).
+        Logged as an admin change. Admins only."""
+        admin = require_admin(request)
+        email = email.strip().lower()
+        if not EMAIL.match(email):
+            raise HTTPException(400, "That isn't an email address.")
+        day = today()
+        with closing(conn()) as c:
+            db.set_override(c, email, body.daily_tracks, body.daily_stems, day if body.scope == "today" else None, admin)
+            o = db.get_override(c, email, day)
+        who = email.split("@")[0]
+        if o is None:
+            event(admin, "admin", f"Set {who}'s daily limits back to the defaults")
+        else:
+            t = body.daily_tracks if body.daily_tracks is not None else settings.daily_tracks
+            st = body.daily_stems if body.daily_stems is not None else settings.daily_stems
+            event(admin, "admin", f"Set {who}'s daily limits to {t} tracks, {st} stem jobs "
+                  f"({'today only' if body.scope == 'today' else 'until changed'})")
+        return {"email": email, "override": o}
+
+    @app.delete("/api/admin/limits/{email}")
+    def reset_limits(email: str, request: Request):
+        """Put one person back on the server's daily limits. Admins only."""
+        return set_limits(email, LimitsBody(), request)
 
     @app.get("/api/health")
     def health():
@@ -538,11 +721,12 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if hosted:
                 user = request.state.user
                 with closing(conn()) as c:
-                    if db.usage_today(c, user, "stems", today()) >= settings.daily_stems:
-                        raise refuse(user, 429, f"You've reached today's limit of {settings.daily_stems} stem separations.",
-                                     f"daily stem limit ({settings.daily_stems})")
+                    most = cap(c, user, "stems")
+                    if db.usage_today(c, user, "stems", today()) >= most:
+                        raise refuse(user, 429, f"You've reached today's limit of {most} stem separations.",
+                                     f"daily stem limit ({most})")
                     db.add_usage(c, user, "stems", today())
-                event(user, "stems", "Started separating stems for 1 track")
+                event(user, "stems", "Started separating stems for 1 track", source=runs_on(stems.backend()))
             jobs.start(path, folder)
         return _stems_status(card, track_id)
 
@@ -582,7 +766,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                         raise refuse(user, 429, f"You've reached today's limit of {settings.daily_drums} drum model runs.",
                                      f"daily drum model limit ({settings.daily_drums})")
                     db.add_usage(c, user, "drums", today())
-            event(user, "drums", "Started detecting drums with the model for 1 track")
+            event(user, "drums", "Started detecting drums with the model for 1 track", source=analysis_source())
             drum_runs.start(track_id)
         return _drum_model_status(track_id)
 
@@ -941,11 +1125,11 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             raise refuse(user, 507, "This server is out of space for new uploads. Ask whoever invited you.",
                          f"storage cap ({settings.storage_gb:g} GB)")
         with closing(conn()) as c:
-            used = db.usage_today(c, user, "tracks", today())
-        if used + len(files) > settings.daily_tracks:
-            left = max(0, settings.daily_tracks - used)
-            raise refuse(user, 429, f"You can analyze {settings.daily_tracks} tracks a day; {left} left today.",
-                         f"daily track limit ({settings.daily_tracks})")
+            used, most = db.usage_today(c, user, "tracks", today()), cap(c, user, "tracks")
+        if used + len(files) > most:
+            left = max(0, most - used)
+            raise refuse(user, 429, f"You can analyze {most} tracks a day; {left} left today.",
+                         f"daily track limit ({most})")
 
     @app.post("/api/analyze-url")
     def analyze_url(body: UrlBody, background: bool = False):

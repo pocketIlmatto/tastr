@@ -71,6 +71,9 @@ class Settings:
     commit: str = ""
     commit_subject: str = ""
     deploy_run: str = ""
+    # Your Cloudflare account id, for the Admin tab's links to the Access dashboard (who can sign in, and the
+    # Access log of blocked requests). Not secret, but kept out of the repository.
+    cf_account_id: str = ""
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -98,6 +101,7 @@ class Settings:
             commit=env.get("TASTR_COMMIT", "").strip(),
             commit_subject=env.get("TASTR_COMMIT_SUBJECT", "").strip(),
             deploy_run=env.get("TASTR_DEPLOY_RUN", "").strip(),
+            cf_account_id=env.get("TASTR_CF_ACCOUNT_ID", "").strip(),
         )
         if hosted and not (s.access_team_domain and s.access_aud):
             # Fail closed: a hosted server that can't check logins must not start.
@@ -113,6 +117,13 @@ class Settings:
                 "daily_stems": self.daily_stems, "daily_drums": self.daily_drums, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses,
                 "audio_days": self.audio_days}
 
+
+    def cf_links(self) -> dict[str, str]:
+        """The Cloudflare Zero Trust pages for Access applications and the Access log, or {} without an account id."""
+        if not re.fullmatch(r"[0-9a-f]{32}", self.cf_account_id):
+            return {}
+        base = f"https://one.dash.cloudflare.com/{self.cf_account_id}"
+        return {"apps": f"{base}/access/apps", "access_logs": f"{base}/logs/access"}
 
     def log_links(self, modal_app: str) -> dict[str, str]:
         """Where an admin can dig into the logs: Fly's monitoring page for the app, and the Modal app."""

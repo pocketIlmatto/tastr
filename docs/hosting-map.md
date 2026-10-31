@@ -191,8 +191,9 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 
 These have defaults and change only if you set a Fly secret of the same name ([hosting.md](hosting.md#settings)):
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
-`TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`, and `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin
-tab's Modal link opens the app). `TASTR_BROWSER_ENGINE=1` (off by default) has the browser make the whole card
+`TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`, `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin
+tab's Modal link opens the app) and `TASTR_CF_ACCOUNT_ID` (your Cloudflare account id, so the Admin tab links to
+Access's applications and its log of blocked requests; without it those links are hidden). `TASTR_BROWSER_ENGINE=1` (off by default) has the browser make the whole card
 with the Rust engine, and `TASTR_ENGINE=python` (default `rust`) has Modal analyze with the Python reference engine. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
 (a change since the last start is logged as a deploy) on its own. The deploy workflow builds `TASTR_COMMIT`,
 `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` into the image (Docker build arguments, not secrets), so the
@@ -203,7 +204,8 @@ Admin tab's deploy line names the commit and links to its GitHub Actions run.
 | Setting | Where |
 | --- | --- |
 | DNS records, SSL/TLS mode | Cloudflare > your domain > **DNS** and **SSL/TLS** |
-| Who's invited | Cloudflare **Zero Trust > Access > Applications** > the Tastr application > its Allow policy |
+| Who's invited | Cloudflare **Zero Trust > Access > Applications** > the Tastr application > its Allow policy (the Admin tab links here when `TASTR_CF_ACCOUNT_ID` is set) |
+| Who was blocked, and why | **Zero Trust > Logs > Access** (linked from the Admin tab's blocked count) |
 | Login method | **Zero Trust > Settings > Authentication** (One-time PIN) |
 | AUD tag | The Tastr Access application's **Overview** |
 | `/pub` bypass | A second Access application, same hostname, path `pub`, Bypass policy |
@@ -220,7 +222,8 @@ Admin tab's deploy line names the commit and links to its GitHub Actions run.
 | Invite someone | Add their email to the Access Allow policy. Nothing on Fly changes. |
 | Remove someone | Delete their email from the policy. Their tracks stay until you delete them. |
 | Ship new code | Merge to main, then **Actions > deploy > Run workflow**. |
-| See usage | The Admin tab; Modal's usage page for cost. |
+| See usage | The Admin tab (today by hour, 7 or 30 days, or all time); Modal's usage page for actual cost. |
+| Let someone upload more today | Admin tab > ✎ on their row > Today only. |
 | Recover a lost volume | Create a volume named `tastr_data` and deploy. The database comes back from R2; audio and stems don't. |
 | Rotate a key | Make a new one at its source, `fly secrets set` it (or update the GitHub secret), then revoke the old one. |
 

@@ -140,3 +140,20 @@ and how Tastr works each one out. Open it from the **Glossary** tab, or from
   the run date, so they update without touching the page.
 
 <img src="images/glossary.png" width="560" alt="The Glossary's Camelot wheel, showing which keys mix with the open track's key">
+
+## Admin (hosted)
+
+When Tastr is hosted for friends, the people in `TASTR_ADMIN_EMAILS` get an **Admin** tab
+([hosting.md](hosting.md#admin-view)). Nobody else sees it, and your own machine has none.
+
+- **Usage chart:** pick Today (24 UTC hours, with a "now" line), 7 days, 30 days or All time, and show
+  Tracks, Stem jobs, Visits, Storage (GB per person at the end of each day) or Cost (estimated from Modal run
+  time). Bars stack per person; click a person in the table to pick them out.
+- **Daily limits per person:** the ✎ at the end of a person's row changes their tracks and stem jobs per
+  day, for today only (back to the default at 00:00 UTC) or until you change it. Their quota shows the raised
+  cap with ↑, and someone at their cap gets a **Raise** link. Each change is logged.
+- **Recent activity filters:** filter the log by what happened, who, where (Tastr, Modal, Fly.io, GitHub,
+  Cloudflare, R2) and when (today, 7 or 30 days, or between two dates). Filters combine; **Problems** shows
+  only what went wrong. Each line names its source.
+- **Cloudflare links:** with `TASTR_CF_ACCOUNT_ID` set, the Access panel links to who can sign in and to
+  the Access log of blocked requests (who and why).

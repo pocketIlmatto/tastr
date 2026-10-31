@@ -1,5 +1,5 @@
-"""P4 of the Rust engine (docs/rust-engine.md): TASTR_ENGINE=rust on the server (tastr/engine/rust.py) and whole
-cards made in the browser (TASTR_BROWSER_ENGINE, tastr/engine/browser_card.py). The parts that need the Rust
+"""P4 and P5 of the Rust engine (docs/rust-engine.md): the Rust engine making every card (tastr/engine/rust.py),
+the Python engine only when asked for or when Rust can't, and whole cards made in the browser (TASTR_BROWSER_ENGINE, tastr/engine/browser_card.py). The parts that need the Rust
 library or its WebAssembly build skip without them:
 
     cd engine-rs && cargo build --release && cargo build --release --lib --target wasm32-unknown-unknown
@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 from synth import make_track, write_wav
 
-from tastr.engine import analyze_file, browser_card, rust
+from tastr.engine import DecodeError, analyze_file, browser_card, rust
 from tastr.engine.card import Source
 
 ROOT = Path(__file__).parent.parent / "engine-rs"
@@ -35,11 +35,11 @@ def song(tmp_path_factory):
 
 def test_engine_choice(monkeypatch):
     monkeypatch.delenv("TASTR_ENGINE", raising=False)
-    assert rust.chosen() == "python"
-    monkeypatch.setenv("TASTR_ENGINE", "Rust")
-    assert rust.chosen() == "rust" and rust.chosen({"engine": "python"}) == "python"
+    assert rust.chosen() == "rust"
+    monkeypatch.setenv("TASTR_ENGINE", "Python")
+    assert rust.chosen() == "python" and rust.chosen({"engine": "rust"}) == "rust"
     monkeypatch.setenv("TASTR_ENGINE", "fortran")
-    assert rust.chosen() == "python"
+    assert rust.chosen() == "rust"
 
 
 @needs_lib
@@ -76,14 +76,31 @@ def test_python_engine_steps_in_when_rust_cant(song, tmp_path, monkeypatch):
     assert "engine" not in part.extras and part.extras["engine_fallback"] == "only some stages were asked for"
     bad = tmp_path / "bad.wav"
     bad.write_bytes(b"RIFF....not audio")
-    with pytest.raises(Exception):
-        analyze_file(bad)  # Rust can't decode it, so Python tries, and fails as before
+    with pytest.raises(DecodeError):
+        analyze_file(bad)  # neither Rust nor Python can decode it
+    monkeypatch.setenv("TASTR_ENGINE", "python")
+    ref = analyze_file(song, ["core"])
+    assert "engine" not in ref.extras and "engine_fallback" not in ref.extras
 
 
-def test_rust_off_by_default(song, monkeypatch):
+@needs_lib
+def test_rust_is_the_default(song, monkeypatch):
     monkeypatch.delenv("TASTR_ENGINE", raising=False)
-    card = analyze_file(song, ["core"])
-    assert "engine" not in card.extras and "engine_fallback" not in card.extras
+    card = analyze_file(song)
+    assert card.extras["engine"] == f"rust {rust.version()}" and "decoded_by" not in card.extras
+
+
+@needs_lib
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_formats_rust_cant_decode_are_decoded_here(song, tmp_path, monkeypatch):
+    """Opus: Python decodes it and Rust still makes the card from the audio."""
+    monkeypatch.setenv("TASTR_ENGINE", "rust")
+    opus = tmp_path / "song.opus"
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(song), "-c:a", "libopus", str(opus)],
+                   check=True)
+    card = analyze_file(opus)
+    assert card.extras["engine"] == f"rust {rust.version()}" and card.extras["decoded_by"] == "python"
+    assert abs(card.core.bpm - 124) < 1
 
 
 def test_server_sends_the_engine_setting_to_modal(song, monkeypatch):
@@ -93,7 +110,7 @@ def test_server_sends_the_engine_setting_to_modal(song, monkeypatch):
 
     seen = {}
 
-    def fake(path, stages, options, on_stage=None, signals=None):
+    def fake(path, stages, options, on_stage=None):
         seen["options"] = options
         return analyze_file(song, ["core"])
 
@@ -171,7 +188,7 @@ def test_upload_with_a_browser_card_skips_the_analysis(song, db_path, tmp_path, 
     assert wasm.status_code == 200 and wasm.headers["content-type"] == "application/wasm"
     card = wasm_card(song, tmp_path)
     r = client.post("/api/analyze?background=1", files=[("files", ("song.wav", song.read_bytes(), "audio/wav")),
-                                                        ("signals", ("card.json", message(card), "application/json"))])
+                                                        ("card", ("card.json", message(card), "application/json"))])
     job = wait_job(client, r.json()["id"])
     assert job["state"] == "done", job
     stored = client.get(f"/api/tracks/{job['results'][0]['track_id']}").json()
@@ -179,7 +196,7 @@ def test_upload_with_a_browser_card_skips_the_analysis(song, db_path, tmp_path, 
     assert not analyzed
     # A card from another build is set aside and the server analyzes the file itself.
     r = client.post("/api/analyze?background=1", files=[("files", ("song.wav", song.read_bytes(), "audio/wav")),
-                                                        ("signals", ("card.json", message(card, "f" * 16), "application/json"))])
+                                                        ("card", ("card.json", message(card, "f" * 16), "application/json"))])
     job = wait_job(client, r.json()["id"])
     stored = client.get(f"/api/tracks/{job['results'][0]['track_id']}").json()
     assert stored["extras"]["browser_card"].startswith("set aside") and analyzed

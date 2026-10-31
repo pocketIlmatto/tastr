@@ -17,7 +17,7 @@ someone re-analyzes them; Opus files, which symphonia can't decode, fall back to
 | P2 | CQT and chroma, beat tracker, tempogram, Ward clustering | Done (below) |
 | P3 | The stages, and cards from Rust | Done (below) |
 | P4 | Switch-over behind a flag, full benchmarks | Done (below) |
-| P5 | Retire the Python engine from the analysis path | |
+| P5 | Retire the Python engine from the analysis path | Done (below) |
 
 ## Layout
 
@@ -263,4 +263,34 @@ needed. Key errors on GiantSteps: 66 fifths, 27 parallel, 23 relative, 120 other
 miss. Wall time on 8 CPUs: 6 min for GiantSteps key, 13 min for Beatport key, 6 min for Beatport tempo. The
 downbeat and Harmonix section benches start from spectrograms, not audio, so they don't exercise the switch;
 P3 showed those stages give identical results on the same input.
+
+## P5: Rust makes every card (2026-10-31)
+
+`analyze_file` now hands every analysis to the Rust engine; `TASTR_ENGINE` defaults to `rust`, on your own
+machine, the Fly server and Modal alike.
+
+- **Formats Rust can't decode** (Opus): Python decodes the file (librosa, else ffmpeg) and Rust makes the card
+  from those samples (`tastr_card_f32`). The card says `extras["decoded_by"] = "python"`.
+- **The Python engine** (`tastr/engine/stages/`, `run_pipeline`) stays as the reference: the benchmarks score
+  it with `--engine python`, the spectrogram benches (downbeats, Harmonix sections) and the fitting scripts
+  call its stage code directly, and the test suite checks its stage logic (`tests/conftest.py` sets
+  `TASTR_ENGINE=python` unless a test asks for Rust). It still makes the card for the drum model, which hooks
+  into its drum stage; for `tastr analyze --stages` (a subset); and when the Rust library isn't built, which
+  `extras["engine_fallback"]` notes. A change to a stage now goes in both, and `tests/test_rust_engine.py`
+  checks that their cards agree.
+- **Browser signals are gone** (`TASTR_BROWSER_SIGNALS`, `signals.js`, `browser_signals.py`): they fed HPSS into
+  the Python engine; the browser card (`TASTR_BROWSER_ENGINE`) replaces them. The upload's form field for the
+  card is now `card`.
+- **Memory**, peak RSS of the whole process for a synthetic track, 2026-10-31:
+
+  | Length | Rust | Python |
+  |---|---|---|
+  | 3 min | 235 MB, 4.2 s | ~740 MB |
+  | 10 min | 699 MB, 18 s | 1,551 MB, 37 s |
+  | 20 min | 1,362 MB, 40 s | ~2.9 GB |
+
+  About 66 MB per minute against Python's 130, so Modal's 2 GB `analyze` function could take tracks of about 25
+  minutes. `TASTR_MAX_MINUTES` stays at 12 until that is tried on real uploads.
+- **Local installs** need the library built once (`cd engine-rs && cargo build --release --lib`); without it
+  the Python engine makes the cards, as before.
 

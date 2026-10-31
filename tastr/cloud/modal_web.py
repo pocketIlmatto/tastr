@@ -85,32 +85,29 @@ stems_image = (
 app = modal.App(APP_NAME)
 
 
-# About 810 MB at peak for a 3-minute track. A container stays warm 1 minute after a request: enough for the
+# About 240 MB at peak for a 3-minute track with the Rust engine (66 MB a minute; Python took 810 MB). A container stays warm 1 minute after a request: enough for the
 # uploads of one batch to share a cold start, without paying for minutes of idle time after every upload.
 @app.function(image=image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=60)
-def analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None,
-            signals: bytes | None = None) -> dict:
+def analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
     from tastr.cloud.jobs import run_analyze
 
-    return run_analyze(audio, suffix, stages, options, signals)
+    return run_analyze(audio, suffix, stages, options)
 
 
 # The same, reporting each stage as it starts (the app's progress bars): yields {"stage", "i", "n"}, then {"card"}.
 @app.function(image=image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=60)
-def analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None,
-                   signals: bytes | None = None):
+def analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None):
     from tastr.cloud.jobs import run_analyze_stream
 
-    yield from run_analyze_stream(audio, suffix, stages, options, signals)
+    yield from run_analyze_stream(audio, suffix, stages, options)
 
 
 # The analysis above plus the drum model, only when someone asks for it on a track.
 @app.function(image=drums_image, cpu=2, memory=4096, timeout=15 * 60)
-def analyze_drums(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None,
-                  signals: bytes | None = None) -> dict:
+def analyze_drums(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
     from tastr.cloud.jobs import run_analyze
 
-    return run_analyze(audio, suffix, stages, options, signals)
+    return run_analyze(audio, suffix, stages, options)
 
 
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)

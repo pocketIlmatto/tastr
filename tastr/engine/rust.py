@@ -1,9 +1,9 @@
 """The Rust engine (engine-rs/, docs/rust-engine.md) as a drop-in for the whole pipeline.
 
-With TASTR_ENGINE=rust (or options {"engine": "rust"}), analyze_file hands a full analysis to the Rust
-library, which decodes the file and makes the card itself. It falls back to the Python engine when the library
-isn't there, for a subset of stages, with browser signals, with the drum model, and for anything the library
-can't do (Opus, which it can't decode). The card says which engine made it in extras["engine"].
+analyze_file hands every analysis to the Rust library, which decodes the file and makes the card itself; for
+formats it can't decode (Opus), Python decodes and passes it the audio. The Python engine makes the card only
+with TASTR_ENGINE=python (or options {"engine": "python"}), for a subset of stages, with the drum model, or
+when the library isn't there. The card says which engine made it in extras["engine"].
 
 The library is engine-rs's cdylib, loaded with ctypes through its small C interface (the same one the
 WebAssembly build exports). It is found at TASTR_ENGINE_LIB, else next to this file, else in engine-rs's
@@ -30,6 +30,10 @@ _lib_error: str | None = None
 
 class RustEngineError(RuntimeError):
     pass
+
+
+class RustDecodeError(RustEngineError):
+    """The library is there but can't decode this file (Opus)."""
 
 
 def lib_name() -> str:
@@ -90,9 +94,10 @@ def version() -> str:
 
 
 def chosen(options: dict | None = None) -> str:
-    """Which engine this analysis asks for: options["engine"], else TASTR_ENGINE, else python."""
-    name = str((options or {}).get("engine") or os.environ.get("TASTR_ENGINE") or "python").strip().lower()
-    return name if name in ENGINES else "python"
+    """Which engine this analysis asks for: options["engine"], else TASTR_ENGINE, else rust. "python" picks
+    the reference engine (tastr/engine/stages/), which the benchmarks compare against."""
+    name = str((options or {}).get("engine") or os.environ.get("TASTR_ENGINE") or "rust").strip().lower()
+    return name if name in ENGINES else "rust"
 
 
 def _meter(beats_per_bar) -> int:
@@ -102,7 +107,7 @@ def _meter(beats_per_bar) -> int:
 def _result(lib: ctypes.CDLL, n: int, what: str) -> dict:
     # The JSON lives in the library's per-thread buffer until this thread's next call; ctypes.string_at copies it.
     if n < 0:
-        raise RustEngineError(f"the Rust engine could not decode {what}")
+        raise RustDecodeError(f"the Rust engine could not decode {what}")
     return json.loads(ctypes.string_at(lib.tastr_card_ptr(), n).decode())
 
 

@@ -355,6 +355,7 @@ def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):
     from tastr import db, service
     from tastr.engine.card import Source
     from test_foundation import full_card
+    monkeypatch.delenv("TASTR_ENGINE", raising=False)  # set for the suite (conftest.py); unset, nothing extra goes
 
     remote_card = full_card()
     remote_card.source = Source(kind="file", uri="/tmp/x/track.mp3", local_path="/tmp/x/track.mp3")

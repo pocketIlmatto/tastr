@@ -12,6 +12,11 @@ if os.environ.get("PYTEST_XDIST_WORKER"):
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Most tests check the stage logic itself, which is the Python reference engine; whether the Rust library is
+# built would otherwise change which engine they test. Tests of the Rust path set TASTR_ENGINE=rust themselves
+# (test_rust_switch.py, test_rust_engine.py).
+os.environ.setdefault("TASTR_ENGINE", "python")
+
 from synth import make_track, write_wav  # noqa: E402
 
 

@@ -444,6 +444,28 @@ and time-stretched copies (`<name>/track_ps-3`, `<name>/track_ts12`) are skipped
 bar-1 picker on the same files, using tracks whose labeled bars are steadily
 3 or 4 beats long. See [rhythm.md](rhythm.md#meter-34-or-44-2026-10-30).
 
+**Ballroom, held out (2026-10-31).** `tastr bench ballroom ballroom --remote --stages core` on all 698
+excerpts (Rust engine, main, not recorded, 133 s on Modal): BPM within 4% 0.585, with x2 / half 0.841
+(130 read at half, 49 at double); beat F 0.674, downbeat F 0.445. Meter: 4/4 kept on 0.994 of 523, but 3/4
+found on only 0.56 of 175, against 0.86 on GTZAN, where the detector was tuned.
+
+| Style | n | BPM 4% | x2 / half | Beat F | Meter right | Ref vs est median BPM |
+|---|---|---|---|---|---|---|
+| ChaChaCha | 111 | 0.98 | 0.98 | 0.73 | 1.00 | 124 / 124 |
+| Tango | 86 | 0.97 | 0.97 | 0.88 | 1.00 | |
+| Rumba (3 sets) | 98 | 0.83 | 0.93 | 0.71 | 1.00 | |
+| Samba | 86 | 0.67 | 0.71 | 0.65 | 0.99 | |
+| Jive | 60 | 0.53 | 1.00 | 0.66 | 1.00 | 172 / 125 |
+| Quickstep | 82 | 0.00 | 0.93 | 0.55 | 0.98 | 204 / 103 |
+| Viennese Waltz | 65 | 0.31 | 0.71 | 0.68 | 0.80 (3/4) | 180 / 136 |
+| Waltz | 110 | 0.23 | 0.56 | 0.54 | 0.42 (3/4) | 87 / 131 |
+
+- Most of the 4% misses outside the waltzes are the tempo fold: Quickstep (about 200 BPM) is always read
+  at half and Jive (about 172) half the time, which is by design for a DJ range.
+- Slow Waltz is the weak spot: its tempo comes out 1.5x too high (87 to 131, the 3:2 trap), and 3/4 is
+  found on only 42%. Viennese Waltz finds 3/4 more often (80%) but at 3/4 of its tempo.
+- So the 3/4 detector is too conservative on slow waltzes, while 4/4 is nearly never flipped.
+
 ## Tempo on spectrograms
 
 `python -m tastr.engine.bench.tempo_spec <folder> --dataset hjdb [--out results.json]`

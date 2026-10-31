@@ -20,7 +20,7 @@ from this page. Update the page in the same change.
 ## The map
 
 Everything a visitor does goes through Cloudflare first. The Fly server is the only thing that talks to Modal
-and R2.
+and R2, and to the catalog lookups when they're turned on.
 
 ```mermaid
 flowchart TB
@@ -33,7 +33,7 @@ flowchart TB
   end
   subgraph FLY[Fly.io app tastr-frienz]
     WEB[Tastr web server, 512 MB]
-    VOL[(Volume tastr_data at /data: tastr.db, uploads, stems)]
+    VOL[(Volume tastr_data at /data: tastr.db, uploads, stems, optional AcousticBrainz index)]
     LS[Litestream]
   end
   subgraph MOD[Modal app tastr-web, environment friends]
@@ -42,6 +42,7 @@ flowchart TB
   end
   R2[(R2 bucket tastr-app: tastr.db)]
   GH[GitHub Actions: deploy workflow]
+  CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, MusicBrainz])
 
   F -->|your hostname| DNS --> ACC -->|request + signed token| WEB
   S -->|signed /pub link| DNS --> BYP --> WEB
@@ -50,6 +51,7 @@ flowchart TB
   LS -->|every database change| R2
   WEB -->|audio bytes| AN -->|track card| WEB
   WEB -->|audio bytes| ST -->|stem files| WEB
+  WEB -.->|artist + title| CAT
   GH -->|modal deploy| MOD
   GH -->|fly deploy| FLY
 ```
@@ -99,7 +101,7 @@ and starts again.
 | Login | Cloudflare Access | Emails a one-time PIN, checks the Allow policy, adds a signed token to each request. |
 | Checking the login | Tastr on Fly | `AccessVerifier` in `tastr/web/hosted.py` checks the token on every request and takes the email from it. |
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
-| Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`. |
+| Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
 | Analysis | Modal `analyze` | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Stays warm 5 minutes after a request. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
@@ -149,6 +151,7 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 | `TASTR_STORAGE_GB` | The upload cap, kept below the volume size |
 | `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | The server's Modal token |
 | `LITESTREAM_BUCKET`, `LITESTREAM_ENDPOINT`, `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY` | The R2 backup |
+| `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#9b-catalog-lookups-optional)) |
 
 These have defaults and change only if you set a Fly secret of the same name ([hosting.md](hosting.md#settings)):
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,

@@ -45,6 +45,10 @@ STRUDEL_ORIGINS = ("https://strudel.cc",)
 # Every route about one track; on a hosted server only its owner gets past the login middleware.
 TRACK_PATH = re.compile(r"^/api/tracks/(\d+)(?:/|$)")
 EXPIRY_EVERY = 6 * 3600  # seconds between sweeps for expired audio on a hosted server
+# TASTR_BROWSER_SIGNALS=1: the page runs HPSS itself and uploads it next to the audio (tastr/engine/browser_signals.py,
+# static/signals.js), so the analysis skips it. A signals file is 4 bytes per sample at 22,050 Hz, up to 20 minutes.
+SIGNALS_NAME = "signals.tsg"
+MAX_SIGNALS_BYTES = 4 * 22050 * 20 * 60 + 65536
 
 
 def _strudel_cors(origin: str | None, preflight: bool = False) -> dict[str, str]:
@@ -161,6 +165,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     (tests pass a stub; hosted mode otherwise checks tokens against the Access team's keys)."""
     settings = settings or Settings.from_env()
     hosted = settings.hosted
+    browser_signals = os.environ.get("TASTR_BROWSER_SIGNALS", "").strip().lower() in ("1", "true", "yes", "on")
     if hosted and verifier is None:
         verifier = AccessVerifier(settings.access_team_domain, settings.access_aud)
     slots = AnalysisSlots(settings.max_analyses) if hosted else None
@@ -299,7 +304,8 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if first:
                 event(user, "signin", "Signed in for the first time")
         return {"hosted": hosted, "links": not hosted, "query": True, "query_scope": "all" if not hosted or user in settings.admins else "mine", "user": user,
-                "admin": hosted and user in settings.admins, "limits": settings.limits() if hosted else None}
+                "admin": hosted and user in settings.admins, "limits": settings.limits() if hosted else None,
+                "browser_signals": browser_signals}
 
     @app.get("/api/admin/usage")
     def admin_usage(request: Request):
@@ -693,9 +699,12 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     # Plain `def` endpoints below run in FastAPI's threadpool, so slow analysis
     # doesn't block the event loop.
     @app.post("/api/analyze")
-    def analyze(request: Request, files: list[UploadFile] = File(...), background: bool = False):
+    def analyze(request: Request, files: list[UploadFile] = File(...), background: bool = False,
+                signals: list[UploadFile] | None = File(None)):
         """Analyze uploaded files and answer with the results. With ?background=1, answer at once with a job
-        to poll at /api/analyze/jobs/{id}, which says which step each file is on (the page's progress bars)."""
+        to poll at /api/analyze/jobs/{id}, which says which step each file is on (the page's progress bars).
+        `signals`: with TASTR_BROWSER_SIGNALS on, what the page measured from a single uploaded file; the engine
+        checks it and falls back to doing that work itself when it doesn't fit (or is missing or too big)."""
         if hosted:
             check_upload(request.state.user, files)
         paths: list[str] = []
@@ -723,18 +732,21 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                              f"{name} is {minutes:.0f} minutes long. This server analyzes tracks up to "
                              f"{settings.max_minutes:g} minutes, so a long mix needs cutting into shorter files first.",
                              f"track length limit ({settings.max_minutes:g} min)")
+        sig = save_signals(signals[0], Path(paths[0])) if browser_signals and signals and len(signals) == len(paths) == 1 else {}
         if hosted:
             event(request.state.user, "upload", f"Uploaded {len(paths)} track{'s' if len(paths) != 1 else ''}")
         if background:
             user = getattr(request.state, "user", None)
-            return JSONResponse(analyses.start(owner_of(request), len(paths), analysis_work(paths, user, owner_of(request))),
+            return JSONResponse(analyses.start(owner_of(request), len(paths), analysis_work(paths, user, owner_of(request), signals=sig)),
                                 status_code=202)
         with closing(conn()) as c:
             try:
                 with analysis_slot():
-                    rs = service.analyze_inputs(c, paths, owner=owner_of(request))
+                    rs = service.analyze_inputs(c, paths, owner=owner_of(request), signals=sig)
             except TimeoutError:
                 raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.")
+            finally:
+                drop_signals(sig)
             if hosted:  # only tracks that analyzed count toward the daily limit, so a failed try can be retried
                 db.add_usage(c, request.state.user, "tracks", today(), sum(r.track_id is not None for r in rs))
             return results(rs, owner_of(request))
@@ -745,9 +757,38 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             p.unlink(missing_ok=True)
             p.parent.rmdir()
 
-    def analysis_work(inputs: list[str], user: str | None, owner: str | None, link: bool = False):
-        """The work of one background analysis job (see analysis_jobs.py), reporting each step as it starts."""
+    def save_signals(upload: UploadFile, audio: Path) -> dict[str, str]:
+        """Store an upload's browser signals next to its audio until the analysis has read them: {audio: signals}.
+        Nothing ({}) when they are too big; the analysis then does that work itself."""
+        dest, size = audio.parent / SIGNALS_NAME, 0
+        with open(dest, "wb") as out:
+            while chunk := upload.file.read(1 << 20):
+                size += len(chunk)
+                if size > MAX_SIGNALS_BYTES:
+                    break
+                out.write(chunk)
+        if size > MAX_SIGNALS_BYTES:
+            dest.unlink(missing_ok=True)
+            return {}
+        return {str(audio): str(dest)}
+
+    def drop_signals(sig: dict[str, str]) -> None:
+        for path in sig.values():
+            Path(path).unlink(missing_ok=True)
+
+    def analysis_work(inputs: list[str], user: str | None, owner: str | None, link: bool = False,
+                      signals: dict[str, str] | None = None):
+        """The work of one background analysis job (see analysis_jobs.py), reporting each step as it starts.
+        `signals`: {audio path: browser signals file} for uploads that came with them (deleted once read)."""
+        sig = {str(Path(k).resolve()): v for k, v in (signals or {}).items()}
+
         def work(progress) -> dict[str, Any]:
+            try:
+                return run(progress)
+            finally:
+                drop_signals(sig)
+
+        def run(progress) -> dict[str, Any]:
             with closing(conn()) as c:
                 if link:
                     progress.stage("fetch")
@@ -762,7 +803,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                         progress.running()
                         for i, source in enumerate(sources):
                             progress.stage("decode", i)
-                            r = service.analyze_source(c, source, owner=owner,
+                            r = service.analyze_source(c, source, owner=owner, signals=sig.get(source.local_path),
                                                        on_stage=lambda name, *_, i=i: progress.stage(name, i))
                             rs.append(r)
                             failed_at.append(progress.last_stage if r.error else None)

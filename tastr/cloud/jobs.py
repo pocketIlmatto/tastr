@@ -132,8 +132,10 @@ def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = No
     return report
 
 
-def run_analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
-    """Analyze one file's bytes; returns the card as a dict (its source names a temporary file)."""
+def run_analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None,
+                signals: bytes | None = None) -> dict:
+    """Analyze one file's bytes; returns the card as a dict (its source names a temporary file).
+    `signals`: what the browser measured from it (tastr/engine/browser_signals.py), if anything."""
     import tempfile
 
     from ..engine import analyze_file
@@ -141,10 +143,11 @@ def run_analyze(audio: bytes, suffix: str, stages: list[str] | None = None, opti
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / f"track{suffix}"
         src.write_bytes(audio)
-        return analyze_file(src, stages, options=options).to_dict()
+        return analyze_file(src, stages, options=options, signals=signals).to_dict()
 
 
-def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None):
+def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None,
+                       signals: bytes | None = None):
     """run_analyze, yielding {"stage", "i", "n"} as each stage starts and then {"card": ...}, for progress bars."""
     import queue
     import tempfile
@@ -159,7 +162,8 @@ def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = Non
 
         def work():
             try:
-                card = analyze_file(src, stages, options=options, on_stage=lambda s, i, n: events.put({"stage": s, "i": i, "n": n}))
+                card = analyze_file(src, stages, options=options, signals=signals,
+                                    on_stage=lambda s, i, n: events.put({"stage": s, "i": i, "n": n}))
                 events.put({"card": card.to_dict()})
             except BaseException as e:  # noqa: BLE001 - raised again below, in the caller's thread
                 events.put({"error": e})

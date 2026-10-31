@@ -77,6 +77,33 @@ row by row on scipy's fast 1-D path, with the same output sample for sample
 (checked against `librosa.effects.hpss`, and `tests/test_engine.py` keeps it so):
 7.1 s in all, HPSS 3.4 s. Sharing the repeated STFTs would save only about 0.3 s more.
 
+## Browser signals
+
+`TASTR_BROWSER_SIGNALS=1` (off by default) moves HPSS, half of the server's analysis time, into the visitor's
+browser. The page decodes the upload with Web Audio (an `OfflineAudioContext` at 22,050 Hz, channels averaged
+like `librosa.to_mono`), runs `hpssHarmonic` from `tastr/web/static/signals.js` in a worker, and uploads a
+signals file next to the audio. The format is in `tastr/engine/browser_signals.py`: the decoded audio and
+HPSS's harmonic part, as int16 with a scale each.
+
+The engine then analyzes that audio instead of decoding the file. It takes the harmonic part as sent and the
+percussive part as audio minus harmonic. HPSS's soft masks add up to one and its STFT round trip rebuilds
+the input, so that difference is HPSS's percussive output to about 1e-7. Signals that don't fit are set aside
+and the file is decoded as usual: a bad file, the wrong rate, or a duration more than 1 s (or 1%) off the
+file's. `extras["browser_signals"]` on the card says which happened. The page sends nothing for tracks over
+20 minutes, tracks too short for the 31-frame median, or files the browser can't decode. Re-analysis and
+links always run fully on the server.
+
+What was measured (2026-10-31), with `tests/test_browser_signals.py` keeping the first two:
+
+- `hpssHarmonic` matches `signals.hpss` to about 1e-7, about 3 s for a 3-minute track in Node on one core.
+- In Chromium, an MP3 and a WAV analyzed from the browser's signals got the same BPM, key, downbeats (within
+  1 ms) and sections as the server decoding the file itself.
+- On four synthetic tracks, the only differences from the server-only card were drum velocities, a few
+  vibe scores in the third decimal and, on one track, one ghost note in a drum lane. All of them come from the
+  int16 rounding: with float32 audio the cards matched except for one velocity. Float32 would double the
+  upload, to 8 bytes a sample (about 32 MB for 3 minutes), so the format uses int16. Synthetic tracks have
+  digital silence, where that rounding shows most.
+
 ## Storage (`tastr/db.py`)
 
 SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or

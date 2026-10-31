@@ -60,7 +60,7 @@ def test_local_mode_stays_open_and_unchanged(db_path, home, monkeypatch):
     c = TestClient(create_app(db_path))
     assert c.get("/api/tracks").status_code == 200
     assert c.get("/api/config").json() == {"hosted": False, "links": True, "query": True, "query_scope": "all", "user": None, "admin": False,
-                                          "limits": None}
+                                          "limits": None, "browser_signals": False}
     assert "content-security-policy" not in c.get("/").headers
 
 

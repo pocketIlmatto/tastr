@@ -585,7 +585,7 @@ def test_background_analysis_reports_each_step(client, monkeypatch):
 
     go, seen = threading.Event(), []
 
-    def fake(source, stages, options, on_stage=None):
+    def fake(source, stages, options, on_stage=None, signals=None):
         for name in ("decode", "core", "sections"):
             on_stage(name, 0, 1)
             seen.append(name)

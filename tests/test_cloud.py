@@ -28,6 +28,8 @@ def test_modal_image_deps_match_pyproject(name):
     web = ("fastapi", "uvicorn", "python-multipart")
     assert sorted(consts["ENGINE_DEPS"]) == sorted(d for d in project["dependencies"] if not d.startswith(web))
     assert consts["STEMS_DEPS"] == project["optional-dependencies"]["stems"]
+    if "TORCH_CPU" in (ROOT / "tastr/cloud" / name).read_text():
+        assert f'TORCH_CPU = ("{project["optional-dependencies"]["drums"][0]}"' in (ROOT / "tastr/cloud" / name).read_text()
     assert consts["PINS"] == _consts("modal_app.py")["PINS"]
 
 
@@ -345,7 +347,7 @@ def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
     sys.modules.pop("tastr.cloud.modal_web", None)
     importlib.import_module("tastr.cloud.modal_web")
     sys.modules.pop("tastr.cloud.modal_web", None)
-    assert len(images) == 3 and all(i.local for i in images)
+    assert len(images) == 4 and all(i.local for i in images)
 
 
 def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):

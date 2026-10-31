@@ -10,7 +10,7 @@ Five services, each with one job:
 | --- | --- |
 | Cloudflare | DNS for your domain, HTTPS at the edge, and the login (Zero Trust Access) |
 | Fly.io | Runs the web server (app `tastr-frienz` in `fly.toml`) and keeps the database, uploads and stems on its volume |
-| Modal | Analysis and stem separation (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
+| Modal | Analysis, the on-request drum model and stem separation (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
 | Cloudflare R2 | Litestream's backup of the library database (bucket `tastr-app`) |
 | GitHub Actions | The manual `deploy` workflow, which ships new code to Modal and Fly |
 
@@ -38,6 +38,7 @@ flowchart TB
   end
   subgraph MOD[Modal app tastr-web, environment friends]
     AN[analyze_stream, 2 CPUs]
+    AD[analyze_drums, 2 CPUs + PyTorch + drum model]
     ST[stems, T4 GPU]
   end
   R2[(R2 bucket tastr-app: tastr.db)]
@@ -50,6 +51,7 @@ flowchart TB
   VOL -.- LS
   LS -->|every database change| R2
   WEB -->|audio bytes| AN -->|each step, then the track card| WEB
+  WEB -->|audio bytes, on request| AD -->|track card| WEB
   WEB -->|audio bytes| ST -->|stem files| WEB
   WEB -.->|artist + title| CAT
   GH -->|modal deploy| MOD
@@ -100,8 +102,10 @@ the page hears that it failed and can upload again. An app deployed before `anal
 works: the server falls back to Modal's `analyze`, without steps.
 
 Stems work the same way through Modal's `stems` function; the server saves the files it gets back on the
-volume. A queued or running separation leaves a marker on the volume, so it resumes if the machine stops
-and starts again.
+volume. "Detect drums with the model" in a track's menu re-analyzes it through `analyze_drums`, which is
+`analyze` plus PyTorch and the pretrained drum model's weights, kept in its own image so everyday uploads
+don't wait for PyTorch to load. A queued or running separation or drum model run leaves a marker on the
+volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops and starts again.
 
 ## Which service handles which step
 
@@ -114,6 +118,7 @@ and starts again.
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
 | Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. |
+| Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
 | Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then Fly, from main. |
@@ -129,7 +134,7 @@ Four layers, each assuming the one before it might be bypassed.
    token means 401, except `/api/health` and signed `/pub/` links. Without both settings the server won't
    start.
 3. **Per-person libraries and limits.** Each track belongs to the email that uploaded it; anyone else gets
-   404. Uploads, stems, storage and concurrent analyses are capped; link downloads and API docs are off; the SQL box
+   404. Uploads, stems, drum model runs, storage and concurrent analyses are capped; link downloads and API docs are off; the SQL box
    reads a copy of the person's own library (admins: the whole database), only SELECTs, for at most 2 s; errors don't name server paths; responses carry CSP and HSTS headers.
 4. **Signed Strudel links.** strudel.cc can't sign in, so the `/pub` Bypass application lets it through
    Cloudflare. Tastr checks each link itself: an HMAC with `TASTR_LINK_SECRET` over one track id and an expiry
@@ -147,7 +152,7 @@ Modal environment keeps the app's spending apart from benchmarks.
 | --- | --- |
 | `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT` |
 | `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image, the restore-then-replicate start, and the backup target |
-| `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream` and `stems`, their CPU, GPU, memory and timeouts |
+| `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
 | `.github/workflows/deploy.yml` | The deploy order and which repository secrets it uses |
 
 ### Fly secrets
@@ -166,7 +171,7 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 
 These have defaults and change only if you set a Fly secret of the same name ([hosting.md](hosting.md#settings)):
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
-`TASTR_AUDIO_DAYS`.
+`TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`.
 
 ### Dashboards
 
@@ -198,4 +203,5 @@ These have defaults and change only if you set a Fly secret of the same name ([h
 
 To stay cheap, the Fly machine stops after a few idle minutes and the next request wakes it (a few seconds).
 Modal stops its container 1 minute after the last analysis, so the first upload after a quiet spell waits
-about 30 seconds more.
+about 30 seconds more. A drum model run usually starts its own, larger container, so it takes a minute
+or two.

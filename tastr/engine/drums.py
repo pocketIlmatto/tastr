@@ -299,18 +299,20 @@ def _full_rate_audio(ctx: AnalysisContext) -> tuple[np.ndarray, int]:
 
 
 def model_lanes(ctx: AnalysisContext) -> dict[str, np.ndarray] | None:
-    """The drum model's hits per lane on the analysis frames, or None without tastr[drums] (or offline on
-    first use). Each hit is its confidence (0.5 to 1) times the level of that drum family's own part, so the
+    """The drum model's hits per lane on the analysis frames, or None when this analysis didn't ask for it
+    (adt.wanted), without tastr[drums], or offline on first use. Each hit is its confidence (0.5 to 1) times the level of that drum family's own part, so the
     model's lanes sit on the same scale as the built-in ones."""
     from . import adt
 
-    if not adt.available():
+    if not adt.wanted(ctx.options):
         return None
     try:
         hits = adt.onsets(*_full_rate_audio(ctx))
     except Exception as e:  # e.g. no network for the first download
         log.warning("drum model unavailable, using the built-in lanes: %s", e)
+        ctx.card.extras["drum_model_error"] = f"{type(e).__name__}: {e}"
         return None
+    ctx.card.extras["drum_model"] = "adtof"  # re-analysis keeps using it (service.reanalyze_track)
     nov = ctx.get("drum_onsets", onsets)
     n = next(iter(nov.values())).size
     level = {fam: float(np.percentile(nov[part], 99.5)) or 1.0 for fam, part in (("low", "kick"), ("high", "hat"))}

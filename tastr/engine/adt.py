@@ -11,9 +11,10 @@ $TASTR_HOME/models/ and checks their SHA-256. The network, the madmom-style spec
 below are written here from ADTOF's published architecture and settings, and the TensorFlow checkpoint
 is read without TensorFlow (tf_checkpoint.py).
 
-It is opt-in, because of that license: with PyTorch installed, the model runs once its weights are in the
-cache (`tastr drum-model fetch`, which shows the license) or with TASTR_DRUM_MODEL=adtof (which downloads
-them on first use). TASTR_DRUM_MODEL=off turns it off again.
+It runs only when asked, because of that license and because it is slower: "Detect drums with the model"
+in a track's menu (or `tastr drum-model run ID`) re-analyzes one track with it, downloading the weights
+on first use. Re-analyzing that track later keeps using it. TASTR_DRUM_MODEL=adtof runs it on every
+analysis instead (the drum benchmarks do this), and TASTR_DRUM_MODEL=off turns it off everywhere.
 """
 
 from __future__ import annotations
@@ -45,13 +46,28 @@ WINDOW, WARMUP = 6000, 400  # frames: 60 s windows read with 4 s of context on e
 INSTALL_HINT = "the drum model needs PyTorch: pip install 'tastr[drums]' (it shares PyTorch with tastr[stems])"
 
 
-def available() -> bool:
-    """True when PyTorch is installed and the model is opted into: its weights are cached, or
-    TASTR_DRUM_MODEL=adtof. TASTR_DRUM_MODEL=off always turns it off."""
-    choice = os.environ.get("TASTR_DRUM_MODEL", "").lower()
-    if choice in ("off", "0", "false", "none") or importlib.util.find_spec("torch") is None:
-        return False
-    return choice in ("adtof", "on", "1", "true") or cached()
+def _choice() -> str:
+    return os.environ.get("TASTR_DRUM_MODEL", "").strip().lower()
+
+
+def switched_off() -> bool:
+    """TASTR_DRUM_MODEL=off: never run the model, even when asked."""
+    return _choice() in ("off", "0", "false", "none")
+
+
+def installed() -> bool:
+    """True when the model can run here when asked: PyTorch is installed and TASTR_DRUM_MODEL isn't off."""
+    return not switched_off() and importlib.util.find_spec("torch") is not None
+
+
+def always() -> bool:
+    """TASTR_DRUM_MODEL=adtof: run the model on every analysis, not only when asked for one track."""
+    return _choice() in ("adtof", "on", "1", "true", "always")
+
+
+def wanted(options: dict | None) -> bool:
+    """Whether this analysis should run the model: asked for ({"drum_model": True}) or always on."""
+    return installed() and (always() or bool((options or {}).get("drum_model")))
 
 
 def cached() -> bool:

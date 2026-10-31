@@ -58,14 +58,17 @@ def fetch(dataset: str, path: str, archives: list[int] | None = None) -> dict:
 
 
 def analyze(audio_path: str | Path, stages: list[str] | None = None, options: dict | None = None, on_stage=None):
-    """Analyze one file on Modal; returns its TrackCard (whose source the caller sets).
+    """Analyze one file on Modal; returns its TrackCard (whose source the caller sets). With the drum model
+    asked for ({"drum_model": True}), it runs in `analyze_drums`, whose image has PyTorch and the weights.
 
-    With `on_stage`, it calls `analyze_stream`, which reports each stage as it starts; an app deployed before
-    that function existed falls back to `analyze`, without stages."""
+    Otherwise, with `on_stage`, it calls `analyze_stream`, which reports each stage as it starts; an app
+    deployed before that function existed falls back to `analyze`, without stages."""
     from ..engine.card import TrackCard
 
     audio_path = Path(audio_path)
     args = (audio_path.read_bytes(), audio_path.suffix, stages, options)
+    if (options or {}).get("drum_model"):
+        return TrackCard.from_dict(_call("analyze_drums", *args))
     if on_stage:
         try:
             for event in _call_gen("analyze_stream", *args):

@@ -307,6 +307,7 @@ const plural = (n) => `${n} track${n === 1 ? "" : "s"}`;
 const editsGone = new Set(); // tracks whose re-analysis dropped some saved edits
 let lookupProviders = []; // enabled catalogs (TASTR_LOOKUP), from the last card the server sent
 const A_TYPICAL_BULK = 40; // a re-analysis, like A_TYPICAL (the upload aside)
+let drumModelOn = false; // whether the server can run the drum model, from the last card it sent
 const BULK = {
   // typical: seconds per track to start the time left from, until the batch's own average is known
   reload: { label: "Reload metadata", doing: "Reloading metadata…", fail: "Couldn't reload metadata", typical: 2,
@@ -325,6 +326,15 @@ const BULK = {
     when: () => lookupProviders.length > 0,
     done: (n) => `Looked up ${plural(n)}.`,
     run: async (id) => (await api(`/api/tracks/${id}/lookup`, { method: "POST" })).card },
+  drums: { label: "Detect drums with the model", note: "slow", doing: "Detecting drums…", fail: "Couldn't detect drums with the model", typical: 90,
+    when: () => drumModelOn,
+    done: (n) => { const d = editsGone.size; editsGone.clear(); return `Detected drums with the model for ${plural(n)}.` + (d ? ` Some edits no longer match the new sections in ${plural(d)}, so they were dropped.` : ""); },
+    run: async (id, say) => {
+      await flushEdits(id);
+      const card = await runDrumModel(id, say);
+      dropEdits(id);
+      return card;
+    } },
   stems: { label: "Separate stems", note: "slow", doing: "Separating stems…", fail: "Couldn't separate stems", typical: 180,
     done: (n) => `Stems ready for ${plural(n)}.`,
     // The server separates in the background; wait for this track before starting the next one.
@@ -577,6 +587,7 @@ let shownCard = null;
 
 function renderCard(c) {
   lookupProviders = c.lookup_providers || [];
+  drumModelOn = !!c.drum_model_available;
   shownCard = c;
   stopAllPlayback();
   if (!savedEdits.has(c.id)) loadEdits(c.id).then(() => { if (savedEdits.has(c.id) && currentId === c.id && $("card").dataset.id === String(c.id)) renderCard(c); });
@@ -1977,6 +1988,21 @@ function trackSummary(c) {
   return [`${src.title || src.uri || `Track ${c.id}`}${src.artist ? " by " + src.artist : ""}`, facts.filter(Boolean).join(" · "), vibes.length ? `Vibe: ${vibes.join(", ")}` : null].filter(Boolean).join("\n");
 }
 // A status the menu shows once its card is drawn again (reloading metadata re-renders the card).
+// ---------- drum model: on-demand re-analysis with the pretrained drum model (tastr/drum_jobs.py) ----------
+const drumsBusy = (st) => st.state === "running" || st.state === "queued";
+const drumsLabel = (st) => st.state === "queued" ? "Waiting for another drum model run…" : "Detecting drums with the model…";
+// Starts the run (or joins one already going), waits for it and resolves to the track's fresh card.
+async function runDrumModel(id, say) {
+  let st = await api(`/api/tracks/${id}/drum-model`, { method: "POST" });
+  while (drumsBusy(st)) {
+    if (say) say(drumsLabel(st));
+    await new Promise((r) => setTimeout(r, 3000));
+    st = await api(`/api/tracks/${id}/drum-model`);
+  }
+  if (st.state !== "done") throw new Error(st.error || "The drum model run failed");
+  return api(`/api/tracks/${id}`);
+}
+
 // ---------- stems: on-demand separation (tastr/stems.py), shared by the track menu and the Strudel view ----------
 const stemStatus = new Map(); // track id -> latest {state: none|queued|running|ready|error, progress?, error?}
 const stemListeners = new Set();
@@ -2053,7 +2079,7 @@ function trackMenu(c) {
   const close = (refocus) => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); document.removeEventListener("pointerdown", outside, true); if (refocus) btn.focus(); };
   const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
   const item = (label, o = {}) => h("button", { type: "button", role: "menuitem", class: "menu-item" + (o.danger ? " danger" : ""), onclick: o.onclick,
-    ...(o.disabled ? { disabled: "", title: o.title || "" } : {}) }, label);
+    ...(o.disabled ? { disabled: "", title: o.title || "" } : o.title ? { title: o.title } : {}) }, label);
   const items = () => [...pop.querySelectorAll("[role=menuitem]:not([disabled]), .menu-confirm button")];
   const copy = async () => {
     close(true);
@@ -2085,6 +2111,27 @@ function trackMenu(c) {
       if (currentId === c.id) renderCard(r.card); else menuNote = null;
       try { await loadTracks(); renderList(); } catch (_) {}
     } catch (e) { tell(e.message, true); }
+  };
+  const detectDrums = async () => {
+    close(true);
+    tell("Detecting drums with the model… this can take a minute or two", false, true);
+    try {
+      await flushEdits(c.id); // the server moves saved edits to the new sections, as with Re-analyze
+      const card = await runDrumModel(c.id, (msg) => tell(`${msg} this can take a minute or two`, false, true));
+      viewsCache = null;
+      dropEdits(c.id);
+      await loadEdits(c.id);
+      menuNote = { id: c.id, msg: "Drums detected with the model" };
+      if (currentId === c.id) renderCard(card); else menuNote = null;
+    } catch (e) { tell(e.message, true); }
+  };
+  const drumsItem = () => {
+    const label = "Detect drums with the model";
+    if (c.extras && c.extras.drum_model) return item("Drums detected with the model", { disabled: true, title: "Re-analyze keeps using the drum model on this track" });
+    if (drumsBusy({ state: c.drum_model_state })) return item(drumsLabel({ state: c.drum_model_state }), { disabled: true });
+    if (!c.has_audio) return null;
+    if (!c.drum_model_available) return item(label, { disabled: true, title: "Needs PyTorch, an optional install: pip install 'tastr[drums]'" });
+    return item(label, { onclick: detectDrums, title: "Re-analyze with the pretrained drum model (ADTOF, CC BY-NC-SA 4.0): finds toms and cymbals the built-in lanes miss. Slower, so it runs only when asked." });
   };
   const separate = async () => {
     close(true);
@@ -2139,6 +2186,7 @@ function trackMenu(c) {
       c.has_audio && c.core && c.core.bpm ? item(`Change to ${beatsPerBar(c) === 3 ? "4/4" : "3/4"} time`, { onclick: () => reanalyze(beatsPerBar(c) === 3 ? "4/4" : "3/4") }) : null,
       c.has_audio && c.core && c.core.meter_set ? item("Detect the time signature again", { onclick: () => reanalyze("auto") }) : null,
       (c.lookup_providers || []).length ? item("Look up BPM & key online", { onclick: lookUp }) : null,
+      drumsItem(),
       stemsItem(),
       h("hr", { class: "menu-sep" }),
       item("Delete track…", { danger: true, onclick: showConfirm })].filter(Boolean));

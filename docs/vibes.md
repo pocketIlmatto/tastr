@@ -146,3 +146,49 @@ Danceability is now 0.75 percussiveness + 0.25 tempo fit, with the bell at 135 B
 and still feeds driving, hypnotic and atmospheric. Energy keeps its hand-picked weights until DEAM can
 check them. `vibes.DANCE_WEIGHTS` now holds the shipped weights, so later `vibe-fit` runs compare against
 them.
+
+### 2026-10-31: confirmation run, all 12 archives plus DEAM
+
+MTG-Jamendo: 3,069 labeled tracks from archives 00-11, scored with the shipped danceability. Archives 09-11
+(about 600 tracks) were fetched after the refit, so they're new to it. DEAM: 1,802 clips, from the Kaggle copy
+of the dataset because its own server stayed down. 0 failed on either.
+
+| Measure vs label | n | Before refit | Now |
+| --- | --- | --- | --- |
+| danceability vs danceable | 510 | 0.702 | 0.815 |
+| danceability vs party | 853 | 0.679 | 0.802 |
+| tag: danceable vs danceable | 510 | 0.508 | 0.741 (shown on 145 tracks, 0.72 of them labeled yes; base rate 0.38) |
+| energy vs aggressive | | | 0.848 |
+| energy vs mood: energetic | | | 0.752 |
+
+A second refit gains nothing (held out 0.809 vs 0.811), so the danceability weights are settled.
+
+DEAM (Spearman against listener ratings):
+
+| Measure | Rating | Spearman |
+| --- | --- | --- |
+| energy | arousal | +0.665 |
+| tag: high energy | arousal | +0.484 |
+| tag: bright | valence | +0.483 |
+| tag: euphoric | valence | +0.231 |
+| tag: melancholic | valence | -0.435 |
+| tag: dark | valence | -0.493 |
+
+Energy refits pull in different directions depending on the label:
+
+| Refit vs label | Today (held out) | Fitted | Fitted weights |
+| --- | --- | --- | --- |
+| energy vs aggressive (MTG) | 0.762 | 0.872 | loudness 0.60, onset rate 0, brightness 0.30, percussiveness 0.10 |
+| energy vs mood: energetic (MTG) | 0.778 | 0.784 | loudness 0.40, onset rate 0.20, brightness 0.35, percussiveness 0.05 |
+| energy vs arousal (DEAM) | 0.699 | 0.717 | loudness 0.20, onset rate 0.30, brightness 0.40, percussiveness 0.10 |
+
+Reading it:
+
+- Today's energy already tracks both datasets well. The "aggressive" fit leans on loudness, the DEAM fit on
+  onset rate and brightness, and each gains little on the other's labels. That's a sign of fitting each
+  dataset's quirks, so the hand-picked energy weights stay unless a joint fit beats them on both.
+- "dark" is at chance against MTG's sparse "dark" uploader tag but clearly follows low valence on DEAM, so it
+  works; the MTG label is the weak part.
+- "driving" and "hypnotic" are still at chance, and "atmospheric" still shows on most tracks (1,677 of 2,365
+  MTG tracks with mood tags). Their cut-offs are the next thing to tune, best from the spread of your own
+  library.

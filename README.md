@@ -140,7 +140,7 @@ work, because those services don't allow downloading audio.
 
 Hosted mode (`TASTR_HOSTED=1`, the `hosted` extra) runs Tastr behind Cloudflare
 Access for a few invited people: every request needs their login, link analysis
-and the SQL box are off, and uploads and stem jobs have limits. See
+is off, the SQL box reads only your own library, and uploads and stem jobs have limits. See
 [docs/hosting.md](docs/hosting.md). [docs/deploy.md](docs/deploy.md) puts it on
 Fly.io, with analysis on Modal and the library backed up to R2.
 

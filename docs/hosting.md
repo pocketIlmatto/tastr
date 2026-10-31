@@ -16,7 +16,7 @@ pieces fit together.
 | --- | --- | --- |
 | Login | none | Cloudflare Access token required on every request except `/api/health` and signed `/pub/` links |
 | Link analysis (yt-dlp) | on (with the `links` extra) | off; the link field is hidden |
-| SQL box (`/api/query`) | on | off; the box is hidden |
+| SQL box (`/api/query`) | whole database, 5 s limit | admins: whole database; everyone else: an in-memory copy of their own library (no owner, path or log columns); 2 s limit, one query at a time |
 | Uploads | any size | audio types only, size, count, per-person daily and total storage limits |
 | Library | one, yours | one per person: each sees and changes only the tracks they uploaded |
 | Deleting a track | removes its stems | also removes its uploaded audio |

@@ -59,7 +59,7 @@ def test_local_mode_stays_open_and_unchanged(db_path, home, monkeypatch):
     monkeypatch.delenv("TASTR_HOSTED", raising=False)
     c = TestClient(create_app(db_path))
     assert c.get("/api/tracks").status_code == 200
-    assert c.get("/api/config").json() == {"hosted": False, "links": True, "query": True, "user": None, "admin": False,
+    assert c.get("/api/config").json() == {"hosted": False, "links": True, "query": True, "query_scope": "all", "user": None, "admin": False,
                                           "limits": None}
     assert "content-security-policy" not in c.get("/").headers
 
@@ -94,7 +94,7 @@ def test_logged_in_requests_work_and_carry_security_headers(client):
     assert client.get("/api/tracks").status_code == 200
     client.cookies.clear()
     cfg = client.get("/api/config", headers=GOOD).json()
-    assert cfg["hosted"] and not cfg["links"] and not cfg["query"] and cfg["user"] == "friend@example.com"
+    assert cfg["hosted"] and not cfg["links"] and cfg["query_scope"] == "mine" and cfg["user"] == "friend@example.com"
     assert client.get("/docs", headers=GOOD).status_code == 404
 
 
@@ -103,8 +103,26 @@ def test_csp_allows_the_pages_own_inline_script():
     assert len(hashes) == 1 and hashes[0].startswith("'sha256-")
 
 
-def test_sql_box_is_off(client):
-    assert client.post("/api/query", json={"sql": "SELECT 1"}, headers=GOOD).status_code == 403
+def test_sql_reads_only_your_own_library(db_path, home):
+    mine, theirs = save(db_path, "friend@example.com", sha="a1"), save(db_path, "other@example.com", sha="b2")
+    c = make_client(db_path)
+    q = lambda sql: c.post("/api/query", json={"sql": sql}, headers=GOOD)
+    assert q("SELECT id FROM tracks").json()["rows"] == [[mine]]
+    assert q("SELECT DISTINCT track_id FROM tags").json()["rows"] == [[mine]]
+    assert q("SELECT count(*) FROM sections WHERE track_id = %d" % theirs).json()["rows"] == [[0]]
+    cols = q("SELECT * FROM tracks").json()["columns"]
+    assert "owner" not in cols and "local_path" not in cols and "source_uri" not in cols and "title" in cols
+    for sql in ["SELECT * FROM events", "SELECT * FROM user_usage", "SELECT * FROM track_edits", f"ATTACH '{db_path}' AS d"]:
+        assert q(sql).status_code == 400, sql
+    assert c.get("/api/config", headers=GOOD).json()["query_scope"] == "mine"
+
+
+def test_admins_query_the_whole_database(db_path, home):
+    save(db_path, "friend@example.com", sha="a1"), save(db_path, "other@example.com", sha="b2")
+    c = make_client(db_path, admins=("friend@example.com",))
+    r = c.post("/api/query", json={"sql": "SELECT owner FROM tracks ORDER BY owner"}, headers=GOOD).json()
+    assert r["rows"] == [["friend@example.com"], ["other@example.com"]]
+    assert c.get("/api/config", headers=GOOD).json()["query_scope"] == "all"
 
 
 def upload(client, *files):

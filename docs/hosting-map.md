@@ -118,8 +118,8 @@ Four layers, each assuming the one before it might be bypassed.
    token means 401, except `/api/health` and signed `/pub/` links. Without both settings the server won't
    start.
 3. **Per-person libraries and limits.** Each track belongs to the email that uploaded it; anyone else gets
-   404. Uploads, stems, storage and concurrent analyses are capped; the SQL box, link downloads and API docs
-   are off; errors don't name server paths; responses carry CSP and HSTS headers.
+   404. Uploads, stems, storage and concurrent analyses are capped; link downloads and API docs are off; the SQL box
+   reads a copy of the person's own library (admins: the whole database), only SELECTs, for at most 2 s; errors don't name server paths; responses carry CSP and HSTS headers.
 4. **Signed Strudel links.** strudel.cc can't sign in, so the `/pub` Bypass application lets it through
    Cloudflare. Tastr checks each link itself: an HMAC with `TASTR_LINK_SECRET` over one track id and an expiry
    7 days out. Changing the secret ends every outstanding link.

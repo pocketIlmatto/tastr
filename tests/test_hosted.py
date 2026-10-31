@@ -57,11 +57,29 @@ def test_hosted_without_access_settings_refuses_to_start(monkeypatch):
 
 def test_local_mode_stays_open_and_unchanged(db_path, home, monkeypatch):
     monkeypatch.delenv("TASTR_HOSTED", raising=False)
+    monkeypatch.delenv("TASTR_BULK_AT_ONCE", raising=False)
+    monkeypatch.setattr("os.cpu_count", lambda: 8)
     c = TestClient(create_app(db_path))
     assert c.get("/api/tracks").status_code == 200
     assert c.get("/api/config").json() == {"hosted": False, "links": True, "query": True, "query_scope": "all", "user": None, "admin": False,
-                                          "limits": None, "browser_engine": None}
+                                          "limits": None, "browser_engine": None, "bulk_at_once": 4}
     assert "content-security-policy" not in c.get("/").headers
+
+
+
+@pytest.mark.parametrize("cores, lanes", [(None, 1), (1, 1), (2, 1), (6, 3), (32, 4)])
+def test_bulk_lanes_at_home_follow_the_cores(monkeypatch, cores, lanes):
+    monkeypatch.setattr("os.cpu_count", lambda: cores)
+    assert Settings().bulk_lanes() == lanes
+    assert Settings(bulk_at_once=6).bulk_lanes() == 6  # TASTR_BULK_AT_ONCE wins
+
+
+def test_bulk_lanes_hosted_follow_max_analyses(monkeypatch):
+    monkeypatch.setattr("os.cpu_count", lambda: 32)
+    assert Settings(hosted=True, max_analyses=3).bulk_lanes() == 3
+    assert Settings(hosted=True, max_analyses=3, bulk_at_once=1).bulk_lanes() == 1
+    monkeypatch.setenv("TASTR_BULK_AT_ONCE", "2")
+    assert Settings.from_env().bulk_at_once == 2
 
 
 @pytest.mark.parametrize("hosted_mode", [False, True])
@@ -95,6 +113,7 @@ def test_logged_in_requests_work_and_carry_security_headers(client):
     client.cookies.clear()
     cfg = client.get("/api/config", headers=GOOD).json()
     assert cfg["hosted"] and not cfg["links"] and cfg["query_scope"] == "mine" and cfg["user"] == "friend@example.com"
+    assert cfg["bulk_at_once"] == cfg["limits"]["max_analyses"]
     assert client.get("/docs", headers=GOOD).status_code == 404
 
 

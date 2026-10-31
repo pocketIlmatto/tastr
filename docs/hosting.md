@@ -51,7 +51,8 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_MAX_FILES` | 20 | files per upload |
 | `TASTR_DAILY_TRACKS` | 30 | tracks each person can upload per UTC day |
 | `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this |
-| `TASTR_MAX_ANALYSES` | 2 | analyses that run at once |
+| `TASTR_MAX_ANALYSES` | 2 | analyses that run at once; more wait in a queue |
+| `TASTR_BULK_AT_ONCE` | `TASTR_MAX_ANALYSES` | tracks a bulk action (reload, re-analyze, look up) runs at once from the browser. Stems and the drum model always go one at a time. At home it defaults to about half the CPU cores, 1 to 4 |
 | `TASTR_DAILY_STEMS` | 10 | stem separations each person can start per UTC day |
 | `TASTR_DAILY_DRUMS` | 10 | drum model runs ("Detect drums with the model") each person can start per UTC day |
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |

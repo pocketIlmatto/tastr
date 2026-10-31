@@ -1335,22 +1335,43 @@ function energyChart(series, sections, duration, card) {
   const LIVE_SPAN = 10; // seconds of history across the 2D view
   const liveCv = h("canvas", { class: "live-spec", hidden: "", "aria-hidden": "true" });
   host.append(liveCv);
-  let analyser = null, freq = null, liveT = null;
+  // Three analysers in a chain on the way to the speakers: a short FFT (crisp timing up top) and a long one (fine bass detail),
+  // crossfaded between 150 and 900 Hz for the 2D view, and a middle one for the 3D view. Sources connect to the first.
+  let analyser = null, aHi = null, aLo = null, freq = null, fHi = null, fLo = null, rowMap = null, prevCol = null, liveT = null;
+  const LIVE_DB = [-100, -28]; // dB range of the 2D colors
   function getAnalyser() {
     if (!analyser) {
-      const ctx = audioCtx();
-      analyser = ctx.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = 0.15;
-      analyser.minDecibels = -95; analyser.maxDecibels = -25; analyser.connect(ctx.destination);
-      freq = new Uint8Array(analyser.frequencyBinCount);
+      const ctx = audioCtx(), mk = (n, sm) => { const a = ctx.createAnalyser(); a.fftSize = n; a.smoothingTimeConstant = sm; a.minDecibels = -95; a.maxDecibels = -25; return a; };
+      aHi = mk(2048, 0.05); aLo = mk(16384, 0.1); analyser = mk(8192, 0.15);
+      aHi.connect(aLo); aLo.connect(analyser); analyser.connect(ctx.destination);
+      freq = new Uint8Array(analyser.frequencyBinCount); fHi = new Float32Array(aHi.frequencyBinCount); fLo = new Float32Array(aLo.frequencyBinCount);
     }
-    return analyser;
+    return aHi;
+  }
+  // Per canvas row: where its frequency band falls in each analyser's bins, and how much of the short FFT to use.
+  function liveRows(hh) {
+    const sr = audioCtx().sampleRate;
+    if (rowMap && rowMap.hh === hh && rowMap.sr === sr) return rowMap;
+    const rows = [];
+    for (let r = 0; r < hh; r++) {
+      const f0 = SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (hh - 1 - r) / hh), f1 = SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (hh - r) / hh), fc = Math.sqrt(f0 * f1);
+      const wHi = Math.max(0, Math.min(1, Math.log(fc / 150) / Math.log(900 / 150)));
+      rows.push({ wHi, lo: [f0 / (sr / aLo.fftSize), f1 / (sr / aLo.fftSize)], hi: [f0 / (sr / aHi.fftSize), f1 / (sr / aHi.fftSize)] });
+    }
+    return (rowMap = { hh, sr, rows });
+  }
+  // dB for a row: narrower than a bin, interpolated between bins (no stair steps); wider, its loudest bin.
+  function binDb(buf, [p0, p1]) {
+    if (p1 - p0 < 1) { const p = (p0 + p1) / 2, a = Math.min(buf.length - 2, Math.floor(p)), q = p - a; return buf[a] * (1 - q) + buf[a + 1] * q; }
+    let m = -Infinity; for (let k = Math.floor(p0), e = Math.min(buf.length, Math.ceil(p1)); k < e; k++) if (buf[k] > m) m = buf[k];
+    return m;
   }
   function liveClear() {
     const r = liveCv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
     const w = Math.max(100, Math.round(r.width * dpr)), hh = Math.max(50, Math.round(r.height * dpr));
     if (liveCv.width !== w || liveCv.height !== hh) { liveCv.width = w; liveCv.height = hh; }
     const g = liveCv.getContext("2d"); g.fillStyle = "rgb(8 8 24)"; g.fillRect(0, 0, w, hh);
-    liveT = null; ridges = []; ridgeT = null;
+    liveT = null; ridges = []; ridgeT = null; prevCol = null;
   }
   function setLiveStyle(k) {
     liveStyle = k;
@@ -1369,7 +1390,7 @@ function energyChart(series, sections, duration, card) {
   const RIDGE_FRONT = [0.04, 0.96]; // the front line spans this share of the plot width
   let ridges = [], ridgeT = null;
   function ridgeSample() {
-    getAnalyser().getByteFrequencyData(freq);
+    getAnalyser(); analyser.getByteFrequencyData(freq);
     const binHz = audioCtx().sampleRate / analyser.fftSize, v = new Float32Array(RIDGE_BINS);
     for (let i = 0; i < RIDGE_BINS; i++)
       v[i] = Math.pow(binMax(SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, i / RIDGE_BINS), SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (i + 1) / RIDGE_BINS), binHz) / 255, 1.6);
@@ -1407,15 +1428,23 @@ function energyChart(series, sections, duration, card) {
     if (dx < 1) return;
     liveT += dx / pxs;
     g.drawImage(liveCv, -dx, 0);
-    getAnalyser().getByteFrequencyData(freq);
-    const binHz = audioCtx().sampleRate / analyser.fftSize, col = g.createImageData(1, hh), n = SPEC_RAMP.length - 1;
+    getAnalyser(); aHi.getFloatFrequencyData(fHi); aLo.getFloatFrequencyData(fLo);
+    const { rows } = liveRows(hh), cur = new Float32Array(hh);
     for (let r = 0; r < hh; r++) {
-      const m = binMax(SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (hh - 1 - r) / hh), SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (hh - r) / hh), binHz);
-      const u = (m / 255) * n, i0 = Math.min(n - 1, Math.floor(u)), q = u - i0;
-      for (let ch = 0; ch < 3; ch++) col.data[r * 4 + ch] = SPEC_RAMP[i0][ch] + (SPEC_RAMP[i0 + 1][ch] - SPEC_RAMP[i0][ch]) * q;
-      col.data[r * 4 + 3] = 255;
+      const m = rows[r], v = m.wHi >= 1 ? binDb(fHi, m.hi) : m.wHi <= 0 ? binDb(fLo, m.lo) : binDb(fHi, m.hi) * m.wHi + binDb(fLo, m.lo) * (1 - m.wHi);
+      cur[r] = Math.max(0, Math.min(1, (v - LIVE_DB[0]) / (LIVE_DB[1] - LIVE_DB[0]))) || 0;
     }
-    for (let i = 0; i < dx; i++) g.putImageData(col, w - dx + i, 0);
+    // The new strip blends from the last column to this one, so frames don't show as blocks.
+    const prev = prevCol && prevCol.length === hh ? prevCol : cur, img = g.createImageData(dx, hh), Rp = SPEC_RAMP, n = Rp.length - 1;
+    for (let i = 0; i < dx; i++) {
+      const wt = (i + 1) / dx;
+      for (let r = 0; r < hh; r++) {
+        const u = (prev[r] + (cur[r] - prev[r]) * wt) * n, i0 = Math.min(n - 1, Math.floor(u)), q = u - i0, o = (r * dx + i) * 4;
+        img.data[o] = Rp[i0][0] + (Rp[i0 + 1][0] - Rp[i0][0]) * q; img.data[o + 1] = Rp[i0][1] + (Rp[i0 + 1][1] - Rp[i0][1]) * q;
+        img.data[o + 2] = Rp[i0][2] + (Rp[i0 + 1][2] - Rp[i0][2]) * q; img.data[o + 3] = 255;
+      }
+    }
+    g.putImageData(img, w - dx, 0); prevCol = cur;
     // a faint dashed line where a section starts, so section changes scroll by with the sound
     if (sections.some((q) => q.start > t - dx / pxs && q.start <= t)) { g.fillStyle = "rgba(255,255,255,.35)"; for (let yy = 0; yy < hh; yy += 6) g.fillRect(w - 1, yy, 1, 3); }
   }

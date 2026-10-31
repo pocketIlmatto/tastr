@@ -125,8 +125,9 @@ pub mod ffi {
     }
 
     /// Decodes the `len` bytes at `ptr` and analyses them into a card. `beats_per_bar` is 3 or 4 to set the
-    /// meter, 0 to detect it. Returns the card JSON's length in bytes (read it from `tastr_card_ptr`), or -1 if
-    /// the audio could not be decoded.
+    /// meter, 0 to detect it. Returns the card JSON's length in bytes (read it from `tastr_card_ptr`). If the
+    /// audio could not be decoded it returns -(n + 1) instead, with the decoder's n-byte message at
+    /// `tastr_card_ptr`.
     ///
     /// # Safety
     /// `ptr` must come from `tastr_alloc(len)` and hold `len` written bytes; it is freed here.
@@ -142,7 +143,11 @@ pub mod ffi {
                 CARD.with(|c| *c.borrow_mut() = s);
                 n
             }
-            Err(_) => -1,
+            Err(e) => {
+                let n = e.len() as i32;
+                CARD.with(|c| *c.borrow_mut() = e);
+                -(n + 1)
+            }
         }
     }
 
@@ -205,7 +210,11 @@ pub mod ffi {
                 OUT.with(|o| *o.borrow_mut() = out);
                 n
             }
-            Err(_) => -1,
+            Err(e) => {
+                let n = e.len() as i32;
+                CARD.with(|c| *c.borrow_mut() = e);
+                -(n + 1)
+            }
         }
     }
 

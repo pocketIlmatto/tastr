@@ -106,8 +106,9 @@ def _meter(beats_per_bar) -> int:
 
 def _result(lib: ctypes.CDLL, n: int, what: str) -> dict:
     # The JSON lives in the library's per-thread buffer until this thread's next call; ctypes.string_at copies it.
-    if n < 0:
-        raise RustDecodeError(f"the Rust engine could not decode {what}")
+    if n < 0:  # -(length + 1) of the decoder's message, in the same buffer
+        why = ctypes.string_at(lib.tastr_card_ptr(), -n - 1).decode(errors="replace") if n < -1 else ""
+        raise RustDecodeError(f"the Rust engine could not decode {what}" + (f": {why}" if why else ""))
     return json.loads(ctypes.string_at(lib.tastr_card_ptr(), n).decode())
 
 

@@ -226,3 +226,11 @@ def test_bench_decodes_files_rust_cant(song, monkeypatch):
     monkeypatch.setattr(rust, "card_from_file", refuse)
     card = runner.analyze_item(Item(id="song", truth=Truth(), path=str(song)))
     assert card.extras["decoded_by"] == "python" and abs(card.core.bpm - 124) < 1
+
+
+@needs_lib
+def test_decode_errors_carry_the_decoders_message(tmp_path):
+    bad = tmp_path / "bad.mp3"
+    bad.write_bytes(b"not audio at all")
+    with pytest.raises(rust.RustDecodeError, match="could not decode .*: .+"):
+        rust.card_from_file(bad)

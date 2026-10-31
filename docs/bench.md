@@ -63,6 +63,7 @@ redistributing its labels or audio.
 | `giantsteps-tempo` | global BPM | 664 EDM previews | github.com/GiantSteps/giantsteps-tempo-dataset (uses `annotations_v2` when present) |
 | `beatport-key` | global key | 1,486 two-minute EDM previews (1,275 with a plain major/minor label are scored) | Zenodo record 1101082: unzip `keys.zip` and `audio.zip` into one folder; no overlap with GiantSteps Key |
 | `fma-keys` | global key | 5,489 full Free Music Archive songs, 17 genres, about half major; 695 in the first zip | Zenodo record 10719860, `tastr fetch fma-keys` ([cloud.md](cloud.md#fma-keys)); labels for non-commercial research |
+| `ballroom` | tempo, beats, downbeats, meter | 698 30 s excerpts of eight ballroom styles; the waltzes are the held-out 3/4 set | mtg.upf.edu + CPJKU/BallroomAnnotations, `tastr fetch ballroom` ([cloud.md](cloud.md#ballroom)); labels CC BY-NC-SA 4.0 |
 | `beatport-tempo` | Beatport's listed BPM | 774 of those previews with a bpm in `meta/` | same folder plus `original_metadata.zip` unzipped to `<root>/meta/*.json`; see "Tempo notes" for its drum & bass conventions |
 | `harmonix` | BPM, beats, downbeats, sections | 912 pop/EDM tracks | github.com/urinieto/harmonixset; audio is not distributed, put your copies in `<root>/audio` named by track id |
 | `manifest` | whatever you fill in | your tracks | a CSV or JSON file, below |

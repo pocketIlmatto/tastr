@@ -33,6 +33,7 @@ class Truth:
     downbeats: list[float] | None = None
     boundaries: list[float] | None = None  # section start times, seconds
     labels: list[str] | None = None  # section labels, same length as boundaries
+    beats_per_bar: int | None = None  # 3 or 4 when the labeled bars are steadily that long
 
 
 @dataclass
@@ -182,6 +183,55 @@ def fma_keys(root: str | Path) -> list[Item]:
     return items
 
 
+def ballroom(root: str | Path) -> list[Item]:
+    """Ballroom (Gouyon et al. 2006): 698 30 s excerpts of eight ballroom styles with a tempo and beat/bar labels.
+
+    Reads <root>/tempo/<id>.bpm (the ISMIR 2004 labels), <root>/beats/<id>.beats ("time beat-in-bar" per line,
+    from CPJKU/BallroomAnnotations) and audio <root>/audio/<style>/<id>.wav, as `tastr fetch ballroom` lays
+    it out. The meter is the bar length when at least 90% of the labeled bars agree (Waltz is 3, the rest 4).
+    The style goes into meta. A few excerpts are known near-duplicates (Sturm 2014); they are kept.
+    """
+    root = Path(root)
+    audio = {f.stem: f for f in (root / "audio").rglob("*.wav") if f.is_file() and not f.name.startswith(".")}
+    items = []
+    for sid, wav in sorted(audio.items()):
+        truth = Truth()
+        bpm_file = root / "tempo" / f"{sid}.bpm"
+        if bpm_file.is_file():
+            try:
+                truth.bpm = float(bpm_file.read_text().split()[0])
+            except (ValueError, IndexError):
+                pass
+        beats_file = root / "beats" / f"{sid}.beats"
+        if beats_file.is_file():
+            times, pos = [], []
+            for line in beats_file.read_text().splitlines():
+                cols = line.split()
+                if len(cols) >= 2:
+                    times.append(float(cols[0]))
+                    pos.append(int(float(cols[1])))
+            if times:
+                truth.beats = times
+                truth.downbeats = [t for t, n in zip(times, pos) if n == 1] or None
+                truth.beats_per_bar = _bar_length(pos)
+        if truth.bpm is None and truth.beats is None:
+            continue
+        items.append(Item(id=f"ballroom-{sid}", path=str(wav), truth=truth, meta={"style": wav.parent.name}))
+    return items
+
+
+def _bar_length(pos: list[int]) -> int | None:
+    """Beats per bar when at least 90% of the labeled bars have the same length, else None."""
+    from collections import Counter
+
+    ones = [i for i, n in enumerate(pos) if n == 1]
+    lengths = [pos[i - 1] for i in ones[1:]]
+    if len(lengths) < 2:
+        return None
+    m, count = Counter(lengths).most_common(1)[0]
+    return m if count >= 0.9 * len(lengths) else None
+
+
 def beatport_tempo(root: str | Path) -> list[Item]:
     """Beatport EDM Key previews with the BPM Beatport lists for each track.
 
@@ -319,6 +369,7 @@ DATASETS: dict[str, Callable[..., list[Item]]] = {
     "giantsteps-tempo": giantsteps_tempo,
     "beatport-key": beatport_key,
     "fma-keys": fma_keys,
+    "ballroom": ballroom,
     "beatport-tempo": beatport_tempo,
     "harmonix": harmonix,
     "manifest": manifest,

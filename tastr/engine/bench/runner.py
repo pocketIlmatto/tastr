@@ -66,6 +66,10 @@ def score_item(item: Item, card: TrackCard) -> dict:
         row.update(metrics.beat_scores(c.beat_times, t.beats, "beat"))
     if t.downbeats:
         row.update(metrics.beat_scores(c.downbeat_times, t.downbeats, "downbeat"))
+    if t.beats_per_bar in (3, 4):
+        row["ref_meter"] = t.beats_per_bar
+        row["est_meter"] = c.beats_per_bar
+        row["meter_correct"] = float(c.beats_per_bar == t.beats_per_bar)
     if t.boundaries:
         row.update(metrics.boundary_scores([s.start for s in card.sections], t.boundaries, card.duration))
     return row
@@ -82,7 +86,8 @@ def _work(args) -> dict:
     return row
 
 
-SUMMARY_METRICS = ["acc1", "acc2", "key_weighted", "key_correct", "beat_f", "downbeat_f", "boundary_f_0.5", "boundary_f_3"]
+SUMMARY_METRICS = ["acc1", "acc2", "key_weighted", "key_correct", "beat_f", "downbeat_f", "boundary_f_0.5", "boundary_f_3",
+                   "meter_correct"]
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -95,6 +100,11 @@ def summarize(rows: list[dict]) -> dict:
     cats = [r["key_category"] for r in rows if "key_category" in r]
     if cats:
         out["key_categories"] = {k: cats.count(k) for k in sorted(set(cats))}
+    for m in (3, 4):  # 3/4 found, and 4/4 kept as 4/4
+        hits = [r["meter_correct"] for r in rows if r.get("ref_meter") == m]
+        if hits:
+            out[f"meter_{m}_correct"] = round(metrics.mean(hits), 4)
+            out[f"meter_{m}_n"] = len(hits)
     octaves = [r["octave"] for r in rows if r.get("octave")]
     if octaves:
         out["tempo_octave_errors"] = {k: octaves.count(k) for k in sorted(set(octaves))}
@@ -170,6 +180,7 @@ LABELS = {
     "downbeat_f": "Downbeat F (70 ms)",
     "boundary_f_0.5": "Sections F (0.5 s)",
     "boundary_f_3": "Sections F (3 s)",
+    "meter_correct": "Meter (3/4 vs 4/4)",
 }
 
 
@@ -184,6 +195,9 @@ def format_summary(report: dict, baseline: dict | None = None) -> str:
         lines.append(f"  {LABELS[m]:24} {s[m]:.3f}  n={s[m + '_n']}{delta}")
     if "key_categories" in s:
         lines.append("  key results: " + ", ".join(f"{k} {v}" for k, v in s["key_categories"].items()))
+    if "meter_3_n" in s or "meter_4_n" in s:
+        lines.append("  meter: " + ", ".join(f"{m}/4 right {s[f'meter_{m}_correct']:.3f} (n={s[f'meter_{m}_n']})"
+                                             for m in (3, 4) if f"meter_{m}_n" in s))
     if "tempo_octave_errors" in s:
         lines.append("  BPM octave errors: " + ", ".join(f"{k} {v}" for k, v in s["tempo_octave_errors"].items()))
     if report["review"]:

@@ -233,13 +233,22 @@ unpacks the mp3s to `fma-keys/audio/<folder>/<track id>.mp3`. A rerun skips song
 fetch writes the item index, so `tastr bench fma-keys fma-keys --remote --stages core` scores what's there.
 See [datasets.md](datasets.md).
 
+### Ballroom
+
+`tastr fetch ballroom ballroom --remote` downloads the Ballroom audio (`data1.tar.gz`, 698 wav excerpts of
+30 s) and tempo labels (`data2.tar.gz`) from mtg.upf.edu, plus the beat and bar labels from
+CPJKU/BallroomAnnotations on GitHub, checks each against mirdata's MD5 and unpacks to
+`ballroom/audio/<style>/<id>.wav`, `ballroom/tempo/<id>.bpm` and `ballroom/beats/<id>.beats`. mtg.upf.edu
+is refused from cloud sessions, so this runs on Modal. Then `tastr bench ballroom ballroom --remote
+--stages core` scores tempo, beats, downbeats and the meter (3/4 found on the waltzes, 4/4 kept on the rest).
+
 ## How it fits together
 
 - `tastr/cloud/modal_app.py`: the Modal app. Its image installs the engine's dependencies (kept in step
   with `pyproject.toml` by `tests/test_cloud.py`) and the local `tastr` package. The bucket is mounted
   read-only at `/data`, except in `fetch`, which writes datasets into it.
 - `tastr/cloud/jobs.py`: the job bodies, plain Python so tests run them without Modal.
-- `tastr/cloud/fetch.py`: downloads the vibe datasets and FMA Keys (`tastr fetch`), into the bucket on Modal or a local folder.
+- `tastr/cloud/fetch.py`: downloads the vibe datasets, FMA Keys and Ballroom (`tastr fetch`), into the bucket on Modal or a local folder.
 - `tastr/cloud/remote.py`: what the CLI and `tastr/stems.py` call; looks up the deployed function by name.
 
 ## Not here yet

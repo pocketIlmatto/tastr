@@ -177,18 +177,9 @@ pub fn power_to_db(x: &[f32], reference: f64, top_db: Option<f64>) -> Vec<f32> {
     out
 }
 
-/// np.percentile(x, q) with linear interpolation.
+/// np.percentile(x, q) of a float32 array, as the float numpy returns.
 pub fn percentile(x: &[f32], q: f64) -> f64 {
-    let mut v: Vec<f32> = x.to_vec();
-    v.sort_by(|a, b| a.total_cmp(b));
-    let pos = q / 100.0 * (v.len() - 1) as f64;
-    let (i, frac) = (pos.floor() as usize, pos - pos.floor());
-    let lo = v[i] as f64;
-    if i + 1 >= v.len() {
-        lo
-    } else {
-        lo + (v[i + 1] as f64 - lo) * frac
-    }
+    crate::np::percentile_f32(x, q) as f64
 }
 
 /// librosa.feature.rms(y=y): frames of 2048 every 512, centred with zero padding.

@@ -381,7 +381,8 @@ Third-party pieces it uses or links to:
 - **mutagen** (file tags, a required dependency) is GPL-2.0-or-later. Tastr doesn't
   bundle it; pip installs it alongside.
 - The Rust engine (`engine-rs/`) builds in **symphonia** (MPL-2.0, unmodified) for decoding,
-  and **rustfft** and **libm** (MIT/Apache-2.0).
+  **rustfft** and **libm** (MIT/Apache-2.0), and **miniz_oxide** (MIT/Zlib/Apache-2.0) for the
+  spectrogram PNG.
 
 - **Strudel** is AGPL-3.0. Tastr doesn't bundle it: "Open in Strudel" opens
   the generated sketch on strudel.cc. The optional sketch tests install Strudel's

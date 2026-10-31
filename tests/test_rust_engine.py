@@ -1,18 +1,22 @@
 """The Rust engine (engine-rs/, docs/rust-engine.md): its native and WebAssembly builds give identical output,
-and its HPSS, shared signals, beats, chroma and section clustering match the Python engine's. Skips unless both builds exist:
+its HPSS, shared signals, beats, chroma and section clustering match the Python engine's, and so do its cards. Skips unless both builds exist:
 
     cd engine-rs && cargo build --release && cargo build --release --lib --target wasm32-unknown-unknown
 """
 
+import base64
 import json
+import re
 import shutil
+import struct
 import subprocess
+import zlib
 from pathlib import Path
 
 import numpy as np
 import pytest
-
 from synth import make_track
+
 from tastr.engine import SR, signals
 from tastr.engine.card import Source, TrackCard
 from tastr.engine.pipeline import AnalysisContext
@@ -257,3 +261,64 @@ def test_binary_reports_a_fingerprint(tmp_path):
     np.zeros(SR, "<f4").tofile(raw)
     out = json.loads(subprocess.run([str(NATIVE), str(raw)], capture_output=True, text=True, check=True).stdout)
     assert len(out["fingerprint"]) == 16 and out["seconds"] == 1.0
+
+
+def test_constants_match_the_python_engine():
+    """engine-rs/src/consts.rs is copied from the key model and the calibration tables; refits must update it."""
+    from tastr.engine import calibration_table, key_model
+
+    src = (ROOT / "src" / "consts.rs").read_text()
+
+    def const(name):
+        body = re.search(rf"pub const {name}: [^=]+=\s*(.*?);\n", src, re.DOTALL).group(1)
+        return np.array([float(x) for x in re.findall(r"-?\d+\.?\d*(?:e-?\d+)?", body)])
+
+    assert np.array_equal(const("KEY_WEIGHTS"), np.asarray(key_model.WEIGHTS).ravel())
+    assert np.array_equal(const("KEY_BIAS"), np.asarray(key_model.BIAS).ravel())
+    assert np.array_equal(const("BPM_KNOTS"), np.array([k[:2] for k in calibration_table.BPM]).ravel())
+    assert np.array_equal(const("KEY_KNOTS"), np.array([k[:2] for k in calibration_table.KEY]).ravel())
+
+
+def png_pixels(url: str) -> np.ndarray:
+    raw = base64.b64decode(url.split(",", 1)[1])
+    pos, idat = 8, b""
+    while pos < len(raw):
+        n = struct.unpack(">I", raw[pos:pos + 4])[0]
+        if raw[pos + 4:pos + 8] == b"IDAT":
+            idat += raw[pos + 8:pos + 8 + n]
+        pos += 12 + n
+    return np.frombuffer(zlib.decompress(idat), np.uint8)
+
+
+def rust_card(path: Path, out: Path, *extra: str) -> dict:
+    subprocess.run([str(NATIVE), "card", str(path), str(out), *extra], check=True, capture_output=True)
+    return json.loads(out.read_text())
+
+
+def test_cards_match_the_python_engine(tmp_path):
+    """The same audio through both engines gives the same card. The spectrogram PNG is deflated differently, so
+    its pixels are compared, and an FFT rounding difference may move a pixel or two by one level."""
+    from tastr.engine.pipeline import run_pipeline
+
+    y = make_track(bpm=128, bars_per_section=(8, 16, 8))[0].astype(np.float32)
+    raw = tmp_path / "y.f32"
+    y.tofile(raw)
+    py = json.loads(json.dumps(run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x"))).to_dict()))
+    rs = rust_card(raw, tmp_path / "card.json")
+    assert rs["stages_run"] == py["stages_run"] and rs["errors"] == py["errors"] == {}
+    pa = png_pixels(py["extras"]["views"]["spectrogram"].pop("png"))
+    pb = png_pixels(rs["extras"]["views"]["spectrogram"].pop("png"))
+    assert pa.size == pb.size and np.count_nonzero(pa != pb) <= pa.size // 10000
+    py.pop("source"), rs.pop("source")
+    assert rs == py
+
+
+def test_card_meter_option_and_wasm_card(stereo_44k, tmp_path):
+    """The WebAssembly build's card is byte for byte the native one, and a given meter is used as is."""
+    wav = stereo_44k[0]
+    subprocess.run([str(NATIVE), "card", str(wav), str(tmp_path / "n.json")], check=True, capture_output=True)
+    subprocess.run(["node", str(ROOT / "run-wasm.mjs"), str(WASM), "card", str(wav), str(tmp_path / "w.json")],
+                   check=True, capture_output=True)
+    assert (tmp_path / "n.json").read_bytes() == (tmp_path / "w.json").read_bytes()
+    three = rust_card(wav, tmp_path / "3.json", "3")["core"]
+    assert three["beats_per_bar"] == 3 and three["meter_set"]

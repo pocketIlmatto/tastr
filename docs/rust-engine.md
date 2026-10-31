@@ -15,8 +15,8 @@ someone re-analyzes them; Opus files, which symphonia can't decode, fall back to
 | P0 | Decode, resample, STFT and HPSS; native and WebAssembly bit-identical | Done (below) |
 | P1 | The other shared signals (mel, MFCC, RMS, onsets, filters, drum envelopes); speed and memory | Done (below) |
 | P2 | CQT and chroma, beat tracker, tempogram, Ward clustering | Done (below) |
-| P3 | The stages, and cards from Rust | Next |
-| P4 | Switch-over behind a flag, full benchmarks | |
+| P3 | The stages, and cards from Rust | Done (below) |
+| P4 | Switch-over behind a flag, full benchmarks | Next |
 | P5 | Retire the Python engine from the analysis path | |
 
 ## Layout
@@ -33,16 +33,27 @@ engine-rs/
                      bass CQT
   src/rhythm.rs      the onset tempogram, librosa's tempo estimate, its dynamic-programming beat tracker and
                      onset peak picking
-  src/sections.rs    librosa.segment.agglomerative: Ward clustering where only neighbouring bars may merge
-  src/np.rs          numpy's pairwise float sums and round-half-even, where results depend on them
+  src/segment.rs     librosa.segment.agglomerative: Ward clustering where only neighbouring bars may merge
+  src/stages/        the card stages, one file each as in tastr/engine/stages/: core, sections, tags,
+                     suggestions, views; mod.rs holds the shared signals (Ctx) and runs them as run_pipeline does
+  src/drums.rs       drums.py's built-in lanes: semi-adaptive NMF, unmixing, kick/tom, snare/clap/perc and
+                     closed/open hat (the optional ADTOF drum model stays on the server)
+  src/music.rs       music.py and calibration.py: key model, modes, chord matching, roman numerals
+  src/card.rs        the card, written as the same JSON as TrackCard.to_dict(); src/json.rs is its writer
+  src/consts.rs      the key model's weights and the calibration tables, copied from Python (a test checks)
+  src/np.rs          numpy's pairwise float sums, round-half-even, percentiles and friends, where results
+                     depend on them
   src/detmath.rs     sin, cos, pow, ... for the whole binary, from the pure-Rust libm crate
-  src/lib.rs         load(bytes) and signals(y); a small C interface for the WebAssembly build
+  src/lib.rs         load(bytes), signals(y), analyze(y) and card_json(y); a small C interface for the
+                     WebAssembly build (tastr_signals, tastr_card)
   src/main.rs        `tastr-engine <file> [out dir]`: the native build as a command; writes every output as
                      <name>.f32 plus manifest.json ({name: [rows, cols]}). `rhythm`, `chroma` and `ward`
-                     subcommands run one step on a .f32 input, to compare it with librosa on the same input
+                     subcommands run one step on a .f32 input, to compare it with librosa on the same input;
+                     `card <file> <out.json> [beats per bar]` writes the whole card
   run-wasm.mjs       the same through the WebAssembly build, under Node
   .cargo/config.toml WebAssembly SIMD on (same bits, faster)
-tests/test_rust_engine.py   native vs WebAssembly bit for bit; every signal, beats, chroma and Ward vs librosa
+tests/test_rust_engine.py   native vs WebAssembly bit for bit; every signal, beats, chroma and Ward vs librosa;
+                            cards vs the Python engine; the copied constants
 ```
 
 Build both and run the tests:
@@ -175,3 +186,40 @@ How the card check ran: a scratch script replaced `librosa.feature.chroma_cqt`, 
 `librosa.segment.agglomerative` with calls to the binary's step commands, then ran `tastr bench beatport-key`,
 `tastr bench beatport-tempo` and `analyze_file` on the 30 tracks, with and without the swap. P3 moves the stages
 themselves into Rust; the full benchmarks run at P4, on Modal as usual.
+
+## What P3 measured (2026-10-31)
+
+Same machine and the same 30 Beatport previews as P2, plus the synthetic tracks.
+
+- **The cards, same audio in:** each track decoded once by the Python engine, then the identical samples
+  analyzed by `run_pipeline` and by `tastr-engine card`. On all 30 tracks and on synthetic tracks at 128 and
+  174 BPM the two cards are equal in every field: BPM, key, confidences, beats, downbeats, meter, sections and
+  their letters and labels, tags and every vibe score, features, every suggestion's title, body and data
+  (drum patterns and velocities, bass loops and per-section beats, chord loops), the energy series and the
+  waveform. The one field that isn't byte-equal by design is the spectrogram PNG (deflated with miniz_oxide,
+  not zlib); decoded, its pixels match except for 1 or 2 of 144,240 on 8 tracks, one 4-level step where the
+  4096-point FFT's last bit tips a rounding.
+- **The one difference found:** on a synthetic 90 BPM track, one beat lands a frame apart, which moves
+  `swing_confidence` from 0.209 to 0.218. The track's tempo is exact in frames, so the regularised grid falls
+  on x.5 frames and rounds either way depending on the last bit of the line fit (numpy's `polyfit` solves it
+  with LAPACK's SVD, ours in closed form). Real tracks don't sit on exact halves; none of the 30 did.
+- **The measured shift, Rust decoding too:** analyzing the MP3s end to end in Rust (our decoder and
+  soxr-shaped resampler instead of librosa's) against the Python cards: BPM, key, meter and bass loops agree on
+  30 of 30, scale and first downbeats on 29, sections on 28 (one boundary moved by 2 bars, one section's label
+  changed between verse and breakdown), tags on 28, chord loops on 27, every drum lane's pattern on 20, and
+  energy to the third decimal on 16 (the others off by 0.001 or 0.002). The drum patterns are the most
+  sensitive: a step whose strength sits on the 0.5 or 0.72 cut-off flips between `.`, `o` and `x`.
+- **Native vs WebAssembly:** the card JSON is byte-identical (WAV, MP3, FLAC, and the 30 tracks spot-checked).
+- **Speed and memory, 3-minute MP3, whole card:** native 6.3 s single-threaded (decode 1.2 s, analysis
+  5.1 s) against 7.3 s for the Python engine; WebAssembly under Node 10.0 s, with 207 MB of memory at the end
+  (77 MB for a 1-minute track). The NMF behind the drum lanes is about 1 s of the native time.
+- **Not ported:** the ADTOF drum model (optional, server only); with it on, the server keeps analyzing.
+  `TASTR_METER` isn't read: the caller passes the meter (`beats_per_bar`), as the browser will.
+
+How it was matched: the same precision choices as in P2, carried through the stages (numpy's float32 means
+and pairwise sums where the Python arrays are float32, its float32 percentile, which keeps the index in
+float64 and interpolates in float32, axis-0 means added row by row, Python's `round` to a decimal via the
+shortest correctly rounded string). The NMF's matrix products are summed in a plain order rather than BLAS's,
+which changes nothing visible after its float32 activations. P4 puts the Rust card behind a flag and runs the
+full benchmarks on Modal.
+

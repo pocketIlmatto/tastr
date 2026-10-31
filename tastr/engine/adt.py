@@ -163,7 +163,8 @@ def _network(n_bands: int):
         def __init__(self):
             super().__init__()
             self.blocks = nn.ModuleList([Block(1, 32), Block(32, 64)])
-            width = -(-(-(-n_bands // 3)) // 3) * 64
+            pooled = -(-n_bands // 3)  # each (1, 3) max-pool rounds the band count up
+            width = -(-pooled // 3) * 64
             self.grus = nn.ModuleList([nn.GRU(width if i == 0 else 120, 60, batch_first=True, bidirectional=True)
                                        for i in range(3)])
             self.out = nn.Linear(120, len(CLASSES))

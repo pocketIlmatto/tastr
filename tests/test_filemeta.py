@@ -75,8 +75,6 @@ def test_album_stored_and_old_db_migrated(tagged_wav, db_path):
 
 
 def test_describe_groups_empty_when_no_tags(synth_wav):
-    from tastr.engine.card import Source
-
     (source,) = resolve_inputs([str(synth_wav[0])])
     source.sha256 = "ab" * 32
     meta = describe(TrackCard(source=source, stages_run={"core": "0.3.0"}), "2026-10-29T01:12:00+00:00")

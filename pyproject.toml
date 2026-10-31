@@ -31,7 +31,8 @@ drums = ["torch>=2.1"]
 hosted = ["pyjwt[crypto]>=2.8"]
 # Benchmarks and stem separation on Modal (docs/cloud.md).
 cloud = ["modal>=1.0"]
-dev = ["pytest>=8", "pytest-xdist>=3.5", "httpx>=0.27", "pyjwt[crypto]>=2.8"]
+# ruff is pinned so a new release cannot turn CI red on its own; bump it on purpose.
+dev = ["pytest>=8", "pytest-xdist>=3.5", "httpx>=0.27", "pyjwt[crypto]>=2.8", "ruff==0.17.3"]
 
 [project.scripts]
 tastr = "tastr.cli:main"
@@ -41,6 +42,17 @@ include = ["tastr*"]
 
 [tool.setuptools.package-data]
 tastr = ["web/*", "web/static/*", "engine/*.json"]
+
+# Lint (CI runs `ruff check .`). A small rule set that catches real mistakes: pyflakes (unused imports and
+# names, undefined names), syntax errors, and bugbear. B008 is off because FastAPI's `Depends()`/`File()`
+# defaults are the intended style; B905 is off because most zips here pair arrays of equal length by design.
+[tool.ruff]
+line-length = 120
+extend-exclude = ["tests/strudel-runtime"]
+
+[tool.ruff.lint]
+select = ["F", "E9", "B"]
+ignore = ["B008", "B905"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

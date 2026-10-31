@@ -27,7 +27,7 @@ jobs:
           elif git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
             files=$(git diff --name-only "${{ github.event.before }}" HEAD)
           else
-            echo "code=true" >> "$GITHUB_OUTPUT"; echo "audio=true" >> "$GITHUB_OUTPUT"; echo "strudel=true" >> "$GITHUB_OUTPUT"; echo "rust=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "code=true" >> "$GITHUB_OUTPUT"; echo "audio=true" >> "$GITHUB_OUTPUT"; echo "strudel=true" >> "$GITHUB_OUTPUT"; echo "rust=true" >> "$GITHUB_OUTPUT"; echo "js=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           code=$(echo "$files" | grep -Ev '^docs/|\.md$' | grep . || true)
           audio=$(echo "$code" | grep -Ev '^tastr/web/' | grep . || true)
@@ -37,6 +37,8 @@ jobs:
           echo "strudel=$([ -n "$strudel" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           rust=$(echo "$code" | grep -E '^engine-rs/|^tests/test_rust_(engine|switch)\.py$|^tastr/engine/(rust|browser_card)\.py$|^tastr/web/static/engine\.js$' | grep . || true)
           echo "rust=$([ -n "$rust" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          js=$(echo "$code" | grep -E '^tastr/web/static/.*\.js$|^eslint\.config\.mjs$' | grep . || true)
+          echo "js=$([ -n "$js" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Docs-only change, tests skipped
         if: steps.scope.outputs.code != 'true'
         run: echo "Only docs/ and Markdown files changed; nothing to test."
@@ -50,6 +52,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
       - if: steps.scope.outputs.code == 'true'
         run: pip install -e '.[dev]'
+      # Lint before the tests so a lint failure shows up in seconds. Config: [tool.ruff] in pyproject.toml.
+      - name: Lint Python (ruff)
+        if: steps.scope.outputs.code == 'true'
+        run: ruff check --output-format github .
+      # The web UI scripts, only when one of them (or the config) changes; the runner image already has Node.
+      - name: Lint web UI (eslint)
+        if: steps.scope.outputs.js == 'true'
+        run: npx --yes eslint@10.12.0 tastr/web/static
       # Strudel itself (AGPL-3.0, test-only, never shipped) so tests/test_strudel_runtime.py can play the sketches;
       # only when the sketch generator or its tests change. Without it those tests skip.
       - uses: actions/setup-node@v4
@@ -77,6 +87,7 @@ jobs:
           rustup target add wasm32-unknown-unknown
           cargo build --release --locked
           cargo build --release --locked --lib --target wasm32-unknown-unknown
+          cargo clippy --release --locked --all-targets -- -D warnings
       - name: Tests
         if: steps.scope.outputs.audio == 'true'
         run: python -m pytest -q -n auto -m "not perf"

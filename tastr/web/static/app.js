@@ -3503,13 +3503,12 @@ const SQL_EXAMPLES = [
 ];
 // Saved searches: the person's own are the quick chips; the built-in examples sit in an "Examples ▾" menu.
 // The server keeps them per person (GET/PUT/DELETE /api/searches), so they follow you to another device.
-let qSaved = { simple: [], sql: [] }, qSavedLoaded = false;
+let qSaved = { simple: [], sql: [] };
 async function loadSaved() {
   try {
     const list = await api("/api/searches");
     qSaved = { simple: [], sql: [] };
     for (const x of list) if (qSaved[x.mode]) qSaved[x.mode].push({ id: x.id, name: x.name, ...x.data });
-    qSavedLoaded = true;
   } catch (_) {}
   renderExamples();
 }

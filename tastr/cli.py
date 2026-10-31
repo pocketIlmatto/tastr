@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from . import db
-from .engine.pipeline import registered_stages, resolve_order
+from .engine.pipeline import resolve_order
 
 
 def main(argv: list[str] | None = None) -> int:

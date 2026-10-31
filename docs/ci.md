@@ -66,6 +66,23 @@ well inside the quota.
 
 ## README screenshots workflow
 
+The README screenshots are generated, not taken by hand, so they follow the UI.
+
+- **How they're made:** `scripts/readme_shots.py` builds a throwaway library of three
+  synthetic tracks (nothing touches your own library), starts `tastr serve` on it, and
+  `scripts/readme-shots.js` takes each shot with Playwright in the default 808 look: the
+  library with an open card, the spectrogram, the Live 3D view, drums, bass and chords, the Strudel sketch
+  and the Glossary's Camelot wheel. They land in `docs/images/`.
+- **When they update:** add the `readme-shots` label to a PR that changes how the UI looks.
+  After it merges, the `readme-shots` GitHub workflow retakes them on `main` and opens a PR
+  with the new images if any changed. It never runs on ordinary pushes, so it only spends
+  Actions minutes when the UI changed.
+- **By hand:** run `python scripts/readme_shots.py` (it needs ffmpeg, node and the
+  playwright npm package; see the script). To add a shot, add a step to
+  `scripts/readme-shots.js` and an `<img>` to the README.
+
+### The workflow's details
+
 `.github/workflows/readme-shots.yml` retakes the README screenshots with
 `scripts/readme_shots.py`. It runs only after a PR labeled `readme-shots` merges, or by hand
 (`workflow_dispatch`), takes about 3 minutes, and opens a PR with the new images when they

@@ -31,6 +31,8 @@ class TrackQuery:
     title: str
     album: str | None = None
     duration: float | None = None  # seconds
+    mbid: str | None = None  # MusicBrainz recording id, when the file is tagged with one
+    isrc: str | None = None
 
 
 @dataclass

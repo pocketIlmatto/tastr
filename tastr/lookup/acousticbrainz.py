@@ -6,8 +6,10 @@ low-level feature CSVs (one row per submission: mbid, submission_offset, bpm / k
 keeps each recording's first submission in a small SQLite index (`build_index`, run by
 `tastr fetch acousticbrainz`). The data is frozen: anything released after mid-2022 isn't in it.
 
-A lookup is two steps:
+A lookup:
 
+0. When the file is tagged with a MusicBrainz recording id (Picard writes one), that id is read from the
+   index with no search; with an ISRC tag, the recordings listed under it are tried first.
 1. MusicBrainz recording search by title and first-listed artist (https://musicbrainz.org/doc/MusicBrainz_API;
    a whole multi-artist credit rarely matches theirs word for word). No key, but at most one request a
    second and a user agent that names the app; the guardrails space this provider's requests 1.1 s
@@ -279,10 +281,27 @@ class AcousticBrainz(Provider):
         except sqlite3.Error as e:
             raise ProviderError(f"Couldn't read the AcousticBrainz index at {self.index()}: {e}") from None
 
+    def tagged(self, q: TrackQuery) -> list[dict]:
+        """Recordings named by the file's own tags: its MusicBrainz recording id (no search at all), else the
+        recordings MusicBrainz lists under its ISRC (one search, no fuzzy matching)."""
+        if q.mbid:
+            return [{"mbid": q.mbid, "artist": q.artist, "title": q.title, "isrcs": [q.isrc] if q.isrc else []}]
+        if q.isrc:
+            return [{"mbid": r["id"], "artist": _credit(r), "title": r.get("title"), "isrcs": r.get("isrcs") or []}
+                    for r in self.search(f"isrc:{q.isrc}") if r.get("id") and q.isrc in (r.get("isrcs") or [])]
+        return []
+
     def lookup(self, q: TrackQuery) -> LookupResult:
-        hits = self.candidates(q)
+        from_tags = self.tagged(q)
+        if from_tags:
+            found = self._read([h["mbid"] for h in from_tags])
+            hit = self._result(from_tags, found, from_tags=True)
+            if hit:
+                return hit
+        hits = [h for h in self.candidates(q) if h["mbid"] not in {t["mbid"] for t in from_tags}]
         if not hits:
-            return LookupResult(self.name, "not_found")
+            return LookupResult(self.name, "not_found", extra={"mbids": [h["mbid"] for h in from_tags][:3]}
+                                if from_tags else {})
         found = self._read([h["mbid"] for h in hits])
         more: list[dict] = []
         if not any(_usable(found.get(h["mbid"])) for h in hits):
@@ -290,20 +309,26 @@ class AcousticBrainz(Provider):
             if more:
                 hits += more
                 found |= self._read([h["mbid"] for h in more])
-        mbids = [h["mbid"] for h in hits]
+        hit = self._result(hits, found)
+        if hit:
+            return hit
+        # On MusicBrainz but never analyzed by AcousticBrainz (or released after 2022).
+        mbids = [h["mbid"] for h in from_tags + hits]
+        return LookupResult(self.name, "not_found", extra={"mbids": mbids[:3], "tried": len(mbids),
+                                                           "same_isrc": len(more)})
+
+    def _result(self, hits: list[dict], found: dict[str, dict], from_tags: bool = False) -> LookupResult | None:
         for h in hits:
             m = h["mbid"]
             f = found.get(m)
             if not _usable(f):
                 continue
             key = " ".join(x for x in (f.get("key_key"), f.get("key_scale")) if x) or None
+            extra = {"mbid": m, "candidates": len(hits)} | ({"from_tags": True} if from_tags else {})
             return LookupResult(self.name, "found", bpm=num(f.get("bpm")), key=key,
                                 matched_artist=h["artist"] or None, matched_title=h["title"],
-                                url=f"https://musicbrainz.org/recording/{m}",
-                                extra={"mbid": m, "candidates": len(mbids)})
-        # On MusicBrainz but never analyzed by AcousticBrainz (or released after 2022).
-        return LookupResult(self.name, "not_found", extra={"mbids": mbids[:3], "tried": len(mbids),
-                                                           "same_isrc": len(more)})
+                                url=f"https://musicbrainz.org/recording/{m}", extra=extra)
+        return None
 
 
 register(AcousticBrainz())

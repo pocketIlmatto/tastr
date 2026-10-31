@@ -18,7 +18,7 @@ except ImportError:  # keep ingest working if the optional parse dependency is m
     mutagen = None
 
 # Bump when the reader starts finding more (or different) fields, so `tastr serve` refreshes stored cards once.
-READER_VERSION = 2
+READER_VERSION = 3
 
 # Our field name -> keys to try in mutagen's "easy" tag mapping, in order.
 _TAG_KEYS = {
@@ -33,6 +33,8 @@ _TAG_KEYS = {
     "bpm": ("bpm",),
     "key": ("initialkey",),
     "comment": ("comment", "description"),
+    "isrc": ("isrc",),
+    "musicbrainz_recording": ("musicbrainz_trackid",),  # Picard's "track id" is the recording MBID
 }
 
 _FORMATS = {".mp3": "MP3", ".m4a": "M4A", ".aac": "AAC", ".flac": "FLAC", ".ogg": "OGG", ".wav": "WAV", ".aif": "AIFF", ".aiff": "AIFF"}
@@ -53,11 +55,12 @@ def _first(easy, keys: tuple[str, ...]) -> str | None:
 
 # WAV/AIFF expose raw ID3 frames even in easy mode, so read these frames directly.
 _ID3_FRAMES = {"title": "TIT2", "artist": "TPE1", "album": "TALB", "album_artist": "TPE2", "year": "TDRC", "genre": "TCON",
-               "track": "TRCK", "label": "TPUB", "bpm": "TBPM", "key": "TKEY"}
+               "track": "TRCK", "label": "TPUB", "bpm": "TBPM", "key": "TKEY", "isrc": "TSRC"}
 
 # Names of user-defined fields (ID3 TXXX, MP4 "----") that carry our fields, matched case-insensitively.
 _FREEFORM_NAMES = {"label": ("label", "organization", "publisher"), "key": ("initialkey", "key", "initial key"),
-                   "bpm": ("bpm",), "comment": ("comment", "description")}
+                   "bpm": ("bpm",), "comment": ("comment", "description"), "isrc": ("isrc",),
+                   "musicbrainz_recording": ("musicbrainz track id",)}
 
 
 def _id3_tags(raw) -> dict[str, str]:
@@ -66,6 +69,10 @@ def _id3_tags(raw) -> dict[str, str]:
         f = raw.get(frame)
         if f is not None and f.text and str(f.text[0]).strip():
             out[name] = str(f.text[0]).strip()
+    for f in raw.getall("UFID"):  # Picard stores the recording MBID as a unique file id
+        if f.owner == "http://musicbrainz.org" and f.data:
+            out["musicbrainz_recording"] = f.data.decode("ascii", "replace").strip()
+            break
     for f in raw.getall("COMM"):
         if f.text and str(f.text[0]).strip():
             out["comment"] = str(f.text[0]).strip()
@@ -167,7 +174,8 @@ def read_file_meta(path: str | Path) -> tuple[dict[str, str], dict[str, Any]]:
 
 
 _TAG_LABELS = [("title", "Title"), ("artist", "Artist"), ("album", "Album"), ("album_artist", "Album artist"), ("year", "Year"),
-               ("genre", "Genre"), ("track", "Track"), ("label", "Label"), ("bpm", "BPM"), ("key", "Key"), ("comment", "Comment")]
+               ("genre", "Genre"), ("track", "Track"), ("label", "Label"), ("bpm", "BPM"), ("key", "Key"), ("comment", "Comment"), ("isrc", "ISRC"),
+               ("musicbrainz_recording", "MusicBrainz recording")]
 
 
 def _mmss(sec: float) -> str:

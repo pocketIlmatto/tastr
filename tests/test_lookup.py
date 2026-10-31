@@ -423,6 +423,38 @@ def test_acousticbrainz_found_through_musicbrainz(ab_index, monkeypatch):
     assert params["query"] == 'recording:"One More Time" AND artist:"Daft Punk"' and params["fmt"] == "json"
 
 
+def test_acousticbrainz_uses_a_tagged_recording_id_without_searching(ab_index, monkeypatch):
+    p = acousticbrainz.AcousticBrainz()
+    calls = canned(monkeypatch, p)
+    r = p.lookup(TrackQuery(artist="Daft Punk", title="One More Time", mbid=MB_ONE))
+    assert (r.status, r.bpm, r.key) == ("found", 123.1, "C# minor") and r.extra["from_tags"] and calls == []
+
+
+def test_acousticbrainz_tagged_isrc_then_name_search(ab_index, monkeypatch):
+    p = acousticbrainz.AcousticBrainz()
+    isrc_rec = mb_rec(MB_TWO, title="One More Time (Radio Edit)") | {"isrcs": ["GBDUW0000059"]}
+    calls = canned(monkeypatch, p, mb_search(isrc_rec))
+    r = p.lookup(TrackQuery(artist="Daft Punk", title="One More Time", isrc="GBDUW0000059"))
+    assert (r.status, r.extra["mbid"], r.extra["from_tags"]) == ("found", MB_TWO, True)  # no title matching
+    assert calls[0][1]["query"] == "isrc:GBDUW0000059" and len(calls) == 1
+    # A tagged id the index doesn't have falls back to the usual search.
+    calls = canned(monkeypatch, p, mb_search(mb_rec(MB_ONE)))
+    r = p.lookup(TrackQuery(artist="Daft Punk", title="One More Time", mbid="55555555-5555-5555-5555-555555555555"))
+    assert (r.status, r.extra["mbid"]) == ("found", MB_ONE) and "from_tags" not in r.extra and len(calls) == 1
+
+
+def test_query_for_reads_mbid_and_isrc_tags():
+    from tastr.engine.card import Source, TrackCard
+
+    src = Source(kind="file", uri="/x.mp3", file_tags={
+        "artist": "Daft Punk", "title": "One More Time", "musicbrainz_recording": MB_ONE.upper(), "isrc": "gb-duw-00-00059"})
+    q = lookup.query_for(TrackCard(source=src))
+    assert (q.mbid, q.isrc) == (MB_ONE, "GBDUW0000059")
+    src.file_tags |= {"musicbrainz_recording": "not an id", "isrc": "short"}
+    q = lookup.query_for(TrackCard(source=src))
+    assert (q.mbid, q.isrc) == (None, None)
+
+
 def test_acousticbrainz_not_found(ab_index, monkeypatch):
     p = acousticbrainz.AcousticBrainz()
     canned(monkeypatch, p, mb_search(), mb_search(mb_rec("55555555-5555-5555-5555-555555555555")))

@@ -225,13 +225,20 @@ bucket writable. It streams MTG-Jamendo's audio archives and keeps only the labe
 the `vibe_bench` function (8 CPUs) and `tastr vibe-fit` refits the weights locally. Details and licenses in
 [vibes.md](vibes.md).
 
+### FMA Keys
+
+`tastr fetch fma-keys fma-keys --remote --archives 0` downloads FMA Keys' labels and the songs in the
+chosen zips (0 to 9; zip 0 is 4.15 GB with 695 labeled songs), checks each zip's MD5 against Zenodo and
+unpacks the mp3s to `fma-keys/audio/<folder>/<track id>.mp3`. A rerun skips songs already there. There's
+no bench loader for it yet. See [datasets.md](datasets.md).
+
 ## How it fits together
 
 - `tastr/cloud/modal_app.py`: the Modal app. Its image installs the engine's dependencies (kept in step
   with `pyproject.toml` by `tests/test_cloud.py`) and the local `tastr` package. The bucket is mounted
   read-only at `/data`, except in `fetch`, which writes datasets into it.
 - `tastr/cloud/jobs.py`: the job bodies, plain Python so tests run them without Modal.
-- `tastr/cloud/fetch.py`: downloads the vibe datasets (`tastr fetch`), into the bucket on Modal or a local folder.
+- `tastr/cloud/fetch.py`: downloads the vibe datasets and FMA Keys (`tastr fetch`), into the bucket on Modal or a local folder.
 - `tastr/cloud/remote.py`: what the CLI and `tastr/stems.py` call; looks up the deployed function by name.
 
 ## Not here yet

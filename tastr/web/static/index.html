@@ -268,13 +268,19 @@
         </div>
 
         <h3 id="g-measures">Measurements behind vibes</h3>
-        <p class="muted">Danceability is fitted to listener labels. The other weights and cut-offs, here and in the vibe rules, are hand-picked, and were benchmarked against MTG-Jamendo listener labels in October 2026 (details in docs/vibes.md).</p>
+        <p class="muted">Danceability is fitted to listener labels. Energy and the vibe rules' weights and cut-offs are hand-picked, but benchmarked against <a href="https://mtg.github.io/mtg-jamendo-dataset/" target="_blank" rel="noopener">MTG-Jamendo</a> listener labels (3,069 tracks) and <a href="https://cvml.unige.ch/databases/DEAM/" target="_blank" rel="noopener">DEAM</a> listener ratings (1,802 clips), Oct 2026. Percentages are the chance that a labeled track ranks above an unlabeled one (50% is a coin flip):</p>
+        <ul class="gl-pts">
+          <li>Danceability vs "danceable": 82%, vs "party": 80% (was 70% and 68% before the fit). The danceable tag is right on 72% of the tracks it shows on, where 38% would be chance.</li>
+          <li>Energy vs "aggressive": 85%, and it follows how energetic listeners rate a clip (DEAM arousal, correlation 0.67).</li>
+          <li>dark and melancholic track how negative listeners rate a clip, bright how positive (DEAM valence, about ±0.45).</li>
+          <li>driving and hypnotic aren't validated yet, and atmospheric shows on too many tracks.</li>
+        </ul>
         <dl class="gl-dl">
           <dt>Brightness (0-1)</dt><dd>The average spectral centroid (the "center of mass" of the frequencies) divided by 3.5 kHz. Higher means more treble.</dd>
           <dt>Percussiveness (0-1)</dt><dd>The share of the track's energy in its percussive part after splitting the audio into harmonic (sustained) and percussive (short, sharp) layers.</dd>
           <dt>Low end (0-1)</dt><dd>The share of the spectrum's power below 150 Hz.</dd>
           <dt>Pulse clarity (0-1)</dt><dd>How much stronger the onsets on the beat are than the average onset. A clear four-on-the-floor kick scores high; a beatless pad scores near 0.</dd>
-          <dt>Danceability (0-1)</dt><dd>75% percussiveness, 25% how close the tempo is to about 135 BPM (the fit fades over about ±45 BPM). These weights were fitted to listener "danceable" labels on about 2,500 MTG-Jamendo tracks (October 2026). Pulse clarity turned out not to help, so it isn't used.</dd>
+          <dt>Danceability (0-1)</dt><dd>75% percussiveness, 25% how close the tempo is to about 135 BPM (the fit fades over about ±45 BPM). Fitted on MTG-Jamendo tracks against listeners' "danceable" and "party" labels (Oct 2026). Pulse clarity turned out not to help, so it isn't used.</dd>
           <dt>Swing % and confidence</dt><dd>Where the off-beat 16th lands within each beat: 50% is straight, about 67% is a full triplet shuffle. Confidence is how consistent that position is from beat to beat.</dd>
           <dt>Section contrast</dt><dd>The spread (standard deviation) of the section energies. High contrast means big builds and drops.</dd>
         </dl>

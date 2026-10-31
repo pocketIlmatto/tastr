@@ -72,7 +72,7 @@ svg text { fill: var(--muted); font-size: 11px; }
 svg text.lbl { fill: var(--fg); }
 svg text.band { fill: var(--bg); font-weight: 600; }
 .drum-lane { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-.drum-lane .name { width: 60px; font-size: 12px; color: var(--muted); flex: none; }
+.drum-lane .name { width: 56px; font-size: 12px; color: var(--muted); flex: none; }
 .drum-grid i { aspect-ratio: 1; max-height: 22px; border-radius: 3px; background: var(--panel); border: 1px solid var(--line); }
 .drum-grid i.full { background: var(--accent); border-color: var(--accent); }
 .drum-grid i.half { background: color-mix(in srgb, var(--accent) 45%, var(--panel)); }
@@ -119,7 +119,7 @@ svg.chart.head-hot .playhead { stroke-width: 3; }
 .st-opt { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 10px; cursor: pointer; }
 .st-code { margin: 0; max-height: 380px; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; tab-size: 2; }
 .st-note { font-size: 12px; margin: 8px 0 0; }
-.daw-pick { font-size: 13px; text-transform: none; letter-spacing: 0; padding: 2px 6px; color: var(--accent); border-color: var(--accent); cursor: pointer; }
+.daw-pick { font-size: 13px; text-transform: none; letter-spacing: 0; padding: 2px 6px; color: var(--accent); border-color: var(--accent); cursor: pointer; min-width: 0; } /* can shrink, so the wide Technics type fits a 390 px phone */
 .sec-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
 .sec-tab { padding: 2px 10px; font-size: 13px; border-radius: 999px; border-left: 4px solid var(--c, var(--line)); }
 .sec-tab[aria-selected="true"] { background: var(--accent); color: #fff; border-color: var(--accent); border-left-color: var(--c, var(--accent)); }
@@ -168,6 +168,16 @@ details.sec[open] > summary::after { content: "Hide"; }
 .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: var(--panel); border: 1px solid var(--line); }
 .sw.full { background: var(--accent); border-color: var(--accent); }
 .sw.half { background: color-mix(in srgb, var(--accent) 45%, var(--panel)); }
+.sw.chg { outline: 2px solid var(--fg); outline-offset: -2px; }
+.sw.playing { outline: 2px solid var(--accent); outline-offset: 2px; margin: 0 2px; }
+/* The legend sits above all parts, under the transport */
+.groove > .grid-foot { margin: 8px 0 10px; padding: 0 0 8px; border-top: 0; border-bottom: 1px solid var(--line); }
+/* Solo/mute per drum lane and per part (playback only) */
+.lane-sm { display: inline-flex; gap: 2px; flex: none; width: 46px; }
+.lane-btn { width: 22px; height: 20px; padding: 0; font-size: 10px; font-weight: 700; line-height: 1; border-radius: 3px; }
+:root .lane-btn.solo[aria-pressed="true"] { background: #2b7bd9; border-color: #2b7bd9; color: #fff; }
+:root .lane-btn.mute[aria-pressed="true"] { background: #555; border-color: #555; color: #fff; }
+.drum-lane.quiet .drum-grid, .drum-lane.quiet .name { opacity: .35; }
 .sec-note { margin: 0 0 8px; font-size: 14px; }
 .sec-note b { display: inline; }
 .sec-diff { font-size: 12px; }
@@ -186,13 +196,19 @@ details.sec[open] > summary::after { content: "Hide"; }
 .seq-play[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
 .seq-tempo { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); }
 .seq-bpm { width: 62px; padding: 4px 6px; font-size: 13px; }
+/* Ableton-style number box: drag up or down to change it */
+.drag-num:not(:focus) { cursor: ns-resize; touch-action: none; }
+body.num-dragging, body.num-dragging * { cursor: ns-resize !important; user-select: none; }
 .seq-hint, .seq-status { font-size: 12px; }
 .seq-status { flex-basis: 100%; }
 .seq-status:empty { display: none; }
 .drum-grid i[role="button"] { cursor: pointer; }
 .drum-grid i[role="button"]:hover { border-color: var(--fg); }
 .drum-grid i[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.drum-grid i.now { box-shadow: 0 0 0 2px var(--fg); }
+/* Playhead column: an outline, because the looks and the edit ring already use box-shadow on steps */
+:root .drum-grid i.now.now { outline: 3px solid var(--accent); outline-offset: 2px; }
+:root .drum-grid i.now.now:not(.full):not(.half) { background: color-mix(in srgb, var(--fg) 35%, var(--bg)); }
+:root .drum-grid i.now.now.full, :root .drum-grid i.now.now.half { filter: brightness(1.25) saturate(1.2); }
 #track-list li.pending { cursor: default; background: var(--panel); }
 #track-list li.pending .t { display: flex; align-items: center; gap: 8px; font-weight: 500; }
 #track-list li.failed .s { color: var(--warn); }
@@ -322,21 +338,21 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .part-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 6px; }
 .part-foot { font-size: 12px; }
 .part-empty { font-size: 13px; margin: 6px 0; }
-.part-chips { display: inline-flex; gap: 4px; align-items: center; }
-.seq-tools .part-chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; }
-.part-chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
-.part-chip[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
+.part-sm { display: inline-flex; gap: 2px; align-self: center; }
+.part.quiet > :not(.part-head) { opacity: .35; }
 .drum-src-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 8px; }
 .drum-src { font-size: 13px; padding: 3px 6px; }
 .drum-src-row .origin { margin: 0; }
 .drum-src-row .linklike { font-size: 13px; }
-.groove .bar-picks { display: grid; grid-template-columns: 60px repeat(4, 1fr); gap: 10px; margin: 8px 0 4px; }
+/* One left gutter (lane name + solo/mute = 118px) so drum beats, bass bars and chord boxes start at the same x */
+.groove .bar-picks { display: grid; grid-template-columns: 108px repeat(4, 1fr); gap: 10px; margin: 8px 0 4px; }
+@media (min-width: 701px) { .groove .drum-lane:not(:has(.lane-sm)) .name { width: 110px; } } /* the bass rhythm row has no solo/mute */
 .groove .bar-picks::before { content: "notes"; font-size: 12px; color: var(--muted); align-self: center; }
 .bar-pick { display: grid; gap: 2px; font-size: 11px; min-width: 0; }
 .bar-pick select { font-size: 13px; padding: 3px 4px; min-width: 0; }
-.bar-pick.now select, .chord-cell.now { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+:root .bar-pick.now.now select, :root .chord-cell.now.now { outline: 3px solid var(--accent); outline-offset: 2px; background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
 .chg-tag { color: var(--accent); }
-.roll { display: grid; grid-template-columns: 60px 1fr; gap: 8px; }
+.roll { display: grid; grid-template-columns: 110px 1fr; gap: 8px; }
 .roll-keys { display: grid; height: 150px; font-size: 10px; color: var(--muted); text-align: right; padding-right: 2px; }
 .roll-keys span { line-height: 1; display: flex; align-items: center; justify-content: flex-end; }
 .roll-keys .tonic { color: var(--fg); font-weight: 600; }
@@ -350,7 +366,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .roll-note.soft { fill: color-mix(in srgb, var(--accent) 50%, var(--bg)); }
 .roll-head { fill: var(--fg); opacity: 0; }
 .roll-head.now { opacity: .14; }
-.chord-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 4px; }
+.chord-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 4px; margin-left: 118px; }
 .chord-cell { display: grid; justify-items: start; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); min-width: 0; }
 .chord-cell.none { border-style: dashed; background: transparent; }
 .chord-bar { font-size: 11px; }
@@ -363,17 +379,15 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .mini-keys .kb { fill: #2a2a33; }
 .mini-keys .on { fill: color-mix(in srgb, var(--accent) 50%, #fff); }
 .mini-keys .on.root { fill: var(--accent); }
-@media (max-width: 700px) { .chord-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .groove .bar-picks { grid-template-columns: repeat(4, 1fr); } .groove .bar-picks::before { display: none; } .roll { grid-template-columns: 28px 1fr; } }
+@media (max-width: 700px) { .chord-row { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-left: 0; } .groove .bar-picks { grid-template-columns: repeat(4, 1fr); } .groove .bar-picks::before { display: none; } .roll { grid-template-columns: 28px 1fr; } }
 
 /* Edits in Drums, bass & chords: --edit (gold) marks what the user changed; it is not a section color and not the "changed vs previous section" outline */
 .sec-tab.edited::after { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-left: 6px; vertical-align: middle; opacity: .8; }
-/* Edited steps: edit-color fill plus a ring outside the cell, so they read at a glance in every look.
+/* Edited steps: a ring outside the cell, so they read at a glance in every look.
    The doubled class out-ranks the looks' i.full box-shadow. */
 :root .drum-grid i.mine.mine { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--edit); position: relative; z-index: 1; }
-:root .drum-grid i.mine.mine.full { background: var(--edit); border-color: var(--edit); }
-:root .drum-grid i.mine.mine.half { background: color-mix(in srgb, var(--edit) 50%, var(--bg)); border-color: var(--edit); }
-:root .drum-grid i.mine.mine:not(.full):not(.half) { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--edit) 35%, transparent) 0 2px, transparent 2px 5px); border: 1px dashed var(--edit); outline: 0; }
-.sw.mine { background: var(--edit); border-color: var(--edit); }
+/* The fill still shows loudness (strong, softer, none); the ring alone says "you changed this". A removed hit is an empty step with a ring. */
+.sw.mine { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--edit); margin: 0 3px; }
 .roll-note.mine { fill: var(--edit); }
 .bar-pick.mine select { border: 2px solid var(--edit); box-shadow: inset 4px 0 0 var(--edit); }
 :root .chord-cell.mine { border: 2px solid var(--edit); box-shadow: inset 0 4px 0 var(--edit); }
@@ -385,6 +399,9 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .ver-wrap { position: relative; display: inline-block; }
 .ver-pop { position: absolute; z-index: 5; left: 0; top: calc(100% + 4px); width: min(340px, 86vw); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgb(0 0 0 / .18); padding: 10px; display: grid; gap: 8px; font-size: 13px; }
 .ver-pop[hidden] { display: none; }
+.exp-parts { display: grid; gap: 6px; margin: 10px 0; }
+.exp-part { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.exp-actions { display: flex; align-items: center; gap: 12px; }
 .ver-note { margin: 0; font-size: 12px; }
 .ver-save { display: flex; gap: 6px; }
 .ver-name { flex: 1; min-width: 0; font-size: 13px; padding: 4px 6px; }
@@ -550,6 +567,11 @@ h1 { white-space: nowrap; }
 [data-look="808"] .beat-group:nth-child(3) { background: #e8d33a40; } [data-look="808"] .beat-group:nth-child(4) { background: #ffffff; }
 [data-look="808"] .drum-grid i { border-radius: 2px; border-color: #a99f88; background: #f4efe2; box-shadow: inset 0 -2px 0 #0001; }
 [data-look="808"] .drum-grid i.full { background: var(--accent); box-shadow: 0 0 6px #e2531d99; }
+/* Soft hits: the base 808 step rule above would otherwise paint them like empty steps */
+[data-look="808"] .drum-grid i.half { background: color-mix(in srgb, var(--accent) 45%, #f4efe2); border-color: color-mix(in srgb, var(--accent) 60%, #a99f88); }
+[data-look="808"] .sw { background: #f4efe2; border-color: #a99f88; border-radius: 2px; }
+[data-look="808"] .sw.full { background: var(--accent); border-color: var(--accent); }
+[data-look="808"] .sw.half { background: color-mix(in srgb, var(--accent) 45%, #f4efe2); border-color: color-mix(in srgb, var(--accent) 60%, #a99f88); }
 [data-look="808"] #lib, [data-look="808"] #card, [data-look="808"] .chord-cell, [data-look="808"] .adm-panel, [data-look="808"] .adm-tile { border: 2px solid #161514; border-radius: 4px; }
 
 /* Technics: 70s hi-fi. Champagne aluminium, black engraved wide type, red LED strobe dots. */
@@ -571,6 +593,10 @@ h1 { white-space: nowrap; }
 [data-look="technics"] .drum-grid i { border-radius: 50%; background: #2a2a2a; border-color: #121212; transform: scale(.7); }
 [data-look="technics"] .drum-grid i.full { background: #ff3b30; box-shadow: 0 0 8px #ff3b30; }
 [data-look="technics"] .drum-grid i.half { background: #9e2a24; box-shadow: 0 0 4px #ff3b3099; }
+[data-look="technics"] .sw { border-radius: 50%; background: #2a2a2a; border-color: #121212; }
+[data-look="technics"] .sw.full { background: #ff3b30; border-color: #ff3b30; }
+[data-look="technics"] .sw.half { background: #9e2a24; }
+[data-look="technics"] .sw.chg, [data-look="technics"] .drum-grid i.chg { outline-color: #efe9dc; }
 [data-look="technics"] .beat-group { background: transparent; border-bottom: 1px solid #12121233; border-radius: 0; }
 [data-look="technics"] .stat b { font-family: "Michroma", sans-serif; font-size: 18px; }
 [data-look="technics"] #lib, [data-look="technics"] #card, [data-look="technics"] .chord-cell, [data-look="technics"] .adm-panel, [data-look="technics"] .adm-tile { border: 1px solid #8c867a; border-radius: 2px; }

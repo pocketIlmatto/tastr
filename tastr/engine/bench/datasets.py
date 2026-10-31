@@ -200,7 +200,7 @@ def ballroom(root: str | Path) -> list[Item]:
         if bpm_file.is_file():
             try:
                 truth.bpm = float(bpm_file.read_text().split()[0])
-            except (ValueError, IndexError):
+            except (ValueError, IndexError):  # empty or malformed file: the excerpt is kept without a BPM
                 pass
         beats_file = root / "beats" / f"{sid}.beats"
         if beats_file.is_file():
@@ -274,7 +274,7 @@ def giantsteps_tempo(root: str | Path) -> list[Item]:
         sid = f.name.split(".")[0]
         try:
             bpm = float(f.read_text().split()[0])
-        except (ValueError, IndexError):
+        except (ValueError, IndexError):  # empty or malformed annotation: the track has no truth to score
             continue
         if sid in audio:
             items.append(Item(id=f"gs-tempo-{sid}", path=str(audio[sid]), truth=Truth(bpm=bpm)))
@@ -299,7 +299,7 @@ def harmonix(root: str | Path, audio_dir: str | Path | None = None) -> list[Item
             for row in csv.DictReader(fh):
                 try:
                     bpms[row["File"]] = float(row["BPM"])
-                except (KeyError, ValueError):
+                except (KeyError, ValueError):  # a row without a usable BPM: that track is scored without one
                     pass
     items = []
     for f in sorted((ds / "beats_and_downbeats").glob("*.txt")):

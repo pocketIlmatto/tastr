@@ -77,6 +77,7 @@ def analyze(audio_path: str | Path, stages: list[str] | None = None, options: di
                 on_stage(event["stage"], event.get("i", 0), event.get("n", 1))
             raise RemoteError("analyze_stream ended without a card")
         except _NotDeployed:
+            # An older deployment without the streaming function: fall back to the plain call, without progress.
             pass
     return TrackCard.from_dict(_call("analyze", *args))
 

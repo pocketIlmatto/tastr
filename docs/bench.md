@@ -226,8 +226,8 @@ from wrong: the top half by confidence scores 0.679, the top quarter 0.753, the 
 steps for the model (after the Rust port): a weaker minor lean or a genre-balanced training set, and a look
 at the semitone-flat tuning cluster.
 
-The first run also had 8 songs the Rust decoder refused (MPEG-1 Layer III with CRC-protected frames, or
-large ID3 cover-art tags). ffmpeg and librosa read them fine. The app already falls back to Python decoding for such files, and
+The first run also had 8 songs the Rust decoder refused: symphonia 0.5's ID3v2 reader rejects a file at
+probe time when any ID3v2.4 frame is flagged compressed ("id3v2: compressed frames are not supported"). ffmpeg and librosa read them fine. The app already falls back to Python decoding for such files, and
 PR #53 makes the bench do the same.
 
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not

@@ -13,10 +13,10 @@ STRUDEL_JS = Path(__file__).parents[1] / "tastr" / "web" / "static" / "strudel.j
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
 
-def run_js(card: dict, audio_url: str | None = None, edits: dict | None = None) -> dict:
+def run_js(card: dict, audio_url: str | None = None, edits: dict | None = None, start: int = 1) -> dict:
     script = f"""
 const {{ strudelCode, strudelLink }} = require({json.dumps(str(STRUDEL_JS))});
-const code = strudelCode({json.dumps(card)}, {json.dumps(audio_url)}, null, {json.dumps(edits)});
+const code = strudelCode({json.dumps(card)}, {json.dumps(audio_url)}, null, {json.dumps(edits)}, {start});
 console.log(JSON.stringify({{ code, link: strudelLink(code) }}));
 """
     out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
@@ -60,7 +60,8 @@ def test_sections_become_parts_arranged_by_bar_count():
     assert "p[" not in code
     assert 's("bd*4")' in code
     assert 's("[~ ~ ~ oh]*2")' in code
-    assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)._punchcard()"
+    assert code.rstrip().splitlines()[-4] == "all(x => x.early(start - 1)._punchcard())"
+    assert "const start = 1 // the bar to play from: 1 is the top\ndrums: drums\nbass: bass\nchords: chords\n" in code
 
 
 def test_gain_only_for_lanes_with_softer_steps():
@@ -125,7 +126,8 @@ def test_bass_and_chords_get_one_part_per_section_type():
             '.voicing().s("sawtooth").lpf(slider(1400, 200, 6000)).gain(.22).room(.3)') in code
     assert 'const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(slider(320, 60, 2000)).gain(.5)' in code
     assert "the detected chord loop" not in code
-    assert code.rstrip().splitlines()[-4] == "stack(drums, bass, chords)._punchcard()"
+    assert code.rstrip().splitlines()[-4] == "all(x => x.early(start - 1)._punchcard())"
+    assert "const start = 1 // the bar to play from: 1 is the top\ndrums: drums\nbass: bass\nchords: chords\n" in code
 
 
 def test_section_without_entries_falls_back_to_the_track_loop():
@@ -142,7 +144,7 @@ def test_section_without_entries_falls_back_to_the_track_loop():
 
 def test_old_cards_keep_the_single_loop():
     code = run_js(card(["Am", "F", "C", "G"]))["code"]
-    assert "plus the chord loop" in code and "chords: " not in code and "bass: " not in code
+    assert "plus the chord loop" in code and "  chords: " not in code and "  bass: " not in code
     assert 'const chords = chord("<Am F C G>")' in code
 
 
@@ -150,9 +152,9 @@ def test_per_section_harmony_with_audio_and_stems():
     c = with_grid(per_section_card(), first=0.5, bar=2.0)
     code = run_js(c, AUDIO)["code"]
     assert "with the detected drums, bass and chords for each section." in code
-    assert '  part("orig"),\n  drums.gain(slider(.5, 0, 1)),\n  // bass, chords,\n)._punchcard()' in code
+    assert 'original: part("orig")\ndrums: drums.gain(slider(.5, 0, 1))\n_bass: bass\n_chords: chords\n' in code
     stems = run_js_stems(c, AUDIO, ["vocals"])
-    assert "  chords: chord(" in stems and "  // bass, chords,\n)" in stems
+    assert "  chords: chord(" in stems and "_bass: bass\n_chords: chords\n" in stems
 
 
 AUDIO = "http://127.0.0.1:8000/api/tracks/7/audio"
@@ -178,9 +180,9 @@ def test_original_audio_is_cut_into_bars_per_section():
     assert "const len = 114.500, bar = 2.0000, first = 0.500" in code
     # the original follows the song too, from each section's first bar
     assert "const part = (name) => arrange(...song.map(([bars, p, from]) => [bars, orig(name, from, from + bars - 1)]))" in code
-    assert '  part("orig"),\n  drums.gain(slider(.5, 0, 1)),\n  // bass, chords,\n)._punchcard()' in code
+    assert 'original: part("orig")\ndrums: drums.gain(slider(.5, 0, 1))\n_bass: bass\n_chords: chords\n' in code
     assert 'loop the first drop with orig("orig", 17, 20)' in code
-    assert "stack(drums, bass, chords)._punchcard()" not in code
+    assert "\nbass: bass" not in code and "all(x => x.early(start - 1)._punchcard())" in code
 
 
 def test_audio_is_left_out_without_a_url_or_duration():
@@ -208,7 +210,7 @@ console.log(JSON.stringify(strudelCode({json.dumps(card)}, {json.dumps(audio_url
     return json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
 
 
-def test_stems_replace_the_full_mix_and_unticked_stems_are_commented_out():
+def test_stems_replace_the_full_mix_and_unticked_stems_are_muted():
     code = run_js_stems(with_grid(card(["Am", "F", "C", "G"]), first=0.5, bar=2.0), AUDIO, ["vocals", "bass", "other"])
     assert "orig: '" not in code
     for n in ("vocals", "bass", "other", "drums"):
@@ -216,15 +218,16 @@ def test_stems_replace_the_full_mix_and_unticked_stems_are_commented_out():
     assert "const orig = (name, a, b) => {" in code
     start = code.index("const part = (name) => arrange(")
     assert "orig(name, from, from + bars - 1)" in code[start:]
-    tail = code[code.index("stack(\n", start):]
-    assert '  part("vocals"),\n  part("bass"),\n  part("other"),\n  // part("drums"), // the sketch drums below play instead\n' in tail
-    assert "  drums.gain(slider(.8, 0, 1)),\n  // bass, chords,\n)" in tail
+    tail = code[code.index("// --- Play:", start):]
+    assert ('vocals_stem: part("vocals")\nbass_stem: part("bass")\nother_stem: part("other")\n'
+            '_drums_stem: part("drums") // the sketch drums below play instead\n') in tail
+    assert "drums: drums.gain(slider(.8, 0, 1))\n_bass: bass\n_chords: chords\n" in tail
     assert 'orig("vocals", 17, 20)' in code
 
 
 def test_original_drums_stem_turns_the_sketch_drums_down():
     code = run_js_stems(with_grid(card()), AUDIO, ["drums"])
-    assert '  // part("vocals"),\n' in code and '  part("drums"),\n' in code
+    assert '_vocals_stem: part("vocals")\n' in code and '\ndrums_stem: part("drums")\n' in code
     assert "drums.gain(slider(.5, 0, 1))" in code and "the sketch drums below play instead" not in code
 
 
@@ -336,6 +339,48 @@ def test_bar_lists_use_repeats_and_halves():
 def test_knobs_are_sliders_and_a_punchcard_draws_under_the_code():
     plain = run_js(card(["Am", "F", "C", "G"]))["code"]
     assert ".lpf(slider(1400, 200, 6000))" in plain and ".lpf(slider(320, 60, 2000))" in plain
-    assert "stack(drums, bass, chords)._punchcard()" in plain
+    assert "all(x => x.early(start - 1)._punchcard())" in plain
     audio = run_js(with_grid(card(["Am", "F", "C", "G"]), first=0.5, bar=2.0), AUDIO)["code"]
-    assert "drums.gain(slider(.5, 0, 1))," in audio and ")._punchcard()" in audio
+    assert "drums: drums.gain(slider(.5, 0, 1))\n" in audio and "all(x => x.early(start - 1)._punchcard())" in audio
+
+
+def with_bass(c, by_section, **data):
+    c["suggestions"].append({"category": "bass", "title": "Bass loop", "body": "", "data": {"loop": ["A"], "rhythm": "", "by_section": by_section, **data}})
+    return c
+
+
+def test_bass_that_moves_inside_a_bar_is_written_as_weighted_runs():
+    by = [{"idx": 0, "loop": ["A", "F", "C", "G"], "rhythm": "..x...x...x...x.",
+           "beats": [None, ["F", "F", "F", "C"], None, ["G", "G", "D", "D"]]},
+          {"idx": 1, "loop": ["A"], "rhythm": None, "beats": [["A", "A", "A", None]]}]  # a beat with no confident note: no move
+    code = run_js(with_bass(card(["Am", "F", "C", "G"]), by))["code"]
+    assert 'bass: note("<a1 [f1@3 c2] c2 [g1 d2]>").struct("[~ x]*4")' in code
+    assert 'bass: note("a1").struct("[~ x]*4")' in code
+
+
+def test_sidechain_ducks_the_bass_and_chords_under_the_kick():
+    c = card(["Am", "F", "C", "G"])
+    c["suggestions"].append({"category": "bass", "title": "Sidechain the bass to the kick", "body": "", "data": {"release_ms": 242, "template": "{sidechain}"}})
+    code = run_js(c)["code"]
+    assert code.count('s("bd*4").duck("2:3").duckdepth(.6)') == 2  # the kick in both parts
+    assert "lpf(slider(1400, 200, 6000)).gain(.22).room(.3).orbit(3)" in code
+    assert "lpf(slider(320, 60, 2000)).gain(.5).orbit(2)" in code
+    assert "the kick ducks the bass (orbit 2) and the chords (orbit 3)" in code
+    plain = run_js(card(["Am", "F", "C", "G"]))["code"]
+    assert ".duck(" not in plain and ".orbit(" not in plain
+
+
+def test_a_pedal_bass_at_dubstep_tempo_wobbles():
+    c = with_bass(card(["Am", "F", "C", "G"]), [], movement="pedal")
+    c["tags"] = [{"tag": "dubstep/halftime tempo", "score": 0.8}]
+    assert ".gain(.5).lpsync(8).lpdepth(2).lpq(6)" in run_js(c)["code"]
+    c["tags"] = [{"tag": "house tempo", "score": 0.8}]
+    assert ".lpsync(" not in run_js(c)["code"]
+
+
+def test_start_bar_plays_from_a_chosen_section():
+    code = run_js(card(["Am", "F", "C", "G"]), start=17)["code"]
+    assert "const start = 17 // the bar to play from: 1 is the top (here: Drop B)" in code
+    assert "all(x => x.early(start - 1)._punchcard())" in code
+    # out of range: from the top
+    assert "const start = 1 // the bar to play from: 1 is the top\n" in run_js(card(), start=999)["code"]

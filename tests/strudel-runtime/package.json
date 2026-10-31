@@ -1,0 +1,12 @@
+{
+  "name": "tastr-strudel-test-runtime",
+  "private": true,
+  "description": "Test-only: runs the generated Strudel sketches in Strudel itself (tests/test_strudel_runtime.py). Strudel is AGPL-3.0; it is never bundled or shipped with Tastr.",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@strudel/core": "1.2.6",
+    "@strudel/mini": "1.2.6",
+    "@strudel/tonal": "1.2.6",
+    "@strudel/transpiler": "1.2.6"
+  }
+}

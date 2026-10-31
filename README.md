@@ -58,9 +58,11 @@ optionally run on a cloud GPU.
   and chord moves, scales to play over each chord, an arrangement map and mix
   notes.
 - **[Strudel](https://strudel.cc):** a live-code sketch of the track with each
-  section's drums, bass and chords at the right tempo. It can use your edits
-  and the original audio cut into bars, either the full mix or separated stems.
-  "Open in Strudel" opens it in strudel.cc, ready to play and remix.
+  section's drums, bass and chords at the right tempo, written the short way live
+  coders type it (`bd*4`, `<Am F C G>`), one named line per layer to mute with `_`,
+  filter sliders and a punchcard under the code. It can use your edits and the
+  original audio cut into bars, either the full mix or separated stems, and start
+  from any section. "Open in Strudel" opens it in strudel.cc, ready to play and remix.
 
 <img src="docs/images/strudel.png" width="560" alt="A generated Strudel sketch with the original audio">
 
@@ -212,6 +214,11 @@ To run the tests:
 python -m pytest -q
 ```
 
+`tests/test_strudel_runtime.py` plays the generated Strudel sketches in Strudel itself.
+It skips unless Strudel's packages are installed for it (Node 22.15 or newer):
+`npm ci --ignore-scripts --prefix tests/strudel-runtime`. CI installs them when the
+sketch generator or its tests change.
+
 ## Accuracy benchmark
 
 `tastr bench` runs the engine over tracks with known labels and scores BPM,
@@ -324,7 +331,12 @@ Third-party pieces it uses or links to:
   bundle it; pip installs it alongside.
 
 - **Strudel** is AGPL-3.0. Tastr doesn't bundle it: "Open in Strudel" opens
-  the generated sketch on strudel.cc.
+  the generated sketch on strudel.cc. The optional sketch tests install Strudel's
+  packages under `tests/strudel-runtime/` to play the sketches; they are never
+  shipped with Tastr (not in the package or the Docker image).
+- Ideas in the Strudel sketch (short mini-notation, sliders, the punchcard, named
+  lines, sidechain and wobble, testing against Strudel itself) come from
+  [Toaster](https://github.com/StopBanning/toaster) (MIT). No code was copied.
 - **Demucs** (stems) is MIT. It is an optional install, and its model weights
   download on first use.
 - **yt-dlp** (links) is under the Unlicense, also optional.

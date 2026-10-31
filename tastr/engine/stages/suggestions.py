@@ -36,6 +36,10 @@ MODEL_PADS = {"cymbal": "C#2"}  # lanes only the optional drum model finds (GM c
 BASS_LOW_BINS = 24
 NO_BASS = 10 ** -0.7
 NO_BASS_SECTION = 10 ** -0.75
+# A loop bar's bass "moves" (e.g. C C C G) only when each beat's note agrees across at least this share of the
+# section's repeats of that bar, with at least BEAT_MIN_REPEATS of them, so one noisy bar can't invent a move.
+BEAT_AGREE = 0.6
+BEAT_MIN_REPEATS = 2
 
 # Chord matches under this score count as unconfident.
 CHORD_MIN_SCORE = 0.6
@@ -242,11 +246,20 @@ def _bass_summary(ctx: AnalysisContext, step_frames: np.ndarray, tonic: int | No
     chroma = cqt.reshape(3, 12, -1).sum(axis=0)
     # Bass level per bar: power in the two lowest octaves (C1-B2, about 32-123 Hz), where bass fundamentals sit.
     low_power = (cqt[:BASS_LOW_BINS] ** 2).sum(axis=0)
-    all_pcs, low = [], []
-    for a, b in _bar_slices(step_frames, cqt.shape[1]):
+    all_pcs, low, beat_pcs = [], [], []
+    beats = step_frames.shape[1] // STEPS_PER_BEAT
+    for i, (a, b) in enumerate(_bar_slices(step_frames, cqt.shape[1])):
         vec = chroma[:, a:b].sum(axis=1)
         all_pcs.append(int(np.argmax(vec)) if vec.sum() > 0 else None)
         low.append(float(low_power[a:b].mean()))
+        # Each beat's note, read after its first 16th so the kick's thump on the beat doesn't pull it.
+        row = []
+        for k in range(beats):
+            fa = int(step_frames[i, k * STEPS_PER_BEAT + 1])
+            fb = int(step_frames[i, (k + 1) * STEPS_PER_BEAT]) if k + 1 < beats else b
+            v = chroma[:, fa:max(fb, fa + 1)].sum(axis=1)
+            row.append(int(np.argmax(v)) if v.sum() > 0 else None)
+        beat_pcs.append(row)
     low = np.asarray(low)
     ref = float(np.percentile(low, 90)) if low.size else 0.0
     # Aligned to bars: None where the bar has (next to) no bass compared with the track's bassy bars.
@@ -275,7 +288,28 @@ def _bass_summary(ctx: AnalysisContext, step_frames: np.ndarray, tonic: int | No
     rhythm = _pattern(prof / prof.max()) if prof.max() > 0 else None
     return {"notes": notes, "loop": list(loop), "degrees": _degrees(loop, tonic, scale), "movement": movement,
             "rhythm": rhythm, "bar_notes": [music.note_name(p) if p is not None else None for p in bar_pcs],
-            "_low": low, "_ref": ref, "_flux": bar_flux}
+            "_low": low, "_ref": ref, "_flux": bar_flux, "_beats": beat_pcs}
+
+
+def _loop_beats(loop: list, notes: list, beat_pcs: list, a: int, b: int) -> list | None:
+    """Per loop bar, its beat notes when the bass moves inside it (["C", "C", "C", "G"]), else None.
+
+    A loop bar k is read from the section's bars at positions k, k + len(loop), ... whose bar note matches; each
+    beat takes the note most of them agree on (BEAT_AGREE, from at least BEAT_MIN_REPEATS bars). None when nothing moves.
+    """
+    out = []
+    for k, name in enumerate(loop):
+        rows = [beat_pcs[i] for i in range(a + k, b, len(loop)) if name is not None and notes[i] == name]
+        row = None
+        if len(rows) >= BEAT_MIN_REPEATS:
+            picks = []
+            for beat in zip(*rows):
+                pc, n = Counter(beat).most_common(1)[0]
+                picks.append(music.note_name(pc) if pc is not None and n / len(rows) >= BEAT_AGREE else None)
+            if all(picks) and len(set(picks)) > 1:
+                row = picks
+        out.append(row)
+    return out if any(out) else None
 
 
 def _degrees(notes, tonic: int | None, scale: str) -> list[str | None]:
@@ -350,7 +384,9 @@ def _section_harmony(harm: dict, sections: list[tuple[int, object]], tonic: int,
 
 
 def _section_bass(bass: dict, sections: list[tuple[int, object]], tonic: int | None, scale: str) -> list[dict]:
-    """Per-section bass: {idx, label, letter, start_bar, end_bar, loop, degrees, rhythm}.
+    """Per-section bass: {idx, label, letter, start_bar, end_bar, loop, degrees, rhythm, beats?}.
+
+    `beats` (only when some loop bar's bass moves inside the bar) holds, per loop bar, its beat notes or None.
 
     `loop` is empty and `rhythm` None when the section has no bass (its median bar's bass level is well under the track's).
     """
@@ -365,7 +401,9 @@ def _section_bass(bass: dict, sections: list[tuple[int, object]], tonic: int | N
             loop = _section_loop(notes[a:b])
             prof = flux[has].mean(axis=0)
             rhythm = _pattern(prof / prof.max()) if prof.max() > 0 else None
-        out.append({**_section_meta(idx, sec), "loop": loop, "degrees": _degrees(loop, tonic, scale), "rhythm": rhythm})
+        moves = _loop_beats(loop, notes, bass["_beats"], a, b) if loop and bass.get("_beats") else None
+        out.append({**_section_meta(idx, sec), "loop": loop, "degrees": _degrees(loop, tonic, scale), "rhythm": rhythm,
+                    **({"beats": moves} if moves else {})})
     return out
 
 
@@ -453,7 +491,7 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
         add("bass", f"Bass loop: {' - '.join(bass['loop'])} ({bass['movement']})",
             f"Per-bar bass notes loop as {' - '.join(bass['loop'])}{degrees}. {tips[bass['movement']]}"
             + (" The bass hits the off-beats (house-style), so leave the downbeats to the kick." if offbeat else ""),
-            {"loop": bass["loop"], "degrees": bass["degrees"], "rhythm": rhythm,
+            {"loop": bass["loop"], "degrees": bass["degrees"], "rhythm": rhythm, "movement": bass["movement"],
              **({"by_section": bass_by_section} if bass_by_section else {})})
     if bpm and ((f.get("low_end") or 0) > 0.2 or style in ("four_floor", "dnb", "halftime")):
         eighth = 60000 / bpm / 2
@@ -512,7 +550,7 @@ def _suggest(ctx: AnalysisContext, grid: dict, bass: dict, harm: dict, by_sectio
 
 class SuggestionsStage:
     name = "suggestions"
-    version = "0.4.0"  # 0.4: 12-step bars and waltz pattern ideas in 3/4
+    version = "0.5.0"  # 0.5: per-section bass "beats" where the bass moves inside a bar; bass "movement" in data
     requires = ("core", "sections", "tags")
 
     def run(self, ctx: AnalysisContext) -> None:

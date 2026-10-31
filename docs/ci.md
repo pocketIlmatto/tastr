@@ -20,7 +20,9 @@ A typical audio run (about 2.5 minutes, billed 3):
 | perf budget (main only) | ~28 s |
 
 Already in place: pip cache, docs-only PRs skip everything after the scope step, UI-only PRs
-skip the audio tests, perf budget only on main.
+skip the audio tests, perf budget only on main. Node and the Strudel test packages
+(`npm ci` in `tests/strudel-runtime`, npm cache, a few seconds) install only when
+`tastr/web/static/strudel.js` or its tests change.
 
 ## Audit, 2026-10-29
 

@@ -146,6 +146,10 @@ Actions**):
 
 Or run the two commands from step 7 yourself.
 
+The page loads `app.js`, `strudel.js` and `style.css` with a content hash in the URL (`?v=…`), so a deploy
+shows up on the next page load even though Cloudflare caches static files. Deploys before this change could
+stay stale for a few hours; **Caching > Configuration > Purge Everything** in Cloudflare clears that.
+
 ## Backups and restores
 
 Litestream copies each change to `tastr-app/tastr.db` in R2. If the volume is lost, create a new one with

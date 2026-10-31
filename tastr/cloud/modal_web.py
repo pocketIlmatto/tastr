@@ -92,6 +92,14 @@ def analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options:
     return run_analyze(audio, suffix, stages, options)
 
 
+# The same, reporting each stage as it starts (the app's progress bars): yields {"stage", "i", "n"}, then {"card"}.
+@app.function(image=image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=60)
+def analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None):
+    from tastr.cloud.jobs import run_analyze_stream
+
+    yield from run_analyze_stream(audio, suffix, stages, options)
+
+
 # The analysis above plus the drum model, only when someone asks for it on a track.
 @app.function(image=drums_image, cpu=2, memory=4096, timeout=15 * 60)
 def analyze_drums(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:

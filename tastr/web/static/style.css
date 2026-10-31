@@ -265,6 +265,15 @@ body.num-dragging, body.num-dragging * { cursor: ns-resize !important; user-sele
 :root .drum-grid i.now.now.full, :root .drum-grid i.now.now.half { filter: brightness(1.25) saturate(1.2); }
 #track-list li.pending { cursor: default; background: var(--panel); }
 #track-list li.pending .t { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+/* job progress: a thin bar under the status line, plus elapsed and time left */
+.pbar { display: block; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 10%, transparent); overflow: hidden; margin-top: 5px; }
+.pbar > i { display: block; height: 100%; background: var(--accent); border-radius: 2px; transition: width .15s linear; }
+@media (prefers-reduced-motion: reduce) { .pbar > i { transition: none; } }
+#track-list li.pending .s { display: flex; gap: 8px; justify-content: space-between; }
+.p-time { flex: none; font-variant-numeric: tabular-nums; }
+#status .pbar { max-width: 320px; margin: 6px auto 0; }
+.st-stem-go .pbar { width: 100%; max-width: 260px; }
+#track-list li.pending.failed .s { display: block; }
 #track-list li.failed .s { color: var(--warn); }
 #track-list li.failed .why { cursor: help; }
 .spin { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }

@@ -57,14 +57,46 @@ def fetch(dataset: str, path: str, archives: list[int] | None = None) -> dict:
     return _call("fetch", dataset, path, archives)
 
 
-def analyze(audio_path: str | Path, stages: list[str] | None = None, options: dict | None = None):
+def analyze(audio_path: str | Path, stages: list[str] | None = None, options: dict | None = None, on_stage=None):
     """Analyze one file on Modal; returns its TrackCard (whose source the caller sets). With the drum model
-    asked for ({"drum_model": True}), it runs in `analyze_drums`, whose image has PyTorch and the weights."""
+    asked for ({"drum_model": True}), it runs in `analyze_drums`, whose image has PyTorch and the weights.
+
+    Otherwise, with `on_stage`, it calls `analyze_stream`, which reports each stage as it starts; an app
+    deployed before that function existed falls back to `analyze`, without stages."""
     from ..engine.card import TrackCard
 
     audio_path = Path(audio_path)
-    name = "analyze_drums" if (options or {}).get("drum_model") else "analyze"
-    return TrackCard.from_dict(_call(name, audio_path.read_bytes(), audio_path.suffix, stages, options))
+    args = (audio_path.read_bytes(), audio_path.suffix, stages, options)
+    if (options or {}).get("drum_model"):
+        return TrackCard.from_dict(_call("analyze_drums", *args))
+    if on_stage:
+        try:
+            for event in _call_gen("analyze_stream", *args):
+                if "card" in event:
+                    return TrackCard.from_dict(event["card"])
+                on_stage(event["stage"], event.get("i", 0), event.get("n", 1))
+            raise RemoteError("analyze_stream ended without a card")
+        except _NotDeployed:
+            pass
+    return TrackCard.from_dict(_call("analyze", *args))
+
+
+class _NotDeployed(RemoteError):
+    pass
+
+
+def _call_gen(name: str, *args):
+    """Like _call, for a generator function: yields what it yields."""
+    try:
+        import modal
+    except ImportError as e:
+        raise RemoteError("running on Modal needs it installed: pip install 'tastr[cloud]' (setup in docs/cloud.md)") from e
+    try:
+        fn = modal.Function.from_name(app_name(), name)
+        fn.hydrate()  # finds out now, before any work, whether the function exists
+    except modal.exception.NotFoundError as e:
+        raise _NotDeployed(name) from e
+    yield from fn.remote_gen(*args)
 
 
 def stems(audio_path: str | Path, out_dir: Path, progress=None) -> None:

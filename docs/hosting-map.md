@@ -33,11 +33,11 @@ flowchart TB
   end
   subgraph FLY[Fly.io app tastr-frienz]
     WEB[Tastr web server, 512 MB]
-    VOL[(Volume tastr_data at /data: tastr.db, uploads, stems, optional AcousticBrainz index)]
+    VOL[(Volume tastr_data at /data: tastr.db, uploads, stems, analysis-jobs, optional AcousticBrainz index)]
     LS[Litestream]
   end
   subgraph MOD[Modal app tastr-web, environment friends]
-    AN[analyze, 2 CPUs]
+    AN[analyze_stream, 2 CPUs]
     AD[analyze_drums, 2 CPUs + PyTorch + drum model]
     ST[stems, T4 GPU]
   end
@@ -50,7 +50,7 @@ flowchart TB
   WEB --- VOL
   VOL -.- LS
   LS -->|every database change| R2
-  WEB -->|audio bytes| AN -->|track card| WEB
+  WEB -->|audio bytes| AN -->|each step, then the track card| WEB
   WEB -->|audio bytes, on request| AD -->|track card| WEB
   WEB -->|audio bytes| ST -->|stem files| WEB
   WEB -.->|artist + title| CAT
@@ -70,7 +70,7 @@ sequenceDiagram
   participant B as Browser
   participant C as Cloudflare Access
   participant W as Fly: Tastr server
-  participant M as Modal: analyze
+  participant M as Modal: analyze_stream
   participant R as R2
   B->>C: open your hostname
   C-->>B: asks for an email, sends a PIN
@@ -82,13 +82,24 @@ sequenceDiagram
   B->>C: upload a track
   C->>W: upload + token
   W->>W: check limits, save the file on the volume
+  W-->>B: a job id (the upload is done)
   W->>M: audio bytes
   Note over M: cold start about 30 s after a quiet spell
+  loop every 1-2 s until done
+    M--)W: the step it's on (decode, core, sections...)
+    B->>W: GET /api/analyze/jobs/{id}
+    W-->>B: the step, for the progress bar
+  end
   M-->>W: track card
   W->>W: save the card in tastr.db, owner = the email
   W-)R: Litestream copies the change within seconds
-  W-->>B: the card
+  B->>W: GET /api/analyze/jobs/{id}
+  W-->>B: done, with the track id
 ```
+
+The job's state is a small file under `analysis-jobs/` on the volume too, so if the machine stops mid-analysis,
+the page hears that it failed and can upload again. An app deployed before `analyze_stream` existed still
+works: the server falls back to Modal's `analyze`, without steps.
 
 Stems work the same way through Modal's `stems` function; the server saves the files it gets back on the
 volume. "Detect drums with the model" in a track's menu re-analyzes it through `analyze_drums`, which is
@@ -106,7 +117,7 @@ volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops an
 | Checking the login | Tastr on Fly | `AccessVerifier` in `tastr/web/hosted.py` checks the token on every request and takes the email from it. |
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
-| Analysis | Modal `analyze` | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Stays warm 1 minute after a request. |
+| Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
@@ -141,7 +152,7 @@ Modal environment keeps the app's spending apart from benchmarks.
 | --- | --- |
 | `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT` |
 | `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image, the restore-then-replicate start, and the backup target |
-| `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
+| `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
 | `.github/workflows/deploy.yml` | The deploy order and which repository secrets it uses |
 
 ### Fly secrets

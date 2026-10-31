@@ -52,7 +52,7 @@ def engine(monkeypatch, gate):
     calls = Calls()
     state = calls.state
 
-    def fake_analyze(source, stages, options):
+    def fake_analyze(source, stages, options, on_stage=None):
         calls.append(dict(options or {}))
         assert gate.wait(5)
         card = full_card()

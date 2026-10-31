@@ -472,3 +472,20 @@ def test_admins_can_query_only_their_own_library(db_path, home):
     c = make_client(db_path, admins=("friend@example.com",))
     r = c.post("/api/query", json={"sql": "SELECT id FROM tracks", "mine": True}, headers=GOOD).json()
     assert r["rows"] == [[mine]]  # the Simple search: its rows open cards, and other people's tracks are 404s
+
+
+def test_background_jobs_are_each_persons_own_and_count_only_successes(db_path, home):
+    from test_web import wait_job
+
+    def verifier(token):
+        return {"good": "friend@example.com", "other": "other@example.com"}[token]
+    c = TestClient(create_app(db_path, Settings(hosted=True, access_team_domain=TEAM, access_aud=AUD, daily_tracks=1),
+                              verifier=verifier))
+    r = c.post("/api/analyze?background=1", files=[("files", ("broken.wav", b"not audio at all", "audio/wav"))], headers=GOOD)
+    assert r.status_code == 202
+    job = wait_job(c, r.json()["id"], headers=GOOD)
+    assert job["state"] == "done" and job["results"][0]["error"] == "Couldn't analyze this file."
+    assert c.get(f"/api/analyze/jobs/{job['id']}", headers={"cf-access-jwt-assertion": "other"}).status_code == 404
+    conn = db.connect(db_path)
+    assert db.usage_today(conn, "friend@example.com", "tracks", hosted.today()) == 0  # a failure doesn't count
+    conn.close()

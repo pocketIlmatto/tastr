@@ -29,12 +29,13 @@ class AnalyzeResult:
 
 
 def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] | None = None,
-                   options: dict | None = None, owner: str | None = None) -> AnalyzeResult:
+                   options: dict | None = None, owner: str | None = None, on_stage=None) -> AnalyzeResult:
+    """`on_stage(name, i, n)`: told as each step starts ("decode", then the engine's stages), for progress."""
     try:
         if not source.local_path:
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
-        card = _analyze(source, stages, options)
+        card = _analyze(source, stages, options, on_stage)
         if (options or {}).get("drum_model_required") and not card.extras.get("drum_model"):
             # Asked for the drum model but it didn't run (not installed, or no network for the weights):
             # fail rather than quietly store the built-in lanes.
@@ -47,15 +48,15 @@ def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] |
         return AnalyzeResult(source, None, None, f"{type(e).__name__}: {e}")
 
 
-def _analyze(source: Source, stages: list[str] | None, options: dict | None):
+def _analyze(source: Source, stages: list[str] | None, options: dict | None, on_stage=None):
     """The engine, here or (TASTR_ANALYSIS_BACKEND=modal, a hosted server) on Modal, where only the audio goes."""
     if os.environ.get("TASTR_ANALYSIS_BACKEND", "local") == "modal":
         from .cloud import remote
 
-        card = remote.analyze(source.local_path, stages, options)
+        card = remote.analyze(source.local_path, stages, options, on_stage)
         card.source = source
         return card
-    return analyze_file(source.local_path, stages, source=source, options=options)
+    return analyze_file(source.local_path, stages, source=source, options=options, on_stage=on_stage)
 
 
 def _lookup(conn: sqlite3.Connection, track_id: int, card: TrackCard) -> None:

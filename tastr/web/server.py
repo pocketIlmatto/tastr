@@ -25,8 +25,9 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .. import db, drum_jobs, lookup, service, stems
+from .analysis_jobs import AnalysisJobs, JobError
 from ..filemeta import describe, legacy_upload_prefix
-from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url
+from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url, resolve_inputs
 from .hosted import (HEALTH_PATH, LINK_DAYS, PUBLIC_PREFIX, TOKEN_HEADER, AccessVerifier, AnalysisSlots, LinkSigner,
                      Settings, expire_audio, file_bytes, inline_script_hashes, security_headers, stored_bytes, today)
 
@@ -149,6 +150,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     async def lifespan(_app):
         stop = threading.Event()
         jobs.resume()  # stem separations the last run left unfinished (e.g. the machine auto-stopped)
+        analyses.resume()  # analyses it left unfinished read as failed
         drum_runs.resume()  # and drum model runs
         if hosted and settings.audio_days > 0:
             threading.Thread(target=expire_loop, args=(stop,), name="tastr-expiry", daemon=True).start()
@@ -158,6 +160,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     app = FastAPI(title="Tastr", docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
                   openapi_url=None if hosted else "/openapi.json", lifespan=lifespan)
     jobs = stems.Jobs()
+    analyses = AnalysisJobs(tastr_home() / "analysis-jobs")
 
     def run_drum_model(track_id: int) -> None:
         """Re-analyze one track with the drum model (a drum_jobs job); raises with a message for the UI."""
@@ -668,7 +671,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     # Plain `def` endpoints below run in FastAPI's threadpool, so slow analysis
     # doesn't block the event loop.
     @app.post("/api/analyze")
-    def analyze(request: Request, files: list[UploadFile] = File(...)):
+    def analyze(request: Request, files: list[UploadFile] = File(...), background: bool = False):
+        """Analyze uploaded files and answer with the results. With ?background=1, answer at once with a job
+        to poll at /api/analyze/jobs/{id}, which says which step each file is on (the page's progress bars)."""
         if hosted:
             check_upload(request.state.user, files)
         paths: list[str] = []
@@ -691,9 +696,13 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 raise refuse(request.state.user, 413, f"{name} is larger than {settings.max_upload_mb:g} MB.",
                              f"upload size limit ({settings.max_upload_mb:g} MB)")
             paths.append(str(dest))
+        if hosted:
+            event(request.state.user, "upload", f"Uploaded {len(paths)} track{'s' if len(paths) != 1 else ''}")
+        if background:
+            user = getattr(request.state, "user", None)
+            return JSONResponse(analyses.start(owner_of(request), len(paths), analysis_work(paths, user, owner_of(request))),
+                                status_code=202)
         with closing(conn()) as c:
-            if hosted:
-                event(request.state.user, "upload", f"Uploaded {len(paths)} track{'s' if len(paths) != 1 else ''}")
             try:
                 with analysis_slot():
                     rs = service.analyze_inputs(c, paths, owner=owner_of(request))
@@ -702,6 +711,46 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if hosted:  # only tracks that analyzed count toward the daily limit, so a failed try can be retried
                 db.add_usage(c, request.state.user, "tracks", today(), sum(r.track_id is not None for r in rs))
             return results(rs, owner_of(request))
+
+    def analysis_work(inputs: list[str], user: str | None, owner: str | None, link: bool = False):
+        """The work of one background analysis job (see analysis_jobs.py), reporting each step as it starts."""
+        def work(progress) -> dict[str, Any]:
+            with closing(conn()) as c:
+                if link:
+                    progress.stage("fetch")
+                try:
+                    sources = resolve_inputs(inputs)
+                except IngestError as e:
+                    raise JobError(str(e))
+                progress.stage("waiting")
+                rs, failed_at = [], []
+                try:
+                    with analysis_slot():
+                        progress.running()
+                        for i, source in enumerate(sources):
+                            progress.stage("decode", i)
+                            r = service.analyze_source(c, source, owner=owner,
+                                                       on_stage=lambda name, *_, i=i: progress.stage(name, i))
+                            rs.append(r)
+                            failed_at.append(progress.last_stage if r.error else None)
+                except TimeoutError:
+                    raise JobError("The server is busy analyzing other tracks. Try again in a few minutes.")
+                if hosted:  # as for a plain upload: only tracks that analyzed count toward the daily limit
+                    db.add_usage(c, user, "tracks", today(), sum(r.track_id is not None for r in rs))
+            out = results(rs, user)
+            for item, stage in zip(out["results"], failed_at):
+                if stage:
+                    item["stage"] = stage
+            return out
+        return work
+
+    @app.get("/api/analyze/jobs/{job_id}")
+    def analysis_job(job_id: str, request: Request):
+        """A background analysis: queued (with `position`), running (with `stage`), done (with `results`) or error."""
+        job = analyses.status(job_id, owner_of(request))
+        if job is None:
+            raise HTTPException(404, "no such job")
+        return job
 
     def check_upload(user: str, files: list[UploadFile]) -> None:
         if len(files) > settings.max_files:
@@ -721,11 +770,13 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                          f"daily track limit ({settings.daily_tracks})")
 
     @app.post("/api/analyze-url")
-    def analyze_url(body: UrlBody):
+    def analyze_url(body: UrlBody, background: bool = False):
         if hosted:
             raise HTTPException(403, "Link analysis is turned off on this server. Upload the audio file instead.")
         if not is_url(body.url):  # never a path: anyone who can reach the server could read files off its disk
             raise HTTPException(400, "Paste an http(s) link to a track or playlist.")
+        if background:
+            return JSONResponse(analyses.start(None, 1, analysis_work([body.url], None, None, link=True)), status_code=202)
         with closing(conn()) as c:
             try:
                 results = service.analyze_inputs(c, [body.url])

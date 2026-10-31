@@ -47,9 +47,10 @@ class Settings:
     access_team_domain: str = ""  # e.g. "yourteam.cloudflareaccess.com"
     access_aud: str = ""  # the Access application's audience (AUD) tag
     max_upload_mb: float = 100
-    # Analysis memory grows with length (about 130 MB a minute) and Modal's `analyze` has 2 GB: past about
-    # 14 minutes it runs out. Longer files are refused up front instead of failing after the upload.
-    max_minutes: float = 12
+    # Analysis memory grows with length (about 66 MB a minute with the Rust engine) and Modal's `analyze` has
+    # 2 GB. 30-minute tracks ran there (2026-10-31); 25 leaves headroom. Longer files are refused up front
+    # instead of failing after the upload.
+    max_minutes: float = 25
     max_files: int = 20
     daily_tracks: int = 30
     storage_gb: float = 10

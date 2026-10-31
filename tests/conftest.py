@@ -12,10 +12,13 @@ if os.environ.get("PYTEST_XDIST_WORKER"):
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Most tests check the stage logic itself, which is the Python reference engine; whether the Rust library is
-# built would otherwise change which engine they test. Tests of the Rust path set TASTR_ENGINE=rust themselves
-# (test_rust_switch.py, test_rust_engine.py).
-os.environ.setdefault("TASTR_ENGINE", "python")
+# Analyses in the tests run on the Rust engine, as they do in the app, whenever its library is built
+# (cd engine-rs && cargo build --release --lib); CI always builds it. Without it they run on the Python engine
+# and the Rust tests skip. Tests of the Python reference engine's stage logic call its stages directly, and
+# fixtures that swap a Python stage (truth_core) switch TASTR_ENGINE to python themselves.
+from tastr.engine import rust as _rust  # noqa: E402
+
+os.environ.setdefault("TASTR_ENGINE", "rust" if _rust.lib_path() else "python")
 
 from synth import make_track, write_wav  # noqa: E402
 
@@ -35,8 +38,10 @@ def db_path(tmp_path):
 
 
 @pytest.fixture
-def truth_core(synth_wav):
-    """Swap the core stage for one that reports the synth track's ground truth."""
+def truth_core(synth_wav, monkeypatch):
+    """Swap the core stage for one that reports the synth track's ground truth. The swap is a Python stage, so
+    analyses in the test run on the Python engine."""
+    monkeypatch.setenv("TASTR_ENGINE", "python")
     from synth import TruthCoreStage
 
     from tastr.engine.pipeline import register_stage, registered_stages

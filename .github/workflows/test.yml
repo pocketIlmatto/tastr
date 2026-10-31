@@ -70,18 +70,18 @@ jobs:
           cache-dependency-path: tests/strudel-runtime/package-lock.json
       - if: steps.scope.outputs.strudel == 'true'
         run: npm ci --ignore-scripts --prefix tests/strudel-runtime
-      # The Rust engine (engine-rs/), native and WebAssembly, so tests/test_rust_engine.py can compare the two
-      # builds and tests/test_rust_switch.py can use them; only when they or their Python side change. Without the builds that test skips. The runner image already
-      # has Rust and Node.
+      # The Rust engine (engine-rs/), native and WebAssembly. The analysis tests run on it as the app does
+      # (tests/conftest.py), and tests/test_rust_engine.py compares the two builds, so it is built whenever the
+      # audio tests run or the engine or its Python side changes. The runner image already has Rust and Node.
       - uses: actions/cache@v4
-        if: steps.scope.outputs.rust == 'true'
+        if: steps.scope.outputs.rust == 'true' || steps.scope.outputs.audio == 'true'
         with:
           path: |
             ~/.cargo/registry
             engine-rs/target
           key: rust-${{ hashFiles('engine-rs/Cargo.lock') }}
       - name: Build the Rust engine
-        if: steps.scope.outputs.rust == 'true'
+        if: steps.scope.outputs.rust == 'true' || steps.scope.outputs.audio == 'true'
         working-directory: engine-rs
         run: |
           rustup target add wasm32-unknown-unknown

@@ -752,3 +752,63 @@ def test_cloudflare_links_for_admins_only(db_path, home):
     assert "cf_links" not in make_client(db_path, cf_account_id=acct).get("/api/config", headers=GOOD).json()
     assert make_client(db_path, admins=("friend@example.com",)).get("/api/config", headers=GOOD).json()["cf_links"] == {}
     assert Settings(cf_account_id="../evil").cf_links() == {}
+
+
+def _run(i, conclusion="success", ago_h=1, name="tests", msg="Admin upgrades (#57)\n\nbody"):
+    from datetime import datetime, timedelta, timezone
+    end = datetime.now(timezone.utc) - timedelta(hours=ago_h)
+    return {"id": i, "name": name, "conclusion": conclusion, "html_url": f"https://github.com/o/r/actions/runs/{i}",
+            "run_started_at": (end - timedelta(minutes=3)).isoformat(), "updated_at": end.isoformat(),
+            "head_commit": {"message": msg}}
+
+
+def test_github_runs_become_log_lines(db_path, home, monkeypatch):
+    monkeypatch.delenv("LITESTREAM_BUCKET", raising=False)
+    c = make_client(db_path, admins=("friend@example.com",), github_repo="o/r")
+    runs = [_run(1, ago_h=48), _run(2), _run(3, "failure", name="deploy")]
+    c.app.state.watch_once(fetch_runs=lambda repo, token: runs)
+    body = c.get("/api/admin/events?source=github", headers=GOOD).json()
+    assert [(e["detail"], e["ok"], e["type"]) for e in body["events"]] == [
+        ("deploy failed on main (3 min): Admin upgrades (#57)", False, "deploy"),
+        ("tests passed on main (3 min): Admin upgrades (#57)", True, "deploy")]  # run 1 is older than a day
+    assert body["events"][0]["link"] == "https://github.com/o/r/actions/runs/3"
+    c.app.state.watch_once(fetch_runs=lambda repo, token: runs + [_run(4, ago_h=0)])  # only what's new
+    assert c.get("/api/admin/events?source=github", headers=GOOD).json()["matched"] == 3
+
+    def offline(repo, token):
+        raise OSError("no network")
+    c.app.state.watch_once(fetch_runs=offline)  # logged to the server log, not the activity log
+    assert c.get("/api/admin/events?source=github", headers=GOOD).json()["matched"] == 3
+
+
+def test_litestream_snapshots_become_log_lines(db_path, home, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    monkeypatch.setenv("LITESTREAM_BUCKET", "tastr-app")
+    c = make_client(db_path, admins=("friend@example.com",))
+    iso = lambda h: (datetime.now(timezone.utc) - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    snaps = [{"replica": "s3", "generation": "a295b16a796689f3", "index": "1", "size": "2097152", "created": iso(30)},
+             {"replica": "s3", "generation": "a295b16a796689f3", "index": "9", "size": "3145728", "created": iso(5)}]
+    c.app.state.watch_once(snapshots=lambda path: snaps)
+    events = lambda: c.get("/api/admin/events?type=backup", headers=GOOD).json()["events"]  # noqa: E731
+    assert [(e["detail"], e["source"]) for e in events()] == [("Litestream snapshot to R2 (3.0 MB, generation a295b16a)", "r2")]
+    c.app.state.watch_once(snapshots=lambda path: snaps)
+    assert len(events()) == 1  # nothing new
+
+    def broken(path):
+        raise RuntimeError("access denied")
+    c.app.state.watch_once(snapshots=broken)
+    c.app.state.watch_once(snapshots=broken)  # one problem line a day
+    assert [(e["detail"], e["ok"]) for e in events()][0] == ("Couldn't check the R2 backup: access denied", False)
+    assert len(events()) == 2
+
+
+def test_backup_goes_stale():
+    from datetime import datetime, timezone
+    from tastr.web import watch
+    now = datetime(2026, 11, 2, 12, tzinfo=timezone.utc)
+    old = [{"generation": "g", "size": "10", "created": "2026-11-01T00:00:00Z"}]
+    lines, newest, day = watch.backup_events(old, None, "2026-11-01T00:00:00Z", None, now)
+    assert [e["detail"] for e in lines] == ["No Litestream snapshot in R2 for 36 hours"] and day == "2026-11-02"
+    assert watch.backup_events(old, None, newest, day, now)[0] == []
+    assert watch._table("replica  generation  index  size  created\ns3  g  1  5  2026-11-01T00:00:00Z\n") == [
+        {"replica": "s3", "generation": "g", "index": "1", "size": "5", "created": "2026-11-01T00:00:00Z"}]

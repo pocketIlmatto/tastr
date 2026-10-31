@@ -154,6 +154,7 @@ When Tastr is hosted for friends, the people in `TASTR_ADMIN_EMAILS` get an **Ad
   cap with ↑, and someone at their cap gets a **Raise** link. Each change is logged.
 - **Recent activity filters:** filter the log by what happened, who, where (Tastr, Modal, Fly.io, GitHub,
   Cloudflare, R2) and when (today, 7 or 30 days, or between two dates). Filters combine; **Problems** shows
-  only what went wrong. Each line names its source.
+  only what went wrong. Each line names its source. GitHub Actions runs on main and the R2 backups show up on
+  their own, checked every 15 minutes.
 - **Cloudflare links:** with `TASTR_CF_ACCOUNT_ID` set, the Access panel links to who can sign in and to
   the Access log of blocked requests (who and why).

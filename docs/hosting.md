@@ -57,6 +57,9 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
 | `TASTR_CF_ACCOUNT_ID` | none | your Cloudflare account id (32 hex characters, from the dashboard URL); the Admin tab then links to Access's applications and its log of blocked requests. Not secret, but keep it out of the repository |
+| `TASTR_GITHUB_REPO` | none | `owner/name` of the repository whose GitHub Actions runs on main the Admin log shows (fly.toml sets it) |
+| `TASTR_GITHUB_TOKEN` | none | a fine-grained token with read-only Actions access, needed only while that repository is private |
+| `TASTR_WATCH_MINUTES` | 15 | how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off |
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
 | `TASTR_BROWSER_ENGINE` | off | `1` has each visitor's browser make the whole card with the Rust engine's WebAssembly build; the server checks it and skips analysis ([ARCHITECTURE.md](ARCHITECTURE.md#browser-engine)). Needs the image's `TASTR_ENGINE_WASM` |
@@ -113,8 +116,14 @@ of each UTC day, every 6 hours and whenever the Admin tab opens; the day keeps i
 `GET /api/admin/events?type=&who=&source=&from=&to=&problems=&limit=` filters the activity log on the server:
 `type` is one of upload, analysis, stems, limit, error, signin, blocked, deploy, backup or admin; `who` an email
 or `-` for lines with no person; `source` one of app, modal, flyio, github, cloudflare or r2; `from` and `to`
-UTC days, both included. Blocked requests come back as one Cloudflare line per day. Nothing writes backup or
-GitHub lines yet (a deploy is logged by the server when it starts on Fly).
+UTC days, both included. Blocked requests come back as one Cloudflare line per day. Deploys are logged by the
+server when it starts on Fly.
+
+Every `TASTR_WATCH_MINUTES` the server also logs (tastr/web/watch.py): each GitHub Actions run that finished on
+main ("tests passed on main (3 min): ..."), linked to the run, when `TASTR_GITHUB_REPO` is set; and each new
+Litestream snapshot in R2, when `LITESTREAM_BUCKET` is set. A failed check of the backup, or no snapshot for 30
+hours, logs one problem line a day. The first check logs only the last day of runs and the newest snapshot. A
+machine Fly stopped for being idle catches up when it wakes.
 
 `PUT /api/admin/limits/{email}` with `{"daily_tracks": 45, "daily_stems": null, "scope": "today"}` changes
 one person's daily caps (`null` = the server default; `scope` `today` ends at 00:00 UTC, `standing` lasts until

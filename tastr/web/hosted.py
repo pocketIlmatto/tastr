@@ -74,6 +74,11 @@ class Settings:
     # Your Cloudflare account id, for the Admin tab's links to the Access dashboard (who can sign in, and the
     # Access log of blocked requests). Not secret, but kept out of the repository.
     cf_account_id: str = ""
+    # The admin log's GitHub Actions lines: the repository ("owner/name"; empty turns them off) and a read-only
+    # token, needed only while the repository is private. Checked with the R2 backup every `watch_minutes`.
+    github_repo: str = ""
+    github_token: str = ""
+    watch_minutes: float = 15
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -102,6 +107,9 @@ class Settings:
             commit_subject=env.get("TASTR_COMMIT_SUBJECT", "").strip(),
             deploy_run=env.get("TASTR_DEPLOY_RUN", "").strip(),
             cf_account_id=env.get("TASTR_CF_ACCOUNT_ID", "").strip(),
+            github_repo=env.get("TASTR_GITHUB_REPO", "").strip(),
+            github_token=env.get("TASTR_GITHUB_TOKEN", "").strip(),
+            watch_minutes=float(env.get("TASTR_WATCH_MINUTES", cls.watch_minutes)),
         )
         if hosted and not (s.access_team_domain and s.access_aud):
             # Fail closed: a hosted server that can't check logins must not start.

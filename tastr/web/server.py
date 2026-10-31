@@ -26,6 +26,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import db, drum_jobs, lookup, service, stems
 from ..engine import browser_card, rust
+from . import watch
 from .analysis_jobs import AnalysisJobs, JobError, new_id, ref
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url, resolve_inputs
@@ -195,6 +196,8 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         drum_runs.resume()  # and drum model runs
         if hosted and settings.audio_days > 0:
             threading.Thread(target=expire_loop, args=(stop,), name="tastr-expiry", daemon=True).start()
+        if hosted and settings.watch_minutes > 0 and (settings.github_repo or os.environ.get("LITESTREAM_BUCKET")):
+            threading.Thread(target=watch_loop, args=(stop,), name="tastr-watch", daemon=True).start()
         yield
         stop.set()
 
@@ -277,6 +280,48 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 log.exception("Deleting expired audio failed")
             if stop.wait(EXPIRY_EVERY):
                 return
+
+    def watch_once(fetch_runs=watch.fetch_runs, snapshots=watch.litestream_snapshots) -> None:
+        """Log GitHub Actions runs on main and Litestream snapshots that are new since the last check."""
+        now = datetime.now(timezone.utc)
+        with closing(conn()) as c:
+            if settings.github_repo:
+                try:
+                    runs = fetch_runs(settings.github_repo, settings.github_token)
+                except Exception as e:  # noqa: BLE001 - offline, rate-limited or a bad token: try next time
+                    log.warning("Checking GitHub Actions failed: %s", e)
+                else:
+                    last = db.get_meta(c, watch.LAST_RUN)
+                    lines, newest = watch.run_events(runs, int(last) if last else None, now)
+                    for e in lines:
+                        db.add_event(c, **e)
+                    if newest:
+                        db.set_meta(c, watch.LAST_RUN, str(newest))
+            if os.environ.get("LITESTREAM_BUCKET"):
+                snaps, error = None, None
+                try:
+                    snaps = snapshots(str(db_path or db.default_db_path()))
+                except Exception as e:  # noqa: BLE001 - logged as a problem line, once a day
+                    error = str(e) or type(e).__name__
+                lines, newest, day = watch.backup_events(snaps, error, db.get_meta(c, watch.LAST_SNAPSHOT),
+                                                         db.get_meta(c, watch.PROBLEM_DAY), now)
+                for e in lines:
+                    db.add_event(c, **e)
+                db.set_meta(c, watch.LAST_SNAPSHOT, newest)
+                db.set_meta(c, watch.PROBLEM_DAY, day)
+
+    def watch_loop(stop: threading.Event) -> None:
+        if stop.wait(60):  # let the server finish starting (and Litestream its first sync)
+            return
+        while True:
+            try:
+                watch_once()
+            except Exception:  # noqa: BLE001 - try again next time
+                log.exception("Checking GitHub and the R2 backup failed")
+            if stop.wait(settings.watch_minutes * 60):
+                return
+
+    app.state.watch_once = watch_once  # for tests
 
     def count_visit(user: str) -> None:
         """A visit is a person's first request after VISIT_IDLE without one; their very first is a first sign-in."""

@@ -126,6 +126,8 @@ Beatport EDM Key, Harmonix, Beat This!, your own tracks), so every analysis
 change is judged by numbers. Experiments that worked and the ones that didn't
 are written up in [docs/bench.md](docs/bench.md), [docs/drums.md](docs/drums.md)
 and [docs/rhythm.md](docs/rhythm.md). See [Accuracy benchmark](#accuracy-benchmark).
+New to audio analysis? [docs/audio-terms.md](docs/audio-terms.md) explains the terms these docs use
+(STFT, mel, MFCC, CQT, chroma, HPSS, onsets, tempogram, Ward clustering), with diagrams.
 
 Highlights so far:
 

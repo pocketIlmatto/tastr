@@ -1,11 +1,15 @@
 //! Tastr's analysis engine in Rust (docs/rust-engine.md). So far: decoding, resampling, HPSS and the shared
-//! signals the stages read, built both natively and for WebAssembly, so the two builds can be checked for
+//! signals the stages read, chroma, tempo, beats and section clustering, built both natively and for WebAssembly, so the two builds can be checked for
 //! identical output.
 
+pub mod cqt;
 pub mod decode;
 mod detmath;
 pub mod features;
+pub mod np;
 pub mod resample;
+pub mod rhythm;
+pub mod sections;
 pub mod spectral;
 
 pub use features::Matrix;
@@ -26,9 +30,52 @@ pub fn signals(y: Vec<f32>) -> Vec<(&'static str, Matrix)> {
     let frames = spec.frames;
     drop(spec);
     let mut out = features::all(&y, &mag, frames, &percussive, SR as f64);
-    let row = |data: Vec<f32>| Matrix { rows: 1, cols: data.len(), data };
+    let onset = out.iter().find(|(n, _)| *n == "onset_envelope").map(|(_, m)| m.data.clone()).unwrap_or_default();
+    out.extend(rhythm_outputs(&onset, None));
+    out.extend(chroma_outputs(&harmonic));
     out.splice(0..0, [("y", row(y)), ("harmonic", row(harmonic)), ("percussive", row(percussive))]);
     out
+}
+
+fn row(data: Vec<f32>) -> Matrix {
+    Matrix { rows: 1, cols: data.len(), data }
+}
+
+fn frames_row(frames: &[usize]) -> Matrix {
+    row(frames.iter().map(|&f| f as f32).collect())
+}
+
+/// What the core stage takes from the onset envelope: the 384-lag tempogram's mean (its periodicity check),
+/// librosa's tempo and beats, the beats at `bpm` if given, and the onset frames. Frame numbers are stored as
+/// floats (exact below 2^24).
+pub fn rhythm_outputs(onset: &[f32], bpm: Option<f64>) -> Vec<(&'static str, Matrix)> {
+    let (sr, hop) = (SR as f64, spectral::HOP);
+    let n = onset.len();
+    let tg = rhythm::tempogram(onset, 384);
+    let mean = rhythm::tempogram_mean(&tg, 384, n);
+    drop(tg);
+    let (tempo, beats) = rhythm::beat_track(onset, sr, hop, None);
+    let mut out = vec![
+        ("tempogram_mean", row(mean.iter().map(|&v| v as f32).collect())),
+        ("tempo", row(vec![tempo as f32])),
+        ("beats", frames_row(&beats)),
+        ("onsets", frames_row(&rhythm::onset_detect(onset, sr, hop))),
+    ];
+    if let Some(bpm) = bpm {
+        out.push(("beats_at_bpm", frames_row(&rhythm::beat_track(onset, sr, hop, Some(bpm)).1)));
+    }
+    out
+}
+
+/// The harmonic part's tuning (in fractions of a 36-per-octave bin), its 12 x frames chroma and its
+/// 36 x frames bass CQT.
+pub fn chroma_outputs(harmonic: &[f32]) -> Vec<(&'static str, Matrix)> {
+    let (sr, hop) = (SR as f64, spectral::HOP);
+    vec![
+        ("tuning", row(vec![cqt::estimate_tuning(harmonic, sr, 36) as f32])),
+        ("chroma", cqt::chroma_cqt(harmonic, sr, hop)),
+        ("bass_cqt", cqt::bass_cqt(harmonic, sr, hop)),
+    ]
 }
 
 /// FNV-1a over the bits of each array: equal hashes mean bit-identical output.

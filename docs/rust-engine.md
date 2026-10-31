@@ -14,8 +14,8 @@ someone re-analyzes them; Opus files, which symphonia can't decode, fall back to
 |---|---|---|
 | P0 | Decode, resample, STFT and HPSS; native and WebAssembly bit-identical | Done (below) |
 | P1 | The other shared signals (mel, MFCC, RMS, onsets, filters, drum envelopes); speed and memory | Done (below) |
-| P2 | CQT and chroma, beat tracker, tempogram, Ward clustering | Next |
-| P3 | The stages, and cards from Rust | |
+| P2 | CQT and chroma, beat tracker, tempogram, Ward clustering | Done (below) |
+| P3 | The stages, and cards from Rust | Next |
 | P4 | Switch-over behind a flag, full benchmarks | |
 | P5 | Retire the Python engine from the analysis path | |
 
@@ -29,13 +29,20 @@ engine-rs/
   src/spectral.rs    STFT, inverse STFT and HPSS, step by step as librosa 1.0 does them
   src/features.rs    mel filter banks, power_to_db, MFCC, RMS, onset strength, spectral centroid, the kick- and
                      air-band flux, log mel, and drums.py's band envelopes (Butterworth + sosfiltfilt)
+  src/cqt.rs         librosa's CQT (wavelet filters, one octave at a time), tuning estimate and CQT chroma; the
+                     bass CQT
+  src/rhythm.rs      the onset tempogram, librosa's tempo estimate, its dynamic-programming beat tracker and
+                     onset peak picking
+  src/sections.rs    librosa.segment.agglomerative: Ward clustering where only neighbouring bars may merge
+  src/np.rs          numpy's pairwise float sums and round-half-even, where results depend on them
   src/detmath.rs     sin, cos, pow, ... for the whole binary, from the pure-Rust libm crate
   src/lib.rs         load(bytes) and signals(y); a small C interface for the WebAssembly build
   src/main.rs        `tastr-engine <file> [out dir]`: the native build as a command; writes every output as
-                     <name>.f32 plus manifest.json ({name: [rows, cols]})
+                     <name>.f32 plus manifest.json ({name: [rows, cols]}). `rhythm`, `chroma` and `ward`
+                     subcommands run one step on a .f32 input, to compare it with librosa on the same input
   run-wasm.mjs       the same through the WebAssembly build, under Node
   .cargo/config.toml WebAssembly SIMD on (same bits, faster)
-tests/test_rust_engine.py   native vs WebAssembly bit for bit, every signal vs the Python engine
+tests/test_rust_engine.py   native vs WebAssembly bit for bit; every signal, beats, chroma and Ward vs librosa
 ```
 
 Build both and run the tests:
@@ -129,3 +136,42 @@ Same machine and tracks as P0.
 Still to do for speed (none of it changes results): the median filters and STFT frames are independent of
 each other and could run on several threads natively; the time medians could stream too, which would bring
 memory down to a few spectrogram columns plus the audio.
+
+## What P2 measured (2026-10-31)
+
+Same machine as P0 and P1, plus 30 real tracks: a random sample of the Beatport EDM Key previews (Zenodo
+1101082, read straight out of the zip with ranged requests, about 44 MB; not kept).
+
+- **Tempo, beats and onsets:** given the same onset envelope, librosa's tempo, beat frames (with and without a
+  given BPM, as core's 1.5x re-track uses) and onset frames come out identical on the synthetic tracks and on 12
+  real ones; the 384-lag tempogram mean is within 3e-8. Getting there meant copying numpy's and numba's
+  precision choices exactly: the onset normalisation uses numpy's float32 pairwise sums, the beat tracker's
+  local score accumulates in float32 and its dynamic program in float64, and peak picking takes numba's float32
+  mean and compares in float64. librosa's local score also skips one term at the window's end (its loop bound
+  stops one short); ours does too.
+- **Ward clustering:** the same section boundaries as `librosa.segment.agglomerative` on 300 random cases,
+  including exact repeats, which test the tie-breaking (scikit-learn's heap order of (cost, i, j)).
+- **Tuning, chroma and the bass CQT:** the same tuning estimate, chroma within 1e-4 (7e-6 on a real track), the
+  bass CQT within 1e-4 of its peak in the top octave and 7e-4 in the lowest. What's left is the resampler:
+  every octave below the top one is computed from audio halved (or, for the bass CQT, cut 16 times) by our
+  soxr-shaped filter instead of soxr itself. The two differ only near each halved band's top, where no filter
+  of the next octave reaches, so it shows up as small level differences, not different notes.
+- **The cards:** all 30 tracks analyzed by the Python engine with librosa's chroma, bass CQT, tempo, beats,
+  onsets and Ward swapped for the Rust steps gave exactly the same cards as the Python engine alone: every BPM,
+  key, confidence, downbeat, section, tag and feature. So on this sample, key (MIREX 0.537, 24 scored tracks),
+  tempo (15 with a Beatport BPM, 80% within 4%) and sections are unchanged, not merely within a point.
+- **Speed, 3-minute track:** tuning, chroma and the bass CQT 1.24 s against librosa's 2.0 s; tempo, beats and
+  onsets 0.2 s against 0.35 s. Everything so far (decode through chroma and beats) takes 3.9 s natively,
+  single-threaded, against about 7.6 s for the same work in the Python engine; 8.1 s in WebAssembly under Node.
+  Most of the CQT's time is resampling (our filter computes every tap; soxr uses FFTs), the first place to
+  speed up, and it can do so without changing a bit.
+- **Memory:** unchanged at about 200 MB at peak for 3 minutes; the CQT keeps only magnitudes.
+- **Native vs WebAssembly:** every output, the new ones included, bit-identical on WAV, FLAC, MP3, AAC and
+  Vorbis. Ward isn't in the WebAssembly outputs yet (it needs the bar features, which come in P3); it uses only
+  float64 add, subtract, multiply and divide, which IEEE 754 makes identical everywhere.
+
+How the card check ran: a scratch script replaced `librosa.feature.chroma_cqt`, `librosa.cqt` (the bass call),
+`librosa.beat.beat_track`, `librosa.feature.tempogram`, `librosa.onset.onset_detect` and
+`librosa.segment.agglomerative` with calls to the binary's step commands, then ran `tastr bench beatport-key`,
+`tastr bench beatport-tempo` and `analyze_file` on the 30 tracks, with and without the swap. P3 moves the stages
+themselves into Rust; the full benchmarks run at P4, on Modal as usual.

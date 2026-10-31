@@ -209,6 +209,27 @@ tracks it is often not the tonic. Adding the bass profile to the learned model's
 noise. The minor prior (bonus for minor keys in the Krumhansl correlation, 0.10) was flat from 0.08 to 0.15 on
 Beatport (0.535 to 0.544) even though only 70% of its labels are minor, against 85% on GiantSteps.
 
+**FMA Keys, zip 0 (2026-10-31, held out):** 695 full-length Free Music Archive songs across genres, half
+major, scored with the core stages on Modal (Rust engine, main 8d55d6b, not recorded). 687 scored: MIREX
+weighted **0.551**, exact 0.476 (327 exact, 65 fifth, 21 relative, 62 parallel, 212 other), against 0.650 on
+GiantSteps. The model leans minor, which suits EDM and hurts here:
+
+| Reference | n | Weighted | Exact | Read as the other mode |
+|---|---|---|---|---|
+| major | 348 | 0.395 | 0.316 | 194 |
+| minor | 339 | 0.710 | 0.640 | 20 |
+
+The "other" misses are mostly major songs read as one of their own minor chords: +4 semitones (iii) 40,
++2 (ii) 27, +7 as minor 18. A cluster of 64 lands one semitone below the reference, which looks like tuning.
+Major read as IV, the worry from GiantSteps, didn't happen at all (0). Key confidence does separate right
+from wrong: the top half by confidence scores 0.679, the top quarter 0.753, the bottom half 0.422. Next
+steps for the model (after the Rust port): a weaker minor lean or a genre-balanced training set, and a look
+at the semitone-flat tuning cluster.
+
+The first run also had 8 songs the Rust decoder refused (MPEG-1 Layer III with CRC-protected frames, or
+large ID3 cover-art tags). ffmpeg and librosa read them fine. The app already falls back to Python decoding for such files, and
+PR #53 makes the bench do the same.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:

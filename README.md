@@ -111,6 +111,20 @@ change is judged by numbers. Experiments that worked and the ones that didn't
 are written up in [docs/bench.md](docs/bench.md), [docs/drums.md](docs/drums.md)
 and [docs/rhythm.md](docs/rhythm.md). See [Accuracy benchmark](#accuracy-benchmark).
 
+Highlights so far:
+
+| Area | Before | Now | Measured on |
+|---|---|---|---|
+| Exact key, held out | 47.6% | 60.4% | GiantSteps Key, 599 EDM previews |
+| BPM within 4% | 0.49 | 0.74 | GiantSteps Tempo, 43 tracks |
+| Bar 1 in the right place | 0.43 | 0.64 | GTZAN, 933 songs |
+| Toms found (onset F, optional model) | 0.01 | 0.37 | MDB Drums, real mixes |
+| Section boundaries within 3 s (F) | 0.48 | 0.58 | Harmonix Set, 912 songs |
+| Danceability vs listeners (AUC) | 0.70 | 0.82 | MTG-Jamendo, 510 tracks |
+
+The [analysis engine report](docs/engine-report.md) has every change, the datasets
+that found and checked it, and what's still open.
+
 ## Quick start
 
 You need Python 3.10 or newer. Check with `python3 --version`. If `python3` is

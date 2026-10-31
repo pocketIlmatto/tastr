@@ -192,3 +192,29 @@ Reading it:
 - "driving" and "hypnotic" are still at chance, and "atmospheric" still shows on most tracks (1,677 of 2,365
   MTG tracks with mood tags). Their cut-offs are the next thing to tune, best from the spread of your own
   library.
+
+### 2026-10-31: pulse clarity was broken until core 0.3.0
+
+Pulse clarity was read after the kick alignment, which moves the beat grid onto the low-band kick, a frame or
+two before the broadband onset peak. So it came out 0 on 86% of MTG-Jamendo, 81% of DEAM and 18 of 20
+Beatport tracks. The fits above that "drop pulse clarity" were fitting a near-constant input, and driving and
+hypnotic were close to chance (AUC about 0.5), while atmospheric got a free +0.4 on nearly every track. Core
+0.3.0 reads it on the tracker's own grid and scales it as (ratio - 1) / 4; on the 20 Beatport tracks it now
+ranges 0.45 to 1. The vibe benches and the tag cut-offs need rerunning on it (Linear TAS-21, TAS-12).
+
+Rerun on core 0.3.0 (Rust engine, 2026-10-31: MTG-Jamendo 3,069 tracks in 568 s, DEAM 1,802 in 646 s on Modal).
+Pulse clarity is never 0 now: MTG p10 / median / p90 0.30 / 0.70 / 1.0, DEAM 0.26 / 0.58 / 0.96. The other tags
+barely moved (high energy vs aggressive 0.837, danceable 0.741; DEAM energy vs arousal +0.665). A vibe-fit puts
+only 0.05-0.20 of danceability's weight on pulse clarity for +0.01 held out, so danceability keeps its weights.
+New cut-offs (tags 0.2.0), with "raw" the rule's score before the cap at 1; shown scores are capped, so the
+shift goes into each rule's constant and MIN_SCORE stays 0.2:
+
+| Tag | New rule | MTG / DEAM shown | Best label check |
+|---|---|---|---|
+| driving | (pulse − 0.73) / 0.35, 115-150 BPM | 17% / 8% (was 1%) | AUC 0.61 vs danceable |
+| hypnotic | (pulse − 0.4) / 0.4 − 3 × contrast − 0.3 | 23% / 14% (was 1%) | AUC 0.59 vs danceable; no label fits |
+| atmospheric | (0.2 − perc) / 0.15 + (0.4 − pulse) − 0.6 | 19% / 16% (was 71%) | AUC 0.77 vs relaxed, precision 0.81 (base 0.40) |
+
+Driving and hypnotic were set from the spread of Pam's own (dance) tracks, aiming at roughly the top quarter
+to third: on her 9 local tracks they show on 3 and 2. No public label really fits them, so review labels
+(`tastr review`) are the real check. Atmospheric shows on none of her dance tracks.

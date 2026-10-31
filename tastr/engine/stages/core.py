@@ -29,11 +29,16 @@ THREE_TWO_RATIO = 0.8
 # 4/4 track and 1.5x lands on dotted eighths. On GTZAN this blocks 89 of 101 wrong switches and 2 of 17
 # right ones; see docs/bench.md "Tempo notes".
 THREE_TWO_MAX_METER = 0.0
+# Pulse clarity: how much stronger the onset envelope is on the tracker's beats than on average, read on the
+# tracker's own grid (before the kick alignment, which moves the grid onto the low-band kick, a frame or two
+# before the broadband onset peak). (ratio - 1) / PULSE_SCALE, clipped to 0-1: noise scores about 0.1,
+# EDM 0.45 to 1. Before 0.3.0 it was read after the alignment and /1.5, so it was 0 on most tracks.
+PULSE_SCALE = 4.0
 
 
 class CoreStage:
     name = "core"
-    version = "0.2.1"
+    version = "0.3.0"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:
@@ -193,11 +198,10 @@ def _tempo_and_beats(ctx: AnalysisContext, onset_env: np.ndarray, low_flux: np.n
     ibis = np.diff(frames) * ctx.hop / ctx.sr
     stability = float(np.clip(1.0 - np.std(ibis) / (np.mean(ibis) + 1e-9) * 4, 0, 1)) if ibis.size else 0.0
     frames = _regularize(frames, n_frames)
+    idx = np.clip(np.round(frames).astype(int), 0, n_frames - 1)
+    pulse = float(np.clip((onset_env[idx].mean() / (onset_env.mean() + 1e-9) - 1.0) / PULSE_SCALE, 0, 1))
     frames = _align_to_kick(frames, low_flux)
     bpm = 60.0 * ctx.sr / (ctx.hop * float(np.median(np.diff(frames)))) if frames.size > 1 else bpm
-
-    idx = np.clip(np.round(frames).astype(int), 0, n_frames - 1)
-    pulse = float(np.clip((onset_env[idx].mean() / (onset_env.mean() + 1e-9) - 1.0) / 1.5, 0, 1))
     return bpm, frames, 0.5 * stability + 0.5 * pulse, stability, pulse
 
 

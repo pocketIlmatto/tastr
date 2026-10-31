@@ -312,8 +312,8 @@ Tastr scores each candidate phase with five cues read from the log mel spectrogr
 chord change, bass change, bar-to-bar change) and z-scores and sums them ([rhythm.md](rhythm.md)).
 
 **Pulse clarity.** How strongly the onsets line up with the tracked beats: the mean onset strength on beats,
-relative to the mean everywhere. High for a four-on-the-floor track, low for ambient music. It is half of
-the BPM confidence score.
+relative to the mean everywhere, read on the beat tracker's own grid (core 0.3.0: (ratio - 1) / 4, clipped to
+0-1). High for a four-on-the-floor track, low for ambient music. It is half of the BPM confidence score.
 
 **Swing.** In straight time, the off-beat 16th note falls exactly halfway through each 8th; in swung time it
 is late. Tastr looks for the strongest onset in the 18% to 42% stretch of each beat, refines its position with

@@ -57,14 +57,14 @@ pub fn vibe_scores(bpm: Option<f64>, mode: Option<&str>, energy: Option<f64>, ca
     }
     if let (Some(p), Some(b)) = (pulse, bpm) {
         if (115.0..=150.0).contains(&b) {
-            add("driving", (p - 0.45) / 0.35);
+            add("driving", (p - 0.73) / 0.35);
         }
     }
     if let Some(d) = dance {
         add("danceable", (d - 0.55) / 0.3);
     }
     if let (Some(p), Some(c)) = (pulse, contrast) {
-        add("hypnotic", (p - 0.4) / 0.4 - 3.0 * c + 0.3);
+        add("hypnotic", (p - 0.4) / 0.4 - 3.0 * c - 0.3);
     }
     if let Some(l) = low {
         add("bass-heavy", (l - 0.25) / 0.25);
@@ -72,7 +72,7 @@ pub fn vibe_scores(bpm: Option<f64>, mode: Option<&str>, energy: Option<f64>, ca
     if let Some(pc) = perc {
         add("percussive", (pc - 0.35) / 0.25);
         if let Some(p) = pulse {
-            add("atmospheric", (0.2 - pc) / 0.15 + (0.4 - p));
+            add("atmospheric", (0.2 - pc) / 0.15 + (0.4 - p) - 0.6);
         }
     }
     if let Some(c) = contrast {

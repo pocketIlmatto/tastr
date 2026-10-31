@@ -368,8 +368,8 @@ pub const KEY_BIAS: [f64; 24] = [
     0.06560583517724985,
 ];
 /// (raw confidence, chance right) knots, raw ascending.
-pub const BPM_KNOTS: [(f64, f64); 6] =
-    [(0.3729, 0.0985), (0.4136, 0.7989), (0.4251, 0.9), (0.4341, 0.9185), (0.4463, 0.9468), (0.5099, 0.9518)];
+pub const BPM_KNOTS: [(f64, f64); 5] =
+    [(0.617, 0.6444), (0.6978, 0.85), (0.7379, 0.9017), (0.8054, 0.9537), (0.9134, 0.9636)];
 /// (raw confidence, chance right) knots, raw ascending.
 pub const KEY_KNOTS: [(f64, f64); 14] = [
     (0.0059, 0.2929),

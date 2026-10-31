@@ -275,13 +275,13 @@
             <tr><td>high energy</td><td>Energy</td><td>Loud and dense overall.</td><td>(energy − 0.6) ÷ 0.3</td></tr>
             <tr><td>chill</td><td>Energy</td><td>Low energy for its tempo, so it sits back.</td><td>Under 115 BPM: (0.45 − energy) ÷ 0.25; otherwise (0.35 − energy) ÷ 0.25</td></tr>
             <tr><td>dynamic</td><td>Energy</td><td>Big contrast in energy between sections: real builds and drops.</td><td>(section contrast − 0.2) ÷ 0.15</td></tr>
-            <tr><td>driving</td><td>Rhythm</td><td>Strong, steady pulse at a dance tempo.</td><td>115-150 BPM only: (pulse clarity − 0.45) ÷ 0.35</td></tr>
+            <tr><td>driving</td><td>Rhythm</td><td>Strong, steady pulse at a dance tempo.</td><td>115-150 BPM only: (pulse clarity − 0.73) ÷ 0.35</td></tr>
             <tr><td>danceable</td><td>Rhythm</td><td>Steady, regular rhythm that is easy to move to.</td><td>(danceability − 0.55) ÷ 0.3</td></tr>
-            <tr><td>hypnotic</td><td>Rhythm</td><td>Strong pulse with very little change between sections.</td><td>(pulse clarity − 0.4) ÷ 0.4 − 3 × section contrast + 0.3</td></tr>
+            <tr><td>hypnotic</td><td>Rhythm</td><td>Strong pulse with very little change between sections.</td><td>(pulse clarity − 0.4) ÷ 0.4 − 3 × section contrast − 0.3</td></tr>
             <tr><td>percussive</td><td>Rhythm</td><td>Drum hits and sharp attacks dominate.</td><td>(percussiveness − 0.35) ÷ 0.25</td></tr>
             <tr><td>swung</td><td>Rhythm</td><td>Off-beat 16ths land late, giving a shuffle.</td><td>Swing confidence over 0.3: (swing % − 54) ÷ 8</td></tr>
             <tr><td>bass-heavy</td><td>Sound</td><td>A large share of the energy sits in the low end.</td><td>(low end − 0.25) ÷ 0.25</td></tr>
-            <tr><td>atmospheric</td><td>Sound</td><td>Few sharp attacks and a weak pulse, so washy and ambient.</td><td>(0.2 − percussiveness) ÷ 0.15 + (0.4 − pulse clarity)</td></tr>
+            <tr><td>atmospheric</td><td>Sound</td><td>Few sharp attacks and a weak pulse, so washy and ambient.</td><td>(0.2 − percussiveness) ÷ 0.15 + (0.4 − pulse clarity) − 0.6</td></tr>
           </tbody>
         </table>
         <div class="gl-two">

@@ -196,7 +196,8 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         drum_runs.resume()  # and drum model runs
         if hosted and settings.audio_days > 0:
             threading.Thread(target=expire_loop, args=(stop,), name="tastr-expiry", daemon=True).start()
-        if hosted and settings.watch_minutes > 0 and (settings.github_repo or os.environ.get("LITESTREAM_BUCKET")):
+        if hosted and settings.watch_minutes > 0 and ((settings.github_repo and settings.github_workflows)
+                                                       or os.environ.get("LITESTREAM_BUCKET")):
             threading.Thread(target=watch_loop, args=(stop,), name="tastr-watch", daemon=True).start()
         yield
         stop.set()
@@ -285,14 +286,14 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         """Log GitHub Actions runs on main and Litestream snapshots that are new since the last check."""
         now = datetime.now(timezone.utc)
         with closing(conn()) as c:
-            if settings.github_repo:
+            if settings.github_repo and settings.github_workflows:
                 try:
                     runs = fetch_runs(settings.github_repo, settings.github_token)
                 except Exception as e:  # noqa: BLE001 - offline, rate-limited or a bad token: try next time
                     log.warning("Checking GitHub Actions failed: %s", e)
                 else:
                     last = db.get_meta(c, watch.LAST_RUN)
-                    lines, newest = watch.run_events(runs, int(last) if last else None, now)
+                    lines, newest = watch.run_events(runs, int(last) if last else None, now, settings.github_workflows)
                     for e in lines:
                         db.add_event(c, **e)
                     if newest:

@@ -764,15 +764,17 @@ def _run(i, conclusion="success", ago_h=1, name="tests", msg="Admin upgrades (#5
 
 def test_github_runs_become_log_lines(db_path, home, monkeypatch):
     monkeypatch.delenv("LITESTREAM_BUCKET", raising=False)
-    c = make_client(db_path, admins=("friend@example.com",), github_repo="o/r")
-    runs = [_run(1, ago_h=48), _run(2), _run(3, "failure", name="deploy")]
+    c = make_client(db_path, admins=("friend@example.com",), github_repo="o/r", github_workflows=("tests", "deploy.yml"))
+    runs = [_run(1, ago_h=48), _run(2), _run(3, "failure", name="deploy"), _run(5, name="readme-shots")]
+    runs[2]["path"] = ".github/workflows/deploy.yml"
+    runs[2]["name"] = "Deploy to Fly"  # matched by its file name
     c.app.state.watch_once(fetch_runs=lambda repo, token: runs)
     body = c.get("/api/admin/events?source=github", headers=GOOD).json()
     assert [(e["detail"], e["ok"], e["type"]) for e in body["events"]] == [
-        ("deploy failed on main (3 min): Admin upgrades (#57)", False, "deploy"),
-        ("tests passed on main (3 min): Admin upgrades (#57)", True, "deploy")]  # run 1 is older than a day
+        ("Deploy to Fly failed on main (3 min): Admin upgrades (#57)", False, "deploy"),
+        ("tests passed on main (3 min): Admin upgrades (#57)", True, "deploy")]  # run 1 is older than a day, readme-shots not listed
     assert body["events"][0]["link"] == "https://github.com/o/r/actions/runs/3"
-    c.app.state.watch_once(fetch_runs=lambda repo, token: runs + [_run(4, ago_h=0)])  # only what's new
+    c.app.state.watch_once(fetch_runs=lambda repo, token: runs + [_run(6, ago_h=0)])  # only what's new
     assert c.get("/api/admin/events?source=github", headers=GOOD).json()["matched"] == 3
 
     def offline(repo, token):

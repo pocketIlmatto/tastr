@@ -113,7 +113,7 @@ and starts again.
 | Checking the login | Tastr on Fly | `AccessVerifier` in `tastr/web/hosted.py` checks the token on every request and takes the email from it. |
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
-| Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 5 minutes after a request. |
+| Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
 | Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then Fly, from main. |
@@ -197,5 +197,5 @@ These have defaults and change only if you set a Fly secret of the same name ([h
 ## Why it's sometimes slow
 
 To stay cheap, the Fly machine stops after a few idle minutes and the next request wakes it (a few seconds).
-Modal stops its container 5 minutes after the last analysis, so the first upload after a quiet spell waits
+Modal stops its container 1 minute after the last analysis, so the first upload after a quiet spell waits
 about 30 seconds more.

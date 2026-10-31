@@ -70,6 +70,13 @@ names) and `run(ctx)`. `register_stage(obj)` at import time of a module in
 (`ctx.get(name, fn)`). Shared intermediates (HPSS, onset envelope, chroma,
 RMS) live in `tastr/engine/signals.py`; use them so they are computed once.
 
+Where the time goes (2026-10-31, a 3-minute synthetic track, 4 CPUs): the whole
+analysis took 14.5 s, 10.8 s of it HPSS, and 7.9 s of that was librosa's two 2-D
+median filters, which take scipy's slow general path. `signals.hpss` now filters
+row by row on scipy's fast 1-D path, with the same output sample for sample
+(checked against `librosa.effects.hpss`, and `tests/test_engine.py` keeps it so):
+7.1 s in all, HPSS 3.4 s. Sharing the repeated STFTs would save only about 0.3 s more.
+
 ## Storage (`tastr/db.py`)
 
 SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or

@@ -13,10 +13,10 @@
       "run": "2026-10-31"
     },
     "downbeat": {
-      "exact": 0.64,
+      "exact": 0.643,
       "tracks": 933,
       "what": "songs, bar 1 right",
-      "run": "2026-10-29"
+      "run": "2026-10-31"
     },
     "giantsteps-key": {
       "exact": 0.606,

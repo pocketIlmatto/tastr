@@ -310,7 +310,8 @@ later; `tests/test_engine.py` fails if it starts importing app code. Use it
 directly with `from tastr.engine import analyze_file`.
 
 Read `docs/ARCHITECTURE.md` for the data flow, card fields, feature names and
-DB tables, and `docs/modules/` for per-module specs.
+DB tables, `docs/modules/` for per-module specs, and `docs/hosting-map.md` for how the
+hosted setup (Cloudflare, Fly.io, Modal, R2) fits together.
 
 ## Licenses
 

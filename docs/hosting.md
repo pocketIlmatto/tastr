@@ -7,7 +7,8 @@ Cloudflare's signed token on every request, so a request that reaches the server
 Cloudflare gets nothing.
 
 This page covers what hosted mode changes and how to configure it. [deploy.md](deploy.md) sets it up on
-Fly.io, with analysis on Modal and the library backed up to R2.
+Fly.io, with analysis on Modal and the library backed up to R2. [hosting-map.md](hosting-map.md) shows how the
+pieces fit together.
 
 ## What hosted mode changes
 

@@ -2869,7 +2869,9 @@ function renderAdmin() {
   const links = A.log_links || {}, rows = admLog === "problems" ? A.problems || [] : A.recent;
   const linkEls = () => [links.fly && h("a", { href: links.fly, target: "_blank", rel: "noopener" }, "Fly logs"),
     links.modal && h("a", { href: links.modal, target: "_blank", rel: "noopener" }, "Modal")].filter(Boolean);
-  const dig = (e) => (e.ok ? null : h("span", { class: "adm-dig" }, ...linkEls().flatMap((a, i) => (i ? [" · ", a] : [a]))));
+  // A deploy links to its GitHub Actions run; a problem links to the Fly and Modal logs.
+  const own = (e) => e.link && /^https:\/\//.test(e.link) ? [h("a", { href: e.link, target: "_blank", rel: "noopener" }, /github\.com/.test(e.link) ? "Deploy run on GitHub" : "Details")] : [];
+  const dig = (e) => { const as = [...own(e), ...(e.ok ? [] : linkEls())]; return as.length ? h("span", { class: "adm-dig" }, ...as.flatMap((a, i) => (i ? [" · ", a] : [a]))) : null; };
   $("adm-logseg").querySelector('[data-k="problems"]').textContent = `Problems${A.problems && A.problems.length ? ` (${A.problems.length})` : ""}`;
   $("adm-log").replaceChildren(...(rows.length ? rows.map((e) => h("li", { class: e.ok ? "" : "warn" },
     h("time", { datetime: e.at, title: e.at }, admAgo(e.at)),

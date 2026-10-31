@@ -55,7 +55,7 @@ flowchart TB
   WEB -->|audio bytes| ST -->|stem files| WEB
   WEB -.->|artist + title| CAT
   GH -->|modal deploy| MOD
-  GH -->|fly deploy| FLY
+  GH -->|fly deploy, with the commit and run link| FLY
 ```
 
 Audio has no storage of its own: uploads and stems live only on the Fly volume and expire after
@@ -163,7 +163,7 @@ Modal environment keeps the app's spending apart from benchmarks.
 | `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT` |
 | `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image, the restore-then-replicate start, and the backup target |
 | `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
-| `.github/workflows/deploy.yml` | The deploy order and which repository secrets it uses |
+| `.github/workflows/deploy.yml` | The deploy order, which repository secrets it uses, and the commit and run link it builds into the Fly image |
 
 ### Fly secrets
 
@@ -184,7 +184,9 @@ These have defaults and change only if you set a Fly secret of the same name ([h
 `TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`, and `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin
 tab's Modal link opens the app). `TASTR_BROWSER_SIGNALS=1` (off by default) has the browser run HPSS
 before uploading. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
-(a change since the last start is logged as a deploy) on its own.
+(a change since the last start is logged as a deploy) on its own. The deploy workflow builds `TASTR_COMMIT`,
+`TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` into the image (Docker build arguments, not secrets), so the
+Admin tab's deploy line names the commit and links to its GitHub Actions run.
 
 ### Dashboards
 

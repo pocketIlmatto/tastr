@@ -599,6 +599,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .adm-log li:first-child { border-top: 0; }
 .adm-log li.warn span:last-child { color: var(--warn); }
 .adm-log .adm-dig { display: block; margin-top: 2px; font-size: 12px; }
+.adm-log .adm-dig a { color: var(--muted); }
 .adm-log li.warn span.adm-dig, .adm-log li.warn .adm-dig a { color: var(--muted); }
 .adm-loglinks { margin: 8px 0 0; font-size: 12px; }
 .adm-loglinks a { color: inherit; }

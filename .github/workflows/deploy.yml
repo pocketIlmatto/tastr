@@ -27,7 +27,13 @@ jobs:
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: modal deploy --env friends tastr/cloud/modal_web.py
       - uses: superfly/flyctl-actions/setup-flyctl@master
+      # The commit and this run go into the image, so the Admin tab's activity log links each deploy here.
       - name: Deploy the web server to Fly.io
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy --remote-only
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          flyctl deploy --remote-only \
+            --build-arg "TASTR_COMMIT=$GITHUB_SHA" \
+            --build-arg "TASTR_COMMIT_SUBJECT=$(git log -1 --format=%s)" \
+            --build-arg "TASTR_DEPLOY_RUN=$RUN_URL"

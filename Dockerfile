@@ -13,6 +13,12 @@ COPY pyproject.toml README.md ./
 COPY tastr ./tastr
 # The engine's version pins (docs/bench.md), the same as the Modal images.
 RUN pip install --no-cache-dir ".[hosted,cloud]" "numpy<2.3" "numba==0.61.2" "llvmlite==0.44.0" "librosa==0.11.0" "scipy<1.16"
+# Which commit this is and the GitHub Actions run that built it (.github/workflows/deploy.yml passes them),
+# for the deploy lines in the admin log. Late in the file, so a new commit doesn't redo the pip install.
+ARG TASTR_COMMIT=""
+ARG TASTR_COMMIT_SUBJECT=""
+ARG TASTR_DEPLOY_RUN=""
+ENV TASTR_COMMIT=$TASTR_COMMIT TASTR_COMMIT_SUBJECT=$TASTR_COMMIT_SUBJECT TASTR_DEPLOY_RUN=$TASTR_DEPLOY_RUN
 COPY deploy/litestream.yml /etc/litestream.yml
 COPY deploy/start.sh /app/start.sh
 

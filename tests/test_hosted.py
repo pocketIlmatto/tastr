@@ -557,6 +557,27 @@ def test_restart_logs_cut_off_analyses_and_deploys(db_path, home):
             pass
     assert [e["detail"] for e in db.recent_events(conn)][0] == "Deployed a new version (the server restarted)"
     assert len(db.recent_events(conn)) == 3
+    run = "https://github.com/o/r/actions/runs/42"
+    with TestClient(create_app(db_path, Settings(**s, fly_image="img:3", commit="49eeecf0123", commit_subject="Rust engine P0",
+                                                 deploy_run=run), verifier=stub_verifier)):
+        pass
+    e = db.recent_events(conn)[0]
+    assert (e["kind"], e["detail"], e["link"]) == ("deploy", "Deployed 49eeecf: Rust engine P0 (the server restarted)", run)
+
+
+def test_events_table_gains_link_column(tmp_path):
+    import sqlite3
+
+    p = tmp_path / "old.db"
+    old = sqlite3.connect(p)
+    old.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, at TEXT NOT NULL, user TEXT, kind TEXT NOT NULL, "
+                "ok INTEGER NOT NULL DEFAULT 1, detail TEXT)")
+    old.execute("INSERT INTO events (at, kind, detail) VALUES ('2099-01-01T00:00:00', 'upload', 'before')")
+    old.commit()
+    old.close()
+    conn = db.connect(p)
+    db.add_event(conn, None, "deploy", "after", link="https://github.com/x")
+    assert {e["detail"]: e["link"] for e in db.recent_events(conn)} == {"before": None, "after": "https://github.com/x"}
 
 
 def test_log_links():

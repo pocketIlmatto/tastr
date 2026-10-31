@@ -83,9 +83,9 @@ stems_image = (
 app = modal.App(APP_NAME)
 
 
-# About 810 MB at peak for a 3-minute track; 24 s warm on 4 CPUs. A container stays warm 5 minutes after a
-# request, so a batch of uploads pays for one cold start.
-@app.function(image=image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=5 * 60)
+# About 810 MB at peak for a 3-minute track. A container stays warm 1 minute after a request: enough for the
+# uploads of one batch to share a cold start, without paying for minutes of idle time after every upload.
+@app.function(image=image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=60)
 def analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
     from tastr.cloud.jobs import run_analyze
 

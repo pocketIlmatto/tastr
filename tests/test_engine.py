@@ -36,3 +36,21 @@ def test_analyze_file(synth_wav):
     assert card.source.title == "synth_124_Am"
     assert abs(card.core.bpm - 124) < 1
     assert card.stages_run.keys() == {"core"}
+
+
+def test_hpss_matches_librosa_sample_for_sample():
+    """signals.hpss is a faster route to librosa.effects.hpss; every stage tuned on librosa's output relies on it
+    being the same, including clips shorter than the 31-frame median window."""
+    import librosa
+    import numpy as np
+
+    from tastr.engine import signals
+    from tastr.engine.card import Source, TrackCard
+    from tastr.engine.pipeline import AnalysisContext
+
+    rng = np.random.default_rng(0)
+    for n in (3000, 7700, 22050 * 6):
+        y = rng.standard_normal(n).astype(np.float32)
+        ctx = AnalysisContext(y=y, sr=22050, card=TrackCard(source=Source(kind="file", uri="x")))
+        for ours, theirs in zip(signals.hpss(ctx), librosa.effects.hpss(y)):
+            assert ours.dtype == theirs.dtype and np.array_equal(ours, theirs)

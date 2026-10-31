@@ -16,9 +16,27 @@ from .pipeline import AnalysisContext
 
 
 def hpss(ctx: AnalysisContext) -> tuple[np.ndarray, np.ndarray]:
-    import librosa
+    """(harmonic, percussive) audio: librosa.effects.hpss with its defaults, sample for sample, about 3x faster.
 
-    return librosa.effects.hpss(ctx.y)
+    librosa median-filters the whole spectrogram with one 2-D scipy call, which takes the slow general
+    path and was about 70% of a track's analysis time. Filtering row by row (or column by column) hits
+    scipy's fast 1-D path (scipy >= 1.15) and gives the same medians; the rest is librosa's own steps.
+    """
+    import librosa
+    from scipy.ndimage import median_filter
+
+    y = ctx.y
+    S, phase = librosa.magphase(librosa.stft(y))
+
+    def median(axis):  # 31 frames along time (axis 1) or 31 bins along frequency (axis 0), as librosa
+        if S.shape[axis] < 31:  # the two paths reflect differently when the window overhangs both ends
+            return median_filter(S, size=(1, 31) if axis else (31, 1), mode="reflect")
+        return np.apply_along_axis(median_filter, axis, S, size=31, mode="reflect")
+
+    harm, perc = median(1), median(0)
+    parts = (librosa.util.softmask(harm, perc, power=2.0, split_zeros=True),
+             librosa.util.softmask(perc, harm, power=2.0, split_zeros=True))
+    return tuple(librosa.istft(S * mask * phase, dtype=y.dtype, length=y.shape[-1]) for mask in parts)
 
 
 def onset_envelope(ctx: AnalysisContext) -> np.ndarray:

@@ -106,7 +106,7 @@ volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops an
 | Checking the login | Tastr on Fly | `AccessVerifier` in `tastr/web/hosted.py` checks the token on every request and takes the email from it. |
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
-| Analysis | Modal `analyze` | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Stays warm 5 minutes after a request. |
+| Analysis | Modal `analyze` | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Stays warm 1 minute after a request. |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
@@ -191,6 +191,6 @@ These have defaults and change only if you set a Fly secret of the same name ([h
 ## Why it's sometimes slow
 
 To stay cheap, the Fly machine stops after a few idle minutes and the next request wakes it (a few seconds).
-Modal stops its container 5 minutes after the last analysis, so the first upload after a quiet spell waits
-about 30 seconds more. A drum model run starts its own, larger container each time, so it takes a minute
+Modal stops its container 1 minute after the last analysis, so the first upload after a quiet spell waits
+about 30 seconds more. A drum model run usually starts its own, larger container, so it takes a minute
 or two.

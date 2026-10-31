@@ -160,7 +160,7 @@ pub mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn tastr_card_f32(ptr: *mut u8, n: usize, beats_per_bar: i32) -> i32 {
         let bytes = unsafe { Vec::from_raw_parts(ptr, 4 * n, 4 * n) };
-        let y: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        let y: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
         drop(bytes);
         let meter = if beats_per_bar > 0 { Some(beats_per_bar as i64) } else { None };
         let s = card_json(y, meter);

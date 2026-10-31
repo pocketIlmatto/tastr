@@ -19,9 +19,10 @@ A typical audio run (about 2.5 minutes, billed 3):
 | pytest, `-n auto` | 80–100 s |
 | perf budget (main only) | ~28 s |
 
-The Rust engine (`engine-rs/`) builds natively and for WebAssembly only when it, its tests
+The Rust engine (`engine-rs/`) builds natively and for WebAssembly when it, its tests
 (`tests/test_rust_engine.py`, `tests/test_rust_switch.py`) or its Python and page side (`tastr/engine/rust.py`,
-`tastr/engine/browser_card.py`, `tastr/web/static/engine.js`) change: about 50 s from clean, less with the cargo
+`tastr/engine/browser_card.py`, `tastr/web/static/engine.js`) change, and also whenever the audio tests run,
+because the test suite analyzes on the Rust engine like the app does: about 50 s from clean, less with the cargo
 cache.
 
 Lint runs in the same job, before the tests: `ruff check` (a second or two) whenever code changes,

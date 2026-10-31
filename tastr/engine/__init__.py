@@ -45,11 +45,19 @@ def analyze_file(path: str | os.PathLike, stages: list[str] | None = None, sourc
         on_stage("decode", 0, 1)
     card = TrackCard(source=source)
     if rust.chosen(options) == "rust":
-        made, why = _rust_card(p, stages, options, on_stage, source)
+        last = ["decode"]
+
+        def heard(name, *rest):
+            last[0] = name
+            on_stage(name, *rest)
+
+        made, why = _rust_card(p, stages, options, heard if on_stage else None, source)
         if made is not None:
             return made
         log.info("Python engine for %s: %s", p.name, why)
         card.extras["engine_fallback"] = why
+        if on_stage and last[0] != "decode":  # back to decoding, so a file nothing reads fails at "decode", not "core"
+            on_stage("decode", 0, 1)
     y = load_audio(p, SR)
     return run_pipeline(y, SR, card, stages=stages, options=options, on_stage=on_stage)
 
@@ -73,8 +81,13 @@ def _rust_card(path, stages, options, on_stage, source):
             d = rust.card_from_file(path, meter)
         except rust.RustDecodeError:
             # A format the Rust decoder doesn't read (Opus): decode here (librosa, else ffmpeg) and hand Rust the
-            # audio. Raises DecodeError when nothing can read the file.
-            d, decoded_here = rust.card_from_samples(load_audio(path, SR), meter), True
+            # audio. Raises DecodeError when nothing can read the file, which progress then shows at "decode".
+            if on_stage:
+                on_stage("decode", 0, 1)
+            y = load_audio(path, SR)
+            if on_stage:
+                on_stage("core", 0, len(registered_stages()))
+            d, decoded_here = rust.card_from_samples(y, meter), True
         version = rust.version()
     except rust.RustEngineError as e:
         return None, str(e)

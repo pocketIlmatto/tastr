@@ -274,8 +274,9 @@ machine, the Fly server and Modal alike.
   from those samples (`tastr_card_f32`). The card says `extras["decoded_by"] = "python"`.
 - **The Python engine** (`tastr/engine/stages/`, `run_pipeline`) stays as the reference: the benchmarks score
   it with `--engine python`, the spectrogram benches (downbeats, Harmonix sections) and the fitting scripts
-  call its stage code directly, and the test suite checks its stage logic (`tests/conftest.py` sets
-  `TASTR_ENGINE=python` unless a test asks for Rust). It still makes the card for the drum model, which hooks
+  call its stage code directly, and tests that swap or check a Python stage ask for it (the `truth_core`
+  fixture sets `TASTR_ENGINE=python`). The rest of the test suite runs on Rust, like the app, whenever the library
+  is built (`tests/conftest.py`), and on Python when it isn't. It still makes the card for the drum model, which hooks
   into its drum stage; for `tastr analyze --stages` (a subset); and when the Rust library isn't built, which
   `extras["engine_fallback"]` notes. A change to a stage now goes in both, and `tests/test_rust_engine.py`
   checks that their cards agree.

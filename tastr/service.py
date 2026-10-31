@@ -35,6 +35,10 @@ def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] |
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
         card = _analyze(source, stages, options)
+        if (options or {}).get("drum_model_required") and not card.extras.get("drum_model"):
+            # Asked for the drum model but it didn't run (not installed, or no network for the weights):
+            # fail rather than quietly store the built-in lanes.
+            raise RuntimeError(card.extras.get("drum_model_error") or "the drum model isn't installed here")
         track_id = db.save_card(conn, card, owner)
         _lookup(conn, track_id, card)
         return AnalyzeResult(source, track_id, card)
@@ -75,7 +79,8 @@ def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], stages: list[str
 KEEP = "keep"
 
 
-def reanalyze_track(conn: sqlite3.Connection, track_id: int, beats_per_bar: int | None | str = KEEP) -> AnalyzeResult | None:
+def reanalyze_track(conn: sqlite3.Connection, track_id: int, beats_per_bar: int | None | str = KEEP,
+                    drum_model: bool | None = None) -> AnalyzeResult | None:
     """Run the full engine again on a stored track's audio file, so it picks up engine changes.
 
     Keeps the track's id and source (links stay links). File tracks also get their tags
@@ -86,6 +91,10 @@ def reanalyze_track(conn: sqlite3.Connection, track_id: int, beats_per_bar: int 
 
     `beats_per_bar`: 3 or 4 sets the meter, None goes back to detecting it, and the default keeps a
     meter the user set before.
+
+    `drum_model`: True runs the optional pretrained drum model (engine/adt.py) this time; the default keeps
+    using it on a track it ran on before (where it is installed). A requested run that couldn't use it fails
+    and leaves the stored card as it was.
     """
     card = db.load_card(conn, track_id)
     if card is None:
@@ -96,8 +105,10 @@ def reanalyze_track(conn: sqlite3.Connection, track_id: int, beats_per_bar: int 
     old_bars = _section_bars(card)
     if beats_per_bar == KEEP:
         beats_per_bar = card.core.beats_per_bar if card.core.meter_set else None
-    result = analyze_source(conn, source, options={"beats_per_bar": beats_per_bar} if beats_per_bar else None,
-                            owner=db.track_owner(conn, track_id)[1])
+    options = {k: v for k, v in (("beats_per_bar", beats_per_bar),
+                                 ("drum_model", drum_model or (drum_model is None and card.extras.get("drum_model"))),
+                                 ("drum_model_required", drum_model)) if v}
+    result = analyze_source(conn, source, options=options or None, owner=db.track_owner(conn, track_id)[1])
     if result.track_id is not None:
         same_meter = result.card.core.beats_per_bar == (card.core.beats_per_bar or 4)
         result.edits_dropped = db.remap_edits(conn, result.track_id, old_bars, _section_bars(result.card),

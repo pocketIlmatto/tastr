@@ -163,11 +163,17 @@ confidence (ADTOF's per-drum threshold maps to 0.5) times the level of the
 built-in part for that family, so the groove's "20% of the loudest lane"
 rule still compares like with like. Snare, clap, perc and open hat stay
 with the built-in detector (the model's hi-hats replace only the hits our
-ringing test calls closed). Because of the license it is opt-in: it runs
-once `tastr drum-model fetch` has cached the weights, or with
-`TASTR_DRUM_MODEL=adtof`. Without PyTorch, with `TASTR_DRUM_MODEL=off`, or
-offline before the first download, the built-in lanes are used and the
-output is the same as before.
+ringing test calls closed). Because of the license, and because it is
+slower, it runs only when asked for one track: "Detect drums with the model"
+in the track's ⋯ menu (or the bulk Actions menu, or `tastr drum-model run ID`)
+re-analyzes that track with it in the background, like a stem separation, and
+downloads the weights on first use. Re-analyzing the track later keeps using
+it. Everyday analysis uses the built-in lanes. `TASTR_DRUM_MODEL=adtof` runs it
+on every analysis instead (the drum benches do this); `TASTR_DRUM_MODEL=off`
+turns it off everywhere. A requested run that can't use the model (no
+PyTorch, offline before the first download) fails and leaves the card as it
+was. On a hosted server it runs in Modal's `analyze_drums` function
+([hosting-map.md](hosting-map.md)).
 
 **Scores of the model's own onsets** (eval adapter: its peak picking; onset F within 50 ms
 with the same labels and cymbal rule as the built-in lanes; built-in -> ADTOF;

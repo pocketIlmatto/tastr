@@ -294,7 +294,7 @@ def test_admin_usage(db_path, home, tmp_path):
     assert set(by) == {"friend@example.com", "pam@example.com", None}
     f = by["friend@example.com"]
     assert f["tracks"] == 1 and f["audio_bytes"] == 1000 and f["last_seen"]
-    assert f["today"] == {"tracks": 2, "stems": 0, "visits": 2}  # two /api/config page loads above
+    assert f["today"] == {"tracks": 2, "stems": 0, "drums": 0, "visits": 2}  # two /api/config page loads above
     assert by[None]["tracks"] == 1 and by["pam@example.com"]["tracks"] == 0
     assert body["limits"]["daily_tracks"] == 30 and body["storage"]["cap_bytes"] == 10 * 1024 ** 3
     assert body["limits"]["storage_gb"] == 10 and body["limits"]["max_analyses"] == 2

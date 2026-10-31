@@ -532,7 +532,7 @@ def test_background_jobs_are_each_persons_own_and_count_only_successes(db_path, 
     conn = db.connect(db_path)
     assert db.usage_today(conn, "friend@example.com", "tracks", hosted.today()) == 0  # a failure doesn't count
     tag = f"(ref {job['id'][:8]})"  # the same ref in the upload and failure lines, and in the server log
-    upload_line, failed_line = [e["detail"] for e in reversed(db.recent_events(conn))]
+    upload_line, failed_line = [e["detail"] for e in reversed(db.recent_events(conn)) if e["kind"] != "signin"]
     assert upload_line == f"Uploaded broken.wav {tag}"
     assert failed_line.startswith("Analysis failed: broken.wav at step ") and failed_line.endswith(tag)
     conn.close()
@@ -585,3 +585,170 @@ def test_log_links():
     assert s.log_links("tastr-web") == {"fly": "https://fly.io/apps/tastr-x/monitoring",
                                         "modal": "https://modal.com/apps/me/friends/deployed/tastr-web"}
     assert Settings().log_links("tastr-web") == {"modal": "https://modal.com/apps"}
+
+
+def test_admin_routes_are_admins_only(db_path, home):
+    plain = make_client(db_path)
+    for method, path in [("get", "/api/admin/usage?range=1"), ("get", "/api/admin/events"),
+                         ("put", "/api/admin/limits/a@example.com"), ("delete", "/api/admin/limits/a@example.com")]:
+        kw = {"json": {"daily_tracks": 5}} if method == "put" else {}
+        assert getattr(plain, method)(path, headers=GOOD, **kw).status_code == 404, path
+        assert getattr(plain, method)(path, **kw).status_code == 401, path
+    assert "cf_links" not in plain.get("/api/config", headers=GOOD).json()
+    local = TestClient(create_app(db_path, Settings()))
+    assert local.get("/api/admin/events").status_code == 404
+    assert local.put("/api/admin/limits/a@example.com", json={}).status_code == 404
+
+
+def test_limit_overrides_end_at_utc_midnight(db_path):
+    conn = db.connect(db_path)
+    db.set_override(conn, "a@example.com", 45, None, "2026-10-31", "pam@example.com")
+    db.set_override(conn, "b@example.com", None, 2, None, "pam@example.com")
+    assert db.daily_cap(conn, "a@example.com", "tracks", "2026-10-31", 30) == 45
+    assert db.daily_cap(conn, "a@example.com", "stems", "2026-10-31", 10) == 10  # not changed: the default
+    assert db.daily_cap(conn, "a@example.com", "tracks", "2026-11-01", 30) == 30  # today only: gone the next UTC day
+    assert db.daily_cap(conn, "b@example.com", "stems", "2030-01-01", 10) == 2  # until changed
+    assert set(db.overrides(conn, "2026-11-01")) == {"b@example.com"}
+    db.set_override(conn, "b@example.com", None, None, None, "pam@example.com")  # back to the defaults
+    assert db.get_override(conn, "b@example.com", "2026-11-01") is None
+
+
+def test_upload_and_stem_limits_use_the_override(db_path, home, tmp_path, monkeypatch):
+    admin = make_client(db_path, admins=("friend@example.com",), daily_tracks=1, daily_stems=0)
+    conn = db.connect(db_path)
+    db.add_usage(conn, "friend@example.com", "tracks", hosted.today())  # at the default cap already
+    conn.close()
+    assert upload(admin, ("a.wav", b"RIFF")).status_code == 429
+    assert admin.put("/api/admin/limits/Friend@Example.com", json={"daily_tracks": 3, "daily_stems": 1, "scope": "today"},
+                     headers=GOOD).json()["override"]["until_day"] == hosted.today()
+    assert admin.get("/api/config", headers=GOOD).json()["limits"]["daily_tracks"] == 3
+    assert upload(admin, ("a.wav", b"RIFF"), ("b.wav", b"RIFF")).status_code == 200  # 3 of 3, over the default of 1
+    body = admin.get("/api/admin/usage", headers=GOOD).json()
+    me = next(u for u in body["users"] if u["email"] == "friend@example.com")
+    assert me["caps"] == {"tracks": 3, "stems": 1} and me["override"]["set_by"] == "friend@example.com"
+    log = [e["detail"] for e in body["recent"] if e["kind"] == "admin"]
+    assert all(e["type"] == "admin" and e["source"] == "app" for e in body["recent"] if e["kind"] == "admin")
+    assert log == ["Set friend's daily limits to 3 tracks, 1 stem jobs (today only)"]
+    assert admin.put("/api/admin/limits/friend@example.com", json={"daily_tracks": -1}, headers=GOOD).status_code == 422
+    assert admin.put("/api/admin/limits/not-an-email", json={"daily_tracks": 1}, headers=GOOD).status_code == 400
+    assert admin.delete("/api/admin/limits/friend@example.com", headers=GOOD).json()["override"] is None
+    assert upload(admin, ("c.wav", b"RIFF")).status_code == 429  # back on the default
+    # stems: the override lets one stem job through where the default allows none
+    track = save(db_path, "friend@example.com", path=str(tmp_path / "x.wav"))
+    (tmp_path / "x.wav").write_bytes(b"RIFF")
+    monkeypatch.setattr(stems, "available", lambda: True)
+    monkeypatch.setattr(stems.Jobs, "start", lambda self, path, folder: None)
+    assert admin.post(f"/api/tracks/{track}/stems", headers=GOOD).status_code == 429
+    admin.put("/api/admin/limits/friend@example.com", json={"daily_stems": 1, "scope": "standing"}, headers=GOOD)
+    assert admin.post(f"/api/tracks/{track}/stems", headers=GOOD).status_code == 202
+
+
+def test_admin_events_filters(db_path, home):
+    c = make_client(db_path, admins=("friend@example.com",), daily_tracks=1)
+    conn = db.connect(db_path)
+    db.add_event(conn, None, "deploy", "Deployed abc", source="flyio")
+    db.add_event(conn, "sam@example.com", "stems", "Started separating stems for 1 track", source="modal")
+    db.add_blocked(conn, hosted.today())
+    db.add_blocked(conn, hosted.today())
+    conn.close()
+    c.get("/api/config", headers=GOOD)  # first sign-in
+    assert upload(c, ("a.wav", b"RIFF"), ("b.wav", b"RIFF")).status_code == 429
+
+    def get(**q):
+        r = c.get("/api/admin/events", params=q, headers=GOOD)
+        assert r.status_code == 200, r.text
+        return r.json()
+    every = get()
+    assert every["total"] == every["matched"] == 5
+    assert {e["type"] for e in every["events"]} == {"deploy", "stems", "blocked", "signin", "limit"}
+    assert every["people"] == ["friend@example.com", "sam@example.com"]
+    assert [e["detail"] for e in get(type="blocked")["events"]] == ["2 requests blocked without a valid Access token"]
+    assert [e["kind"] for e in get(source="modal")["events"]] == ["stems"]
+    assert sorted(e["kind"] for e in get(who="-")["events"]) == ["blocked", "deploy"]
+    both = get(who="friend@example.com", type="limit")
+    assert both["matched"] == 1 and both["total"] == 5
+    assert get(who="friend@example.com", source="cloudflare")["events"][0]["kind"] == "signin"
+    assert get(**{"from": "2000-01-01", "to": "2000-01-02"})["matched"] == 0
+    assert get(**{"from": hosted.today(), "to": hosted.today()})["matched"] == 5
+    assert get(problems=True)["matched"] == 2  # the limit hit and the blocked requests
+    for bad in ({"type": "nope"}, {"source": "aws"}, {"from": "yesterday"}):
+        assert c.get("/api/admin/events", params=bad, headers=GOOD).status_code == 400
+
+
+def test_old_events_get_type_and_source(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE events (id INTEGER PRIMARY KEY, at TEXT NOT NULL, user TEXT, kind TEXT NOT NULL, "
+                "ok INTEGER NOT NULL DEFAULT 1, detail TEXT, link TEXT)")
+    raw.execute("CREATE TABLE blocked_requests (day TEXT PRIMARY KEY, n INTEGER NOT NULL)")
+    raw.execute("INSERT INTO events (at, kind, detail) VALUES ('2026-10-30T00:00:00+00:00', 'failed', 'x'), "
+                "('2026-10-30T00:00:01+00:00', 'deploy', 'y')")
+    raw.execute("INSERT INTO blocked_requests VALUES ('2026-10-30', 3)")
+    raw.commit()
+    raw.close()
+    conn = db.connect(path)
+    assert [(e["type"], e["source"]) for e in db.recent_events(conn)] == [("deploy", "flyio"), ("error", "app")]
+    db.add_blocked(conn, "2026-10-30")
+    assert db.blocked_on(conn, "2026-10-30") == 4
+
+
+def test_visits_count_after_half_an_hour_idle(db_path, home, monkeypatch):
+    from tastr.web import server
+    c = make_client(db_path, admins=("friend@example.com",))
+    for _ in range(3):
+        c.get("/api/config", headers=GOOD)
+    conn = db.connect(db_path)
+    assert db.usage_today(conn, "friend@example.com", "visits", hosted.today()) == 1
+    monkeypatch.setattr(server, "VISIT_IDLE", -1)  # every request now comes "after a break"
+    c.get("/api/tracks", headers=GOOD)
+    assert db.usage_today(conn, "friend@example.com", "visits", hosted.today()) == 2
+    assert [e["kind"] for e in db.recent_events(conn)] == ["signin"]  # only the very first visit is a sign-in
+
+
+def test_admin_usage_ranges(db_path, home, tmp_path):
+    from datetime import date, timedelta
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"x" * 1000)
+    save(db_path, "friend@example.com", path=str(audio))
+    day = hosted.today()
+    back = lambda n: (date.fromisoformat(day) - timedelta(days=n)).isoformat()  # noqa: E731
+    conn = db.connect(db_path)
+    db.add_usage(conn, "friend@example.com", "tracks", day, 2, hour=f"{day}T00")
+    db.add_usage(conn, "friend@example.com", "tracks", back(3), 4)
+    db.add_usage(conn, "sam@example.com", "stems", back(40), 1)
+    db.snapshot_storage(conn, back(5), {"friend@example.com": 500, None: 9})
+    conn.close()
+    c = make_client(db_path, admins=("friend@example.com",))
+
+    def series(r):
+        body = c.get(f"/api/admin/usage?range={r}", headers=GOOD)
+        assert body.status_code == 200, body.text
+        return body.json()["series"]
+    s1 = series("1")
+    assert s1["hourly"] and len(s1["labels"]) == 24
+    f = s1["people"]["friend@example.com"]
+    assert f["tracks"][0] == 2 and f["visits"][s1["now_hour"]] == 1
+    assert f["storage"][s1["now_hour"]] == 1000 and f["storage"][23] in (0, 1000)
+    s7 = series("7")
+    assert len(s7["labels"]) == 7 and s7["labels"][-1] == day
+    f = s7["people"]["friend@example.com"]
+    assert f["tracks"][-1] == 2 and f["tracks"][-4] == 4
+    assert f["storage"][1] == 500 and f["storage"][-1] == 1000  # carried forward, then today's snapshot
+    assert "sam@example.com" not in s7["people"]
+    s30 = series("30")
+    assert len(s30["labels"]) == 30 and s30["people"]["friend@example.com"]["storage"][0] == 0  # before the first snapshot
+    sall = series("all")
+    assert sall["labels"][0] == back(40) and sall["people"]["sam@example.com"]["stems"][0] == 1
+    assert c.get("/api/admin/usage?range=2", headers=GOOD).status_code == 400
+
+
+def test_cloudflare_links_for_admins_only(db_path, home):
+    acct = "0123456789abcdef0123456789abcdef"
+    admin = make_client(db_path, admins=("friend@example.com",), cf_account_id=acct)
+    links = admin.get("/api/config", headers=GOOD).json()["cf_links"]
+    assert links == {"apps": f"https://one.dash.cloudflare.com/{acct}/access/apps",
+                     "access_logs": f"https://one.dash.cloudflare.com/{acct}/logs/access"}
+    assert "cf_links" not in make_client(db_path, cf_account_id=acct).get("/api/config", headers=GOOD).json()
+    assert make_client(db_path, admins=("friend@example.com",)).get("/api/config", headers=GOOD).json()["cf_links"] == {}
+    assert Settings(cf_account_id="../evil").cf_links() == {}

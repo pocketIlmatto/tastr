@@ -180,9 +180,38 @@ CREATE TABLE IF NOT EXISTS user_usage (
     PRIMARY KEY (user, day, kind)
 );
 
+-- The same counts per UTC hour ('YYYY-MM-DDTHH'), kept two days, for the admin view's Today chart.
+CREATE TABLE IF NOT EXISTS usage_hours (
+    user  TEXT NOT NULL,
+    hour  TEXT NOT NULL,
+    kind  TEXT NOT NULL,
+    n     INTEGER NOT NULL,
+    PRIMARY KEY (user, hour, kind)
+);
+
+-- An admin's change to one person's daily limits (hosted only). NULL limit = the server default;
+-- until_day = the UTC day a "today only" change ends after, NULL = until an admin changes it.
+CREATE TABLE IF NOT EXISTS limit_overrides (
+    email        TEXT PRIMARY KEY,
+    daily_tracks INTEGER,
+    daily_stems  INTEGER,
+    until_day    TEXT,
+    set_by       TEXT,
+    set_at       TEXT NOT NULL
+);
+
+-- Bytes stored per owner ('' = no owner) at the last snapshot of each UTC day, for the admin view's Storage chart.
+CREATE TABLE IF NOT EXISTS storage_days (
+    day   TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    PRIMARY KEY (day, owner)
+);
+
 -- What people did on a hosted server, for the admin view's activity log (kept about 90 days, see add_event).
--- kind: upload, stems, drums, reanalyze, signin, limit, failed, restart or deploy; ok = 0 for limits hit and
--- failures. link: where to read more (a deploy's GitHub Actions run).
+-- kind: upload, stems, drums, reanalyze, signin, limit, failed, restart, deploy or admin; ok = 0 for limits hit and
+-- failures. type: the admin filter's group for the kind (EVENT_TYPES); source: where it happened (EVENT_SOURCES).
+-- link: where to read more (a deploy's GitHub Actions run).
 CREATE TABLE IF NOT EXISTS events (
     id     INTEGER PRIMARY KEY,
     at     TEXT NOT NULL,
@@ -190,7 +219,9 @@ CREATE TABLE IF NOT EXISTS events (
     kind   TEXT NOT NULL,
     ok     INTEGER NOT NULL DEFAULT 1,
     detail TEXT,
-    link   TEXT
+    link   TEXT,
+    type   TEXT,
+    source TEXT NOT NULL DEFAULT 'app'
 );
 
 -- Searches people saved in Explore > Find tracks, per person (owner is the Access email on a hosted server,
@@ -208,8 +239,9 @@ CREATE INDEX IF NOT EXISTS idx_saved_searches_owner ON saved_searches(owner);
 
 -- Requests a hosted server refused for a missing or invalid Cloudflare Access token, per UTC day.
 CREATE TABLE IF NOT EXISTS blocked_requests (
-    day TEXT PRIMARY KEY,
-    n   INTEGER NOT NULL
+    day     TEXT PRIMARY KEY,
+    n       INTEGER NOT NULL,
+    last_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
@@ -240,8 +272,18 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
         conn.executescript(SCHEMA)
         if "album" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
             conn.execute("ALTER TABLE tracks ADD COLUMN album TEXT")  # databases created before album existed
-        if "link" not in {r[1] for r in conn.execute("PRAGMA table_info(events)")}:
+        event_cols = {r[1] for r in conn.execute("PRAGMA table_info(events)")}
+        if "link" not in event_cols:
             conn.execute("ALTER TABLE events ADD COLUMN link TEXT")  # databases created before deploy links
+        if "type" not in event_cols:  # databases from before the admin log's filters
+            conn.execute("ALTER TABLE events ADD COLUMN type TEXT")
+            conn.execute("ALTER TABLE events ADD COLUMN source TEXT NOT NULL DEFAULT 'app'")
+            for kind, typ in EVENT_TYPE_OF.items():
+                conn.execute("UPDATE events SET type = ? WHERE kind = ?", (typ, kind))
+            conn.execute("UPDATE events SET source = 'flyio' WHERE kind IN ('deploy', 'restart')")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(type, at)")
+        if "last_at" not in {r[1] for r in conn.execute("PRAGMA table_info(blocked_requests)")}:
+            conn.execute("ALTER TABLE blocked_requests ADD COLUMN last_at TEXT")
         if "created_at" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
             conn.execute("ALTER TABLE tracks ADD COLUMN created_at TEXT")
         # tracks from before upload times were kept: their last analysis is the best guess there is
@@ -685,10 +727,25 @@ def usage_today(conn: sqlite3.Connection, user: str, kind: str, day: str) -> int
     return row[0] if row else 0
 
 
-def add_usage(conn: sqlite3.Connection, user: str, kind: str, day: str, n: int = 1) -> None:
-    conn.execute("INSERT INTO user_usage VALUES (?, ?, ?, ?) ON CONFLICT (user, day, kind) DO UPDATE SET n = n + ?",
-                 (user, day, kind, n, n))
-    conn.commit()
+HOUR_DAYS = 2  # usage_hours rows kept
+
+
+def add_usage(conn: sqlite3.Connection, user: str, kind: str, day: str, n: int = 1, hour: str | None = None) -> None:
+    """Count `n` of `kind` for `user` on `day`, and in the current UTC hour of that day (or `hour`, 'YYYY-MM-DDTHH')."""
+    hour = hour or f"{day}T{datetime.now(timezone.utc):%H}"
+    with conn:
+        conn.execute("INSERT INTO user_usage VALUES (?, ?, ?, ?) ON CONFLICT (user, day, kind) DO UPDATE SET n = n + ?",
+                     (user, day, kind, n, n))
+        conn.execute("INSERT INTO usage_hours VALUES (?, ?, ?, ?) ON CONFLICT (user, hour, kind) DO UPDATE SET n = n + ?",
+                     (user, hour, kind, n, n))
+        conn.execute("DELETE FROM usage_hours WHERE hour < strftime('%Y-%m-%dT%H', 'now', ?)", (f"-{HOUR_DAYS} days",))
+
+
+def usage_hours(conn: sqlite3.Connection, day: str) -> list[dict[str, Any]]:
+    """Each person's counts per hour of `day`: [{user, hour (0-23), kind, n}]."""
+    rows = conn.execute("SELECT user, hour, kind, n FROM usage_hours WHERE hour >= ? AND hour < ? ORDER BY hour",
+                        (f"{day}T00", f"{day}T99"))
+    return [{"user": u, "hour": int(h[-2:]), "kind": k, "n": n} for u, h, k, n in rows]
 
 
 def has_usage(conn: sqlite3.Connection, user: str) -> bool:
@@ -696,29 +753,140 @@ def has_usage(conn: sqlite3.Connection, user: str) -> bool:
     return conn.execute("SELECT 1 FROM user_usage WHERE user = ? LIMIT 1", (user,)).fetchone() is not None
 
 
+# ---- per-person daily limits (hosted) ----
+
+def get_override(conn: sqlite3.Connection, email: str, day: str) -> dict[str, Any] | None:
+    """`email`'s limit change that still applies on `day`, or None. A "today only" change ends after its day."""
+    row = conn.execute("SELECT daily_tracks, daily_stems, until_day, set_by, set_at FROM limit_overrides "
+                       "WHERE email = ? AND (until_day IS NULL OR until_day >= ?)", (email, day)).fetchone()
+    return _override(row) if row else None
+
+
+def _override(row) -> dict[str, Any]:
+    tracks, stems_, until, by, at = row
+    return {"daily_tracks": tracks, "daily_stems": stems_, "until_day": until, "set_by": by, "set_at": at}
+
+
+def overrides(conn: sqlite3.Connection, day: str) -> dict[str, dict[str, Any]]:
+    """Every limit change that still applies on `day`, by email."""
+    return {r[0]: _override(r[1:]) for r in conn.execute(
+        "SELECT email, daily_tracks, daily_stems, until_day, set_by, set_at FROM limit_overrides "
+        "WHERE until_day IS NULL OR until_day >= ?", (day,))}
+
+
+def set_override(conn: sqlite3.Connection, email: str, daily_tracks: int | None, daily_stems: int | None,
+                 until_day: str | None, set_by: str | None) -> None:
+    """Change `email`'s daily limits (None = the server default for that one); both None goes back to the defaults."""
+    with conn:
+        if daily_tracks is None and daily_stems is None:
+            conn.execute("DELETE FROM limit_overrides WHERE email = ?", (email,))
+            return
+        conn.execute("INSERT OR REPLACE INTO limit_overrides VALUES (?, ?, ?, ?, ?, ?)",
+                     (email, daily_tracks, daily_stems, until_day, set_by, _now()))
+
+
+def daily_cap(conn: sqlite3.Connection, email: str, kind: str, day: str, default: int) -> int:
+    """The daily cap on `kind` ("tracks" or "stems") for `email` on `day`: their override if one applies, else `default`."""
+    o = get_override(conn, email, day)
+    v = o and o.get(f"daily_{kind}")
+    return default if v is None else v
+
+
+# ---- storage history (hosted) ----
+
+def snapshot_storage(conn: sqlite3.Connection, day: str, by_owner: dict[str | None, int]) -> None:
+    """Record bytes stored per owner for `day`; a later snapshot the same day replaces it, so each day keeps its last."""
+    with conn:
+        conn.executemany("INSERT OR REPLACE INTO storage_days VALUES (?, ?, ?)",
+                         [(day, owner or "", int(b)) for owner, b in by_owner.items()])
+
+
+def storage_history(conn: sqlite3.Connection, since: str) -> list[dict[str, Any]]:
+    return [{"day": d, "owner": o or None, "bytes": b} for d, o, b in conn.execute(
+        "SELECT day, owner, bytes FROM storage_days WHERE day >= ? ORDER BY day", (since,))]
+
+
+def first_storage_day(conn: sqlite3.Connection) -> str | None:
+    return conn.execute("SELECT min(day) FROM storage_days").fetchone()[0]
+
+
+# ---- admin activity log (hosted) ----
+
 EVENT_DAYS = 90
+# The admin log's filter groups (type) for each kind of event, and where events come from (source).
+EVENT_TYPE_OF = {"upload": "upload", "reanalyze": "analysis", "drums": "analysis", "stems": "stems", "limit": "limit",
+                 "failed": "error", "restart": "error", "signin": "signin", "deploy": "deploy", "admin": "admin"}
+EVENT_TYPES = ("upload", "analysis", "stems", "limit", "error", "signin", "blocked", "deploy", "backup", "admin")
+EVENT_SOURCES = ("app", "modal", "flyio", "github", "cloudflare", "r2")
 
 
 def add_event(conn: sqlite3.Connection, user: str | None, kind: str, detail: str, ok: bool = True,
-              link: str | None = None) -> None:
+              link: str | None = None, source: str = "app") -> None:
     """One line for the admin activity log; rows older than EVENT_DAYS go at the same time."""
     with conn:
-        conn.execute("INSERT INTO events (at, user, kind, ok, detail, link) VALUES (?, ?, ?, ?, ?, ?)",
-                     (_now(), user, kind, int(ok), detail, link))
+        conn.execute("INSERT INTO events (at, user, kind, ok, detail, link, type, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     (_now(), user, kind, int(ok), detail, link, EVENT_TYPE_OF.get(kind, kind), source))
         conn.execute("DELETE FROM events WHERE at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)", (f"-{EVENT_DAYS} days",))
+
+
+def _event_row(at, user, kind, ok, detail, link, typ, source) -> dict[str, Any]:
+    return {"at": at, "user": user, "kind": kind, "ok": bool(ok), "detail": detail, "link": link,
+            "type": typ or EVENT_TYPE_OF.get(kind, kind), "source": source or "app"}
+
+
+EVENT_COLS = "at, user, kind, ok, detail, link, type, source"
 
 
 def recent_events(conn: sqlite3.Connection, n: int = 20, problems: bool = False) -> list[dict[str, Any]]:
     """The last `n` admin log lines; with `problems`, only failures, limits hit and restarts that cut work off."""
     where = "WHERE ok = 0 " if problems else ""
-    rows = conn.execute(f"SELECT at, user, kind, ok, detail, link FROM events {where}ORDER BY at DESC, id DESC LIMIT ?", (n,))
-    return [{"at": at, "user": user, "kind": kind, "ok": bool(ok), "detail": detail, "link": link}
-            for at, user, kind, ok, detail, link in rows]
+    rows = conn.execute(f"SELECT {EVENT_COLS} FROM events {where}ORDER BY at DESC, id DESC LIMIT ?", (n,))
+    return [_event_row(*r) for r in rows]
+
+
+def find_events(conn: sqlite3.Connection, type: str = "", who: str = "", source: str = "", since: str = "",
+                until: str = "", problems: bool = False, limit: int = 200) -> dict[str, Any]:
+    """Admin log lines matching every filter given, newest first, with the blocked-request count per day as
+    Cloudflare lines. who "-" = lines with no person. since/until are UTC days, both included.
+    Returns {events (at most `limit`), matched, total, people (everyone named in the log)}."""
+    blocked = [{"at": last_at or f"{day}T23:59:59+00:00", "user": None, "kind": "blocked", "ok": False,
+                "detail": f"{n} request{'' if n == 1 else 's'} blocked without a valid Access token",
+                "link": None, "type": "blocked", "source": "cloudflare"}
+               for day, n, last_at in conn.execute("SELECT day, n, last_at FROM blocked_requests "
+                                                   "WHERE day >= date('now', ?)", (f"-{EVENT_DAYS} days",))]
+    total = conn.execute("SELECT count(*) FROM events").fetchone()[0] + len(blocked)
+    where, args = [], []
+    for col, v in (("type", type), ("source", source)):
+        if v:
+            where.append(f"{col} = ?")
+            args.append(v)
+    if who == "-":
+        where.append("user IS NULL")
+    elif who:
+        where.append("user = ?")
+        args.append(who)
+    if since:
+        where.append("at >= ?")
+        args.append(since)
+    if until:
+        where.append("at < ?")
+        args.append(until + "T99")  # through the end of that day
+    if problems:
+        where.append("ok = 0")
+    sql = f"SELECT {EVENT_COLS} FROM events {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY at DESC, id DESC"
+    matched = conn.execute(f"SELECT count(*) FROM ({sql})", args).fetchone()[0]
+    rows = [_event_row(*r) for r in conn.execute(sql + " LIMIT ?", (*args, limit))]
+    keep_blocked = (type in ("", "blocked") and source in ("", "cloudflare") and who in ("", "-"))
+    extra = [b for b in blocked if keep_blocked and (not since or b["at"] >= since) and (not until or b["at"] < until + "T99")]
+    rows = sorted(rows + extra, key=lambda e: e["at"], reverse=True)[:limit]
+    people = [u for (u,) in conn.execute("SELECT DISTINCT user FROM events WHERE user IS NOT NULL ORDER BY user")]
+    return {"events": rows, "matched": matched + len(extra), "total": total, "people": people}
 
 
 def add_blocked(conn: sqlite3.Connection, day: str) -> None:
     with conn:
-        conn.execute("INSERT INTO blocked_requests VALUES (?, 1) ON CONFLICT (day) DO UPDATE SET n = n + 1", (day,))
+        conn.execute("INSERT INTO blocked_requests VALUES (?, 1, ?) ON CONFLICT (day) DO UPDATE SET n = n + 1, last_at = ?",
+                     (day, _now(), _now()))
 
 
 def blocked_on(conn: sqlite3.Connection, day: str) -> int:

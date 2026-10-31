@@ -400,7 +400,9 @@
       <p id="adm-error" class="error"></p>
       <div class="adm-tiles" id="adm-tiles"></div>
       <div class="adm-panel">
-        <h2>Usage, last 30 days <span class="adm-seg" role="group" aria-label="Show"><button type="button" data-k="tracks" aria-pressed="true">Tracks</button><button type="button" data-k="stems" aria-pressed="false">Stem jobs</button></span></h2>
+        <h2>Usage <span class="muted" id="adm-range-label">last 30 days</span>
+          <span class="adm-seg" id="adm-range" role="group" aria-label="Time range"><button type="button" data-r="1" aria-pressed="false">Today</button><button type="button" data-r="7" aria-pressed="false">7 days</button><button type="button" data-r="30" aria-pressed="true">30 days</button><button type="button" data-r="all" aria-pressed="false">All time</button></span>
+          <span class="adm-seg" id="adm-kind" role="group" aria-label="Show"><button type="button" data-k="tracks" aria-pressed="true">Tracks</button><button type="button" data-k="stems" aria-pressed="false">Stem jobs</button><button type="button" data-k="visits" aria-pressed="false">Visits</button><button type="button" data-k="storage" aria-pressed="false">Storage</button><button type="button" data-k="cost" aria-pressed="false">Cost</button></span></h2>
         <div class="adm-chart" id="adm-chart"></div>
         <div class="adm-legend" id="adm-legend"></div>
       </div>
@@ -409,13 +411,23 @@
         <div class="table-wrap"><table class="adm-people" id="adm-people"></table></div>
       </div>
       <div class="adm-two">
-        <div class="adm-panel"><h2>Recent activity <span class="adm-seg" id="adm-logseg" role="group" aria-label="Show"><button type="button" data-k="all" aria-pressed="true">All</button><button type="button" data-k="problems" aria-pressed="false">Problems</button></span></h2><ul class="adm-log" id="adm-log"></ul><p class="adm-loglinks muted" id="adm-loglinks"></p></div>
+        <div class="adm-panel"><h2>Recent activity <span class="adm-seg" id="adm-logseg" role="group" aria-label="Show"><button type="button" data-k="all" aria-pressed="true">All</button><button type="button" data-k="problems" aria-pressed="false">Problems</button></span></h2>
+          <div class="adm-filters" id="adm-filters">
+            <label>What <select id="af-type"></select></label>
+            <label>Who <select id="af-who"></select></label>
+            <label>Source <select id="af-src"></select></label>
+            <label>When <select id="af-when"><option value="">Any time</option><option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="range">Between dates…</option></select></label>
+            <label id="af-range" hidden>From <input type="date" id="af-from" aria-label="Activity from"> to <input type="date" id="af-to" aria-label="Activity until"></label>
+          </div>
+          <p class="adm-count muted"><span id="af-n" role="status" aria-live="polite"></span> <button type="button" class="linklike" id="af-clear" hidden>Clear filters</button></p>
+          <ul class="adm-log" id="adm-log"></ul><p class="adm-loglinks muted" id="adm-loglinks"></p></div>
         <div class="adm-panel">
           <h2>Limits</h2>
           <table class="adm-kv" id="adm-limits"></table>
           <p class="muted">Set with environment variables on the server (docs/hosting.md). They apply after a restart.</p>
           <h2 class="adm-sub">Access</h2>
           <p>Who can sign in is set in Cloudflare Access (Zero Trust, Access, Applications). People appear here after their first sign-in.</p>
+          <p id="adm-cf-apps" hidden><a class="adm-ext" target="_blank" rel="noopener">Edit who can sign in, in Cloudflare ↗</a></p>
           <p id="adm-blocked"></p>
         </div>
       </div>

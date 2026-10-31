@@ -56,6 +56,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_DAILY_DRUMS` | 10 | drum model runs ("Detect drums with the model") each person can start per UTC day |
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
+| `TASTR_CF_ACCOUNT_ID` | none | your Cloudflare account id (32 hex characters, from the dashboard URL); the Admin tab then links to Access's applications and its log of blocked requests. Not secret, but keep it out of the repository |
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
 | `TASTR_BROWSER_ENGINE` | off | `1` has each visitor's browser make the whole card with the Rust engine's WebAssembly build; the server checks it and skips analysis ([ARCHITECTURE.md](ARCHITECTURE.md#browser-engine)). Needs the image's `TASTR_ENGINE_WASM` |
@@ -102,6 +103,23 @@ were refused today (UTC) for a missing or invalid Access token. The log (`events
 stem jobs started, re-analyses, first sign-ins, limits hit, failed analyses, deploys and restarts. A failure keeps only the file
 name and a short reason, never the error text, which can name server paths. Rows older than 90 days are
 dropped as new ones come in. Your own machine keeps no log.
+
+`GET /api/admin/usage?range=1|7|30|all` also returns `series`: per person, tracks, stem jobs, visits and
+bytes stored for each UTC hour of today (`range=1`) or each day of the range (`all` goes back at most a year),
+and each person's `caps` and `override`. A visit is a person's first request after 30 minutes without one. Usage
+per hour (`usage_hours`) is kept two days. Storage per person (`storage_days`) is recorded at the first request
+of each UTC day, every 6 hours and whenever the Admin tab opens; the day keeps its last value.
+
+`GET /api/admin/events?type=&who=&source=&from=&to=&problems=&limit=` filters the activity log on the server:
+`type` is one of upload, analysis, stems, limit, error, signin, blocked, deploy, backup or admin; `who` an email
+or `-` for lines with no person; `source` one of app, modal, flyio, github, cloudflare or r2; `from` and `to`
+UTC days, both included. Blocked requests come back as one Cloudflare line per day. Nothing writes backup or
+GitHub lines yet (a deploy is logged by the server when it starts on Fly).
+
+`PUT /api/admin/limits/{email}` with `{"daily_tracks": 45, "daily_stems": null, "scope": "today"}` changes
+one person's daily caps (`null` = the server default; `scope` `today` ends at 00:00 UTC, `standing` lasts until
+changed), and `DELETE` puts them back on the defaults. The upload and stem checks use the change, and
+`/api/config` returns the caller's own caps. Each change is logged as an admin line.
 
 Admins see an **Admin** tab in the header with all of this: tiles for people, tracks, stem jobs,
 storage, analyses running and an estimated 30-day Modal cost, a per-person chart of the last 30 days,

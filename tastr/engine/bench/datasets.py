@@ -158,6 +158,30 @@ def beatport_key(root: str | Path) -> list[Item]:
     return items
 
 
+def fma_keys(root: str | Path) -> list[Item]:
+    """FMA Keys (FMAK, Zenodo 10719860): Free Music Archive songs across 17 genres, key and mode labeled by
+    an expert annotator, about half major. Full songs, not previews.
+
+    Reads <root>/fma_keys_metadata.csv (track_id, spotify_uri, key_and_mode like "F# Major") and audio
+    named "<track id>.mp3" (zero-padded, as FMA ships it) anywhere under <root>, as `tastr fetch fma-keys`
+    lays it out. Only songs whose zip has been fetched are scored.
+    """
+    root = Path(root)
+    audio = {}
+    for f in root.rglob("*.mp3"):
+        if f.is_file() and not f.name.startswith("._") and f.stem.isdigit():
+            audio[int(f.stem)] = f
+    items = []
+    with (root / "fma_keys_metadata.csv").open(newline="") as fh:
+        for row in csv.DictReader(fh):
+            key = parse_key(row.get("key_and_mode") or "")
+            tid = int(row["track_id"]) if (row.get("track_id") or "").isdigit() else None
+            if key is None or tid not in audio:
+                continue
+            items.append(Item(id=f"fmak-{tid}", path=str(audio[tid]), truth=Truth(tonic=key[0], mode=key[1])))
+    return items
+
+
 def beatport_tempo(root: str | Path) -> list[Item]:
     """Beatport EDM Key previews with the BPM Beatport lists for each track.
 
@@ -294,6 +318,7 @@ DATASETS: dict[str, Callable[..., list[Item]]] = {
     "giantsteps-key": giantsteps_key,
     "giantsteps-tempo": giantsteps_tempo,
     "beatport-key": beatport_key,
+    "fma-keys": fma_keys,
     "beatport-tempo": beatport_tempo,
     "harmonix": harmonix,
     "manifest": manifest,

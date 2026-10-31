@@ -82,6 +82,16 @@ def test_beatport_key_loader(tmp_path):
     assert [(i.id, i.truth.tonic, i.truth.mode) for i in keys] == [("bp-key-201", 10, "minor")]
 
 
+def test_fma_keys_loader(tmp_path):
+    (tmp_path / "fma_keys_metadata.csv").write_text(
+        "track_id,spotify_uri,key_and_mode\n10,spotify:track:x,F# Major\n141,,F minor\n200,,F# Major\n")
+    for name in ("000/000010.mp3", "000/000141.mp3", "000/._000141.mp3"):  # 200 isn't fetched
+        (tmp_path / "audio" / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "audio" / name).write_bytes(b"x")
+    items = datasets.load("fma-keys", str(tmp_path))
+    assert [(i.id, i.truth.tonic, i.truth.mode) for i in items] == [("fmak-10", 6, "major"), ("fmak-141", 5, "minor")]
+
+
 def test_beatport_tempo_loader(tmp_path):
     (tmp_path / "meta").mkdir()
     (tmp_path / "audio").mkdir()

@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
                          "and <dataset>-annotations.json, the files to upload")
 
     kp = sub.add_parser("key-profiles", help="key profiles and labels of a key dataset, for train_key, locally or on Modal")
-    kp.add_argument("dataset", choices=["giantsteps-key", "beatport-key"])
+    kp.add_argument("dataset", choices=["giantsteps-key", "beatport-key", "fma-keys"])
     kp.add_argument("path", help="dataset folder (a bucket folder with --remote)")
     kp.add_argument("--out", required=True, help="the JSON file to write (train_key --profiles)")
     kp.add_argument("--limit", type=int, help="first N tracks")
@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     fe.add_argument("--remote", action="store_true", help="run on Modal, writing into the R2 bucket (docs/cloud.md)")
 
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
-    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, harmonix or manifest")
+    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, harmonix or manifest")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
     b.add_argument("--stages", help="comma-separated stage names (default: core,sections)")
     b.add_argument("--limit", type=int, help="only the first N tracks")

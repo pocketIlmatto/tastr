@@ -4,13 +4,13 @@
       "exact": 0.491,
       "tracks": 1275,
       "what": "tracks, exact key",
-      "run": "2026-10-29"
+      "run": "2026-10-31"
     },
     "beatport-tempo": {
-      "exact": 0.872,
+      "exact": 0.897,
       "tracks": 774,
       "what": "tracks, BPM within 4%",
-      "run": "2026-10-30"
+      "run": "2026-10-31"
     },
     "downbeat": {
       "exact": 0.64,
@@ -19,22 +19,22 @@
       "run": "2026-10-29"
     },
     "giantsteps-key": {
-      "exact": 0.599,
+      "exact": 0.606,
       "tracks": 599,
       "what": "tracks, exact key",
-      "run": "2026-10-29"
+      "run": "2026-10-31"
     },
     "giantsteps-tempo": {
-      "exact": 0.721,
+      "exact": 0.744,
       "tracks": 43,
       "what": "tracks, BPM within 4%",
-      "run": "2026-10-30"
+      "run": "2026-10-31"
     },
     "sections": {
-      "exact": 0.581,
+      "exact": 0.582,
       "tracks": 912,
       "what": "songs, boundary F within 3 s",
-      "run": "2026-10-30"
+      "run": "2026-10-31"
     }
   }
 }

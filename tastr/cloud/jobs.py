@@ -50,10 +50,16 @@ def load_items(dataset: str, folder: Path) -> list:
 
 
 def run_bench(dataset: str, path: str | None, root: str | Path, stages: list[str] | None = None,
-              limit: int | None = None, jobs: int = 1, progress=None) -> dict:
-    """`tastr bench` with `path` relative to `root` (the bucket mount on Modal). Returns the report."""
-    from ..engine import bench
+              limit: int | None = None, jobs: int = 1, progress=None, engine: str | None = None) -> dict:
+    """`tastr bench` with `path` relative to `root` (the bucket mount on Modal). Returns the report.
+    `engine`: "rust" or "python" (TASTR_ENGINE, which the worker processes inherit)."""
+    import os
+
+    from ..engine import bench, rust
     from ..engine.bench import runner
+
+    if engine:
+        os.environ["TASTR_ENGINE"] = engine
 
     t0 = time.time()
     items = load_items(dataset, Path(root) / path) if path else bench.load(dataset)
@@ -62,6 +68,7 @@ def run_bench(dataset: str, path: str | None, root: str | Path, stages: list[str
     load_seconds = round(time.time() - t0, 1)
     report = runner.run(items, stages=stages, jobs=jobs, limit=limit, progress=progress)
     report["timing"] = {"load_seconds": load_seconds, "jobs": jobs}
+    report["engine"] = rust.chosen()
     return report
 
 

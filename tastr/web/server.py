@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .. import db, drum_jobs, lookup, service, stems
+from ..engine import browser_card, rust
 from .analysis_jobs import AnalysisJobs, JobError, new_id, ref
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url, resolve_inputs
@@ -47,6 +48,8 @@ TRACK_PATH = re.compile(r"^/api/tracks/(\d+)(?:/|$)")
 EXPIRY_EVERY = 6 * 3600  # seconds between sweeps for expired audio on a hosted server
 # TASTR_BROWSER_SIGNALS=1: the page runs HPSS itself and uploads it next to the audio (tastr/engine/browser_signals.py,
 # static/signals.js), so the analysis skips it. A signals file is 4 bytes per sample at 22,050 Hz, up to 20 minutes.
+# TASTR_BROWSER_ENGINE=1: the page runs the whole Rust engine (WebAssembly, static/engine.js) and sends the finished
+# card in the same field (tastr/engine/browser_card.py); the server stores it when it checks out.
 SIGNALS_NAME = "signals.tsg"
 MAX_SIGNALS_BYTES = 4 * 22050 * 20 * 60 + 65536
 
@@ -166,6 +169,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     settings = settings or Settings.from_env()
     hosted = settings.hosted
     browser_signals = os.environ.get("TASTR_BROWSER_SIGNALS", "").strip().lower() in ("1", "true", "yes", "on")
+    browser_engine = browser_card.enabled()
     if hosted and verifier is None:
         verifier = AccessVerifier(settings.access_team_domain, settings.access_aud)
     slots = AnalysisSlots(settings.max_analyses) if hosted else None
@@ -334,7 +338,21 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 event(user, "signin", "Signed in for the first time")
         return {"hosted": hosted, "links": not hosted, "query": True, "query_scope": "all" if not hosted or user in settings.admins else "mine", "user": user,
                 "admin": hosted and user in settings.admins, "limits": settings.limits() if hosted else None,
-                "browser_signals": browser_signals}
+                "browser_signals": browser_signals, "browser_engine": browser_engine_cfg()}
+
+    def browser_engine_cfg() -> dict | None:
+        """Where the page gets the engine's WebAssembly build and which build it is, when browser cards are on."""
+        wid = rust.wasm_id() if browser_engine else None
+        return {"wasm": f"/engine/{rust.WASM_NAME}?v={wid}", "engine": wid} if wid else None
+
+    @app.get(f"/engine/{rust.WASM_NAME}")
+    def engine_wasm():
+        """The Rust engine's WebAssembly build (TASTR_BROWSER_ENGINE). Its URL carries its hash, so it caches."""
+        path = rust.wasm_path() if browser_engine else None
+        if path is None:
+            raise HTTPException(404, "Not Found")
+        return FileResponse(path, media_type="application/wasm",
+                            headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
     @app.get("/api/admin/usage")
     def admin_usage(request: Request):
@@ -789,7 +807,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                              f"{name} is {minutes:.0f} minutes long. This server analyzes tracks up to "
                              f"{settings.max_minutes:g} minutes, so a long mix needs cutting into shorter files first.",
                              f"track length limit ({settings.max_minutes:g} min)", f"{name}, {minutes:.0f} min")
-        sig = save_signals(signals[0], Path(paths[0])) if browser_signals and signals and len(signals) == len(paths) == 1 else {}
+        sig = save_signals(signals[0], Path(paths[0])) if (browser_signals or browser_engine) and signals and len(signals) == len(paths) == 1 else {}
         given = [Path(p).name for p in paths]
         job_id = new_id()
         if hosted:

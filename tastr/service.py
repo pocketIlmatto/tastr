@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import db
-from .engine import analyze_file
+from .engine import analyze_file, browser_card
 from .engine.card import Source, TrackCard
 from .ingest import file_sha256, resolve_inputs
 
@@ -51,9 +51,28 @@ def analyze_source(conn: sqlite3.Connection, source: Source, stages: list[str] |
 
 
 def _analyze(source: Source, stages: list[str] | None, options: dict | None, on_stage=None, signals=None):
-    """The engine, here or (TASTR_ANALYSIS_BACKEND=modal, a hosted server) on Modal, where only the audio
-    (and the browser's signals, if any) go."""
+    """The card the browser made, when it sent one that checks out (engine/browser_card.py); otherwise the
+    engine, here or (TASTR_ANALYSIS_BACKEND=modal, a hosted server) on Modal."""
     data = Path(signals).read_bytes() if signals else None
+    set_aside = None
+    if browser_card.is_card(data):  # the page made the whole card (TASTR_BROWSER_ENGINE)
+        try:
+            return browser_card.load(data, source)
+        except browser_card.BrowserCardError as e:
+            log.warning("browser card for %s set aside: %s", source.uri, e)
+            set_aside, data = f"set aside: {e}", None
+    card = _analyze_audio(source, stages, options, on_stage, data)
+    if set_aside:
+        card.extras["browser_card"] = set_aside
+    return card
+
+
+def _analyze_audio(source: Source, stages: list[str] | None, options: dict | None, on_stage, data: bytes | None):
+    """The engine, here or on Modal, where only the audio (and the browser's signals, if any) go. TASTR_ENGINE
+    travels in the options, so Modal uses the engine this server is set to."""
+    engine = os.environ.get("TASTR_ENGINE", "").strip().lower()
+    if engine and "engine" not in (options or {}):  # so it reaches Modal too, where the setting isn't
+        options = {**(options or {}), "engine": engine}
     if os.environ.get("TASTR_ANALYSIS_BACKEND", "local") == "modal":
         from .cloud import remote
 

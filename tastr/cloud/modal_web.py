@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import modal
 
+from tastr.cloud.rust_image import with_rust_engine
+
 APP_NAME = "tastr-web"
 
 # Same as modal_app.py (tests/test_cloud.py keeps them in step).
@@ -54,9 +56,9 @@ def _warm_drums() -> None:
     _warm()
 
 
+# The Rust engine's library goes in too (tastr/cloud/rust_image.py), for servers set to TASTR_ENGINE=rust.
 image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("ffmpeg", "libsndfile1")
+    with_rust_engine(modal.Image.debian_slim(python_version="3.12").apt_install("ffmpeg", "libsndfile1"))
     .pip_install(*ENGINE_DEPS, *PINS)
     .env({"NUMBA_CACHE_DIR": NUMBA_CACHE})
     .add_local_python_source("tastr", copy=True)  # copied, so the warm-up below can run against it

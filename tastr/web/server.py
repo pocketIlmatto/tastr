@@ -679,12 +679,10 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             raise HTTPException(403, "The SQL query box is turned off on this server.")
         path = db_path or db.default_db_path()
         try:
-            with closing(db.connect(path, readonly=True)) as c:
-                cur = c.execute(body.sql)
-                columns = [d[0] for d in cur.description] if cur.description else []
-                rows = [list(r) for r in cur.fetchmany(MAX_QUERY_ROWS)]
+            columns, rows = db.run_query(path, body.sql, MAX_QUERY_ROWS)
         except sqlite3.Error as e:
-            raise HTTPException(400, str(e))
+            msg = "The query took too long and was stopped." if str(e) == "interrupted" else str(e)
+            raise HTTPException(400, msg)
         return {"columns": columns, "rows": rows}
 
     page = versioned_index()

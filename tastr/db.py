@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -491,6 +493,22 @@ def retag_track(conn: sqlite3.Connection, track_id: int) -> str:
         conn.execute("UPDATE tracks SET title = ?, artist = ?, album = ? WHERE id = ?", (s.title, s.artist, s.album, track_id))
         conn.execute("UPDATE cards SET json = ? WHERE track_id = ?", (card.to_json(), track_id))
     return "changed"
+
+
+# What a read-only query may do: read tables, call functions and use WITH RECURSIVE. Everything else (ATTACH, which
+# could open or create another database file even on a read-only connection, PRAGMA, any write) is refused.
+_QUERY_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, getattr(sqlite3, "SQLITE_RECURSIVE", 33)}
+
+
+def run_query(path: str | os.PathLike, sql: str, max_rows: int, seconds: float = 5.0) -> tuple[list[str], list[list]]:
+    """Run one SELECT on a read-only connection: only the actions above, stopped after `seconds`, at most `max_rows` rows."""
+    deadline = time.monotonic() + seconds
+    with closing(connect(path, readonly=True)) as conn:
+        conn.set_authorizer(lambda action, *_: sqlite3.SQLITE_OK if action in _QUERY_ACTIONS else sqlite3.SQLITE_DENY)
+        conn.set_progress_handler(lambda: time.monotonic() > deadline, 10_000)  # a true return interrupts the query
+        cur = conn.execute(sql)
+        columns = [d[0] for d in cur.description] if cur.description else []
+        return columns, [list(r) for r in cur.fetchmany(max_rows)]
 
 
 def usage_today(conn: sqlite3.Connection, user: str, kind: str, day: str) -> int:

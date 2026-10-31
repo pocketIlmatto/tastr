@@ -79,12 +79,13 @@ sequenceDiagram
   C->>W: request + Cf-Access-Jwt-Assertion
   W->>W: verify the token, read the email
   Note over W: a stopped machine wakes here (a few seconds)
+  B->>B: file size and length within the limits?
   opt TASTR_BROWSER_SIGNALS is on
     B->>B: decode the file, run HPSS in a worker (signals.js)
   end
   B->>C: upload a track (+ its signals file)
   C->>W: upload + token
-  W->>W: check limits, save the file on the volume
+  W->>W: check limits (size, length from the header), save the file on the volume
   W-->>B: a job id (the upload is done)
   W->>M: audio bytes (+ signals)
   Note over M: cold start about 30 s after a quiet spell
@@ -143,7 +144,7 @@ Four layers, each assuming the one before it might be bypassed.
    token means 401, except `/api/health` and signed `/pub/` links. Without both settings the server won't
    start.
 3. **Per-person libraries and limits.** Each track belongs to the email that uploaded it; anyone else gets
-   404. Uploads, stems, drum model runs, storage and concurrent analyses are capped; link downloads and API docs are off; the SQL box
+   404. Uploads (size and length), stems, drum model runs, storage and concurrent analyses are capped; link downloads and API docs are off; the SQL box
    reads a copy of the person's own library (admins: the whole database), only SELECTs, for at most 2 s; errors don't name server paths; responses carry CSP and HSTS headers.
 4. **Signed Strudel links.** strudel.cc can't sign in, so the `/pub` Bypass application lets it through
    Cloudflare. Tastr checks each link itself: an HMAC with `TASTR_LINK_SECRET` over one track id and an expiry
@@ -179,7 +180,7 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 | `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#9b-catalog-lookups-optional)) |
 
 These have defaults and change only if you set a Fly secret of the same name ([hosting.md](hosting.md#settings)):
-`TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
+`TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
 `TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`. `TASTR_BROWSER_SIGNALS=1` (off by default) has the browser run HPSS
 before uploading.
 

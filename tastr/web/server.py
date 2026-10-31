@@ -28,7 +28,7 @@ from .. import db, drum_jobs, lookup, service, stems
 from .analysis_jobs import AnalysisJobs, JobError
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url, resolve_inputs
-from .hosted import (HEALTH_PATH, LINK_DAYS, PUBLIC_PREFIX, TOKEN_HEADER, AccessVerifier, AnalysisSlots, LinkSigner,
+from .hosted import (HEALTH_PATH, LINK_DAYS, PUBLIC_PREFIX, TOKEN_HEADER, AccessVerifier, AnalysisSlots, LinkSigner, audio_minutes,
                      Settings, expire_audio, file_bytes, inline_script_hashes, security_headers, stored_bytes, today)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -110,7 +110,29 @@ def _unprefixed(title: str | None, uri: str | None) -> str | None:
 def _failure_reason(error: str | None) -> str:
     """A short reason for the admin log, without the error text (which can name server paths)."""
     kind = (error or "").split(":", 1)[0]
-    return "it couldn't be decoded as audio" if kind == "DecodeError" else f"the analysis hit an error ({kind or 'unknown'})"
+    if kind == "DecodeError":
+        return "it couldn't be decoded as audio"
+    if _ran_out(error):
+        return f"it ran out of {_ran_out(error)} on Modal ({kind or 'unknown'})"
+    return f"the analysis hit an error ({kind or 'unknown'})"
+
+
+def _ran_out(error: str | None) -> str | None:
+    """"memory" or "time" when a Modal analysis was stopped for using too much of it, else None."""
+    e = (error or "").lower()
+    if "timeout" in e or "timed out" in e:
+        return "time"
+    if "memory" in e or "oom" in e.split(":", 1)[0]:
+        return "memory"
+    return None
+
+
+def _hosted_error(error: str | None, settings: Settings) -> str:
+    """What a friend sees when an analysis fails: no error text (it can name server paths), but why if it's known."""
+    if _ran_out(error):
+        return (f"The server ran out of {_ran_out(error)} analyzing this file. Tracks up to {settings.max_minutes:g} "
+                "minutes work best; try a shorter file.")
+    return "Couldn't analyze this file."
 
 
 def _cross_site(request) -> bool:
@@ -264,7 +286,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                     log.warning("analysis failed for %s: %s", r.source.uri, r.error)
                     event(user, "failed", f"Analysis failed: {Path(r.source.uri or 'upload').name}, {_failure_reason(r.error)}",
                           ok=False)
-                    r.error = "Couldn't analyze this file."
+                    r.error = _hosted_error(r.error, settings)
         return _results(rs)
 
     def analysis_slot():
@@ -699,12 +721,17 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                         break
                     out.write(chunk)
             if hosted and size > settings.max_upload_bytes:
-                for p in [dest, *map(Path, paths)]:  # nothing from a refused request stays on disk
-                    p.unlink(missing_ok=True)
-                    p.parent.rmdir()
+                discard([dest, *map(Path, paths)])
                 raise refuse(request.state.user, 413, f"{name} is larger than {settings.max_upload_mb:g} MB.",
                              f"upload size limit ({settings.max_upload_mb:g} MB)")
             paths.append(str(dest))
+            minutes = audio_minutes(dest) if hosted else None
+            if minutes is not None and minutes > settings.max_minutes:
+                discard(map(Path, paths))
+                raise refuse(request.state.user, 413,
+                             f"{name} is {minutes:.0f} minutes long. This server analyzes tracks up to "
+                             f"{settings.max_minutes:g} minutes, so a long mix needs cutting into shorter files first.",
+                             f"track length limit ({settings.max_minutes:g} min)")
         sig = save_signals(signals[0], Path(paths[0])) if browser_signals and signals and len(signals) == len(paths) == 1 else {}
         if hosted:
             event(request.state.user, "upload", f"Uploaded {len(paths)} track{'s' if len(paths) != 1 else ''}")
@@ -723,6 +750,12 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if hosted:  # only tracks that analyzed count toward the daily limit, so a failed try can be retried
                 db.add_usage(c, request.state.user, "tracks", today(), sum(r.track_id is not None for r in rs))
             return results(rs, owner_of(request))
+
+    def discard(files) -> None:
+        """Nothing from a refused upload stays on disk."""
+        for p in files:
+            p.unlink(missing_ok=True)
+            p.parent.rmdir()
 
     def save_signals(upload: UploadFile, audio: Path) -> dict[str, str]:
         """Store an upload's browser signals next to its audio until the analysis has read them: {audio: signals}.

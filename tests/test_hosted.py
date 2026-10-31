@@ -142,6 +142,47 @@ def test_oversized_upload_leaves_nothing_on_disk(db_path, home):
     assert [p for p in (home / "uploads").rglob("*") if p.is_file()] == []
 
 
+def _wav(seconds: float) -> bytes:
+    import io
+
+    import numpy as np
+    import soundfile as sf
+
+    buf = io.BytesIO()
+    sf.write(buf, np.zeros(int(seconds * 8000), dtype=np.float32), 8000, format="WAV")
+    return buf.getvalue()
+
+
+def test_too_long_upload_is_refused_before_analysis(db_path, home):
+    c = make_client(db_path, max_minutes=0.05)  # 3 seconds
+    r = upload(c, ("short.wav", _wav(1)), ("mix.wav", _wav(6)))
+    assert r.status_code == 413 and "mix.wav" in r.json()["detail"] and "minutes" in r.json()["detail"]
+    assert [p for p in (home / "uploads").rglob("*") if p.is_file()] == []
+    conn = db.connect(db_path)
+    assert "track length limit" in db.recent_events(conn)[0]["detail"]
+    assert db.usage_today(conn, "friend@example.com", "tracks", hosted.today()) == 0
+
+
+def test_length_unknown_is_left_to_the_analysis(tmp_path):
+    p = tmp_path / "odd.mp3"
+    p.write_bytes(b"not audio")
+    assert hosted.audio_minutes(p) is None
+    p = tmp_path / "ok.wav"
+    p.write_bytes(_wav(3))
+    assert hosted.audio_minutes(p) == pytest.approx(0.05)
+
+
+def test_out_of_memory_says_why():
+    from tastr.web.server import _failure_reason, _hosted_error
+
+    s = Settings(max_minutes=12)
+    for err in ("FunctionTimeoutError: Task's current input hit its timeout of 600s",
+                "RemoteError: Task exited with OOM (out of memory)"):
+        assert "ran out of" in _hosted_error(err, s) and "12 minutes" in _hosted_error(err, s)
+        assert "ran out of" in _failure_reason(err)
+    assert _hosted_error("DecodeError: /data/uploads/x", s) == "Couldn't analyze this file."
+
+
 def test_daily_track_limit_per_person(db_path, home):
     c = make_client(db_path, daily_tracks=3)
     conn = db.connect(db_path)

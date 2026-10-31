@@ -127,12 +127,20 @@ function nap(ms) {
     document.addEventListener("visibilitychange", vis);
   });
 }
+// An error reply's message: the server's own `detail`, else something readable. A reply that isn't the app's
+// (Cloudflare or Fly answering for it: a timeout, a restart) has no detail, and over HTTP/2 no status text either.
+function httpError(status, detail, statusText) {
+  if (detail) return typeof detail === "string" ? detail : JSON.stringify(detail);
+  if ([502, 503, 504, 520, 522, 524].includes(status)) return `The server didn't answer in time (error ${status}). It may have restarted; try again in a minute.`;
+  if (status === 413) return "This file is too large for the server.";
+  return statusText || `The server answered with error ${status}.`;
+}
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) {
-    let msg = r.statusText;
-    try { const j = await r.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch (_) {}
-    throw new Error(msg);
+    let detail = null;
+    try { detail = (await r.json()).detail; } catch (_) {}
+    throw new Error(httpError(r.status, detail, r.statusText));
   }
   return r.status === 204 ? null : r.json();
 }
@@ -199,7 +207,7 @@ function shortError(err) {
   if (!err) return "";
   if (/^DecodeError/.test(err)) return "It couldn't be decoded as audio.";
   const line = err.split("\n")[0].replace(/\S*[\\/]uploads[\\/]\w{8}_/g, "");
-  return line.length > 120 ? line.slice(0, 117) + "…" : line;
+  return line.length > 200 ? line.slice(0, 197) + "…" : line;
 }
 // One placeholder row: the step it's on, elapsed time and a bar while it runs; where it stopped if it failed.
 function pendingLi(p) {
@@ -2304,7 +2312,7 @@ async function runBatch(items, rows) {
       uploaded = 1;
       if (r && r.id && !r.results) r = await followJob(r, row, update);
       results = (r && r.results) || [];
-    } catch (e) { results = [{ track_id: null, title: row.name, error: e.message, stage: row.stage }]; }
+    } catch (e) { results = [{ track_id: null, title: row.name, error: e.message || "The upload failed with no reply from the server.", stage: row.stage }]; }
     clearInterval(tick);
     const bad = results.filter((r) => r.error);
     const ok = results.filter((r) => r.track_id != null);
@@ -2333,16 +2341,40 @@ function postWithProgress(path, body, onProgress) {
       let j = null;
       try { j = JSON.parse(x.responseText); } catch (_) {}
       if (x.status >= 200 && x.status < 300) resolve(j);
-      else reject(new Error(j && j.detail ? (typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)) : x.statusText || `Error ${x.status}`));
+      else reject(new Error(httpError(x.status, j && j.detail, x.statusText)));
     };
     x.onerror = () => reject(new Error("Couldn't reach the server."));
     x.send(body);
   });
 }
+// A file's length in minutes from its header, read by the browser without uploading it (null if it can't tell).
+function audioMinutes(file) {
+  return new Promise((resolve) => {
+    const a = new Audio(), url = URL.createObjectURL(file);
+    const done = (v) => { clearTimeout(t); URL.revokeObjectURL(url); a.removeAttribute("src"); resolve(v); };
+    const t = setTimeout(() => done(null), 5000);
+    a.preload = "metadata";
+    a.onloadedmetadata = () => done(Number.isFinite(a.duration) ? a.duration / 60 : null);
+    a.onerror = () => done(null);
+    a.src = url;
+  });
+}
+// A hosted server's size and length limits, checked before uploading so a file it would refuse fails at once
+// (the server checks again).
+async function checkUpload(f) {
+  const L = serverCfg.limits;
+  if (!L) return;
+  if (L.max_upload_mb && f.size > L.max_upload_mb * 1024 * 1024)
+    throw new Error(`${f.name} is ${Math.round(f.size / 1048576)} MB; this server takes files up to ${L.max_upload_mb} MB.`);
+  const min = L.max_minutes ? await audioMinutes(f) : null;
+  if (min != null && min > L.max_minutes)
+    throw new Error(`${f.name} is ${Math.round(min)} minutes long. This server analyzes tracks up to ${L.max_minutes} minutes, so a long mix needs cutting into shorter files first.`);
+}
 function uploadFiles(files) {
   analyzeBatch(files.map((f) => ({
     name: f.name,
     send: async (onProgress, onMeasure) => {
+      await checkUpload(f);
       const fd = new FormData();
       fd.append("files", f);
       const sig = serverCfg.browser_signals ? await measureInBrowser(f, onMeasure) : null;
@@ -2836,7 +2868,7 @@ function renderAdmin() {
   $("adm-log").replaceChildren(...(A.recent.length ? A.recent.map((e) => h("li", { class: e.ok ? "" : "warn" },
     h("time", { datetime: e.at, title: e.at }, admAgo(e.at)),
     h("span", {}, e.user ? h("b", { title: e.user }, admName(e.user) + " ") : null, h("span", {}, e.detail)))) : [h("li", { class: "muted" }, "Nothing yet.")]));
-  const kv = [["Upload size", `${L.max_upload_mb} MB`, "TASTR_MAX_UPLOAD_MB"], ["Files per upload", L.max_files, "TASTR_MAX_FILES"],
+  const kv = [["Upload size", `${L.max_upload_mb} MB`, "TASTR_MAX_UPLOAD_MB"], ["Track length", `${L.max_minutes} min`, "TASTR_MAX_MINUTES"], ["Files per upload", L.max_files, "TASTR_MAX_FILES"],
     ["Tracks per person per day", L.daily_tracks, "TASTR_DAILY_TRACKS"], ["Stem jobs per person per day", L.daily_stems, "TASTR_DAILY_STEMS"],
     ["Total storage", `${L.storage_gb} GB`, "TASTR_STORAGE_GB"], ["Analyses at once", L.max_analyses, "TASTR_MAX_ANALYSES"],
     ["Modal budget (friends env)", `$${ADM_BUDGET}/mo`, "set in Modal"]];

@@ -227,8 +227,8 @@ steps for the model (after the Rust port): a weaker minor lean or a genre-balanc
 at the semitone-flat tuning cluster.
 
 The first run also had 8 songs the Rust decoder refused: symphonia 0.5's ID3v2 reader rejects a file at
-probe time when any ID3v2.4 frame is flagged compressed ("id3v2: compressed frames are not supported"). ffmpeg and librosa read them fine. The app already falls back to Python decoding for such files, and
-PR #53 makes the bench do the same.
+probe time when any ID3v2.4 frame is flagged compressed ("id3v2: compressed frames are not supported"). ffmpeg and librosa read them fine. PR #53 makes the Rust decoder retry past the leading ID3v2 tags, and
+adds the same Python fallback to the bench that the app already has.
 
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).

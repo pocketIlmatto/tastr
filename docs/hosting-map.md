@@ -32,12 +32,12 @@ flowchart TB
     BYP[Access app on /pub: Bypass]
   end
   subgraph FLY[Fly.io app tastr-frienz]
-    WEB[Tastr web server, 512 MB]
+    WEB[Tastr web server, 512 MB, serves the Rust engine's WebAssembly build]
     VOL[(Volume tastr_data at /data: tastr.db, uploads, stems, analysis-jobs, optional AcousticBrainz index)]
     LS[Litestream]
   end
   subgraph MOD[Modal app tastr-web, environment friends]
-    AN[analyze_stream, 2 CPUs]
+    AN[analyze_stream, 2 CPUs, Python engine or Rust library]
     AD[analyze_drums, 2 CPUs + PyTorch + drum model]
     ST[stems, T4 GPU]
   end
@@ -80,14 +80,21 @@ sequenceDiagram
   W->>W: verify the token, read the email
   Note over W: a stopped machine wakes here (a few seconds)
   B->>B: file size and length within the limits?
-  opt TASTR_BROWSER_SIGNALS is on
+  opt TASTR_BROWSER_ENGINE is on
+    B->>W: GET /engine/tastr_engine.wasm (once, then cached)
+    B->>B: decode and analyze the whole track in a worker (engine.js)
+  end
+  opt TASTR_BROWSER_SIGNALS is on, and no card was made
     B->>B: decode the file, run HPSS in a worker (signals.js)
   end
-  B->>C: upload a track (+ its signals file)
+  B->>C: upload a track (+ its card or signals file)
   C->>W: upload + token
   W->>W: check limits (size, length from the header), save the file on the volume
   W-->>B: a job id (the upload is done)
-  W->>M: audio bytes (+ signals)
+  opt a card came and checks out
+    W->>W: save the card, skip Modal
+  end
+  W->>M: audio bytes (+ signals), with TASTR_ENGINE in the options
   Note over M: cold start about 30 s after a quiet spell
   loop every 1-2 s until done
     M--)W: the step it's on (decode, core, sections...)
@@ -105,6 +112,14 @@ With `TASTR_BROWSER_SIGNALS` on, the page first decodes the file and runs HPSS, 
 and uploads the result next to the audio (`signals.tsg` in the upload's folder, deleted once read). Modal's
 `analyze_stream` then analyzes that audio and skips HPSS; if the signals don't fit the file, it does the work
 itself. Off by default; see [ARCHITECTURE.md](ARCHITECTURE.md#browser-signals).
+
+With `TASTR_BROWSER_ENGINE` on, the page goes further: it downloads the Rust engine's WebAssembly build from the
+server (`/engine/tastr_engine.wasm`, about 2 MB, cached by its hash), makes the whole card in a worker and uploads
+it with the audio. The server stores that card without calling Modal when it checks out: made by the build the
+server serves now, every stage at the engine's versions, as long as the file (`tastr/engine/browser_card.py`).
+Otherwise, and for Opus files, tracks over 20 minutes or any failure in the browser, Modal analyzes the file as
+usual. `TASTR_ENGINE=rust` has Modal use the Rust engine too (the server passes it along with each request), so a
+card is the same wherever it was made. Both are off by default; see [rust-engine.md](rust-engine.md).
 
 The job's state is a small file under `analysis-jobs/` on the volume too, so if the machine stops mid-analysis,
 the page hears that it failed and can upload again. An app deployed before `analyze_stream` existed still
@@ -127,7 +142,8 @@ volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops an
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
 | HPSS (optional) | The visitor's browser | With `TASTR_BROWSER_SIGNALS` on, `tastr/web/static/signals.js` runs it in a worker and the upload carries it. |
-| Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. |
+| Whole analysis (optional) | The visitor's browser | With `TASTR_BROWSER_ENGINE` on, `tastr/web/static/engine.js` runs the Rust engine's WebAssembly build in a worker and the upload carries the card. The Docker image builds the `.wasm` in a Rust stage and the server serves it from `TASTR_ENGINE_WASM`. |
+| Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. The image builds the Rust engine's library too (`tastr/cloud/rust_image.py`), used when the server sets `TASTR_ENGINE=rust`. |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
@@ -183,7 +199,8 @@ These have defaults and change only if you set a Fly secret of the same name ([h
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
 `TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`, and `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin
 tab's Modal link opens the app). `TASTR_BROWSER_SIGNALS=1` (off by default) has the browser run HPSS
-before uploading. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
+before uploading, `TASTR_BROWSER_ENGINE=1` (off by default) has it make the whole card with the Rust engine, and
+`TASTR_ENGINE=rust` (default `python`) has Modal analyze with the Rust engine. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
 (a change since the last start is logged as a deploy) on its own. The deploy workflow builds `TASTR_COMMIT`,
 `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` into the image (Docker build arguments, not secrets), so the
 Admin tab's deploy line names the commit and links to its GitHub Actions run.

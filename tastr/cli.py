@@ -145,6 +145,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="save the local folder's track list to tastr-index-DATASET.json for fast --remote runs")
     b.add_argument("--remote", action="store_true",
                    help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
+    b.add_argument("--engine", choices=["python", "rust"],
+                   help="which engine analyzes (default: TASTR_ENGINE, else python); rust always runs every stage")
     b.add_argument("--record", action="store_true",
                    help="save the headline score to tastr/engine/bench_scores.json, quoted in the UI (full runs only)")
 
@@ -191,7 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         t0 = time.time()
         try:
             report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
-                                  jobs=args.jobs if args.jobs > 1 else None)
+                                  jobs=args.jobs if args.jobs > 1 else None,
+                                  **({"engine": args.engine} if args.engine else {}))
         except (remote.RemoteError, ValueError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
@@ -226,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         def progress(i, n, row):
             print(f"\r{i}/{n} {row['id'][:50]:50}", end="", file=sys.stderr, flush=True)
 
+        if args.engine:
+            os.environ["TASTR_ENGINE"] = args.engine
         stages = args.stages.split(",") if args.stages else None
         report = runner.run(items, stages=stages, jobs=args.jobs, limit=args.limit, progress=progress)
         print(file=sys.stderr)

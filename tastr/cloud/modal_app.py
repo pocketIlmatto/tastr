@@ -14,6 +14,8 @@ import time
 
 import modal
 
+from tastr.cloud.rust_image import with_rust_engine
+
 _IMPORTED = time.time()  # in the container: when it finished starting and imported this module
 
 APP_NAME = "tastr"
@@ -30,9 +32,9 @@ STEMS_DEPS = ["demucs>=4.0.1"]  # the `stems` extra
 # Versions known to work together (docs/bench.md): librosa 1.0 with numba 0.68 and numpy 2.5 segfaults.
 PINS = ["numpy<2.3", "numba==0.61.2", "llvmlite==0.44.0", "librosa==0.11.0", "scipy<1.16"]
 
+# With the Rust engine's library (tastr/cloud/rust_image.py), so `tastr bench --remote --engine rust` works.
 image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("ffmpeg", "libsndfile1")
+    with_rust_engine(modal.Image.debian_slim(python_version="3.12").apt_install("ffmpeg", "libsndfile1"))
     .pip_install(*ENGINE_DEPS, *PINS, "zstandard")  # zstandard: `fetch acousticbrainz` reads .tar.zst dumps
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
     .add_local_python_source("tastr")
@@ -63,11 +65,11 @@ BENCH_CPUS = 8
 
 @app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3 * 3600, volumes={DATA: datasets})
 def bench(dataset: str, path: str | None = None, stages: list[str] | None = None, limit: int | None = None,
-          jobs: int | None = None) -> dict:
+          jobs: int | None = None, engine: str | None = None) -> dict:
     called = time.time()
     from tastr.cloud.jobs import run_bench
 
-    report = run_bench(dataset, path, DATA, stages=stages, limit=limit, jobs=jobs or BENCH_CPUS)
+    report = run_bench(dataset, path, DATA, stages=stages, limit=limit, jobs=jobs or BENCH_CPUS, engine=engine)
     report["timing"] |= {"container_started": _IMPORTED, "called": called, "import_seconds": round(time.time() - called - report["timing"]["load_seconds"] - report["seconds"], 1)}
     return report
 
@@ -129,18 +131,21 @@ def stems(audio: bytes, suffix: str) -> dict[str, bytes]:
 
 
 @app.local_entrypoint()
-def run_branch(kind: str, dataset: str, path: str, stages: str = "", limit: int = 0, out: str = ""):
+def run_branch(kind: str, dataset: str, path: str, stages: str = "", limit: int = 0, out: str = "",
+               engine: str = ""):
     """Bench a branch's code without deploying it, so the shared app stays as is:
 
         modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --stages core
         modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this   # any spec-bench
+        modal run tastr/cloud/modal_app.py --kind bench --dataset giantsteps-key --path giantsteps-key --engine rust
 
     `modal run` uploads the working tree to a temporary app that stops when the run ends.
     """
     import json
 
     if kind == "bench":
-        report = bench.remote(dataset, path, [s for s in stages.split(",") if s] or None, limit or None)
+        report = bench.remote(dataset, path, [s for s in stages.split(",") if s] or None, limit or None,
+                              engine=engine or None)
     else:
         report = spec_bench.remote(kind, dataset, path, limit or None)
     text = json.dumps(report, indent=1)

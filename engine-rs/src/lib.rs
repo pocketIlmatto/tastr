@@ -22,6 +22,9 @@ pub use features::Matrix;
 
 pub const SR: u32 = 22050;
 
+/// The crate version, so callers can tell which engine made a card.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Mono audio at 22,050 Hz from file bytes.
 pub fn load(bytes: Vec<u8>) -> Result<Vec<f32>, String> {
     let d = decode::decode(bytes)?;
@@ -141,6 +144,36 @@ pub mod ffi {
             }
             Err(_) => -1,
         }
+    }
+
+    /// The same from audio already decoded: `n` mono float32 samples at 22,050 Hz at `ptr`, which must come
+    /// from `tastr_alloc(4 * n)` and is freed here. The server and the benchmarks use it to analyze audio they
+    /// decoded themselves.
+    ///
+    /// # Safety
+    /// `ptr` must come from `tastr_alloc(4 * n)` and hold `n` written floats.
+    #[no_mangle]
+    pub unsafe extern "C" fn tastr_card_f32(ptr: *mut u8, n: usize, beats_per_bar: i32) -> i32 {
+        let bytes = unsafe { Vec::from_raw_parts(ptr, 4 * n, 4 * n) };
+        let y: Vec<f32> = bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+        drop(bytes);
+        let meter = if beats_per_bar > 0 { Some(beats_per_bar as i64) } else { None };
+        let s = card_json(y, meter);
+        let len = s.len() as i32;
+        CARD.with(|c| *c.borrow_mut() = s);
+        len
+    }
+
+    /// The crate version (engine-rs/Cargo.toml), as UTF-8 at the returned pointer; its length from
+    /// `tastr_version_len`.
+    #[no_mangle]
+    pub extern "C" fn tastr_version() -> *const u8 {
+        VERSION.as_ptr()
+    }
+
+    #[no_mangle]
+    pub extern "C" fn tastr_version_len() -> usize {
+        VERSION.len()
     }
 
     #[no_mangle]

@@ -3,4 +3,6 @@
 !README.md
 !tastr/
 !deploy/
+!engine-rs/
+engine-rs/target
 **/__pycache__

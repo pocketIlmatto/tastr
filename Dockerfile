@@ -1,5 +1,14 @@
 # The hosted Tastr web server for Fly.io (docs/deploy.md). Analysis and stems run on Modal
 # (tastr/cloud/modal_web.py), so this image has no Demucs or PyTorch and the server fits in 512 MB.
+
+# The Rust engine's WebAssembly build, which the server hands to browsers with TASTR_BROWSER_ENGINE on
+# (docs/rust-engine.md). Only the .wasm file (about 2 MB) goes into the server image.
+FROM rust:1.97.0-slim AS engine
+RUN rustup target add wasm32-unknown-unknown
+WORKDIR /src
+COPY engine-rs ./
+RUN cargo build --release --lib --target wasm32-unknown-unknown --locked
+
 FROM python:3.12-slim
 
 # Litestream streams every change to the library database to R2, and restores it onto a new volume.
@@ -19,9 +28,10 @@ ARG TASTR_COMMIT=""
 ARG TASTR_COMMIT_SUBJECT=""
 ARG TASTR_DEPLOY_RUN=""
 ENV TASTR_COMMIT=$TASTR_COMMIT TASTR_COMMIT_SUBJECT=$TASTR_COMMIT_SUBJECT TASTR_DEPLOY_RUN=$TASTR_DEPLOY_RUN
+COPY --from=engine /src/target/wasm32-unknown-unknown/release/tastr_engine.wasm /app/engine/tastr_engine.wasm
 COPY deploy/litestream.yml /etc/litestream.yml
 COPY deploy/start.sh /app/start.sh
 
-ENV TASTR_HOME=/data PYTHONUNBUFFERED=1
+ENV TASTR_HOME=/data PYTHONUNBUFFERED=1 TASTR_ENGINE_WASM=/app/engine/tastr_engine.wasm
 EXPOSE 8080
 CMD ["/app/start.sh"]

@@ -98,6 +98,20 @@ What was measured (2026-10-31), with `tests/test_browser_signals.py` keeping the
 - `hpssHarmonic` matches `signals.hpss` to about 1e-7, about 3 s for a 3-minute track in Node on one core.
 - In Chromium, an MP3 and a WAV analyzed from the browser's signals got the same BPM, key, downbeats (within
   1 ms) and sections as the server decoding the file itself.
+
+## Browser engine
+
+`TASTR_BROWSER_ENGINE=1` (off by default) goes further than browser signals: the page runs the Rust engine's
+WebAssembly build (`/engine/tastr_engine.wasm`, built into the image) on the upload in a worker
+(`tastr/web/static/engine.js`) and sends the finished card with the audio, so the server runs no analysis.
+`tastr/engine/browser_card.py` takes the card only if it was made by the build the server serves now (a hash
+of the wasm file), ran every stage at the server's versions and sample rate, and lasts as long as the file;
+otherwise it is set aside (`extras["browser_card"]` says why) and the server analyzes as usual. Opus files,
+tracks over 20 minutes, and browsers without WebAssembly fall back to browser signals or the server.
+
+`TASTR_ENGINE=rust` makes the server's own cards with the same engine, natively through ctypes
+(`tastr/engine/rust.py`), so browser and server cards agree byte for byte. See
+[rust-engine.md](rust-engine.md).
 - On four synthetic tracks, the only differences from the server-only card were drum velocities, a few
   vibe scores in the third decimal and, on one track, one ghost note in a drum lane. All of them come from the
   int16 rounding: with float32 audio the cards matched except for one velocity. Float32 would double the

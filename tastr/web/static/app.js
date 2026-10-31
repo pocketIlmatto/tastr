@@ -84,6 +84,7 @@ function vibeBody(c) {
 let tracks = [];
 let tagsByTrack = {};
 let currentId = null;
+let labels = new Map(), reviewRows = []; // your labels by track id, and the review list (GET /api/labels, /api/review)
 
 // ---------- helpers ----------
 function h(tag, attrs, ...kids) {
@@ -161,10 +162,38 @@ document.querySelectorAll("nav button").forEach((b) =>
 );
 
 // ---------- library ----------
-const lib = { q: "", sort: "new", vibes: [], key: "", bmin: "", bmax: "" };
+const LIB_CLEAR = () => ({ q: "", vibes: [], key: "", bmin: "", bmax: "", up: "", upFrom: "", upTo: "", lab: "" });
+const lib = { sort: "new", ...LIB_CLEAR() };
+// Upload dates, as the sidebar shows them: the time if today, the weekday this week, else the date.
+const DAY = 864e5, dayStart = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return +d; };
+const fmtUp = (t) => {
+  if (!t) return "";
+  const today = dayStart(Date.now()), d = new Date(t);
+  if (t >= today) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (t >= today - DAY) return "Yesterday";
+  if (t >= today - 6 * DAY) return d.toLocaleDateString([], { weekday: "short" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) });
+};
+const fmtUpLong = (t) => new Date(t).toLocaleString([], { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+function upMatch(t) {
+  const today = dayStart(Date.now());
+  switch (lib.up) {
+    case "today": return t >= today;
+    case "yesterday": return t >= today - DAY && t < today;
+    case "7": return t >= today - 6 * DAY;
+    case "30": return t >= today - 29 * DAY;
+    case "old": return t < today - 29 * DAY;
+    case "range": {
+      const a = lib.upFrom ? dayStart(new Date(lib.upFrom + "T00:00")) : -Infinity, b = lib.upTo ? dayStart(new Date(lib.upTo + "T00:00")) + DAY : Infinity;
+      return t >= a && t < b;
+    }
+    default: return true;
+  }
+}
 const keyRank = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); return m ? +m[1] * 2 + (m[2] === "B" ? 1 : 0) : 999; };
 const SORTS = {
-  new: (a, b) => b.id - a.id,
+  new: (a, b) => b.uploaded - a.uploaded || b.id - a.id,
+  old: (a, b) => a.uploaded - b.uploaded || a.id - b.id,
   title: (a, b) => (a.title || "").localeCompare(b.title || ""),
   bpm: (a, b) => (a.bpm ?? 999) - (b.bpm ?? 999),
   bpmd: (a, b) => (b.bpm ?? -1) - (a.bpm ?? -1),
@@ -172,14 +201,16 @@ const SORTS = {
   energy: (a, b) => (b.energy ?? -1) - (a.energy ?? -1),
   len: (a, b) => (b.duration ?? 0) - (a.duration ?? 0),
 };
-const libActive = () => !!(lib.q || lib.vibes.length || lib.key || lib.bmin || lib.bmax);
+const libActive = () => !!(lib.q || lib.vibes.length || lib.key || lib.bmin || lib.bmax || lib.up || lib.lab);
 // Search, sort and filters run in the browser, which is fine for a few hundred tracks.
 function visibleTracks() {
   const q = lib.q.trim().toLowerCase(), lo = lib.bmin === "" ? null : +lib.bmin, hi = lib.bmax === "" ? null : +lib.bmax;
+  const need = lib.lab === "need" ? new Set(reviewRows.map((r) => r.track_id)) : null;
   return tracks.filter((t) =>
     (!q || `${t.title} ${t.artist || ""}`.toLowerCase().includes(q)) &&
     lib.vibes.every((v) => (t.tags || []).includes(v)) && (!lib.key || keyMatch(t.camelot)) &&
-    (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi))).sort(SORTS[lib.sort]);
+    (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi)) &&
+    upMatch(t.uploaded) && (!lib.lab || (need ? need.has(t.id) : (lib.lab === "yes") === labels.has(t.id)))).sort(SORTS[lib.sort]);
 }
 // lib.key is a Camelot code, or "8A~" for that key plus the keys that mix with it (one step round the wheel, or the relative major/minor).
 const camelotNear = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); if (!m) return [k]; const n = +m[1], l = m[2], o = l === "A" ? "B" : "A", w = (d) => ((n + d + 11) % 12) + 1; return [k, `${w(-1)}${l}`, `${w(1)}${l}`, `${n}${o}`]; };
@@ -202,15 +233,18 @@ function fillFilterOptions() {
 }
 function syncTools() {
   $("lib-q").value = lib.q; $("lib-sort").value = lib.sort; syncFilterSelects(); $("lib-bmin").value = lib.bmin; $("lib-bmax").value = lib.bmax;
+  $("lib-up").value = lib.up; $("lib-up-from").value = lib.upFrom; $("lib-up-to").value = lib.upTo; $("lib-up-range").hidden = lib.up !== "range"; $("lib-lab").value = lib.lab;
 }
 async function loadTracks() {
-  tracks = await api("/api/tracks");
+  const [rows] = await Promise.all([api("/api/tracks"), loadReview(false)]);
+  tracks = rows;
+  for (const t of tracks) t.uploaded = Date.parse(t.created_at || t.analyzed_at) || 0; // when it was uploaded, for the list, sort and filter
   fillFilterOptions();
 }
 async function refresh(selectId) {
   await loadTracks();
   // A freshly analyzed track must be visible, so show everything, newest first.
-  if (selectId != null) { Object.assign(lib, { q: "", vibes: [], key: "", bmin: "", bmax: "", sort: "new" }); syncTools(); }
+  if (selectId != null) { Object.assign(lib, { ...LIB_CLEAR(), sort: "new" }); syncTools(); }
   renderList();
   if (selectId != null) openTrack(selectId);
 }
@@ -247,7 +281,7 @@ function syncCardFilters(n) {
       h("button", { type: "button", class: "cf-clear", onclick: () => { if (vibe) lib.vibes = []; else { lib.key = ""; lib.bmin = ""; lib.bmax = ""; } syncTools(); renderList(); } }, vibe ? "Clear vibes" : "Clear"));
   });
 }
-function clearFilters() { Object.assign(lib, { q: "", vibes: [], key: "", bmin: "", bmax: "" }); syncTools(); renderList(); }
+function clearFilters() { Object.assign(lib, LIB_CLEAR()); syncTools(); renderList(); }
 
 // Placeholder rows for files being analyzed (or that failed), shown above the saved tracks.
 const pending = [];
@@ -293,6 +327,7 @@ function renderList() {
   if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
   else if (!shown.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
   for (const p of pending) ul.append(pendingLi(p));
+  const inQ = new Set(reviewRows.map((r) => r.track_id));
   for (const t of shown) {
     const picked = sel.has(t.id), job = jobs.get(t.id);
     ul.append(h("li", { class: "trk" + (t.id === currentId ? " active" : "") + (picked ? " picked" : ""), "data-id": t.id, tabindex: "0",
@@ -300,16 +335,22 @@ function renderList() {
         onclick: (e) => { if (selecting) toggleSel(t.id, e.shiftKey); else if (e.metaKey || e.ctrlKey) { setSelecting(true); toggleSel(t.id, false); } else openTrack(t.id); } },
       selecting ? h("span", { class: "pick" + (picked ? " on" : ""), "aria-hidden": "true" }) : null,
       h("div", { class: "trk-main" },
-        h("div", { class: "t", title: t.title }, t.title || `Track ${t.id}`),
+        h("div", { class: "t-row" }, h("div", { class: "t", title: t.title }, t.title || `Track ${t.id}`),
+          t.uploaded ? h("time", { class: "up", datetime: new Date(t.uploaded).toISOString(), title: `Uploaded ${fmtUpLong(t.uploaded)}` }, fmtUp(t.uploaded)) : null),
         job ? [h("div", { class: "s job" + (job.error ? " fail" : ""), title: job.error || null }, job.error ? null : h("span", { class: "spin" + (job.active ? "" : " idle"), "aria-hidden": "true" }), job.text),
             job.frac != null ? progBar(job.frac, `${t.title || "Track"} progress`) : null]
           : h("div", { class: "s" }, h("span", { class: "s-txt" }, [t.artist, isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, mmss(t.duration)].filter(Boolean).join(" · ")),
+            // status marks in a fixed slot next to the energy bar, so they line up whatever the text length
+            h("span", { class: "st-marks" },
+              labels.has(t.id) ? h("span", { class: "lb-tick", title: "You labeled this track", "aria-label": "You labeled this track" }, "✓") : null,
+              inQ.has(t.id) ? h("span", { class: "rv-dot", title: "In your review list", "aria-label": "In your review list" }) : null),
             h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` }))))));
   }
   ul.scrollTop = top;
   if (focusId) { const li = ul.querySelector(`li.trk[data-id="${focusId}"]`); if (li) li.focus({ preventScroll: true }); }
   renderBulk(shown);
   syncCardFilters(shown.length);
+  renderReview();
 }
 
 // ---------- bulk selection and actions ----------
@@ -421,6 +462,8 @@ function bulkMenu() {
   const items = () => [...pop.querySelectorAll("[role=menuitem], .menu-confirm button")];
   const showMain = () => pop.replaceChildren(
     ...Object.entries(BULK).filter(([, v]) => !v.when || v.when()).map(([k, v]) => item(v.label, () => { close(false); runBulk(k, [...sel]); }, { note: v.note })),
+    item("Add to review", () => { close(false); const ids = [...sel]; setInReview(ids, true).then(() => { sayBulk(`Added ${ids.length} to review.`, 4000); renderList(); }); }),
+    item("Remove from review", () => { close(false); const ids = [...sel]; setInReview(ids, false).then(() => { sayBulk(`Took ${ids.length} out of review.`, 4000); renderList(); }); }),
     h("hr", { class: "menu-sep" }),
     item(`Delete ${plural(n)}…`, showConfirm, { danger: true }));
   const showConfirm = () => {
@@ -567,6 +610,10 @@ $("lib-vibe").addEventListener("change", (e) => { const v = e.target.value; if (
 $("lib-key").addEventListener("change", (e) => { lib.key = e.target.value; syncFilterSelects(); renderList(); });
 $("lib-bmin").addEventListener("input", (e) => { lib.bmin = e.target.value; renderList(); });
 $("lib-bmax").addEventListener("input", (e) => { lib.bmax = e.target.value; renderList(); });
+$("lib-up").addEventListener("change", (e) => { lib.up = e.target.value; $("lib-up-range").hidden = lib.up !== "range"; renderList(); });
+$("lib-up-from").addEventListener("change", (e) => { lib.upFrom = e.target.value; renderList(); });
+$("lib-up-to").addEventListener("change", (e) => { lib.upTo = e.target.value; renderList(); });
+$("lib-lab").addEventListener("change", (e) => { lib.lab = e.target.value; renderList(); });
 $("lib-clear").addEventListener("click", clearFilters);
 $("lib-fbtn").addEventListener("click", () => { const f = $("lib-filters"), open = f.hidden; f.hidden = !open; $("lib-fbtn").setAttribute("aria-expanded", String(open)); });
 $("track-list").addEventListener("keydown", (e) => {
@@ -580,6 +627,360 @@ $("track-list").addEventListener("keydown", (e) => {
   if (n) n.focus();
 });
 
+// ---------- your labels and the review list (tastr/labels.py) ----------
+// GET /api/review is the list (tracks you flagged first, then the most suspect), GET /api/labels the log; a label is
+// PUT /api/tracks/{id}/labels, and PUT /api/tracks/{id}/review {state: "flagged" | "skipped" | null} puts a track in
+// the list or takes it out. Labels are kept apart from the analysis: re-analyzing never changes them.
+let reviewOn = false, labelOpen = null, reviewDone = 0, reviewTab = "todo";
+const JSON_PUT = (body) => ({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+async function loadReview(paint = true) {
+  try {
+    const [q, labs] = await Promise.all([api("/api/review?limit=1000"), api("/api/labels")]);
+    reviewRows = q; labels = new Map(labs.map((l) => [l.track_id, l]));
+  } catch (_) { /* an older server, or offline: keep what we had */ }
+  if (paint) renderList();
+}
+const reviewRow = (id) => reviewRows.find((r) => r.track_id === id);
+const inReview = (id) => !!reviewRow(id);
+let repaintLabel = null; // the open card's label bar repaints itself through this
+async function setInReview(ids, on) {
+  try { await Promise.all(ids.map((id) => api(`/api/tracks/${id}/review`, JSON_PUT({ state: on ? "flagged" : "skipped" })))); }
+  catch (e) { setStatus(e.message, true); }
+  await loadReview();
+  if (repaintLabel && ids.includes(repaintLabel.id)) repaintLabel.paint();
+}
+// Camelot code <-> key: 8B = C major, 8A = A minor, each step round the wheel = up a fifth. Names are plain text ("Bb major").
+const MAJ_ASCII = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"], MIN_ASCII = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+const camPc = (cam) => { const m = /^(\d+)([AB])$/.exec(cam || ""); return m ? ((((m[2] === "B" ? 0 : 9) + (+m[1] - 8) * 7) % 12) + 12) % 12 : null; };
+const CAM_NAME = (cam) => { const m = /^(\d+)([AB])$/.exec(cam || ""); if (!m) return cam; const pc = camPc(cam); return m[2] === "A" ? `${MIN_ASCII[pc]} minor` : `${MAJ_ASCII[pc]} major`; };
+const ALL_CAMS = [...Array(12)].flatMap((_, i) => [`${i + 1}A`, `${i + 1}B`]);
+const PC_OF = { c: 0, "b#": 0, "c#": 1, db: 1, d: 2, "d#": 3, eb: 3, e: 4, fb: 4, "e#": 5, f: 5, "f#": 6, gb: 6, g: 7, "g#": 8, ab: 8, a: 9, "a#": 10, bb: 10, b: 11, cb: 11 };
+const camOf = (pc, minor) => `${((7 * (minor ? (pc + 3) % 12 : pc)) % 12 + 7) % 12 + 1}${minor ? "A" : "B"}`;
+// Any key spelling the server takes ("A minor", "Am", "F# major", "8A") -> its Camelot code, or null.
+function nameToCam(n) {
+  const s = String(n || "").trim().replace(/♯/g, "#").replace(/♭/g, "b");
+  let m = /^(1[0-2]|[1-9])\s*([ab])$/i.exec(s);
+  if (m) return `${+m[1]}${m[2].toUpperCase()}`;
+  m = /^([a-g])([#b]?)\s*:?\s*(major|minor|maj|min|m)?$/i.exec(s);
+  if (!m) return null;
+  const pc = PC_OF[(m[1] + m[2]).toLowerCase()];
+  return pc == null ? null : camOf(pc, /^(minor|min|m)$/i.test(m[3] || ""));
+}
+const camLabel = (cam) => `${accid(CAM_NAME(cam))} (${cam})`;
+function renderReview() {
+  const q = reviewRows;
+  $("lib-review-n").textContent = q.length ? String(q.length) : "";
+  $("lib-review").setAttribute("aria-selected", String(reviewOn)); $("lib-tracks").setAttribute("aria-selected", String(!reviewOn));
+  $("review").hidden = !reviewOn; $("track-list").hidden = reviewOn; $("lib-tools").hidden = reviewOn || !tracks.length;
+  if (!reviewOn) return;
+  $("rv-n-todo").textContent = `(${q.length})`; $("rv-n-done").textContent = `(${labels.size})`;
+  $("rv-tab-todo").setAttribute("aria-selected", String(reviewTab === "todo")); $("rv-tab-done").setAttribute("aria-selected", String(reviewTab === "done"));
+  $("review").querySelector(".rv-intro").hidden = reviewTab !== "todo";
+  if (reviewTab === "done") { renderReviewLog(); return; }
+  const ul = $("review-list"), top = ul.scrollTop;
+  ul.replaceChildren(); ul.setAttribute("aria-label", "Tracks to review");
+  if (!q.length) { ul.append(h("li", { class: "empty" }, reviewDone ? `All caught up: you labeled ${reviewDone} this session.` : "Nothing to review: every track looks right or is labeled.")); return; }
+  for (const r of q.slice(0, 20)) {
+    const pct = isNum(r.chance_right) ? Math.round(r.chance_right * 100) : null, title = r.title || `Track ${r.track_id}`;
+    const open = () => openForReview(r.track_id);
+    ul.append(h("li", { class: currentId === r.track_id ? "active" : "", "data-id": r.track_id, tabindex: "0", role: "button", "aria-label": `${title}: ${r.reasons.join(", ")}`,
+        onclick: open, onkeydown: (e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(); } } },
+      h("div", { class: "rv-top" }, h("span", { class: "rv-t", title }, title),
+        r.mine ? h("span", { class: "rv-chance", title: "You added this one" }, "added by you")
+          : pct != null ? h("span", { class: "rv-chance" + (pct < 40 ? " low" : ""), title: "How likely Tastr's BPM and key are right (the lower of the two)" }, `${pct}% likely right`) : null),
+      h("div", { class: "rv-s" }, [isNum(r.bpm) ? `${r.bpm.toFixed(0)} BPM` : null, r.camelot ? `${r.camelot} ${accid(CAM_NAME(r.camelot))}` : null].filter(Boolean).join(" · ")),
+      h("ul", { class: "rv-why" }, r.reasons.map((x) => h("li", {}, accid(x)))),
+      h("button", { type: "button", class: "rv-x", title: "Take it out of review", "aria-label": `Take ${title} out of review`, onclick: (e) => { e.stopPropagation(); setInReview([r.track_id], false); } }, "×")));
+  }
+  if (q.length > 20) ul.append(h("li", { class: "empty" }, `${q.length - 20} more after these`));
+  ul.scrollTop = top;
+}
+// What a label changed from Tastr's reading when it was saved: [kind, text], kind same | chg | note.
+function labelDiffs(lab) {
+  const out = [], tb = lab.tastr_bpm, tcam = nameToCam(lab.tastr_key), tk = tcam ? accid(CAM_NAME(tcam)) : lab.tastr_key || "no key";
+  const note = lab.note ? [["note", `“${lab.note}”`]] : [];
+  if (lab.kept) return [["same", `Kept as is: ${[isNum(tb) ? `${tb.toFixed(1)} BPM` : null, tk].filter(Boolean).join(" · ")}`], ...note];
+  if (isNum(lab.bpm)) out.push(isNum(tb) && Math.abs(lab.bpm - tb) < 0.06 ? ["same", `BPM ✓ ${tb.toFixed(1)}`] : ["chg", `BPM ${isNum(tb) ? tb.toFixed(1) : "–"} → ${lab.bpm}`]);
+  if (lab.key_name) { const cam = nameToCam(lab.key_name); out.push(cam && cam === tcam ? ["same", `Key ✓ ${tk}`] : ["chg", `Key ${tk} → ${cam ? accid(CAM_NAME(cam)) : lab.key_name}`]); }
+  if (lab.boundaries) out.push(["chg", `${lab.boundaries.split(" ").length} section starts`]);
+  return [...out, ...note];
+}
+function renderReviewLog() {
+  const ul = $("review-list"), top = ul.scrollTop;
+  ul.replaceChildren(); ul.setAttribute("aria-label", "Tracks you reviewed");
+  const rows = [...labels.values()].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+  if (!rows.length) { ul.append(h("li", { class: "empty" }, "Nothing reviewed yet. Labels you save show up here.")); return; }
+  const fixed = rows.filter((lab) => labelDiffs(lab).some(([k]) => k === "chg")).length;
+  ul.append(h("li", { class: "empty rv-logsum" }, `${rows.length} reviewed · Tastr was off on ${fixed}. `,
+    h("button", { type: "button", class: "linklike", onclick: () => { Object.assign(lib, LIB_CLEAR(), { lab: "yes" }); syncTools(); setReview(false); } }, "Show them in the library"), " · ",
+    h("button", { type: "button", class: "linklike", onclick: exportLabels }, "Download CSV")));
+  for (const lab of rows) {
+    const id = lab.track_id, title = lab.title || `Track ${id}`, at = Date.parse(lab.updated_at);
+    ul.append(h("li", { class: currentId === id ? "active" : "", "data-id": id, tabindex: "0", role: "button", onclick: () => openTrack(id),
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTrack(id); } } },
+      h("div", { class: "rv-top" }, h("span", { class: "rv-t", title }, title), at ? h("time", { class: "rv-when", title: fmtUpLong(at) }, fmtUp(at)) : null),
+      h("ul", { class: "rv-diff" }, labelDiffs(lab).map(([k, t]) => h("li", { class: k }, t)))));
+  }
+  ul.scrollTop = top;
+}
+// Your labels as CSV, Tastr's reading when each was saved next to it.
+function exportLabels() {
+  const esc = (v) => (v == null ? "" : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  const cols = ["track_id", "title", "artist", "tastr_bpm", "bpm", "tastr_key", "key_name", "boundaries", "note", "updated_at", "kept"];
+  const lines = [cols.join(","), ...[...labels.values()].map((lab) => cols.map((k) => esc(k === "kept" ? (lab.kept ? 1 : 0) : lab[k])).join(","))];
+  downloadBytes(new TextEncoder().encode(lines.join("\n") + "\n"), "tastr-labels.csv", "text/csv");
+}
+$("rv-tab-todo").addEventListener("click", () => { reviewTab = "todo"; renderReview(); });
+$("rv-tab-done").addEventListener("click", () => { reviewTab = "done"; renderReview(); });
+function openForReview(id) { labelOpen = id; openTrack(id); renderReview(); }
+function setReview(on) { reviewOn = on; if (on && libCollapsed) setLibCollapsed(false); renderList(); }
+$("lib-review").addEventListener("click", (e) => { e.stopPropagation(); if (libCollapsed) setLibCollapsed(false); if (!reviewOn) setReview(true); });
+$("lib-tracks").addEventListener("click", (e) => { if (libCollapsed) return; e.stopPropagation(); if (reviewOn) setReview(false); });
+
+// Section-start times: m:ss with a tenth when it isn't a whole second (bar lines rarely land on one). Also reads seconds.
+const fmtMark = (t) => { const r = Math.round(t * 10) / 10, s = r % 60; return `${Math.floor(r / 60)}:${(Number.isInteger(s) ? String(s) : s.toFixed(1)).padStart(Number.isInteger(s) ? 2 : 4, "0")}`; };
+const parseTimes = (str) => { const parts = String(str || "").trim().split(/[;\s,]+/).filter(Boolean); const ts = parts.map((x) => { const m = /^(?:(\d+):)?(\d+(?:\.\d+)?)$/.exec(x); return m ? (+(m[1] || 0)) * 60 + +m[2] : NaN; }); return ts.some((t) => !isNum(t)) ? null : ts; };
+// Marking section starts on the chart: the open label panel sets this; the card's chart reads it, draws the marks and edits them.
+let markHook = null;
+const snapBar = (c, t) => { const bars = (c.core && c.core.downbeat_times) || []; let best = t, bd = Infinity; for (const b of bars) { const d = Math.abs(b - t); if (d < bd) { bd = d; best = b; } } return bd < 4 ? best : t; };
+const charts = new Map(); // card id -> {now, draw, mode, setMode, el, big} for the chart on screen
+document.addEventListener("keydown", (e) => {
+  if (!markHook || e.key.toLowerCase() !== "m" || e.metaKey || e.ctrlKey || e.altKey || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || "")) return;
+  const ch = charts.get(markHook.cardId); if (!ch) return;
+  e.preventDefault(); markHook.add(ch.now(), true);
+});
+function endMarking(id) {
+  if (!markHook || markHook.cardId !== id) return;
+  markHook = null;
+  const ch = charts.get(id); if (ch) { ch.big(false); ch.draw(); }
+}
+
+// The label bar at the bottom of the card head: is the analysis right? Closed, a one-line summary; open, the label panel.
+function labelBar(c) {
+  const core = c.core || {}, key = core.key, cam0 = key && key.camelot, bar = h("div", { class: "lb-bar" });
+  const hasBpm = isNum(core.bpm), tBpm = hasBpm ? +core.bpm.toFixed(1) : null;
+  const tastrSay = [hasBpm ? `${tBpm} BPM` : null, cam0 ? keyName(key) : null].filter(Boolean).join(", ");
+  const canKeep = hasBpm || !!cam0;
+  const summary = () => {
+    const lab = labels.get(c.id), why = reviewRow(c.id);
+    const rvBtn = why ? h("button", { type: "button", class: "linklike", title: "Take it out of the review list", onclick: () => setInReview([c.id], false) }, "Remove from review")
+      : h("button", { type: "button", class: "linklike", title: "Put it in the review list to check later", onclick: () => setInReview([c.id], true) }, "Add to review");
+    if (!lab) return [h("span", {}, why ? (why.mine ? "You added this to review. " : "Tastr isn't sure about this one. ") : "Is this analysis right? "),
+      h("button", { type: "button", onclick: () => { labelOpen = c.id; paint(); } }, why ? "Check it" : "Label it"),
+      canKeep ? h("button", { type: "button", title: `Label it as right: ${tastrSay}`, onclick: () => keepAsIs("") }, "✓ Keep as is") : null, rvBtn];
+    const lcam = lab.key_name ? nameToCam(lab.key_name) : null;
+    const bits = [lab.bpm ? `${lab.bpm} BPM` : null, lab.key_name ? (lcam ? camLabel(lcam) : lab.key_name) : null, lab.boundaries ? `${lab.boundaries.split(" ").length} section starts` : null].filter(Boolean);
+    return [h("span", { class: "lb-done" }, lab.kept ? "✓ Kept as is" : "✓ Your label"), h("span", {}, bits.join(" · ") || "note only"),
+      h("button", { type: "button", onclick: () => { labelOpen = c.id; paint(); } }, "Edit"), why ? rvBtn : null];
+  };
+  // After a save: refresh the list and log, then open the next track in review (Save & next, or Keep as is in Review) or show the summary.
+  async function saved(next) {
+    labelOpen = null; endMarking(c.id);
+    await loadReview();
+    const nxt = next ? reviewRows.find((r) => r.track_id !== c.id) : null;
+    if (nxt) openForReview(nxt.track_id); else paint();
+  }
+  // "Keep as is": Tastr got it right. Stored as a label with Tastr's own BPM and key, so it scores future engine changes too.
+  async function keepAsIs(note, err) {
+    const had = labels.has(c.id);
+    try { await api(`/api/tracks/${c.id}/labels`, JSON_PUT({ ...(hasBpm ? { bpm: tBpm } : {}), ...(cam0 ? { key_name: CAM_NAME(cam0) } : {}), ...(note ? { note } : {}), kept: true })); }
+    catch (e) { if (err) err.textContent = e.message; else setStatus(e.message, true); return; }
+    if (!had) reviewDone++;
+    saved(reviewOn);
+  }
+  function paint() {
+    if (labelOpen !== c.id) endMarking(c.id);
+    if (!bar.isConnected && repaintLabel && repaintLabel.id === c.id && repaintLabel.bar !== bar) return;
+    bar.replaceChildren(...(labelOpen === c.id ? [panel()] : summary()).filter(Boolean));
+  }
+  function panel() {
+    const lab = labels.get(c.id), why = reviewRow(c.id);
+    const st = { bpm: lab?.bpm ?? "", key: lab?.key_name ?? "", bounds: lab?.boundaries ?? "", note: lab?.note ?? "" };
+    const err = h("p", { class: "lb-err", role: "alert" });
+    const flash = (el) => { el.classList.remove("lb-flash"); void el.offsetWidth; el.classList.add("lb-flash"); };
+    // what Save will store, kept in view so every pick, drag or tap shows where it lands
+    const sumEl = h("p", { class: "lb-sum", "aria-live": "polite" });
+    function sum() {
+      const cam = nameToCam(st.key), nB = String(st.bounds).trim() ? String(st.bounds).trim().split(/[;\s,]+/).length : 0;
+      const parts = [st.bpm !== "" ? h("b", {}, `${st.bpm} BPM`) : null, cam ? h("b", {}, camLabel(cam)) : st.key ? h("b", {}, st.key) : null,
+        nB ? h("b", {}, `${nB} section start${nB === 1 ? "" : "s"}`) : null, st.note.trim() ? "a note" : null].filter(Boolean);
+      sumEl.replaceChildren(...(parts.length ? ["Will save: ", ...parts.flatMap((p, i) => (i ? [" · ", p] : [p]))] : ["Nothing set yet. Pick, type, drag or tap a value."]));
+    }
+    // BPM: confirm, half/double, type or drag it, or tap it
+    const bpmIn = h("input", { type: "number", min: "30", max: "300", step: "0.1", value: String(st.bpm), "aria-label": "Your BPM", placeholder: "BPM" });
+    const bpmVals = hasBpm ? [core.bpm, core.bpm / 2, core.bpm * 2] : [];
+    const bpmBtns = bpmVals.map((v, i) => h("button", { type: "button", "aria-pressed": "false", title: i ? `${v.toFixed(1)} BPM` : `Keep Tastr's ${v.toFixed(1)}`,
+      onclick: () => setBpm(+v.toFixed(1)) }, i ? `${["", "½", "×2"][i]} ${v.toFixed(1)}` : `✓ ${v.toFixed(1)}`));
+    const syncBpm = () => bpmBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(st.bpm !== "" && Math.abs(+st.bpm - bpmVals[i]) < 0.06)));
+    const BPM_HINT = "Tastr often lands on half or double time. Tap along if you're not sure.";
+    const bpmHint = h("span", { class: "lb-hint", "aria-live": "polite" }, BPM_HINT);
+    function setBpm(v, from) { st.bpm = v; bpmIn.value = String(v); syncBpm(); if (from !== "tap") bpmHint.replaceChildren(BPM_HINT); flash(bpmIn); sum(); }
+    bpmIn.addEventListener("input", () => { st.bpm = bpmIn.value; syncBpm(); sum(); });
+    dragNumber(bpmIn, { coarse: 1, from: () => tBpm ?? 120 }); // the drum player's drag box: a whole BPM per notch, Shift for 0.1
+    let taps = [], tapTimer = 0;
+    const tap = h("button", { type: "button", class: "lb-tap", title: "Tap along to the beat" }, "Tap");
+    const tapDone = () => { if (taps.length > 2) { bpmHint.replaceChildren(h("b", {}, `Set to ${st.bpm} BPM from your ${taps.length} taps.`), " Tap again to start over."); tap.textContent = "Tap"; } };
+    tap.onclick = () => {
+      const now = performance.now(); if (taps.length && now - taps[taps.length - 1] > 2000) taps = []; taps.push(now); taps = taps.slice(-9);
+      clearTimeout(tapTimer); tapTimer = setTimeout(tapDone, 2000);
+      if (taps.length > 2) {
+        const iv = (taps[taps.length - 1] - taps[0]) / (taps.length - 1), v = +(60000 / iv).toFixed(1);
+        setBpm(v, "tap"); tap.textContent = `${v} ♩`;
+        bpmHint.replaceChildren(h("b", {}, `Tapping: ${v} BPM → your label BPM.`), ` Keep tapping to steady it (${taps.length} taps).`);
+      } else { tap.textContent = "Tap…"; bpmHint.replaceChildren(taps.length === 1 ? "Keep tapping on the beat…" : "One more…"); }
+    };
+    // Key: confirm, the usual near misses, or pick any of the 24; 🔊 plays each against the track
+    const near = cam0 ? camelotNear(cam0) : [];
+    const keyCams = cam0 ? [cam0, near[3], near[2], near[1]] : [];
+    const keyBtns = keyCams.map((cam, i) => h("button", { type: "button", "aria-pressed": "false", title: `${cam} · ${["Keep Tastr's key", "Same notes, other mode", "Tastr's most common miss", "Tastr's most common miss"][i]}`,
+      onclick: () => setKey(CAM_NAME(cam)) }, i ? `${["", "Relative", "Fifth up", "Fifth down"][i]}: ${accid(CAM_NAME(cam))}` : `✓ ${keyName(key)}`,
+      why && why.catalog_key === cam ? h("span", { class: "lb-cat", title: "What the catalog lists" }, "catalog") : null));
+    const hearBtn = (camOf, label) => { const b = h("button", { type: "button", class: "lb-hear", title: `Hear ${label()} against the track`, "aria-label": `Hear ${label()} against the track` }, "🔊"); b.onclick = () => hearKey(c, camOf(), b); return b; };
+    const drumsBtn = h("button", { type: "button", class: "lb-drums", "aria-pressed": String(!hearDrums), title: "Leave the drums out of 🔊 so the chords are easier to hear" }, hearDrums ? "🥁 Drums on" : "🥁 Drums off");
+    drumsBtn.onclick = () => {
+      hearDrums = !hearDrums; drumsBtn.setAttribute("aria-pressed", String(!hearDrums)); drumsBtn.textContent = hearDrums ? "🥁 Drums on" : "🥁 Drums off";
+      if (hearing) { const hh = hearing; hh.stop(); hearKey(hh.c, hh.cam, hh.btn); } // replay what's playing, now with or without drums
+    };
+    // the chord's level against the track; changes what's playing right away
+    const volOut = h("output", {}, ""), volIn = h("input", { type: "range", min: "-18", max: "12", step: "1", value: String(hearChordDb), "aria-label": "Chord volume against the track" });
+    const volTxt = () => { volOut.textContent = hearChordDb === 0 ? "even" : `${hearChordDb > 0 ? "+" : ""}${hearChordDb} dB`; };
+    volIn.addEventListener("input", () => { hearChordDb = +volIn.value; volTxt(); if (hearing?.lvl) hearing.lvl.gain.setTargetAtTime(Math.pow(10, hearChordDb / 20), audioCtx().currentTime, 0.03); });
+    volIn.addEventListener("dblclick", () => { volIn.value = "0"; volIn.dispatchEvent(new Event("input")); });
+    volTxt();
+    const chordVol = h("label", { class: "lb-vol", title: "How loud the 🔊 chord is against the track (double-click to reset)" }, "Chord", h("span", { class: "muted" }, "quieter"), volIn, h("span", { class: "muted" }, "louder"), volOut);
+    const keySel = h("select", { "aria-label": "Your key" }, h("option", { value: "" }, "Other key…"), ALL_CAMS.map((cam) => h("option", { value: CAM_NAME(cam) }, `${cam} · ${accid(CAM_NAME(cam))}`)));
+    const otherHear = hearBtn(() => nameToCam(keySel.value), () => "the picked key");
+    const syncKey = () => {
+      const cam = nameToCam(st.key);
+      keyBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(cam === keyCams[i])));
+      keySel.value = cam && !keyCams.includes(cam) ? CAM_NAME(cam) : "";
+      otherHear.disabled = !keySel.value;
+      const tt = keySel.value ? `Hear ${accid(keySel.value)} against the track` : "Pick a key in the list first, then hear it against the track";
+      otherHear.title = tt; otherHear.setAttribute("aria-label", tt);
+    };
+    function setKey(v) { st.key = v; syncKey(); sum(); }
+    keySel.addEventListener("change", () => setKey(keySel.value));
+    // Section starts: type them, start from the detected ones, or mark them on the chart
+    const detected = (c.sections || []).map((x) => fmtMark(x.start)).join(" ");
+    const bIn = h("input", { type: "text", value: st.bounds ? st.bounds.split(" ").map((t) => fmtMark(+t)).join(" ") : "", placeholder: "e.g. 0:00 0:32 1:04", "aria-label": "Section start times" });
+    const redrawChart = () => { if (markHook && markHook.cardId === c.id) charts.get(c.id)?.draw(); };
+    bIn.addEventListener("input", () => { st.bounds = bIn.value; sum(); redrawChart(); });
+    const useDet = h("button", { type: "button", title: "Fill in Tastr's detected section starts, then fix any that are off" }, "Start from detected");
+    useDet.onclick = () => { bIn.value = detected; st.bounds = detected; bIn.focus(); sum(); redrawChart(); };
+    const setTimes = (ts, sort = true) => { const v = (sort ? [...ts].sort((a, b) => a - b) : ts).map(fmtMark).join(" "); bIn.value = v; st.bounds = v; sum(); };
+    const en = c.series && c.series.energy, hasChart = !!(en && en.times && en.times.length > 1) || !!(c.sections || []).length; // the card shows the chart
+    const markBtn = h("button", { type: "button", class: "lb-mark", "aria-pressed": "false", title: "Click the chart below to add section starts", ...(hasChart ? {} : { hidden: "" }) }, "✎ Mark on chart");
+    const atHead = h("button", { type: "button", hidden: "", title: "Add a start where the playhead is (or press M)" }, "＋ At playhead");
+    const markHint = h("span", { class: "lb-hint", hidden: "" }, "Click the waveform or energy chart to add a start; it snaps to the nearest bar line (hold Alt for the exact spot). Drag a mark to move it, click it to remove it. While it plays, press M to drop one on the beat.");
+    const added = []; // marks added this time, newest last, for Undo
+    function setMarking(on) {
+      if (markHook && markHook.cardId !== c.id) markHook = null;
+      markHook = on ? { cardId: c.id, get: () => (parseTimes(bIn.value) || []).sort((a, b) => a - b), set: setTimes,
+        add: (t, snap) => { const ts = parseTimes(bIn.value) || [], tt = +(snap ? snapBar(c, t) : t).toFixed(2); if (!ts.some((q) => Math.abs(q - tt) < 0.3)) { ts.push(tt); added.push(tt); } setTimes(ts); redrawChart(); flash(bIn); },
+        undo: () => { const ts = parseTimes(bIn.value) || []; let i = -1; while (added.length && i < 0) { const t = added.pop(); i = ts.findIndex((q) => Math.abs(q - t) < 0.06); } if (i < 0) i = ts.length - 1; ts.splice(i, 1); setTimes(ts); redrawChart(); },
+        done: () => setMarking(false) } : null;
+      markBtn.setAttribute("aria-pressed", String(on)); markBtn.textContent = on ? "✓ Done marking" : "✎ Mark on chart"; atHead.hidden = markHint.hidden = !on;
+      const ch = charts.get(c.id);
+      // marking opens the chart expanded on desktop (more room to place marks); Done or Close puts it back
+      if (ch) {
+        if (on && ch.mode() === "live") ch.setMode("wave"); else ch.draw();
+        ch.big(on && innerWidth > 700);
+        if (!on) markBtn.scrollIntoView({ block: "nearest" }); else if (innerWidth <= 700) ch.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+    }
+    markBtn.onclick = () => setMarking(!(markHook && markHook.cardId === c.id));
+    atHead.onclick = () => { const ch = charts.get(c.id); if (ch && markHook) markHook.add(ch.now(), true); };
+    const noteIn = h("input", { type: "text", value: st.note, maxlength: "500", placeholder: "Optional, e.g. half-time feel in the breakdown", "aria-label": "Note" });
+    noteIn.addEventListener("input", () => { st.note = noteIn.value; sum(); });
+    setTimeout(() => { syncBpm(); syncKey(); sum(); }, 0);
+    // PUT the label; the server checks it and answers 400 with a readable message
+    async function save(next) {
+      err.textContent = "";
+      const out = {};
+      if (st.bpm !== "") out.bpm = st.bpm;
+      if (st.key) { const cam = nameToCam(st.key); out.key_name = cam ? CAM_NAME(cam) : st.key; }
+      if (String(st.bounds).trim()) {
+        const ts = parseTimes(st.bounds);
+        out.boundaries = ts ? ts.sort((a, b) => a - b).map((t) => +t.toFixed(2)).join(" ") : st.bounds;
+      }
+      if (st.note.trim()) out.note = st.note.trim();
+      const had = labels.has(c.id);
+      try { await api(`/api/tracks/${c.id}/labels`, JSON_PUT(out)); } catch (e) { err.textContent = e.message; return; }
+      if (!had && Object.keys(out).length) reviewDone++;
+      saved(next);
+    }
+    const nextUp = reviewRows.find((r) => r.track_id !== c.id);
+    return h("div", { class: "lb-panel", role: "group", "aria-label": "Your label for this track" },
+      why ? h("p", { class: "lb-why" }, h("b", {}, "Why it's listed: "), accid(why.reasons.join("; ")), ".") : null,
+      h("div", { class: "lb-row" }, h("b", {}, "BPM"), h("div", { class: "lb-ctl" }, ...bpmBtns, bpmIn, tap, bpmHint)),
+      h("div", { class: "lb-row" }, h("b", {}, "Key"), h("div", { class: "lb-ctl" },
+        ...keyBtns.map((b, i) => h("span", { class: "lb-kpair" }, b, c.has_audio ? hearBtn(() => keyCams[i], () => accid(CAM_NAME(keyCams[i]))) : null)),
+        h("span", { class: "lb-kpair" }, keySel, c.has_audio ? otherHear : null), ...(c.has_audio ? [drumsBtn, chordVol,
+        h("span", { class: "lb-hint" }, "🔊 plays that key's chord alone for 2 seconds, then brings the track in under it. The right key blends in; a wrong one clashes. Try two in a row to compare.")] : []))),
+      h("div", { class: "lb-row" }, h("b", {}, "Sections"), h("div", { class: "lb-ctl" }, bIn, detected ? useDet : null, markBtn, atHead, markHint, h("span", { class: "lb-hint" }, "Where each section starts, in m:ss or seconds. Leave empty to skip."))),
+      h("div", { class: "lb-row" }, h("b", {}, "Note"), h("div", { class: "lb-ctl" }, noteIn)),
+      sumEl, err,
+      h("div", { class: "lb-acts" },
+        h("button", { type: "button", class: "primary", onclick: () => save(false) }, "Save label"),
+        nextUp ? h("button", { type: "button", onclick: () => save(true), title: `Then open ${nextUp.title || "the next one"}` }, "Save & next ▸") : null,
+        canKeep ? h("button", { type: "button", title: `Tastr is right: label it ${tastrSay}${reviewOn ? ", then open the next one" : ""}`, onclick: () => keepAsIs(st.note.trim(), err) }, "✓ Keep as is") : null,
+        lab ? h("button", { type: "button", class: "linklike", onclick: () => { st.bpm = ""; st.key = ""; st.bounds = ""; st.note = ""; save(false); } }, "Remove label") : null,
+        h("button", { type: "button", class: "linklike", onclick: () => { labelOpen = null; paint(); } }, "Cancel"),
+        h("span", { class: "muted lb-hint", style: "flex-basis:auto" }, "Kept apart from the analysis: re-analyzing never changes it.")));
+  }
+  repaintLabel = { id: c.id, bar, paint };
+  paint();
+  return bar;
+}
+
+// Hear a key: that key's tonic chord (low root, root, third, fifth, octave) alone for 2 s, then ~6 s of the track's drop or
+// chorus fades in under it. With the drums off, the track part is its harmonic part (HPSS, static/hpss.js), what the key detector hears.
+let hearing = null, hearDrums = true, hearChordDb = 0; // chord level against the track, in dB
+const harmCache = { key: null, buf: null, offset: 0 };
+function harmonicClip(audio, c, t0, len) {
+  const key = `${c.id}|${t0.toFixed(2)}|${len}`;
+  if (harmCache.key !== key) {
+    const b = audio.buf, sr = b.sampleRate, pad = 0.5, a = Math.max(0, Math.floor((t0 - pad) * sr)), e = Math.min(b.length, Math.ceil((t0 + len + pad) * sr));
+    const y = new Float32Array(Math.max(0, e - a));
+    for (let ch = 0; ch < b.numberOfChannels; ch++) { const d = b.getChannelData(ch); for (let i = 0; i < y.length; i++) y[i] += d[a + i] / b.numberOfChannels; }
+    const hh = hpssHarmonic(y);
+    if (!hh) return null;
+    const buf = audioCtx().createBuffer(1, hh.length, sr); buf.copyToChannel(hh, 0);
+    Object.assign(harmCache, { key, buf, offset: a / sr });
+  }
+  return harmCache;
+}
+async function hearKey(c, cam, btn) {
+  const was = hearing; stopAllPlayback(); if (was && was.btn === btn) return;
+  const pc = camPc(cam); if (pc == null) return;
+  btn.textContent = "…";
+  const sec = (c.sections || []).find((q) => /drop|chorus/i.test(q.label || "")) || (c.sections || [])[1];
+  // the chord alone first (SOLO s), then the track fades in under it, so you hear what it adds
+  const SOLO = 2, TRACK = 6, t0 = sec ? sec.start + 0.05 : c.duration * 0.3, len = SOLO + TRACK;
+  let audio, part;
+  try {
+    audio = await trackAudio(c);
+    if (hearDrums) part = { buf: audio.buf, offset: 0 };
+    else { await delay(0); part = harmonicClip(audio, c, t0, TRACK) || { buf: audio.buf, offset: 0 }; }
+  } catch (e) { btn.textContent = "🔊"; setStatus(`Couldn't load the audio: ${e.message}`, true); return; }
+  if (!btn.isConnected) { btn.textContent = "🔊"; return; }
+  const ctx = audioCtx(); if (ctx.state === "suspended") ctx.resume();
+  const now = ctx.currentTime + 0.05;
+  const out = ctx.createGain(); out.gain.value = 1; out.connect(ctx.destination);
+  const src = ctx.createBufferSource(); src.buffer = part.buf; const tg = ctx.createGain(); src.connect(tg).connect(out);
+  tg.gain.setValueAtTime(0, now + SOLO); tg.gain.linearRampToValueAtTime(0.7, now + SOLO + 0.6); src.start(now + SOLO, Math.max(0, t0 - part.offset), TRACK);
+  const minor = cam.endsWith("A"), root = 48 + pc, notes = [root - 12, root, root + (minor ? 3 : 4), root + 7, root + 12];
+  const lp = ctx.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 1800;
+  const pad = ctx.createGain(), lvl = ctx.createGain(); lvl.gain.value = Math.pow(10, hearChordDb / 20); lp.connect(pad).connect(lvl).connect(out);
+  pad.gain.setValueAtTime(0, now); pad.gain.linearRampToValueAtTime(0.16, now + 0.4); pad.gain.setValueAtTime(0.16, now + len - 0.6); pad.gain.linearRampToValueAtTime(0, now + len);
+  const oscs = notes.map((n, i) => { const o = ctx.createOscillator(); o.type = i ? "triangle" : "sine"; o.frequency.value = 440 * Math.pow(2, (n - 69) / 12); const g = ctx.createGain(); g.gain.value = i ? 0.22 : 0.4; o.connect(g).connect(lp); o.start(now); o.stop(now + len); return o; });
+  btn.textContent = "■"; btn.classList.add("on");
+  // stop() clears onended first, or a restart's late onended would reset the new clip's button
+  const me = { btn, c, cam, lvl, stop() { src.onended = null; try { src.stop(); } catch (_) {} oscs.forEach((o) => { try { o.stop(); } catch (_) {} }); out.disconnect(); btn.textContent = "🔊"; btn.classList.remove("on"); if (hearing === me) hearing = null; if (player === me) player = null; } };
+  hearing = me; player = me;
+  src.onended = () => me.stop();
+}
+
 async function openTrack(id) {
   currentId = id;
   // Update the highlight in place so the list keeps its scroll position and focus.
@@ -588,6 +989,7 @@ async function openTrack(id) {
     li.classList.toggle("active", on);
     if (on) { li.setAttribute("aria-current", "true"); li.scrollIntoView({ block: "nearest" }); } else li.removeAttribute("aria-current");
   });
+  document.querySelectorAll("#review-list > li[data-id]").forEach((li) => li.classList.toggle("active", +li.dataset.id === id)); // both review tabs
   switchTo("library");
   try {
     const [card] = await Promise.all([api(`/api/tracks/${id}`), loadEdits(id)]);
@@ -655,6 +1057,7 @@ function renderCard(c) {
   if (!savedEdits.has(c.id)) loadEdits(c.id).then(() => { if (savedEdits.has(c.id) && currentId === c.id && $("card").dataset.id === String(c.id)) renderCard(c); });
   if (c.stems_state && !stemsBusy(stemStatus.get(c.id) || {})) { stemStatus.set(c.id, { state: c.stems_state }); pollStems(); } // a fresh card knows best
   sectionBus = new EventTarget();
+  markHook = null; charts.clear();
   const core = c.core || {};
   const key = core.key;
   const bpmSure = isNum(core.bpm) ? sureness(core.bpm_likely_correct, core.bpm_confidence) : null;
@@ -685,6 +1088,8 @@ function renderCard(c) {
   const listed = lookupLine(c);
   if (listed) head.append(listed);
   head.append(h("div", { class: "card-filter", "data-kind": "head", hidden: "" }));
+  if (labelOpen !== null && labelOpen !== c.id) labelOpen = null;
+  head.append(labelBar(c));
   root.append(head);
 
   if (c.metadata) root.append(metadataSection(c.metadata));
@@ -729,16 +1134,68 @@ function renderCard(c) {
   const errs = Object.entries(c.errors || {});
   if (errs.length) {
     root.append(h("div", { class: "errors" }, "Some stages failed: ", errs.map(([k, v]) => h("div", {}, `${k}: ${v}`))));
-  }  syncCardFilters(visibleTracks().length);
+  }
+  placeSections();
+  syncCardFilters(visibleTracks().length);
 }
 
-// Card sections are <details>; which are open is remembered across tracks (Metadata starts closed).
+// Card sections are <details>; which are open is remembered across tracks (Metadata starts closed). Each header has a drag
+// grip and up/down buttons that move the section; the order is the reader's own (see secOrder).
 const openState = {};
 function section(key, title, body, defaultOpen = true) {
   const open = key in openState ? openState[key] : defaultOpen;
-  const det = h("details", { class: "sec", ...(open ? { open: "" } : {}) }, h("summary", {}, title), h("div", { class: "sec-content" }, body));
+  const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const name = typeof title === "string" ? title : (SEC_NAMES[key] || key);
+  const handle = h("span", { class: "sec-grip", draggable: "true", title: "Drag to move this section. The order sticks for every track.", "aria-hidden": "true", onclick: stop }, "⠿");
+  const up = h("button", { type: "button", class: "sec-mv", "data-dir": "-1", title: `Move ${name} up`, "aria-label": `Move ${name} up`, onclick: (e) => { stop(e); moveSection(key, -1, e.currentTarget); } }, "↑");
+  const down = h("button", { type: "button", class: "sec-mv", "data-dir": "1", title: `Move ${name} down`, "aria-label": `Move ${name} down`, onclick: (e) => { stop(e); moveSection(key, 1, e.currentTarget); } }, "↓");
+  const det = h("details", { class: "sec", "data-sec": key, ...(open ? { open: "" } : {}) },
+    h("summary", {}, handle, title, h("span", { class: "sec-move" }, up, down)), h("div", { class: "sec-content" }, body));
   det.addEventListener("toggle", () => { openState[key] = det.open; });
+  // drag by the grip onto another section's header
+  handle.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/x-tastr-sec", key); e.dataTransfer.effectAllowed = "move"; det.classList.add("sec-dragging"); });
+  handle.addEventListener("dragend", () => { det.classList.remove("sec-dragging"); document.querySelectorAll(".sec-drop-above,.sec-drop-below").forEach((x) => x.classList.remove("sec-drop-above", "sec-drop-below")); });
+  const summ = det.firstChild;
+  const below = (e) => { const r = summ.getBoundingClientRect(); return e.clientY > r.top + r.height / 2; };
+  summ.addEventListener("dragover", (e) => { if (!e.dataTransfer.types.includes("text/x-tastr-sec")) return; e.preventDefault(); const b = below(e); det.classList.toggle("sec-drop-below", b); det.classList.toggle("sec-drop-above", !b); });
+  summ.addEventListener("dragleave", () => det.classList.remove("sec-drop-above", "sec-drop-below"));
+  summ.addEventListener("drop", (e) => { const from = e.dataTransfer.getData("text/x-tastr-sec"); det.classList.remove("sec-drop-above", "sec-drop-below"); if (!from || from === key) return; e.preventDefault(); dropSection(from, key, below(e)); });
   return det;
+}
+// Card section order: the reader's own, kept in this browser (localStorage tastr-sec-order) and used for every track.
+// Unknown keys are dropped and new ones appended, so a section added later just shows up at the end.
+const SEC_DEFAULT = ["meta", "energy", "vibe", "groove", "try"];
+const SEC_NAMES = { meta: "Metadata", energy: "Energy & sections", vibe: "Vibe", groove: "Drums, bass & chords", try: "Try this in" };
+let secOrder = (() => {
+  try { const v = JSON.parse(localStorage.getItem("tastr-sec-order") || "null"); if (Array.isArray(v)) return [...v.filter((k) => SEC_DEFAULT.includes(k)), ...SEC_DEFAULT.filter((k) => !v.includes(k))]; } catch (_) {}
+  return [...SEC_DEFAULT];
+})();
+const secCustom = () => secOrder.join() !== SEC_DEFAULT.join();
+function saveSecOrder() { try { if (secCustom()) localStorage.setItem("tastr-sec-order", JSON.stringify(secOrder)); else localStorage.removeItem("tastr-sec-order"); } catch (_) {} }
+// Put the card's sections in secOrder, in place (charts and players keep their state).
+function placeSections() {
+  const root = $("card"), els = {}; root.querySelectorAll(":scope > details.sec[data-sec]").forEach((d) => (els[d.dataset.sec] = d));
+  const tail = root.querySelector(":scope > .errors, :scope > .sec-order-note");
+  for (const k of secOrder) if (els[k]) root.insertBefore(els[k], tail);
+  const shown = secOrder.filter((k) => els[k]);
+  shown.forEach((k, i) => { els[k].querySelector('.sec-mv[data-dir="-1"]').disabled = i === 0; els[k].querySelector('.sec-mv[data-dir="1"]').disabled = i === shown.length - 1; });
+  let note = root.querySelector(":scope > .sec-order-note");
+  if (secCustom()) {
+    if (!note) { note = h("p", { class: "sec-order-note muted" }, "You've changed the section order. ", h("button", { type: "button", class: "linklike", onclick: () => { secOrder = [...SEC_DEFAULT]; saveSecOrder(); placeSections(); } }, "Reset order")); root.append(note); }
+  } else note?.remove();
+}
+const secFlash = (k) => { const d = $("card").querySelector(`:scope > details[data-sec="${k}"]`); if (!d) return; d.classList.remove("sec-moved"); void d.offsetWidth; d.classList.add("sec-moved"); };
+// Swap with the neighbour among the sections shown; focus stays on the button, or the other arrow once this one is disabled.
+function moveSection(key, dir, btn) {
+  const shown = secOrder.filter((k) => $("card").querySelector(`:scope > details[data-sec="${k}"]`)), i = shown.indexOf(key), j = i + dir;
+  if (i < 0 || j < 0 || j >= shown.length) return;
+  [shown[i], shown[j]] = [shown[j], shown[i]];
+  secOrder = [...shown, ...secOrder.filter((k) => !shown.includes(k))]; saveSecOrder(); placeSections(); secFlash(key);
+  if (btn && btn.disabled) btn.parentElement.querySelector(".sec-mv:not(:disabled)")?.focus(); else btn?.focus();
+}
+function dropSection(from, onto, after) {
+  const o = secOrder.filter((k) => k !== from), at = o.indexOf(onto) + (after ? 1 : 0);
+  o.splice(at, 0, from); secOrder = o; saveSecOrder(); placeSections(); secFlash(from);
 }
 
 function metadataSection(meta) {
@@ -905,9 +1362,13 @@ function strudelView(c) {
     h("div", { class: "st-actions" }, open, copy, say), pre, note);
 }
 
-const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+// Key names as musicians spell them (the Camelot wheel's spellings: B♭ not A#), with real ♭ and ♯ signs. Display only;
+// stored values stay ASCII ("Bb major").
+const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]; // note values as the bass and chord parts store them
+const KEY_SPELL = ["C", "D♭", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
+const accid = (s) => String(s).replace(/([A-G])b(?![a-z])/g, "$1♭").replace(/([A-G])#/g, "$1♯");
 function keyName(k) {
-  return isNum(k.tonic) ? `${NOTES[k.tonic % 12]} ${k.mode || ""}`.trim() : "–";
+  return isNum(k.tonic) ? `${k.mode === "minor" && k.tonic % 12 === 1 ? "C♯" : KEY_SPELL[k.tonic % 12]} ${k.mode || ""}`.trim() : "–";
 }
 
 // ---------- track audio: the original file for playback/scrubbing, and waveform/spectrogram picture data ----------
@@ -1138,7 +1599,18 @@ function energyChart(series, sections, duration, card) {
   const say = (m) => { note.textContent = m; note.classList.toggle("error", !!m); };
   const liveHint = h("div", { class: "live-hint", hidden: "" }, "Press ▶ to stream the spectrogram as the track plays");
   let savedView = null;
-  wrap.append(modes, bar, h("div", { class: "chart-hostwrap" }, host, liveHint, busy), tip, ...(canPlay ? [transport] : []), keyP, note);
+  // shown while you mark section starts from the label panel (mirrors its controls, so marking works in the expanded view too)
+  const markBar = h("div", { class: "mark-bar", hidden: "" });
+  function paintMarkBar() {
+    const mk = markList(); markBar.hidden = !mk; bar.lastChild.hidden = !!mk; if (!mk) return;
+    markBar.replaceChildren(h("b", {}, "Marking section starts"),
+      h("span", { class: "muted" }, mk.length ? `${mk.length}: ${mk.map(fmtMark).join(" ")}` : "none yet"),
+      canPlay ? h("button", { type: "button", title: "Add a start where the playhead is (or press M)", onclick: () => markHook.add(tNow(), true) }, "＋ At playhead (M)") : null,
+      mk.length ? h("button", { type: "button", title: "Remove the last start you added", onclick: () => markHook.undo() }, "↶ Undo") : null,
+      h("button", { type: "button", class: "primary", onclick: () => markHook.done() }, "✓ Done marking"),
+      h("span", { class: "muted hint" }, "Click to add (snaps to bars, Alt = exact), drag a mark to move it, click a mark to remove it."));
+  }
+  wrap.append(modes, bar, markBar, h("div", { class: "chart-hostwrap" }, host, liveHint, busy), tip, ...(canPlay ? [transport] : []), keyP, note);
 
   const x = (t) => L + ((t - view.a) / (view.b - view.a)) * (W - L - R);
   const tAt = (px) => view.a + ((px - L) / (W - L - R)) * (view.b - view.a);
@@ -1232,6 +1704,20 @@ function energyChart(series, sections, duration, card) {
       }
     }
     s.append(plot);
+    // your section starts, while marking them from the label panel
+    const mk = markList();
+    paintMarkBar();
+    if (mk && mode !== "live") {
+      const g = svg("g", { class: "marks", "clip-path": `url(#${clipId})` });
+      mk.forEach((t, i) => {
+        if (t < view.a || t > view.b) return;
+        const xx = x(t);
+        g.append(svg("line", { x1: xx, x2: xx, y1: T, y2: H - B, stroke: "var(--accent)", "stroke-width": 2, "stroke-dasharray": "5 3" }));
+        g.append(svg("rect", { x: xx - 9, y: H - B - 15, width: 18, height: 15, rx: 3, fill: "var(--accent)" }));
+        g.append(svg("text", { x: xx, y: H - B - 4, "text-anchor": "middle", fill: "#fff", style: "font-size:10px;font-weight:700" }, txt(String(i + 1))));
+      });
+      s.append(g);
+    }
     const yLabel = (text) => s.append(svg("text", { x: 10, y: (H - B + T) / 2, "text-anchor": "middle", transform: `rotate(-90 10 ${(H - B + T) / 2})` }, txt(text)));
     if (mode === "energy") {
       [0, 0.5, 1].forEach((v) => s.append(svg("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, txt(v))));
@@ -1290,6 +1776,8 @@ function energyChart(series, sections, duration, card) {
     if (svgEl) for (const q of [".cursor", ".cursor-dot"]) { const el = svgEl.querySelector(q); if (el) el.setAttribute("opacity", 0); }
   }
   let drag = null;
+  const markList = () => (markHook && markHook.cardId === card.id ? markHook.get() : null);
+  const nearMark = (px) => { const mk = markList(); if (!mk) return -1; let bi = -1, bd = 7; mk.forEach((t, i) => { const d = Math.abs(x(t) - px); if (d <= bd) { bd = d; bi = i; } }); return bi; };
   const atEdge = () => view.b - view.a < end - 0.01;
   const nearHead = (px) => { if (!canPlay) return false; const t = tNow(); return t >= view.a && t <= view.b && Math.abs(px - x(t)) <= 8; };
   const setHot = (on) => svgEl.classList.toggle("head-hot", on);
@@ -1297,6 +1785,8 @@ function energyChart(series, sections, duration, card) {
     if (mode === "live") { if (playing) me.stop(); else play(); return; } // Live: the chart is one big play/pause button
     svgEl.setPointerCapture(e.pointerId);
     const px = toVB(e).px;
+    const mi = nearMark(px);
+    if (mi >= 0) { drag = { mark: mi, list: markList(), px, moved: false }; svgEl.style.cursor = "ew-resize"; hideTip(); return; }
     if (nearHead(px)) { const was = playing; if (was) me.stop(); drag = { scrub: true, was, px }; setHot(true); svgEl.style.cursor = "grabbing"; hideTip(); scrubStart(); return; }
     drag = { px, a: view.a, b: view.b };
   });
@@ -1304,6 +1794,12 @@ function energyChart(series, sections, duration, card) {
     if (mode === "live") return;
     const { px } = toVB(e);
     if (drag && drag.scrub) { if (scrub) scrub.target = Math.max(0, Math.min(end, tAt(Math.max(L, Math.min(W - R, px))))); return; }
+    if (drag && drag.mark != null) {
+      if (Math.abs(px - drag.px) < 3 && !drag.moved) return;
+      drag.moved = true;
+      const t = tAt(Math.max(L, Math.min(W - R, px))); drag.list[drag.mark] = +(e.altKey ? t : snapBar(card, t)).toFixed(2); markHook.set(drag.list, false); draw(); return;
+    }
+    if (!drag && markList() && nearMark(px) >= 0) { svgEl.style.cursor = "ew-resize"; setHot(false); hideTip(); return; }
     if (!drag) { const hot = nearHead(px); setHot(hot); svgEl.style.cursor = hot || atEdge() ? "grab" : "crosshair"; if (hot) { hideTip(); return; } }
     if (drag && atEdge()) {
       const dt = ((px - drag.px) / (W - L - R)) * (drag.b - drag.a);
@@ -1315,6 +1811,11 @@ function energyChart(series, sections, duration, card) {
   const up = (e) => {
     if (mode === "live") return;
     if (drag && drag.scrub) { const was = drag.was; drag = null; setHot(false); svgEl.style.cursor = "grab"; scrubEnd(); if (was) play(); else paintHead(); return; }
+    // marking: a click without a move removes the mark it's on; a click elsewhere adds one (snapped to a bar line unless Alt)
+    if (drag && drag.mark != null) { const d = drag; drag = null; if (!d.moved) d.list.splice(d.mark, 1); if (markHook) markHook.set(d.list); draw(); svgEl.style.cursor = "crosshair"; return; }
+    if (e && e.type === "pointerup" && drag && Math.abs(toVB(e).px - drag.px) < 3 && markList()) {
+      const t0 = tAt(toVB(e).px); if (canPlay) seek(t0); markHook.add(t0, !e.altKey); drag = null; return;
+    }
     if (e && e.type === "pointerup" && drag && Math.abs(toVB(e).px - drag.px) < 3) {
       const t0 = tAt(toVB(e).px), si = sections.findIndex((q) => t0 >= q.start && t0 < q.end);
       if (canPlay) seek(t0);
@@ -1330,6 +1831,8 @@ function energyChart(series, sections, duration, card) {
     e.preventDefault();
     zoom(Math.exp(Math.sign(e.deltaY) * 0.25), tAt(Math.max(L, Math.min(W - R, toVB(e).px))));
   }, { passive: false });
+
+  charts.set(card.id, { now: () => tNow(), draw: () => draw(), mode: () => mode, setMode: (k) => setMode(k), el: wrap, big: (on) => { if (on !== wrap.classList.contains("big")) setBig(on); } });
 
   // ---- Live: an AnalyserNode on the playing audio drives a canvas over the plot area ----
   const LIVE_SPAN = 10; // seconds of history across the 2D view
@@ -1606,7 +2109,10 @@ function energyChart(series, sections, duration, card) {
     expandBtn.setAttribute("aria-pressed", String(on)); expandBtn.textContent = on ? "✕ Close" : "⤢ Expand";
     fsBtn.hidden = !on || !document.fullscreenEnabled;
     if (on) { backdrop = h("div", { class: "chart-backdrop", onclick: () => setBig(false) }); document.body.append(backdrop); document.addEventListener("keydown", onEsc); expandBtn.focus(); }
-    else { backdrop?.remove(); backdrop = null; document.removeEventListener("keydown", onEsc); if (document.fullscreenElement === wrap) document.exitFullscreen(); }
+    else {
+      backdrop?.remove(); backdrop = null; document.removeEventListener("keydown", onEsc); if (document.fullscreenElement === wrap) document.exitFullscreen();
+      if (markList()) markHook.done(); // closing the expanded chart ends marking too
+    }
     hideTip();
     requestAnimationFrame(fitSize);
   }
@@ -1614,7 +2120,7 @@ function energyChart(series, sections, duration, card) {
   function fitSize() {
     const big = wrap.classList.contains("big") || document.fullscreenElement === wrap;
     if (big) {
-      const used = [modes, bar, transport, keyP, note].reduce((n, el) => n + (el.isConnected && !el.hidden ? el.offsetHeight + 10 : 0), 0);
+      const used = [modes, bar, markBar, transport, keyP, note].reduce((n, el) => n + (el.isConnected && !el.hidden ? el.offsetHeight + 10 : 0), 0);
       W = Math.max(320, Math.round(host.clientWidth)); H = Math.max(220, Math.round(wrap.clientHeight - used - 40));
     } else { W = 700; H = 220; }
     svgEl.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -1685,19 +2191,20 @@ function laneRows(pattern, prev, measured, onToggle, help, orig, laneCtl) {
 // ---------- sequencer (WebAudio, no samples) and MIDI export ----------
 let actx = null, noiseBuf = null, player = null;
 // Ableton-style number box: drag up or down to change the value (Shift for fine steps). A click without a drag still lets you type.
-function dragNumber(input) {
-  const min = +input.min, max = +input.max, step = +input.step || 1;
+// opts.coarse: the step per drag notch without Shift (default: the input's step); opts.from(): the start value when the box is empty.
+function dragNumber(input, opts = {}) {
+  const min = +input.min, max = +input.max, step = +input.step || 1, coarse = opts.coarse || step, dec = (String(step).split(".")[1] || "").length;
   input.classList.add("drag-num");
   input.title = "Drag up or down to change (Shift: fine). Click to type.";
   input.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 || document.activeElement === input) return; // already typing: leave the caret alone
-    const y0 = e.clientY, v0 = +input.value || 0;
+    const y0 = e.clientY, v0 = input.value === "" && opts.from ? opts.from() : +input.value || 0;
     let dragging = false;
     const move = (ev) => {
       const dy = y0 - ev.clientY;
       if (!dragging && Math.abs(dy) < 3) return;
       if (!dragging) { dragging = true; input.setPointerCapture(e.pointerId); document.body.classList.add("num-dragging"); }
-      const v = Math.max(min, Math.min(max, v0 + Math.round(dy / (ev.shiftKey ? 12 : 3)) * step));
+      const v = +Math.max(min, Math.min(max, v0 + Math.round(dy / (ev.shiftKey ? 12 : 3)) * (ev.shiftKey ? step : coarse))).toFixed(dec);
       if (+input.value !== v) { input.value = String(v); input.dispatchEvent(new Event("input", { bubbles: true })); }
     };
     const up = () => {
@@ -2541,6 +3048,7 @@ function trackMenu(c) {
       (c.lookup_providers || []).length ? item("Look up BPM & key online", { onclick: lookUp }) : null,
       drumsItem(),
       stemsItem(),
+      inReview(c.id) ? item("Remove from review", { onclick: () => { close(true); setInReview([c.id], false); } }) : item("Add to review", { onclick: () => { close(true); setInReview([c.id], true); } }),
       h("hr", { class: "menu-sep" }),
       item("Delete track…", { danger: true, onclick: showConfirm })].filter(Boolean));
   };
@@ -3340,7 +3848,7 @@ function camelotWheel(host, note) {
     const g = svg("g", { class: "cam-cell", tabindex: "0", role: "button", "aria-label": `${id}, ${CAM_KEYS[ring][n - 1]}` },
       svg("path", { d: arc(r0, r1, a0, a1) }),
       svg("text", { x: tx, y: ty - 3, class: "cam-id" }, id),
-      svg("text", { x: tx, y: ty + 8, class: "cam-key" }, CAM_KEYS[ring][n - 1]));
+      svg("text", { x: tx, y: ty + 8, class: "cam-key" }, accid(CAM_KEYS[ring][n - 1])));
     g.addEventListener("click", () => pick(id));
     g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(id); } });
     cells[id] = g; root.append(g);
@@ -3351,7 +3859,7 @@ function camelotWheel(host, note) {
     const n = parseInt(id, 10), ring = id.slice(-1), other = ring === "A" ? "B" : "A";
     const near = [`${(n + 10) % 12 + 1}${ring}`, `${n % 12 + 1}${ring}`, `${n}${other}`];
     for (const [k, g] of Object.entries(cells)) g.setAttribute("class", "cam-cell" + (k === id ? " sel" : near.includes(k) ? " near" : ""));
-    note.textContent = `${id} (${CAM_KEYS[ring][n - 1]}) mixes with ${near.map((k) => `${k} (${CAM_KEYS[k.slice(-1)][parseInt(k, 10) - 1]})`).join(", ")}.`;
+    note.textContent = `${id} (${accid(CAM_KEYS[ring][n - 1])}) mixes with ${near.map((k) => `${k} (${accid(CAM_KEYS[k.slice(-1)][parseInt(k, 10) - 1])})`).join(", ")}.`;
   }
   host.replaceChildren(root);
   return pick;

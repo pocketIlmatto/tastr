@@ -69,6 +69,8 @@
         <dt>Drag</dt><dd>Pan when zoomed in</dd>
         <dt>Click in <b>Live</b></dt><dd>Play or pause</dd>
         <dt>Click <b>⤢ Expand</b></dt><dd>Show the chart bigger; <kbd>Esc</kbd> puts it back</dd>
+        <dt><kbd>M</kbd> while marking</dt><dd>Add a section start at the playhead (<b>✎ Mark on chart</b> in the label panel)</dd>
+        <dt><kbd>Alt</kbd> click while marking</dt><dd>Add a start at the exact spot, not the nearest bar</dd>
       </dl>
     </section>
     <section>
@@ -109,7 +111,9 @@
     </div>
     <div class="split">
       <aside id="lib">
-        <div class="lib-head"><span class="lib-title">Tracks <span id="lib-total" class="muted"></span></span>
+        <div class="lib-head"><div class="lib-tabs" role="tablist" aria-label="Sidebar">
+          <button type="button" role="tab" id="lib-tracks" class="lib-title lib-tab" aria-selected="true" title="Your tracks">Tracks <span id="lib-total" class="muted"></span></button>
+          <button type="button" role="tab" id="lib-review" class="lib-title lib-tab" aria-selected="false" title="Tracks most likely analyzed wrong, to check and label">Review <span id="lib-review-n"></span></button></div>
           <button type="button" id="lib-collapse" aria-expanded="true" aria-controls="lib-body" title="Hide the track list">«</button></div>
         <div id="lib-quick">
           <input id="lib-quick-q" type="search" placeholder="Jump to a track…" aria-label="Find a track and open it" aria-controls="lib-quick-list" autocomplete="off">
@@ -120,7 +124,7 @@
           <input id="lib-q" type="search" placeholder="Search title or artist" aria-label="Search tracks">
           <div class="lib-row">
             <label>Sort <select id="lib-sort" aria-label="Sort tracks">
-              <option value="new">Newest</option><option value="title">Title A–Z</option><option value="bpm">BPM, slow to fast</option>
+              <option value="new" title="Newest upload first">Newest</option><option value="old" title="Oldest upload first">Oldest</option><option value="title">Title A–Z</option><option value="bpm">BPM, slow to fast</option>
               <option value="bpmd">BPM, fast to slow</option><option value="key">Key</option><option value="energy">Energy, high to low</option><option value="len">Length, long to short</option>
             </select></label>
             <button type="button" id="lib-fbtn" aria-expanded="false" aria-controls="lib-filters">Filters</button>
@@ -129,11 +133,19 @@
             <label>Vibe <select id="lib-vibe"></select></label>
             <label>Key <select id="lib-key"></select></label>
             <label class="lib-bpm">BPM <input id="lib-bmin" type="number" min="0" max="300" placeholder="min" aria-label="Minimum BPM"> – <input id="lib-bmax" type="number" min="0" max="300" placeholder="max" aria-label="Maximum BPM"></label>
+            <label>Uploaded <select id="lib-up"><option value="">Any time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="old">More than 30 days ago</option><option value="range">Between dates…</option></select></label>
+            <label id="lib-up-range" class="lib-bpm" hidden>From <input id="lib-up-from" type="date" aria-label="Uploaded from"> to <input id="lib-up-to" type="date" aria-label="Uploaded until"></label>
+            <label>Review <select id="lib-lab"><option value="">Any</option><option value="need">Needs review</option><option value="yes">Reviewed (labeled)</option><option value="no">Not reviewed yet</option></select></label>
           </div>
           <div class="lib-count muted"><span id="lib-n" role="status" aria-live="polite"></span> <button type="button" id="lib-clear" class="linklike" hidden>Clear filters</button><button type="button" id="lib-sel" aria-pressed="false" title="Select several tracks for bulk actions (or Ctrl/Cmd-click a track)">Select</button></div>
           <div id="lib-bulk" hidden></div>
         </div>
         <ul id="track-list" aria-label="Tracks"></ul>
+        <div id="review" hidden>
+          <p class="rv-intro muted">Tracks most likely analyzed wrong, most suspect first. Checking them tells Tastr how it does on <i>your</i> music: every label also scores future engine changes.</p>
+          <div class="rv-tabs" role="tablist"><button type="button" role="tab" id="rv-tab-todo" aria-selected="true">To review <span id="rv-n-todo"></span></button><button type="button" role="tab" id="rv-tab-done" aria-selected="false">Reviewed <span id="rv-n-done"></span></button></div>
+          <ul id="review-list" aria-label="Tracks to review"></ul>
+        </div>
         </div>
       </aside>
       <article id="card"><p class="muted">Select a track.</p></article>
@@ -412,6 +424,7 @@
 </main>
 <script src="/static/strudel.js"></script>
 <script src="/static/engine.js"></script>
+<script src="/static/hpss.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

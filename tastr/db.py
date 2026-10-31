@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     stages_json     TEXT,
     errors_json     TEXT,
     analyzed_at     TEXT NOT NULL,
+    -- created_at: when it was first added (its upload), kept when it is re-analyzed
+    created_at      TEXT,
     owner           TEXT,  -- who uploaded it on a hosted server, as an Access email; NULL on your own machine
     UNIQUE (sha256, owner)
 );
@@ -130,6 +132,17 @@ CREATE TABLE IF NOT EXISTS track_labels (
     key_name   TEXT,     -- as given, e.g. "A minor"; checked by tastr.engine.bench.datasets.parse_key
     boundaries TEXT,     -- section starts in seconds, space-separated
     note       TEXT,
+    updated_at TEXT NOT NULL,
+    kept       INTEGER NOT NULL DEFAULT 0,  -- 1 when saved with "Keep as is": Tastr's own reading, confirmed
+    tastr_bpm  REAL,     -- Tastr's BPM and key when the label was saved, so the review log can say what changed
+    tastr_key  TEXT
+);
+
+-- Tracks you put in the review list yourself (flagged) or took out of it (skipped); see labels.review_queue.
+-- Per track, so per person on a hosted server (a track has one owner). Re-analyzing keeps them.
+CREATE TABLE IF NOT EXISTS review_flags (
+    track_id   INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    state      TEXT NOT NULL CHECK (state IN ('flagged', 'skipped')),
     updated_at TEXT NOT NULL
 );
 
@@ -229,6 +242,14 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
             conn.execute("ALTER TABLE tracks ADD COLUMN album TEXT")  # databases created before album existed
         if "link" not in {r[1] for r in conn.execute("PRAGMA table_info(events)")}:
             conn.execute("ALTER TABLE events ADD COLUMN link TEXT")  # databases created before deploy links
+        if "created_at" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
+            conn.execute("ALTER TABLE tracks ADD COLUMN created_at TEXT")
+        # tracks from before upload times were kept: their last analysis is the best guess there is
+        conn.execute("UPDATE tracks SET created_at = analyzed_at WHERE created_at IS NULL")
+        label_cols = {r[1] for r in conn.execute("PRAGMA table_info(track_labels)")}
+        for col, ddl in (("kept", "INTEGER NOT NULL DEFAULT 0"), ("tastr_bpm", "REAL"), ("tastr_key", "TEXT")):
+            if col not in label_cols:
+                conn.execute(f"ALTER TABLE track_labels ADD COLUMN {col} {ddl}")  # databases from before the review log
         conn.execute("INSERT OR IGNORE INTO meta VALUES ('db_schema_version', ?)", (str(DB_SCHEMA_VERSION),))
         conn.commit()
     conn.row_factory = sqlite3.Row
@@ -294,6 +315,7 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
                 conn.execute(f"DELETE FROM {table} WHERE track_id = ?", (track_id,))
         else:
             row["owner"] = owner
+            row["created_at"] = row["analyzed_at"]
             cols = ", ".join(row)
             vals = ", ".join(f":{col}" for col in row)
             track_id = conn.execute(f"INSERT INTO tracks ({cols}) VALUES ({vals})", row).lastrowid
@@ -355,7 +377,8 @@ def list_tracks(conn: sqlite3.Connection, owner: str | None = None) -> list[dict
     """All tracks, or only `owner`'s on a hosted server."""
     where, args = ("WHERE owner = ?", (owner,)) if owner else ("", ())
     rows = conn.execute(
-        f"SELECT id, title, artist, duration, bpm, key_name, camelot, energy, analyzed_at FROM tracks {where} ORDER BY id",
+        f"SELECT id, title, artist, duration, bpm, key_name, camelot, energy, analyzed_at, created_at FROM tracks {where} "
+        "ORDER BY id",
         args,
     ).fetchall()
     return [dict(r) for r in rows]
@@ -380,31 +403,70 @@ def get_lookups(conn: sqlite3.Connection, track_id: int) -> list[dict[str, Any]]
 
 
 LABEL_FIELDS = ("bpm", "key_name", "boundaries", "note")
+_LABEL_COLS = LABEL_FIELDS + ("updated_at", "kept", "tastr_bpm", "tastr_key")
+
+
+def _label_row(r) -> dict[str, Any]:
+    d = dict(zip(_LABEL_COLS, r))
+    d["kept"] = bool(d["kept"])
+    return d
 
 
 def get_labels(conn: sqlite3.Connection, track_id: int) -> dict[str, Any]:
-    r = conn.execute("SELECT bpm, key_name, boundaries, note, updated_at FROM track_labels WHERE track_id = ?",
-                     (track_id,)).fetchone()
-    return dict(zip(LABEL_FIELDS + ("updated_at",), r)) if r else {}
+    r = conn.execute(f"SELECT {', '.join(_LABEL_COLS)} FROM track_labels WHERE track_id = ?", (track_id,)).fetchone()
+    return _label_row(r) if r else {}
 
 
 def set_labels(conn: sqlite3.Connection, track_id: int, labels: dict[str, Any]) -> dict[str, Any]:
-    """Replace the track's labels with the given fields (checked by tastr.labels); none set clears them."""
+    """Replace the track's labels with the given fields (checked by tastr.labels); none set clears them.
+    `kept` marks a "Keep as is" (Tastr's own BPM and key, confirmed). Tastr's BPM and key at this moment are
+    stored with the label, and saving one takes the track off the review list you put it on."""
     vals = [labels.get(f) for f in LABEL_FIELDS]
     with conn:
         conn.execute("DELETE FROM track_labels WHERE track_id = ?", (track_id,))
         if any(v not in (None, "") for v in vals[:3]):
-            conn.execute("INSERT INTO track_labels VALUES (?, ?, ?, ?, ?, ?)", (track_id, *vals, _now()))
+            t = conn.execute("SELECT bpm, key_name FROM tracks WHERE id = ?", (track_id,)).fetchone()
+            conn.execute(f"INSERT INTO track_labels (track_id, {', '.join(_LABEL_COLS)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (track_id, *vals, _now(), int(bool(labels.get("kept"))), t[0] if t else None, t[1] if t else None))
+            conn.execute("DELETE FROM review_flags WHERE track_id = ? AND state = 'flagged'", (track_id,))
     return get_labels(conn, track_id)
 
 
 def list_labels(conn: sqlite3.Connection, owner: str | None = None) -> list[dict[str, Any]]:
-    """Every labeled track with its audio path and title, oldest label first."""
-    sql = ("SELECT t.id, t.local_path, t.title, t.artist, l.bpm, l.key_name, l.boundaries, l.note, l.updated_at "
+    """Every labeled track with its audio path and title, oldest label first. tastr_bpm / tastr_key are Tastr's
+    reading when the label was saved (its current one for labels saved before that was kept)."""
+    sql = ("SELECT t.id, t.local_path, t.title, t.artist, l.bpm, l.key_name, l.boundaries, l.note, l.updated_at, l.kept, "
+           "COALESCE(l.tastr_bpm, t.bpm), COALESCE(l.tastr_key, t.key_name) "
            "FROM track_labels l JOIN tracks t ON t.id = l.track_id")
     rows = conn.execute(sql + (" WHERE t.owner IS ?" if owner is not None else "") + " ORDER BY l.updated_at",
                         (owner,) if owner is not None else ())
-    return [dict(zip(("track_id", "path", "title", "artist", *LABEL_FIELDS, "updated_at"), r)) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(zip(("track_id", "path", "title", "artist", *_LABEL_COLS), r))
+        d["kept"] = bool(d["kept"])
+        out.append(d)
+    return out
+
+
+REVIEW_STATES = ("flagged", "skipped")
+
+
+def review_flags(conn: sqlite3.Connection, owner: str | None = None) -> dict[int, str]:
+    """Track id -> "flagged" (you put it in the review list) or "skipped" (you took it out)."""
+    sql = "SELECT f.track_id, f.state FROM review_flags f JOIN tracks t ON t.id = f.track_id"
+    rows = conn.execute(sql + (" WHERE t.owner IS ?" if owner is not None else ""), (owner,) if owner is not None else ())
+    return dict(rows.fetchall())
+
+
+def set_review_flag(conn: sqlite3.Connection, track_id: int, state: str | None) -> None:
+    """Put a track in the review list ("flagged"), take it out ("skipped"), or leave it to the queue (None)."""
+    if state is not None and state not in REVIEW_STATES:
+        raise ValueError(f"state must be one of {', '.join(REVIEW_STATES)} or null")
+    with conn:
+        if state is None:
+            conn.execute("DELETE FROM review_flags WHERE track_id = ?", (track_id,))
+        else:
+            conn.execute("INSERT OR REPLACE INTO review_flags VALUES (?, ?, ?)", (track_id, state, _now()))
 
 
 EDIT_PARTS = ("drums", "bass", "chords", "drumsrc")
@@ -585,7 +647,8 @@ _QUERY_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUN
 
 # A friend's SQL on a hosted server runs on an in-memory copy of their own library: these tables, their rows only,
 # without the columns that name people or server paths. Tables the query doesn't mention are copied empty.
-LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups", "track_labels")
+LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups", "track_labels",
+                  "review_flags")
 _PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_json"}
 
 

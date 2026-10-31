@@ -68,9 +68,12 @@ Everything a track card shows and what you can do with it. The [README](../READM
   3D landscape of ridges. **⤢ Expand** shows any chart bigger, or full screen.
 - **Stem separation** into vocals, bass, other and drums with Demucs, on your
   machine or on a [Modal](https://modal.com) GPU (see [Stems](usage.md#stems-optional)).
-- **Library sidebar** with search, sort and filters by vibe, key and BPM. Click a
-  vibe, the BPM or the key on a track card to filter the list from there (more vibes
-  narrow it; the key shows the keys that mix with it).
+- **Library sidebar** with search, sort (newest or oldest upload, title, BPM, key, energy, length) and filters
+  by vibe, key, BPM, upload date and review state. Each row shows when the track was uploaded, a ✓ when you
+  labeled it and a hollow dot when it's in your review list. Click a vibe, the BPM or the key on a track card
+  to filter the list from there (more vibes narrow it; the key shows the keys that mix with it).
+- **Card sections in your order.** Drag a section by its ⠿ grip, or use the ↑/↓ buttons on its header, to put
+  e.g. Vibe above Energy. The order is kept in your browser and used for every track; "Reset order" puts it back.
 - **Track and bulk actions:** copy a summary, reload metadata, re-analyze,
   separate stems or delete, for one track or a whole selection.
 - **Explore tab:** a BPM-energy chart, and **Find tracks** to search your library
@@ -87,6 +90,36 @@ Everything a track card shows and what you can do with it. The [README](../READM
 <img src="images/live-3d.png" width="560" alt="The Live tab's 3D view: a landscape of frequency ridges rolling back from the playing moment">
 
 <img src="images/find-tracks.png" width="560" alt="Find tracks: a key that mixes with 8A and a BPM range, and the matching tracks">
+
+## Label and review
+
+Tastr's scores come from public datasets that are mostly EDM previews. Your own labels are the only check on
+the music you actually use, and every label also scores future engine changes
+([bench.md](bench.md#your-own-tracks)).
+
+- **Review tab** in the sidebar, with a count of tracks to look at. **To review** lists the tracks most likely
+  analyzed wrong: a low "likely right" score on BPM or key, or a catalog listing that disagrees, spelled out
+  ("freqblog lists 61.1 BPM, half Tastr's"). Tracks you added yourself come first. The × on a row takes a track
+  out. **Reviewed** is the log of your labels, newest first, with what changed from Tastr's reading
+  ("BPM 61.1 → 122.3", "Kept as is"), a link that shows them in the library, and a CSV download.
+- **Label bar** at the bottom of each card's header: "Is this analysis right?", then **Label it**,
+  **✓ Keep as is** (stores Tastr's own BPM and key as a confirmation) or **Add to review**. A track can also go
+  in or out of review from its ⋯ menu, or for a whole selection from the bulk Actions menu.
+- **The label panel:**
+  - BPM: Tastr's, half or double in one click, a drag box (a whole BPM per notch, Shift for 0.1), or **Tap**
+    along to the beat.
+  - Key: Tastr's key, its relative and the fifths above and below (Tastr's most common misses), or any of the
+    24. A "catalog" tag marks the one a catalog lists.
+  - 🔊 next to each key plays its chord alone for 2 seconds, then brings the track's drop in under it: the right
+    key blends in, a wrong one clashes. **🥁 Drums off** plays only the track's harmonic part (HPSS, worked out
+    in the browser for the clip), which is what the key detector listens to. A slider sets the chord's level.
+  - Sections: start times in m:ss, from the detected ones, or **✎ Mark on chart**: click the chart to add a start
+    (it snaps to the nearest bar, Alt for the exact spot), drag a mark to move it, click it to remove it, or press
+    M while it plays.
+  - A note, and a "Will save" line that always shows what Save stores. **Save & next** opens the next track to
+    review.
+- Labels and review flags are per person on a hosted server, like the library, and re-analyzing never changes
+  them.
 
 ## Glossary
 

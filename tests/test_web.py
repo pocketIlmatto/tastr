@@ -642,13 +642,15 @@ def test_ui_card_filters_vibes_keys_and_bpm():
 
     js = (STATIC_DIR / "app.js").read_text()
     grab = lambda n: re.search(rf"^(const {n} = .*?;|function {n}\(.*?\n}})$", js, re.M | re.S).group(0)
-    defs = "\n".join(grab(n) for n in ("isNum", "lib", "keyRank", "SORTS", "visibleTracks", "camelotNear", "keyMatch", "vibeFilter", "keyFilter", "bpmFilter"))
+    defs = "\n".join(grab(n) for n in ("isNum", "LIB_CLEAR", "lib", "DAY", "upMatch", "keyRank", "SORTS", "visibleTracks", "camelotNear", "keyMatch", "vibeFilter", "keyFilter", "bpmFilter"))
     script = defs + """
+const labels = new Map([[4, {}]]), reviewRows = [{ track_id: 2 }];
+const now = Date.now();
 let tracks = [
-  { id: 1, title: "a", tags: ["dark", "driving"], camelot: "12A", bpm: 124 },
-  { id: 2, title: "b", tags: ["dark"], camelot: "1B", bpm: 128.4 },
-  { id: 3, title: "c", tags: ["driving"], camelot: "2A", bpm: 140 },
-  { id: 4, title: "d", tags: [], camelot: "5A", bpm: 118 },
+  { id: 1, title: "a", tags: ["dark", "driving"], camelot: "12A", bpm: 124, uploaded: now - 40 * DAY },
+  { id: 2, title: "b", tags: ["dark"], camelot: "1B", bpm: 128.4, uploaded: now - 2 * DAY },
+  { id: 3, title: "c", tags: ["driving"], camelot: "2A", bpm: 140, uploaded: now - 3 * DAY },
+  { id: 4, title: "d", tags: [], camelot: "5A", bpm: 118, uploaded: now },
 ];
 const showFiltered = () => {};
 const ids = () => visibleTracks().map((t) => t.id).sort();
@@ -660,6 +662,10 @@ keyFilter("1A"); out.key1A = ids(); out.keyState = lib.key;
 keyFilter("1A"); out.keyOff = lib.key;
 bpmFilter(123.6); out.bpm = [lib.bmin, lib.bmax, ids()];
 bpmFilter(123.6); out.bpmOff = [lib.bmin, lib.bmax];
+const order = () => visibleTracks().map((t) => t.id);
+out.newest = order(); lib.sort = "old"; out.oldest = order(); lib.sort = "new";
+lib.up = "7"; out.week = ids(); lib.up = "old"; out.older = ids(); lib.up = "";
+lib.lab = "need"; out.need = ids(); lib.lab = "yes"; out.labeled = ids(); lib.lab = "no"; out.unlabeled = ids(); lib.lab = "";
 console.log(JSON.stringify(out));
 """
     got = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
@@ -668,3 +674,6 @@ console.log(JSON.stringify(out));
     assert got["dark"] == [1, 2] and got["darkDriving"] == [1] and got["driving"] == [1, 3]
     assert got["key1A"] == [1, 2, 3] and got["keyState"] == "1A~" and got["keyOff"] == ""
     assert got["bpm"] == ["119", "129", [1, 2]] and got["bpmOff"] == ["", ""]
+    assert got["newest"] == [4, 2, 3, 1] and got["oldest"] == [1, 3, 2, 4]  # by upload time
+    assert got["week"] == [2, 3, 4] and got["older"] == [1]
+    assert got["need"] == [2] and got["labeled"] == [4] and got["unlabeled"] == [1, 2, 3]

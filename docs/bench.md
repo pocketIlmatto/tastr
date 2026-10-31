@@ -114,8 +114,12 @@ tastr bench manifest my-labels.csv
 ```
 
 `tastr review` lists unlabeled tracks where a catalog lookup ([lookup.md](lookup.md)) disagrees with the
-BPM or key, then those whose BPM or key is under 60% likely right. The web server serves the same as
-`GET /api/review` and `GET`/`PUT /api/tracks/{id}/labels`, for a future labeling view.
+BPM or key, then those whose BPM or key is under 60% likely right. The app's Review tab shows the same list
+and the panel to label each track ([features.md](features.md#label-and-review)). Its API: `GET /api/review`
+(tracks you put in the list first, marked `mine`; each row has its reasons plus `catalog_bpm` / `catalog_key`),
+`GET`/`PUT /api/tracks/{id}/labels` (`kept: true` marks a "Keep as is"), `GET /api/labels` (your labels, newest
+first, with Tastr's BPM and key when each was saved), and `PUT /api/tracks/{id}/review` with
+`{"state": "flagged" | "skipped" | null}` to put a track in the list, take it out, or leave it to the queue.
 
 ## Key detection notes
 

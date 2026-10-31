@@ -6,8 +6,9 @@ vs 87. They live in the `track_labels` table, separate from the analysis, so re-
 them. `tastr labels export` writes them as a `tastr bench manifest` file, so every engine change can be
 scored against them as well.
 
-The review queue (`tastr review`) ranks unlabeled tracks by how likely their analysis is wrong: a low
-"likely right" score on BPM or key, or a catalog listing (tastr.lookup) that disagrees with it.
+The review queue (`tastr review`, the app's Review tab) ranks unlabeled tracks by how likely their analysis is
+wrong: a low "likely right" score on BPM or key, or a catalog listing (tastr.lookup) that disagrees with it.
+You can also put a track in the list yourself or take one out (the `review_flags` table).
 """
 
 from __future__ import annotations
@@ -58,6 +59,8 @@ def clean(labels: dict[str, Any]) -> dict[str, Any]:
         out["boundaries"] = " ".join(f"{t:g}" for t in times)
     if labels.get("note"):
         out["note"] = str(labels["note"]).strip()[:500]
+    if labels.get("kept") and ("bpm" in out or "key_name" in out):
+        out["kept"] = True  # "Keep as is": Tastr's own reading, confirmed
     return out
 
 
@@ -73,15 +76,57 @@ def export_manifest(conn: sqlite3.Connection, out: str | Path, owner: str | None
     return len(rows)
 
 
+# Key names as the review list spells them: the Camelot wheel's spellings (Bb major, C# minor), in ASCII.
+_MAJOR = ["C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+_MINOR = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
+
+
+def key_label(tonic: int, mode: str) -> str:
+    return f"{(_MINOR if mode == 'minor' else _MAJOR)[tonic % 12]} {mode}"
+
+
+def _bpm_text(v: float) -> str:
+    return f"{round(v, 1):g}"
+
+
+def _catalog_reasons(card, res: dict[str, Any], cmp: dict[str, Any]) -> list[tuple[str, str, Any]]:
+    """("bpm" | "key", reason, the catalog's value) for each way a catalog listing disagrees with the card. The
+    reason spells out the catalog's value, e.g. "freqblog lists 61.1 BPM, half Tastr's"."""
+    from .engine.music import camelot
+    from .lookup import parse_listed_key
+
+    out = []
+    who, ours = res["provider"], card.core
+    if cmp["bpm"] not in (None, "agrees"):
+        how = {"half": "half Tastr's", "double": "double Tastr's"}.get(cmp["bpm"], f"not Tastr's {_bpm_text(ours.bpm)}")
+        out.append(("bpm", f"{who} lists {_bpm_text(res['bpm'])} BPM, {how}", round(res["bpm"], 1)))
+    if cmp["key"] not in (None, "agrees"):
+        listed = (res["tonic"], res["mode"]) if res.get("tonic") is not None and res.get("mode") else \
+            parse_listed_key(res.get("key"), res.get("camelot"))
+        cam = camelot(*listed)
+        tastr = key_label(ours.key.tonic, ours.key.mode)
+        d = (listed[0] - ours.key.tonic) % 12
+        how = {"relative": "the relative key: same notes, other mode",
+               "parallel": f"the parallel key of Tastr's {tastr}: same root, other mode",
+               "fifth": f"a fifth {'above' if d == 7 else 'below'} Tastr's {tastr}"}.get(cmp["key"], f"not Tastr's {tastr}")
+        out.append(("key", f"{who} lists {key_label(*listed)} ({cam}), {how}", cam))
+    return out
+
+
 def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = None) -> list[dict[str, Any]]:
-    """Unlabeled tracks most worth a look, most suspect first. `chance_right` is the lower of the BPM and key
-    "likely right" scores (None on cards analyzed before calibration); `reasons` says why each is listed."""
+    """Tracks most worth a look, most suspect first. Tracks you put in the list yourself come first (`mine`,
+    labeled or not); ones you took out never show. The rest are unlabeled tracks with a low "likely right" score
+    on BPM or key, or a catalog listing that disagrees. `chance_right` is the lower of the BPM and key "likely
+    right" scores (None on cards analyzed before calibration); `reasons` says why each is listed, and
+    `catalog_bpm` / `catalog_key` (Camelot) are what a disagreeing catalog lists."""
     from . import lookup
 
     labeled = {r["track_id"] for r in db.list_labels(conn, owner)}
+    flags = db.review_flags(conn, owner)
     out = []
     for t in db.list_tracks(conn, owner):
-        if t["id"] in labeled:
+        flag = flags.get(t["id"])
+        if flag == "skipped" or (t["id"] in labeled and flag != "flagged"):
             continue
         card = db.load_card(conn, t["id"])
         if card is None:
@@ -94,20 +139,27 @@ def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = 
                 scores.append(p)
                 if p < 0.6:
                     reasons.append(f"{name} {round(100 * p)}% likely right")
-        disagree = 0
+        disagree, cat_bpm, cat_key = 0, None, None
         for r in db.get_lookups(conn, t["id"]):
             if r.get("status") != "found":
                 continue
-            cmp = lookup.compare(card, r)
-            for what in ("bpm", "key"):
-                if cmp[what] not in (None, "agrees"):
-                    disagree += 1
-                    reasons.append(f"{r['provider']} lists {what} {cmp[what]}")
+            for what, why, value in _catalog_reasons(card, r, lookup.compare(card, r)):
+                disagree += 1
+                reasons.append(why)
+                if what == "bpm" and cat_bpm is None:
+                    cat_bpm = value
+                if what == "key" and cat_key is None:
+                    cat_key = value
+        mine = flag == "flagged"
+        if mine:
+            reasons.insert(0, "You put this back in review (it has a label)" if t["id"] in labeled else "You added this to review")
         if not reasons:
             continue
-        chance = min(scores) if scores else None
+        k = card.core.key
         out.append({"track_id": t["id"], "title": card.source.title, "artist": card.source.artist,
-                    "bpm": card.core.bpm, "key": card.core.key.name if card.core.key else None,
-                    "chance_right": chance, "disagreements": disagree, "reasons": reasons})
-    out.sort(key=lambda r: (-r["disagreements"], r["chance_right"] if r["chance_right"] is not None else 1.0))
+                    "bpm": card.core.bpm, "key": k.name if k else None, "camelot": k.camelot if k else None,
+                    "chance_right": min(scores) if scores else None, "disagreements": disagree, "reasons": reasons,
+                    "mine": mine, "catalog_bpm": cat_bpm, "catalog_key": cat_key})
+    out.sort(key=lambda r: (not r["mine"], -r["disagreements"],
+                            r["chance_right"] if r["chance_right"] is not None else 1.0))
     return out[:limit]

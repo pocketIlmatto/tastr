@@ -20,7 +20,7 @@ pub struct Spectrogram {
     pub data: Vec<Complex<f32>>,
 }
 
-fn hann(n: usize) -> Vec<f64> {
+pub fn hann(n: usize) -> Vec<f64> {
     // scipy.signal.get_window("hann", N, fftbins=True): 0.5 - 0.5 cos(2 pi k / N)
     (0..n).map(|k| 0.5 - 0.5 * libm::cos(2.0 * core::f64::consts::PI * k as f64 / n as f64)).collect()
 }
@@ -39,8 +39,13 @@ pub fn stft_with(y: &[f32], n_fft: usize, hop: usize) -> Spectrogram {
 }
 
 /// The same STFT handed over one frame at a time, `each(frame, bins)`, without keeping it. Returns the frame count.
-pub fn stft_frames(y: &[f32], n_fft: usize, hop: usize, mut each: impl FnMut(usize, &[Complex<f32>])) -> usize {
-    let win = hann(n_fft);
+pub fn stft_frames(y: &[f32], n_fft: usize, hop: usize, each: impl FnMut(usize, &[Complex<f32>])) -> usize {
+    stft_frames_window(y, &hann(n_fft), hop, each)
+}
+
+/// The same with another window (its length is n_fft), e.g. librosa's window="ones" for the CQT.
+pub fn stft_frames_window(y: &[f32], win: &[f64], hop: usize, mut each: impl FnMut(usize, &[Complex<f32>])) -> usize {
+    let n_fft = win.len();
     let bins = n_fft / 2 + 1;
     let frames = 1 + y.len() / hop;
     let fft = FftPlannerScalar::<f64>::new().plan_fft_forward(n_fft);

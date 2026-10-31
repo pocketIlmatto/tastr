@@ -1,5 +1,5 @@
 """The Rust engine (engine-rs/, docs/rust-engine.md): its native and WebAssembly builds give identical output,
-and its HPSS and shared signals match the Python engine's. Skips unless both builds exist:
+and its HPSS, shared signals, beats, chroma and section clustering match the Python engine's. Skips unless both builds exist:
 
     cd engine-rs && cargo build --release && cargo build --release --lib --target wasm32-unknown-unknown
 """
@@ -127,6 +127,64 @@ def test_shared_signals_match_the_python_engine(tmp_path):
             assert err < 0.01, name
         else:  # float32 throughout, as librosa; only the summation order and maths library differ
             assert err <= 2e-6 * np.abs(want).max(), name
+
+
+def noisy_track(seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    y = make_track(bpm=124, bars_per_section=(4, 4))[0]
+    return (y + 1e-3 * rng.standard_normal(y.size)).astype(np.float32)
+
+
+def test_tempo_beats_and_onsets_match_librosa(tmp_path):
+    """Given the same onset envelope, the same tempo, beats and onsets as librosa, and the same tempogram."""
+    import librosa
+
+    y = noisy_track(3)
+    env = signals.onset_envelope(AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri="x"))))
+    tempo, beats = librosa.beat.beat_track(onset_envelope=env, sr=SR, hop_length=512)
+    tempo = float(np.atleast_1d(tempo)[0])
+    _, faster = librosa.beat.beat_track(onset_envelope=env, sr=SR, hop_length=512, bpm=tempo * 1.5)
+    raw = tmp_path / "env.f32"
+    env.astype("<f4").tofile(raw)
+    ours = run([str(NATIVE), "rhythm", str(raw), repr(tempo * 1.5)], tmp_path / "out")
+    tg = librosa.feature.tempogram(onset_envelope=env, sr=SR, hop_length=512, win_length=384).mean(axis=1)
+    assert np.abs(ours["tempogram_mean"] - tg).max() < 1e-6
+    assert ours["tempo"][0] == np.float32(tempo)
+    assert np.array_equal(ours["beats"], beats) and np.array_equal(ours["beats_at_bpm"], faster)
+    assert np.array_equal(ours["onsets"], librosa.onset.onset_detect(onset_envelope=env, sr=SR, hop_length=512))
+
+
+def test_chroma_and_bass_cqt_match_librosa(tmp_path):
+    """Same tuning estimate; chroma and the bass CQT within float32 noise plus the resampler's small differences
+    (each octave below the top one is computed from audio halved by our resampler instead of soxr)."""
+    import librosa
+
+    y = noisy_track(4)
+    h, _ = signals.hpss(AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri="x"))))
+    raw = tmp_path / "h.f32"
+    h.astype("<f4").tofile(raw)
+    ours = run([str(NATIVE), "chroma", str(raw)], tmp_path / "out")
+    assert ours["tuning"][0] == np.float32(librosa.estimate_tuning(y=h, sr=SR, bins_per_octave=36))
+    chroma = librosa.feature.chroma_cqt(y=h, sr=SR, hop_length=512)
+    assert ours["chroma"].shape == chroma.shape and np.abs(ours["chroma"] - chroma).max() < 1e-3
+    bass = np.abs(librosa.cqt(h, sr=SR, hop_length=512, fmin=librosa.note_to_hz("C1"), n_bins=36, bins_per_octave=12))
+    assert ours["bass_cqt"].shape == bass.shape and np.abs(ours["bass_cqt"] - bass).max() < 2e-3 * bass.max()
+
+
+def test_ward_boundaries_match_librosa(tmp_path):
+    """librosa.segment.agglomerative on bar-like features: sections plus noise, and exact repeats (ties)."""
+    import librosa
+
+    rng = np.random.default_rng(5)
+    for _ in range(40):
+        n, f = int(rng.integers(4, 120)), int(rng.integers(1, 26))
+        k = int(rng.integers(1, min(n, 16) + 1))
+        z = np.repeat(rng.normal(size=(f, n // 8 + 1)), 8, axis=1)[:, :n]
+        z = (z + rng.normal(scale=rng.choice([0.0, 0.1, 1.0]), size=(f, n))).astype(np.float32)
+        z.astype("<f4").tofile(tmp_path / "z.f32")
+        subprocess.run([str(NATIVE), "ward", str(tmp_path / "z.f32"), str(f), str(k), str(tmp_path / "out")], check=True)
+        ours = np.fromfile(tmp_path / "out" / "boundaries.f32", "<f4")
+        assert np.array_equal(ours, librosa.segment.agglomerative(z.astype(np.float64), k))
 
 
 def test_butterworth_tables_are_scipys():

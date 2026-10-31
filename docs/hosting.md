@@ -47,6 +47,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_ACCESS_TEAM_DOMAIN` | (required) | your Access team domain, e.g. `yourteam.cloudflareaccess.com` |
 | `TASTR_ACCESS_AUD` | (required) | the Access application's Audience (AUD) tag |
 | `TASTR_MAX_UPLOAD_MB` | 100 | largest file accepted |
+| `TASTR_MAX_MINUTES` | 12 | longest track accepted, read from the file's header before analysis (see [below](#when-an-upload-fails)) |
 | `TASTR_MAX_FILES` | 20 | files per upload |
 | `TASTR_DAILY_TRACKS` | 30 | tracks each person can upload per UTC day |
 | `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this |
@@ -102,6 +103,30 @@ Admins see an **Admin** tab in the header with all of this: tiles for people, tr
 storage, analyses running and an estimated 30-day Modal cost, a per-person chart of the last 30 days,
 the people table with today's quotas, the activity log, the limits and the blocked count. Nobody else
 gets the tab, and on your own machine there is none.
+
+## When an upload fails
+
+The page checks a file's size and length against the limits before it uploads it, and the server checks
+again, so a file that is too big or too long fails at once with a message that says which limit. A failed
+analysis shows "Couldn't analyze this file", with the step it stopped at and, when Modal stopped it for using
+too much memory or time, that reason.
+
+Why there's a length limit: analysis memory grows with the track's length, about 130 MB a minute on top of a
+few hundred MB (measured: 3 min 740 MB, 10 min 1.6 GB, 20 min 2.9 GB). Modal's `analyze` has 2 GB, so
+anything much past 14 minutes runs out of memory; a one-hour mix would need about 8 GB. Raise
+`TASTR_MAX_MINUTES` only together with `memory=` in `tastr/cloud/modal_web.py`.
+
+To find out what happened to an upload:
+
+- **Admin tab > Activity**: an "Uploaded 1 track" line, then "Analysis failed: <file>, <reason>" or a
+  "Hit the ... limit" line. No failure line after the upload usually means the server stopped or restarted
+  mid-analysis (a deploy, for example).
+- **Fly**: `fly logs -a <app>` streams the server's log live; failed analyses log
+  `analysis failed for <file>: <error>` with the full error. Older lines are in the Fly dashboard's
+  **Monitoring** page for the app. `fly status -a <app>` shows restarts.
+- **Modal**: `modal app logs tastr-web --env friends` streams the functions' logs, and the dashboard
+  (modal.com > the `friends` environment > `tastr-web` > `analyze_stream`) lists each call with its
+  duration, memory and how it ended (an out-of-memory or timeout stop is shown there).
 
 ## Strudel links
 

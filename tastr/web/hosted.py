@@ -5,7 +5,7 @@
 - refuses every request without a valid Cloudflare Access token (the `Cf-Access-Jwt-Assertion` header,
   signed by your Access team), so a request that skips Cloudflare gets nothing. Only /api/health answers;
 - turns off link analysis (yt-dlp) and the SQL box;
-- limits uploads (size, count, audio types, total storage, tracks per person per day), stem jobs per
+- limits uploads (size, length, count, audio types, total storage, tracks per person per day), stem jobs per
   person per day, and how many analyses run at once;
 - hides error details that could name server paths, and sends security headers (CSP, no framing);
 - gives each person their own library: tracks carry the uploader's email, and every /api/tracks/{id}
@@ -47,6 +47,9 @@ class Settings:
     access_team_domain: str = ""  # e.g. "yourteam.cloudflareaccess.com"
     access_aud: str = ""  # the Access application's audience (AUD) tag
     max_upload_mb: float = 100
+    # Analysis memory grows with length (about 130 MB a minute) and Modal's `analyze` has 2 GB: past about
+    # 14 minutes it runs out. Longer files are refused up front instead of failing after the upload.
+    max_minutes: float = 12
     max_files: int = 20
     daily_tracks: int = 30
     storage_gb: float = 10
@@ -66,6 +69,7 @@ class Settings:
             access_team_domain=env.get("TASTR_ACCESS_TEAM_DOMAIN", "").strip().removeprefix("https://").rstrip("/"),
             access_aud=env.get("TASTR_ACCESS_AUD", "").strip(),
             max_upload_mb=float(env.get("TASTR_MAX_UPLOAD_MB", cls.max_upload_mb)),
+            max_minutes=float(env.get("TASTR_MAX_MINUTES", cls.max_minutes)),
             max_files=int(env.get("TASTR_MAX_FILES", cls.max_files)),
             daily_tracks=int(env.get("TASTR_DAILY_TRACKS", cls.daily_tracks)),
             storage_gb=float(env.get("TASTR_STORAGE_GB", cls.storage_gb)),
@@ -86,7 +90,7 @@ class Settings:
         return int(self.max_upload_mb * 1024 * 1024)
 
     def limits(self) -> dict:
-        return {"max_upload_mb": self.max_upload_mb, "max_files": self.max_files, "daily_tracks": self.daily_tracks,
+        return {"max_upload_mb": self.max_upload_mb, "max_minutes": self.max_minutes, "max_files": self.max_files, "daily_tracks": self.daily_tracks,
                 "daily_stems": self.daily_stems, "daily_drums": self.daily_drums, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses,
                 "audio_days": self.audio_days}
 
@@ -173,6 +177,21 @@ def file_bytes(path: str | None) -> int:
         return Path(path).stat().st_size if path else 0
     except OSError:
         return 0
+
+
+def audio_minutes(path: str | Path) -> float | None:
+    """How long an audio file is, from its header (no decoding), or None if that can't be read."""
+    from ..filemeta import read_file_meta
+
+    seconds = read_file_meta(path)[1].get("duration")
+    if not seconds:
+        try:
+            import soundfile
+
+            seconds = soundfile.info(str(path)).duration
+        except Exception:
+            return None
+    return seconds / 60
 
 
 def stored_bytes(home: Path) -> int:

@@ -17,8 +17,8 @@ if (typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScop
       const ptr = w.tastr_alloc(bytes.length);
       new Uint8Array(w.memory.buffer, ptr, bytes.length).set(bytes);
       const n = w.tastr_card(ptr, bytes.length, 0);
-      if (n < 0) { self.postMessage({ error: "the engine can't decode this file" }); return; }
       const text = (p, len) => new TextDecoder().decode(new Uint8Array(w.memory.buffer, p, len));
+      if (n < 0) { self.postMessage({ error: "the engine can't decode this file: " + text(w.tastr_card_ptr(), -n - 1) }); return; }
       self.postMessage({ json: text(w.tastr_card_ptr(), n), version: text(w.tastr_version(), w.tastr_version_len()) });
     } catch (err) {
       self.postMessage({ error: String(err) });

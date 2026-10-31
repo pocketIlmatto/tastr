@@ -210,3 +210,48 @@ def test_browser_engine_off_by_default(db_path, tmp_path, monkeypatch):
     client = TestClient(create_app(db_path))
     assert client.get("/api/config").json()["browser_engine"] is None
     assert client.get(f"/engine/{rust.WASM_NAME}").status_code == 404
+
+
+@needs_lib
+def test_bench_decodes_files_rust_cant(song, monkeypatch):
+    """The bench runner falls back to the Python decoder like analyze_file (FMA Keys has MP3s Rust rejects)."""
+    from tastr.engine.bench import runner
+    from tastr.engine.bench.datasets import Item, Truth
+
+    monkeypatch.setenv("TASTR_ENGINE", "rust")
+
+    def refuse(path, beats_per_bar=None):
+        raise rust.RustDecodeError("the Rust engine could not decode it")
+
+    monkeypatch.setattr(rust, "card_from_file", refuse)
+    card = runner.analyze_item(Item(id="song", truth=Truth(), path=str(song)))
+    assert card.extras["decoded_by"] == "python" and abs(card.core.bpm - 124) < 1
+
+
+@needs_lib
+def test_decode_errors_carry_the_decoders_message(tmp_path):
+    bad = tmp_path / "bad.mp3"
+    bad.write_bytes(b"not audio at all")
+    with pytest.raises(rust.RustDecodeError, match="could not decode .*: .+"):
+        rust.card_from_file(bad)
+
+
+@needs_lib
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_mp3_with_a_compressed_id3_frame(song, tmp_path):
+    """symphonia 0.5 refuses ID3v2.4 tags with a compressed frame (some FMA MP3s); decode.rs reads past them."""
+    import zlib
+
+    def syncsafe(n):
+        return bytes([(n >> 21) & 0x7F, (n >> 14) & 0x7F, (n >> 7) & 0x7F, n & 0x7F])
+
+    mp3 = tmp_path / "plain.mp3"
+    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(song), "-map_metadata", "-1",
+                    "-id3v2_version", "0", "-write_xing", "1", str(mp3)], check=True)
+    text = b"\x03" + b"a title " * 40
+    body = syncsafe(len(text)) + zlib.compress(text)
+    frame = b"TIT2" + syncsafe(len(body)) + b"\x00\x09" + body  # flags: compressed + data length indicator
+    tagged = tmp_path / "tagged.mp3"
+    tagged.write_bytes(b"ID3\x04\x00\x00" + syncsafe(len(frame)) + frame + mp3.read_bytes())
+    want, got = rust.card_from_file(mp3), rust.card_from_file(tagged)
+    assert got == want

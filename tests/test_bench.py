@@ -92,6 +92,37 @@ def test_fma_keys_loader(tmp_path):
     assert [(i.id, i.truth.tonic, i.truth.mode) for i in items] == [("fmak-10", 6, "major"), ("fmak-141", 5, "minor")]
 
 
+def test_ballroom_loader_reads_tempo_beats_and_meter(tmp_path):
+    for style, sid in (("Waltz", "Media-1"), ("ChaChaCha", "Albums-2"), ("Rumba", "Albums-3")):
+        (tmp_path / "audio" / style).mkdir(parents=True, exist_ok=True)
+        (tmp_path / "audio" / style / f"{sid}.wav").write_bytes(b"x")
+    (tmp_path / "tempo").mkdir()
+    (tmp_path / "beats").mkdir()
+    (tmp_path / "tempo" / "Media-1.bpm").write_text("87\n")
+    (tmp_path / "tempo" / "Albums-2.bpm").write_text("124\n")
+    waltz = "".join(f"{i * 0.69:.3f} {i % 3 + 1}\n" for i in range(12))
+    (tmp_path / "beats" / "Media-1.beats").write_text(waltz)
+    (tmp_path / "beats" / "Albums-2.beats").write_text("".join(f"{i * 0.48:.3f} {i % 4 + 1}\n" for i in range(16)))
+    items = {i.id: i for i in datasets.load("ballroom", str(tmp_path))}
+    assert set(items) == {"ballroom-Media-1", "ballroom-Albums-2"}  # Albums-3 has no labels
+    w = items["ballroom-Media-1"]
+    assert w.truth.bpm == 87.0 and w.truth.beats_per_bar == 3 and len(w.truth.downbeats) == 4
+    assert w.meta["style"] == "Waltz"
+    assert items["ballroom-Albums-2"].truth.beats_per_bar == 4
+
+
+def test_meter_is_scored_per_meter():
+    from tastr.engine.card import Source, TrackCard
+
+    card = TrackCard(source=Source(kind="file", uri="x"))
+    card.core.beats_per_bar = 4
+    rows = [runner.score_item(datasets.Item(id=f"t{m}", truth=datasets.Truth(beats_per_bar=m)), card) for m in (3, 4, 4)]
+    s = runner.summarize(rows)
+    assert s["meter_3_correct"] == 0.0 and s["meter_4_correct"] == 1.0 and s["meter_4_n"] == 2
+    assert "meter: 3/4 right 0.000 (n=1), 4/4 right 1.000 (n=2)" in runner.format_summary(
+        {"summary": s, "seconds": 0, "review": []})
+
+
 def test_beatport_tempo_loader(tmp_path):
     (tmp_path / "meta").mkdir()
     (tmp_path / "audio").mkdir()

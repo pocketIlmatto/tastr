@@ -39,8 +39,9 @@ Notes:
   in 10 zips split by track id. A non-EDM held-out key set with many major keys, where the learned model's
   "major read as IV" weakness would show. The record is CC BY 4.0; the dataset's notes say the labels are
   for non-commercial research. `tastr fetch fma-keys` ([cloud.md](cloud.md#fma-keys)).
-- **Ballroom with audio** (698 excerpts, CC0): the held-out 3/4 and tempo check, without the 4.8 GB
-  spectrogram zip. Its audio host (mtg.upf.edu) is refused from cloud sessions.
+- **Ballroom with audio** (698 excerpts; labels CC BY-NC-SA 4.0 per mirdata): the held-out 3/4 and tempo
+  check, without the 4.8 GB spectrogram zip. Its audio host (mtg.upf.edu) is refused from cloud sessions,
+  so `tastr fetch ballroom --remote` fetches it on Modal ([cloud.md](cloud.md#ballroom)).
 - **Slakh2100-redux** (1,710 synthesized multitracks with aligned MIDI, CC BY 4.0, 104 GB in one tarball):
   ground truth for bass lines and chords, if those suggestions get a benchmark.
 - BRID (367 samba percussion excerpts, beats and tempo, CC BY 4.0, 0.94 GB): far from dance music.

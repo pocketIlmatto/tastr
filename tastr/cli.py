@@ -124,9 +124,9 @@ def main(argv: list[str] | None = None) -> int:
     vf.add_argument("results", nargs="+", help="JSON files written by vibe-bench --out")
     vf.add_argument("--out", help="write the fit results as JSON here")
 
-    fe = sub.add_parser("fetch", help="download a vibe dataset (mtg-moods, deam), FMA Keys (fma-keys) or the "
+    fe = sub.add_parser("fetch", help="download a vibe dataset (mtg-moods, deam), FMA Keys (fma-keys), Ballroom (ballroom) or the "
                                       "AcousticBrainz lookup dump (acousticbrainz), locally or on Modal into the bucket")
-    fe.add_argument("dataset", choices=["mtg-moods", "deam", "acousticbrainz", "fma-keys"])
+    fe.add_argument("dataset", choices=["mtg-moods", "deam", "acousticbrainz", "fma-keys", "ballroom"])
     fe.add_argument("path", help="destination folder (a bucket folder with --remote)")
     fe.add_argument("--archives",
                     help="mtg-moods: which of the 100 audio archives, about 1.6 GB each, e.g. 0-5 or 0,7,9 "
@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     fe.add_argument("--remote", action="store_true", help="run on Modal, writing into the R2 bucket (docs/cloud.md)")
 
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
-    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, harmonix or manifest")
+    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, ballroom, harmonix or manifest")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
     b.add_argument("--stages", help="comma-separated stage names (default: core,sections)")
     b.add_argument("--limit", type=int, help="only the first N tracks")

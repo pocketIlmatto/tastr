@@ -18,6 +18,11 @@ songs across 17 genres, about half major. The audio is full songs in 10 zips of 
 folder (track id // 1000); `archives` picks which (0 is `000-019.zip`, 695 labeled songs). Each zip is
 checked against Zenodo's MD5 before it's unpacked. The record is CC BY 4.0, but the dataset's notes put
 the labels to non-commercial research use, so they are treated like the vibe sets: bucket only.
+
+`ballroom` is the Ballroom set (Gouyon et al. 2006): 698 30 s excerpts of eight ballroom styles (wav,
+about 1.4 GB), the ISMIR 2004 tempo labels and the beat/bar labels from CPJKU/BallroomAnnotations, which
+give the meter (Waltz is 3/4). It's the held-out set for the 3/4 detector tuned on GTZAN, and a tempo check
+on non-electronic dance music. The MD5s are mirdata's. Labels are CC BY-NC-SA 4.0: bucket only.
 """
 
 from __future__ import annotations
@@ -45,6 +50,12 @@ FMAK_RECORD = "https://zenodo.org/api/records/10719860"
 FMAK_LABELS = "fma_keys_metadata.csv"
 FMAK_ZIPS = ["000-019.zip", "020-039.zip", "040-049.zip", "050-059.zip", "060-069.zip", "070-079.zip",
              "080-089.zip", "090-099.zip", "100-109.zip", "110-124.zip"]
+BALLROOM_FILES = {  # name -> (url, md5 from mirdata's ballroom loader)
+    "data1.tar.gz": ("https://mtg.upf.edu/ismir2004/contest/tempoContest/data1.tar.gz", "2872a3e52070bc342a4510a95e2fa0b8"),
+    "data2.tar.gz": ("https://mtg.upf.edu/ismir2004/contest/tempoContest/data2.tar.gz", "4a0ec5518bbb4dbf3ab02de0383b0994"),
+    "master.zip": ("https://github.com/CPJKU/BallroomAnnotations/archive/master.zip", "d0c31e1a30c0caf8fd22dec25f2174cf"),
+}
+BALLROOM_KEEP = {".wav": "audio", ".bpm": "tempo", ".beats": "beats"}  # suffix -> folder under dest
 
 
 def _get(url: str):
@@ -188,11 +199,7 @@ def fetch_fma_keys(dest: str | Path, archives: list[int], record: str = FMAK_REC
         with tempfile.TemporaryDirectory() as tmp:
             # Download to local disk first: unzipping needs seeks, which the bucket mount can't do.
             z = _save(files[name]["links"]["self"], Path(tmp) / name)
-            md5 = hashlib.md5()
-            with z.open("rb") as fh:
-                for b in iter(lambda: fh.read(1 << 20), b""):
-                    md5.update(b)
-            if files[name].get("checksum") != f"md5:{md5.hexdigest()}":
+            if files[name].get("checksum") != f"md5:{_md5(z)}":
                 bad.append(name)  # a cut-off download: rerun this archive
                 continue
             with zipfile.ZipFile(z) as zf:
@@ -211,6 +218,56 @@ def fetch_fma_keys(dest: str | Path, archives: list[int], record: str = FMAK_REC
     return {"dataset": "fma-keys", "kept": kept, "already_there": skipped, "checksum_mismatch": bad}
 
 
+def _md5(path: Path) -> str:
+    md5 = hashlib.md5()
+    with path.open("rb") as fh:
+        for b in iter(lambda: fh.read(1 << 20), b""):
+            md5.update(b)
+    return md5.hexdigest()
+
+
+def fetch_ballroom(dest: str | Path, files: dict = BALLROOM_FILES, progress=print) -> dict:
+    """Ballroom audio, tempo and beat labels into `dest`/audio/<style>/<id>.wav, tempo/<id>.bpm, beats/<id>.beats."""
+    dest = Path(dest)
+    kept = skipped = 0
+    bad = []
+    for name, (url, md5) in files.items():
+        progress(f"downloading {name}")
+        with tempfile.TemporaryDirectory() as tmp:
+            f = _save(url, Path(tmp) / name)
+            if _md5(f) != md5:
+                bad.append(name)
+                continue
+            if name.endswith(".zip"):
+                with zipfile.ZipFile(f) as zf:
+                    members = [(m.filename, (lambda m=m: zf.open(m))) for m in zf.infolist() if not m.is_dir()]
+                    kept, skipped = _keep_ballroom(dest, members, kept, skipped)
+            else:
+                with tarfile.open(f, "r:gz") as tf:
+                    members = [(m.name, (lambda m=m: tf.extractfile(m))) for m in tf.getmembers() if m.isfile()]
+                    kept, skipped = _keep_ballroom(dest, members, kept, skipped)
+        progress(f"{name}: unpacked")
+    return {"dataset": "ballroom", "kept": kept, "already_there": skipped, "checksum_mismatch": bad}
+
+
+def _keep_ballroom(dest: Path, members, kept: int, skipped: int) -> tuple[int, int]:
+    for name, open_member in members:
+        p = Path(name)
+        folder = BALLROOM_KEEP.get(p.suffix.lower())
+        if folder is None or p.name.startswith("."):
+            continue
+        # audio keeps its style folder (BallroomData/<style>/<id>.wav); labels are flat
+        out = dest / folder / (Path(*p.parts[-2:]) if folder == "audio" else p.name)
+        if out.exists():
+            skipped += 1
+            continue
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open_member() as fh, out.open("wb") as w:
+            shutil.copyfileobj(fh, w)
+        kept += 1
+    return kept, skipped
+
+
 def fetch(dataset: str, dest: str | Path, archives: list[int] | None = None, progress=print) -> dict:
     """Fetch `dataset` into `dest` and write its item index (tastr/cloud/jobs.py) for fast remote runs."""
     from .jobs import write_index
@@ -223,7 +280,9 @@ def fetch(dataset: str, dest: str | Path, archives: list[int] | None = None, pro
         result = fetch_deam(dest, progress=progress)
     elif dataset == "fma-keys":
         result = fetch_fma_keys(dest, archives if archives is not None else [0], progress=progress)
+    elif dataset == "ballroom":
+        result = fetch_ballroom(dest, progress=progress)
     else:
-        raise ValueError(f"unknown dataset {dataset!r}; choose from mtg-moods, deam, acousticbrainz, fma-keys")
+        raise ValueError(f"unknown dataset {dataset!r}; choose from mtg-moods, deam, acousticbrainz, fma-keys, ballroom")
     result["index"] = str(write_index(dataset, dest))
     return result

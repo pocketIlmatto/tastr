@@ -173,6 +173,37 @@ def test_fetch_fma_keys_checks_md5_and_unpacks(tmp_path):
     assert again["checksum_mismatch"] == ["000-019.zip"] and again["kept"] == 0
 
 
+def test_fetch_ballroom_checks_md5_and_lays_out_folders(tmp_path):
+    import hashlib
+
+    audio = tmp_path / "data1.tar.gz"
+    with tarfile.open(audio, "w:gz") as tf:
+        for name, data in (("BallroomData/Waltz/Media-1.wav", b"w"), ("BallroomData/nada/x.txt", b"n"),
+                           ("BallroomData/Waltz/._Media-1.wav", b"junk")):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    tempo = tmp_path / "data2.tar.gz"
+    with tarfile.open(tempo, "w:gz") as tf:
+        info = tarfile.TarInfo("BallroomAnnotations/ballroomGroundTruth/Media-1.bpm")
+        info.size = 3
+        tf.addfile(info, io.BytesIO(b"87\n"))
+    beats = tmp_path / "master.zip"
+    with zipfile.ZipFile(beats, "w") as zf:
+        zf.writestr("BallroomAnnotations-master/Media-1.beats", "0.1 1\n")
+        zf.writestr("BallroomAnnotations-master/README.md", "readme")
+    files = {f.name: (f"file://{f}", hashlib.md5(f.read_bytes()).hexdigest()) for f in (audio, tempo, beats)}
+    dest = tmp_path / "ballroom"
+    result = fetch.fetch_ballroom(dest, files=files, progress=lambda *_: None)
+    assert result["kept"] == 3 and result["checksum_mismatch"] == []
+    assert (dest / "audio/Waltz/Media-1.wav").read_bytes() == b"w"
+    assert (dest / "tempo/Media-1.bpm").read_text() == "87\n"
+    assert (dest / "beats/Media-1.beats").is_file()
+    assert fetch.fetch_ballroom(dest, files=files, progress=lambda *_: None)["already_there"] == 3
+    files["master.zip"] = (files["master.zip"][0], "0")
+    assert fetch.fetch_ballroom(tmp_path / "b2", files=files, progress=lambda *_: None)["checksum_mismatch"] == ["master.zip"]
+
+
 @pytest.mark.audio
 def test_vibe_bench_end_to_end_on_a_folder(tmp_path, synth_wav, capsys):
     root = mtg_tsvs(tmp_path / "mtg")

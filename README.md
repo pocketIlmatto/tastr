@@ -5,8 +5,9 @@ for each track: tempo, key, energy, sections, vibe, drums, bass and chords,
 plus ideas for rebuilding it in Ableton Live or Strudel. Every card lands in a
 SQLite database you can search, chart and query with SQL.
 
-It runs on your own machine. Heavy jobs (stem separation, benchmarks) can
-optionally run on a cloud GPU.
+Run it on your own machine, or host it for a few invited people behind a login
+(see [Hosting for a few people](#hosting-for-a-few-people-optional)). Heavy jobs
+(stem separation, benchmarks) can optionally run on a cloud GPU.
 
 <img src="docs/images/library.png" width="720" alt="The Tastr library and a track card with its energy chart and sections">
 
@@ -81,9 +82,11 @@ optionally run on a cloud GPU.
   separate stems or delete, for one track or a whole selection.
 - **Explore tab:** a BPM-energy chart, and **Find tracks** to search your library
   without code (BPM, key and the keys that mix with it, energy, vibe, length,
-  sections, text, with AND/OR groups), or in SQL with a table and column reference.
-  Save the searches you use as one-click chips, or start from the examples.
-  "Edit as SQL" shows the SQL behind a search.
+  sections, text, with AND/OR groups), or in read-only SQL with a table and column
+  reference. Save the searches you use as one-click chips, or start from the
+  examples. "Edit as SQL" shows the SQL behind a search.
+- **Two looks:** 808 (a drum-machine panel) and Technics (70s hi-fi), picked
+  in the header.
 - **Keyboard shortcuts** for most things; press `?` for the list.
 
 <img src="docs/images/spectrogram.png" width="560" alt="Spectrogram view with sections and playback">
@@ -118,6 +121,20 @@ change is judged by numbers. Experiments that worked and the ones that didn't
 are written up in [docs/bench.md](docs/bench.md), [docs/drums.md](docs/drums.md)
 and [docs/rhythm.md](docs/rhythm.md). See [Accuracy benchmark](#accuracy-benchmark).
 
+Highlights so far:
+
+| Area | Before | Now | Measured on |
+|---|---|---|---|
+| Exact key, held out | 47.6% | 60.4% | GiantSteps Key, 599 EDM previews |
+| BPM within 4% | 0.49 | 0.74 | GiantSteps Tempo, 43 tracks |
+| Bar 1 in the right place | 0.43 | 0.64 | GTZAN, 933 songs |
+| Toms found (onset F, optional model) | 0.01 | 0.37 | MDB Drums, real mixes |
+| Section boundaries within 3 s (F) | 0.48 | 0.58 | Harmonix Set, 912 songs |
+| Danceability vs listeners (AUC) | 0.70 | 0.82 | MTG-Jamendo, 510 tracks |
+
+The [analysis engine report](docs/engine-report.md) has every change, the datasets
+that found and checked it, and what's still open.
+
 ## Quick start
 
 You need Python 3.10 or newer. Check with `python3 --version`. If `python3` is
@@ -143,13 +160,24 @@ paste a track or playlist link from YouTube, SoundCloud, Bandcamp, Mixcloud
 and other sites that allow downloads. Spotify and Apple Music links don't
 work, because those services don't allow downloading audio.
 
-### Sharing with a few people (optional)
+### Hosting for a few people (optional)
 
-Hosted mode (`TASTR_HOSTED=1`, the `hosted` extra) runs Tastr behind Cloudflare
-Access for a few invited people: every request needs their login, link analysis
-is off, the SQL box reads only your own library, and uploads and stem jobs have limits. See
-[docs/hosting.md](docs/hosting.md). [docs/deploy.md](docs/deploy.md) puts it on
-Fly.io, with analysis on Modal and the library backed up to R2.
+Tastr can also run as a small shared web app. Hosted mode (`TASTR_HOSTED=1`, the
+`hosted` extra) puts it behind Cloudflare Access for a few invited people:
+
+- every request needs their login (a one-time code sent to their email);
+- each person has their own library and sees only the tracks they uploaded;
+- link analysis is off, the SQL box reads only your own library, and uploads
+  and stem jobs have daily limits;
+- uploaded audio and stems are deleted after a while (30 days by default), but
+  the track cards stay;
+- admins get an **Admin** tab with usage per person and an activity log.
+
+[docs/hosting.md](docs/hosting.md) lists everything hosted mode changes.
+[docs/deploy.md](docs/deploy.md) puts it on Fly.io, with analysis and stems on
+Modal and the library backed up to R2, and [docs/hosting-map.md](docs/hosting-map.md)
+shows how those pieces fit together. A hosted server analyzes without the
+optional drum model, so its drum lanes come from the built-in detector.
 
 ## Command line
 
@@ -270,8 +298,9 @@ for the previous Krumhansl-Kessler method. See docs/bench.md "Key detection note
 
 Stem separation and benchmarks can run on [Modal](https://modal.com), with
 benchmark datasets in a Cloudflare R2 bucket (`python -m pip install -e '.[cloud]'`).
-The web app and everyday analysis stay local. Setup and costs are in
-[docs/cloud.md](docs/cloud.md).
+On your own machine the web app and everyday analysis stay local. Setup and costs
+are in [docs/cloud.md](docs/cloud.md). A hosted server (above) uses its own Modal
+app for analysis and stems.
 
 ### README screenshots
 
@@ -310,6 +339,8 @@ tastr/lookup/               opt-in catalog lookups (BPM/key by artist + title), 
 tastr/db.py                 SQLite schema and save/load/query
 tastr/service.py            inputs -> engine -> DB, used by the CLI and web app
 tastr/web/                  FastAPI app and UI; hosted.py is the shared-server mode (docs/hosting.md)
+tastr/cloud/                Modal apps: benchmarks and stems (modal_app.py), a hosted server's analysis (modal_web.py)
+Dockerfile, fly.toml, deploy/   the hosted server's image, Fly.io config and Litestream backup (docs/deploy.md)
 ```
 
 The engine is kept self-contained so it can be split into its own library

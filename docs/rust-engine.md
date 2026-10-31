@@ -16,7 +16,7 @@ someone re-analyzes them; Opus files, which symphonia can't decode, fall back to
 | P1 | The other shared signals (mel, MFCC, RMS, onsets, filters, drum envelopes); speed and memory | Done (below) |
 | P2 | CQT and chroma, beat tracker, tempogram, Ward clustering | Done (below) |
 | P3 | The stages, and cards from Rust | Done (below) |
-| P4 | Switch-over behind a flag, full benchmarks | Flags in; benchmarks next (below) |
+| P4 | Switch-over behind a flag, full benchmarks | Done (below) |
 | P5 | Retire the Python engine from the analysis path | |
 
 ## Layout
@@ -247,4 +247,20 @@ Benchmarks: `tastr bench <name> --engine rust` (locally or `--remote` on Modal) 
 decoding the file itself; synthetic audio goes in as samples. The downbeat and Harmonix section benches work
 from spectrograms rather than audio, so they keep the Python path; P3 showed those stages are identical given
 the same input.
+
+What the full benchmarks measured (2026-10-31, `modal run tastr/cloud/modal_app.py --kind bench ... --engine rust`
+from the P4 branch, every stage in Rust including decoding; no failed tracks):
+
+| Bench | Tracks | Python | Rust |
+|---|---|---|---|
+| `giantsteps-key`, exact key | 599 | 0.599 | 0.606 (MIREX weighted 0.682) |
+| `beatport-key`, exact key | 1,275 | 0.491 | 0.491 (MIREX weighted 0.587) |
+| `beatport-tempo`, Acc1 / Acc2 | 774 | 0.897 / 0.930 | 0.897 / 0.930 |
+| `giantsteps-tempo`, Acc1 / Acc2 | 43 | 0.744 / 0.907 | 0.744 / 0.907 |
+
+Tempo is unchanged and key moves within the decoder's noise (GiantSteps up 4 tracks), so no retuning was
+needed. Key errors on GiantSteps: 66 fifths, 27 parallel, 23 relative, 120 other; the fifths stay the biggest
+miss. Wall time on 8 CPUs: 6 min for GiantSteps key, 13 min for Beatport key, 6 min for Beatport tempo. The
+downbeat and Harmonix section benches start from spectrograms, not audio, so they don't exercise the switch;
+P3 showed those stages give identical results on the same input.
 

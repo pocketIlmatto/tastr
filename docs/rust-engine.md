@@ -291,7 +291,8 @@ machine, the Fly server and Modal alike.
   | 20 min | 1,362 MB, 40 s | ~2.9 GB |
 
   About 66 MB per minute against Python's 130, so Modal's 2 GB `analyze` function could take tracks of about 25
-  minutes. `TASTR_MAX_MINUTES` stays at 12 until that is tried on real uploads.
+  minutes. On the deployed function, 12 to 30-minute MP3s all analyzed (24 to 54 s), so `TASTR_MAX_MINUTES` is now
+  25.
 - **Local installs** need the library built once (`cd engine-rs && cargo build --release --lib`); without it
   the Python engine makes the cards, as before.
 

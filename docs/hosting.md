@@ -47,7 +47,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_ACCESS_TEAM_DOMAIN` | (required) | your Access team domain, e.g. `yourteam.cloudflareaccess.com` |
 | `TASTR_ACCESS_AUD` | (required) | the Access application's Audience (AUD) tag |
 | `TASTR_MAX_UPLOAD_MB` | 100 | largest file accepted |
-| `TASTR_MAX_MINUTES` | 12 | longest track accepted, read from the file's header before analysis (see [below](#when-an-upload-fails)) |
+| `TASTR_MAX_MINUTES` | 25 | longest track accepted, read from the file's header before analysis (see [below](#when-an-upload-fails)) |
 | `TASTR_MAX_FILES` | 20 | files per upload |
 | `TASTR_DAILY_TRACKS` | 30 | tracks each person can upload per UTC day |
 | `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this |
@@ -115,10 +115,11 @@ again, so a file that is too big or too long fails at once with a message that s
 analysis shows "Couldn't analyze this file", with the step it stopped at and, when Modal stopped it for using
 too much memory or time, that reason.
 
-Why there's a length limit: analysis memory grows with the track's length, about 130 MB a minute on top of a
-few hundred MB (measured: 3 min 740 MB, 10 min 1.6 GB, 20 min 2.9 GB). Modal's `analyze` has 2 GB, so
-anything much past 14 minutes runs out of memory; a one-hour mix would need about 8 GB. Raise
-`TASTR_MAX_MINUTES` only together with `memory=` in `tastr/cloud/modal_web.py`.
+Why there's a length limit: analysis memory grows with the track's length, about 66 MB a minute with the Rust
+engine (measured locally: 3 min 235 MB, 10 min 0.7 GB, 20 min 1.4 GB; the Python engine took twice that).
+Modal's `analyze` has 2 GB. On 2026-10-31 the deployed function analyzed 12, 20, 25 and 30-minute MP3s
+without trouble, in 24 to 54 s, so the limit is 25 minutes to leave headroom. A one-hour mix would need about
+4 GB. Raise `TASTR_MAX_MINUTES` past 30 only together with `memory=` in `tastr/cloud/modal_web.py`.
 
 To find out what happened to an upload:
 

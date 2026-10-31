@@ -209,6 +209,27 @@ tracks it is often not the tonic. Adding the bass profile to the learned model's
 noise. The minor prior (bonus for minor keys in the Krumhansl correlation, 0.10) was flat from 0.08 to 0.15 on
 Beatport (0.535 to 0.544) even though only 70% of its labels are minor, against 85% on GiantSteps.
 
+**FMA Keys, zip 0 (2026-10-31, held out):** 695 full-length Free Music Archive songs across genres, half
+major, scored with the core stages on Modal (Rust engine, main 8d55d6b, not recorded). 687 scored: MIREX
+weighted **0.551**, exact 0.476 (327 exact, 65 fifth, 21 relative, 62 parallel, 212 other), against 0.650 on
+GiantSteps. The model leans minor, which suits EDM and hurts here:
+
+| Reference | n | Weighted | Exact | Read as the other mode |
+|---|---|---|---|---|
+| major | 348 | 0.395 | 0.316 | 194 |
+| minor | 339 | 0.710 | 0.640 | 20 |
+
+The "other" misses are mostly major songs read as one of their own minor chords: +4 semitones (iii) 40,
++2 (ii) 27, +7 as minor 18. A cluster of 64 lands one semitone below the reference, which looks like tuning.
+Major read as IV, the worry from GiantSteps, didn't happen at all (0). Key confidence does separate right
+from wrong: the top half by confidence scores 0.679, the top quarter 0.753, the bottom half 0.422. Next
+steps for the model (after the Rust port): a weaker minor lean or a genre-balanced training set, and a look
+at the semitone-flat tuning cluster.
+
+The first run also had 8 songs the Rust decoder refused: symphonia 0.5's ID3v2 reader rejects a file at
+probe time when any ID3v2.4 frame is flagged compressed ("id3v2: compressed frames are not supported"). ffmpeg and librosa read them fine. PR #53 makes the Rust decoder retry past the leading ID3v2 tags, and
+adds the same Python fallback to the bench that the app already has.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:
@@ -422,6 +443,28 @@ and time-stretched copies (`<name>/track_ps-3`, `<name>/track_ts12`) are skipped
 (or `tastr spec-bench meter`) scores core's 3/4-or-4/4 guess and its 3-beat
 bar-1 picker on the same files, using tracks whose labeled bars are steadily
 3 or 4 beats long. See [rhythm.md](rhythm.md#meter-34-or-44-2026-10-30).
+
+**Ballroom, held out (2026-10-31).** `tastr bench ballroom ballroom --remote --stages core` on all 698
+excerpts (Rust engine, main, not recorded, 133 s on Modal): BPM within 4% 0.585, with x2 / half 0.841
+(130 read at half, 49 at double); beat F 0.674, downbeat F 0.445. Meter: 4/4 kept on 0.994 of 523, but 3/4
+found on only 0.56 of 175, against 0.86 on GTZAN, where the detector was tuned.
+
+| Style | n | BPM 4% | x2 / half | Beat F | Meter right | Ref vs est median BPM |
+|---|---|---|---|---|---|---|
+| ChaChaCha | 111 | 0.98 | 0.98 | 0.73 | 1.00 | 124 / 124 |
+| Tango | 86 | 0.97 | 0.97 | 0.88 | 1.00 | |
+| Rumba (3 sets) | 98 | 0.83 | 0.92 | 0.71 | 1.00 | |
+| Samba | 86 | 0.67 | 0.71 | 0.65 | 0.99 | |
+| Jive | 60 | 0.53 | 1.00 | 0.66 | 1.00 | 172 / 125 |
+| Quickstep | 82 | 0.00 | 0.93 | 0.55 | 0.98 | 204 / 103 |
+| Viennese Waltz | 65 | 0.31 | 0.71 | 0.68 | 0.80 (3/4) | 180 / 136 |
+| Waltz | 110 | 0.23 | 0.56 | 0.54 | 0.42 (3/4) | 87 / 131 |
+
+- Most of the 4% misses outside the waltzes are the tempo fold: Quickstep (about 200 BPM) is always read
+  at half and Jive (about 172) half the time, which is by design for a DJ range.
+- Slow Waltz is the weak spot: its tempo comes out 1.5x too high (87 to 131, the 3:2 trap), and 3/4 is
+  found on only 42%. Viennese Waltz finds 3/4 more often (80%) but at 3/4 of its tempo.
+- So the 3/4 detector is too conservative on slow waltzes, while 4/4 is nearly never flipped.
 
 ## Tempo on spectrograms
 

@@ -76,8 +76,10 @@ def main(argv: list[str] | None = None) -> int:
     kp.add_argument("--from-cache", metavar="FEATURES",
                     help="read a local key_features cache instead of decoding audio")
 
-    dm = sub.add_parser("drum-model", help="the optional pretrained drum model (ADTOF, CC BY-NC-SA 4.0): status or fetch")
-    dm.add_argument("action", choices=["status", "fetch"])
+    dm = sub.add_parser("drum-model", help="the optional pretrained drum model (ADTOF, CC BY-NC-SA 4.0): status, "
+                                           "fetch, or run on one track")
+    dm.add_argument("action", choices=["status", "fetch", "run"])
+    dm.add_argument("track_id", type=int, nargs="?", help="run: the track to re-analyze with the model")
 
     db_ = sub.add_parser("drum-bench", help="drum lane benches (synth, idmt, mdb, stemgmd-mix), locally or on Modal")
     db_.add_argument("suite", choices=["synth", "idmt", "mdb", "stemgmd-mix"])
@@ -88,8 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     db_.add_argument("--kits", choices=["all", "train", "test"], default="all",
                      help="stemgmd-mix: all kits, or the half tuned on (train) or held out (test)")
     db_.add_argument("--drum-model", action="store_true",
-                     help="with --remote: run where the pretrained drum model is installed (locally it is used "
-                          "whenever tastr[drums] is; TASTR_DRUM_MODEL=off turns it off)")
+                     help="score the pretrained drum model's lanes (locally it needs tastr[drums]; with --remote "
+                          "it runs where the model is installed)")
     db_.add_argument("--out", help="write the JSON report here")
     db_.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
     db_.add_argument("--write-bundle", action="store_true",
@@ -435,6 +437,8 @@ def _drum_model(args) -> int:
 
     print(f"ADTOF drum model (https://github.com/MZehren/ADTOF): weights {adt.LICENSE}, non-commercial use only, "
           "share-alike. Not part of Tastr.")
+    if args.action == "run":
+        return _drum_model_run(args)
     if importlib.util.find_spec("torch") is None:
         print(f"error: {adt.INSTALL_HINT}", file=sys.stderr)
         return 2
@@ -444,8 +448,34 @@ def _drum_model(args) -> int:
         except (OSError, ValueError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
-    state = "on" if adt.available() else "off (TASTR_DRUM_MODEL=off)" if adt.cached() else "off: run `tastr drum-model fetch`"
-    print(f"drum model: {state}")
+    state = ("off (TASTR_DRUM_MODEL=off)" if adt.switched_off() else "on for every analysis (TASTR_DRUM_MODEL=adtof)"
+             if adt.always() else "on request: `tastr drum-model run ID` or \"Detect drums with the model\" in the web UI")
+    print(f"drum model: {state}; weights {'downloaded' if adt.cached() else 'download on first use'}")
+    return 0
+
+
+def _drum_model_run(args) -> int:
+    from . import drum_jobs, service
+
+    if args.track_id is None:
+        print("error: run needs a track id (see `tastr list`)", file=sys.stderr)
+        return 2
+    if not drum_jobs.available():
+        print(f"error: {drum_jobs.INSTALL_HINT} (or TASTR_DRUM_MODEL=off turned it off)", file=sys.stderr)
+        return 2
+    print(f"Re-analyzing track {args.track_id} with the drum model...", file=sys.stderr)
+    try:
+        result = service.reanalyze_track(db.connect(args.db), args.track_id, drum_model=True)
+    except FileNotFoundError:
+        print("error: the original audio file is not on disk", file=sys.stderr)
+        return 1
+    if result is None:
+        print(f"no track {args.track_id}", file=sys.stderr)
+        return 1
+    if result.error:
+        print(f"error: {result.error}", file=sys.stderr)
+        return 1
+    print(_summary_line(result.track_id, result.card))
     return 0
 
 
@@ -469,6 +499,8 @@ def _drum_bench(args) -> int:
             print(f"wall {time.time() - t0:.0f} s, of which the bench {report.get('timing', {}).get('seconds', 0):.0f} s",
                   file=sys.stderr)
         else:
+            if args.drum_model:
+                os.environ["TASTR_DRUM_MODEL"] = "adtof"  # every analysis in the bench (and its workers)
             report = jobs.run_drum_bench(args.suite, args.path, args.limit, args.jobs, args.drums_only, args.kits)
     except (remote.RemoteError, ValueError, FileNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)

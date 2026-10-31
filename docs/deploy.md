@@ -184,7 +184,9 @@ Uploaded audio and stems are not backed up; they are on the volume only, and exp
 
 - The machine stops after a few idle minutes and starts on the next request, which takes a few seconds.
   The first analysis after a quiet spell also waits for Modal to start a container (about half a minute).
-- A queued or running stem separation leaves a marker on the volume, so if the machine stops mid-job the
-  server starts it again on its next start.
-- Analysis runs without the pretrained drum model on Modal (it needs PyTorch, which the analysis image
-  leaves out to start faster); the drum lanes come from Tastr's own detector.
+- A queued or running stem separation or drum model run leaves a marker on the volume, so if the machine
+  stops mid-job the server starts it again on its next start.
+- Uploads are analyzed without the pretrained drum model, so the analysis image can leave out PyTorch and
+  start faster. "Detect drums with the model" in a track's menu re-analyzes that one track through
+  Modal's `analyze_drums` function, which has PyTorch and the weights (CC BY-NC-SA 4.0) built into its
+  image. It starts a larger container, so expect a minute or two per track. `TASTR_DAILY_DRUMS` caps it.

@@ -25,6 +25,7 @@ pieces fit together.
 | Try this in Strudel | strudel.cc fetches audio from `tastr serve` | strudel.cc fetches it through a signed link that works for a week |
 | Admin view (`/api/admin/usage`) | none | usage per person, for `TASTR_ADMIN_EMAILS` |
 | Stem separation | unlimited | per-person daily limit |
+| Detect drums with the model | unlimited (needs `tastr[drums]`) | per-person daily limit; runs on Modal's `analyze_drums` |
 | Analyses at once | unlimited | capped; extra ones wait their turn |
 | Analysis errors | full message | "Couldn't analyze this file." (details go to the server log) |
 | Security headers | none | CSP, no framing, nosniff, HSTS |
@@ -51,6 +52,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this |
 | `TASTR_MAX_ANALYSES` | 2 | analyses that run at once |
 | `TASTR_DAILY_STEMS` | 10 | stem separations each person can start per UTC day |
+| `TASTR_DAILY_DRUMS` | 10 | drum model runs ("Detect drums with the model") each person can start per UTC day |
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |

@@ -18,23 +18,23 @@ def no_torch(monkeypatch):
     monkeypatch.setattr(adt.importlib.util, "find_spec", lambda name, *a: None if name == "torch" else real(name, *a))
 
 
-def test_opt_in_only(monkeypatch, tmp_path):
-    monkeypatch.setenv("TASTR_HOME", str(tmp_path))  # no weights cached
+def test_runs_only_when_asked(monkeypatch, tmp_path):
+    monkeypatch.setenv("TASTR_HOME", str(tmp_path))
     monkeypatch.delenv("TASTR_DRUM_MODEL", raising=False)
     monkeypatch.setattr(adt.importlib.util, "find_spec", lambda name, *a: object())  # as if torch were installed
-    assert not adt.available()  # PyTorch alone (e.g. from tastr[stems]) doesn't turn it on
-    monkeypatch.setenv("TASTR_DRUM_MODEL", "adtof")
-    assert adt.available()
-    monkeypatch.delenv("TASTR_DRUM_MODEL")
+    assert adt.installed() and not adt.wanted(None)  # PyTorch alone (e.g. from tastr[stems]) doesn't turn it on
     for name in adt.FILES:
         (adt.models_dir()).mkdir(parents=True, exist_ok=True)
         (adt.models_dir() / name).write_bytes(b"")
-    assert adt.available()  # fetched
+    assert not adt.wanted({})  # nor do downloaded weights: everyday analysis keeps the built-in lanes
+    assert adt.wanted({"drum_model": True})  # "Detect drums with the model" on one track
+    monkeypatch.setenv("TASTR_DRUM_MODEL", "adtof")
+    assert adt.wanted(None)  # every analysis (the drum benches)
     monkeypatch.setenv("TASTR_DRUM_MODEL", "off")
-    assert not adt.available()
+    assert not adt.wanted({"drum_model": True})
     no_torch(monkeypatch)
     monkeypatch.setenv("TASTR_DRUM_MODEL", "adtof")
-    assert not adt.available()
+    assert not adt.installed() and not adt.wanted({"drum_model": True})
 
 
 def test_drum_model_cli_without_torch(monkeypatch, capsys):
@@ -47,7 +47,7 @@ def test_drum_model_cli_without_torch(monkeypatch, capsys):
 
 
 def fake_model(monkeypatch, hits):
-    monkeypatch.setattr(adt, "available", lambda: True)
+    monkeypatch.setattr(adt, "wanted", lambda options: True)
     monkeypatch.setattr(adt, "onsets", lambda y, sr: {k: (np.asarray(t, float), np.full(len(t), 1.0)) for k, t in hits.items()})
 
 

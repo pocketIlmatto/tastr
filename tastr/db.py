@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS user_usage (
 );
 
 -- What people did on a hosted server, for the admin view's activity log (kept about 90 days, see add_event).
--- kind: upload, stems, reanalyze, signin, limit or failed; ok = 0 for limits hit and failures.
+-- kind: upload, stems, drums, reanalyze, signin, limit or failed; ok = 0 for limits hit and failures.
 CREATE TABLE IF NOT EXISTS events (
     id     INTEGER PRIMARY KEY,
     at     TEXT NOT NULL,

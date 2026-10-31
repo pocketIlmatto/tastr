@@ -40,7 +40,7 @@ Run it on your own machine, or host it for a few invited people behind a login
 
 - **Drum lanes** for kick, snare, clap, hat, open hat, tom and perc, as a
   16-step grid per section (12 steps in 3/4). Template patterns that fit the
-  tempo (waltz patterns in 3/4) are one click away. With the optional drum model (below), kick, hat and tom come from
+  tempo (waltz patterns in 3/4) are one click away. Ask for the optional drum model (below) on a track and kick, hat and tom come from
   [ADTOF](https://github.com/MZehren/ADTOF), a network trained on annotated
   real music that finds toms the built-in detector misses, and a cymbal lane
   (crash and ride) is added.
@@ -176,8 +176,8 @@ Tastr can also run as a small shared web app. Hosted mode (`TASTR_HOSTED=1`, the
 [docs/hosting.md](docs/hosting.md) lists everything hosted mode changes.
 [docs/deploy.md](docs/deploy.md) puts it on Fly.io, with analysis and stems on
 Modal and the library backed up to R2, and [docs/hosting-map.md](docs/hosting-map.md)
-shows how those pieces fit together. A hosted server analyzes without the
-optional drum model, so its drum lanes come from the built-in detector.
+shows how those pieces fit together. Uploads use the built-in drum detector;
+"Detect drums with the model" runs the optional drum model on one track at a time.
 
 ## Command line
 
@@ -227,23 +227,24 @@ deleted with the track.
 
 ### Drum model (optional)
 
-With PyTorch installed, the kick, hat and tom lanes come from ADTOF's pretrained
-drum transcription model (Zehren et al.), which also adds a cymbal lane. On real
+"Detect drums with the model" in a track's ⋯ menu (or the bulk Actions menu)
+re-analyzes it in the background with ADTOF's pretrained drum transcription model (Zehren et al.), which also adds a cymbal lane. On real
 mixes it finds toms (onset F 0.37 against 0.01 on MDB Drums mixes, 0.88 against
-0.00 on unseen StemGMD kits) and scores higher on kick and hats; snare, clap, perc and open hats stay with the built-in detector. Details and
+0.00 on unseen StemGMD kits) and scores higher on kick and hats; snare, clap, perc and open hats stay with the built-in detector. It is
+slower than the built-in lanes, so everyday analysis doesn't use it; re-analyzing a track that has it keeps it. Details and
 scores are in [docs/drums.md](docs/drums.md#pretrained-drum-model-adtof).
 
 ```bash
 python -m pip install -e '.[drums]'   # PyTorch only; shared with .[stems]
-tastr drum-model fetch                 # shows the license, downloads the weights
+tastr drum-model fetch                 # shows the license, downloads the weights (optional: first use does it too)
+tastr drum-model run 1                 # re-analyze track 1 with the model, like the menu item
 ```
 
 **The weights are CC BY-NC-SA 4.0: non-commercial use only, and share-alike.** They
-are not part of Tastr's repository, so the model is opt-in even with PyTorch installed:
-`tastr drum-model fetch` downloads them (about 5 MB, from a pinned commit of ADTOF's
-GitHub repository, checked by SHA-256) into `~/.tastr/models/`, and from then on the
-model is used. `TASTR_DRUM_MODEL=adtof` does the same on first use; `TASTR_DRUM_MODEL=off`
-switches it off. Without it, Tastr uses the built-in lanes exactly as before.
+are not part of Tastr's repository: the first run (or `tastr drum-model fetch`) downloads
+them (about 5 MB, from a pinned commit of ADTOF's GitHub repository, checked by SHA-256)
+into `~/.tastr/models/`. `TASTR_DRUM_MODEL=adtof` runs the model on every analysis
+instead of on request; `TASTR_DRUM_MODEL=off` switches it off.
 
 To run the tests:
 

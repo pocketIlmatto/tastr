@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from .. import db, lookup, service, stems
+from .. import db, drum_jobs, lookup, service, stems
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url
 from .hosted import (HEALTH_PATH, LINK_DAYS, PUBLIC_PREFIX, TOKEN_HEADER, AccessVerifier, AnalysisSlots, LinkSigner,
@@ -149,6 +149,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     async def lifespan(_app):
         stop = threading.Event()
         jobs.resume()  # stem separations the last run left unfinished (e.g. the machine auto-stopped)
+        drum_runs.resume()  # and drum model runs
         if hosted and settings.audio_days > 0:
             threading.Thread(target=expire_loop, args=(stop,), name="tastr-expiry", daemon=True).start()
         yield
@@ -157,6 +158,21 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     app = FastAPI(title="Tastr", docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
                   openapi_url=None if hosted else "/openapi.json", lifespan=lifespan)
     jobs = stems.Jobs()
+
+    def run_drum_model(track_id: int) -> None:
+        """Re-analyze one track with the drum model (a drum_jobs job); raises with a message for the UI."""
+        with closing(conn()) as c:
+            with analysis_slot():
+                result = service.reanalyze_track(c, track_id, drum_model=True)
+        if result is None:
+            raise LookupError("The track was deleted.")
+        if result.error:
+            if hosted:
+                log.warning("drum model run for track %s failed: %s", track_id, result.error)
+                raise RuntimeError("Couldn't analyze the file with the drum model.")
+            raise RuntimeError(f"Couldn't analyze the file with the drum model: {result.error}")
+
+    drum_runs = drum_jobs.Jobs(run_drum_model)
     last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
 
     @app.middleware("http")
@@ -272,7 +288,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         def person(email):
             return people.setdefault(email, {"email": email, "tracks": 0, "audio_bytes": 0, "stems_bytes": 0,
                                              "last_upload": None, "last_seen": last_seen.get(email),
-                                             "today": {"tracks": 0, "stems": 0, "visits": 0}})
+                                             "today": {"tracks": 0, "stems": 0, "drums": 0, "visits": 0}})
 
         with closing(conn()) as c:
             for owner, tid, sha, path, at in c.execute(
@@ -298,7 +314,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         return {"today": day, "users": users, "history": history, "admins": list(settings.admins),
                 "limits": settings.limits(), "recent": recent, "blocked_today": blocked,
                 "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(settings.storage_gb * 1024 ** 3)},
-                "active_stem_jobs": jobs.active(), "analyses": slots.status()}
+                "active_stem_jobs": jobs.active(), "active_drum_jobs": drum_runs.active(), "analyses": slots.status()}
 
     @app.get("/api/health")
     def health():
@@ -345,6 +361,8 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         body["has_audio"] = _audio_path(card) is not None
         body["stems_available"] = stems.available()
         body["stems_state"] = jobs.status(_stems_dir(card, track_id))["state"]
+        body["drum_model_available"] = drum_jobs.available()
+        body["drum_model_state"] = drum_runs.status(track_id)["state"]
         body["lookups"] = lookup.describe(card, db.get_lookups(c, track_id))
         body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in lookup.enabled()]
         return body
@@ -461,6 +479,36 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         if not path.is_file():
             raise HTTPException(404, "This track has not been separated into stems.")
         return FileResponse(path, media_type="audio/flac", headers=_strudel_cors(origin))
+
+    def _drum_model_status(track_id: int) -> dict[str, Any]:
+        return {**drum_runs.status(track_id), "available": drum_jobs.available()}
+
+    @app.get("/api/tracks/{track_id}/drum-model")
+    def track_drum_model(track_id: int):
+        """The track's drum model run: none, queued, running, done or error (with `error`)."""
+        _card_or_404(track_id)
+        return _drum_model_status(track_id)
+
+    @app.post("/api/tracks/{track_id}/drum-model", status_code=202)
+    def detect_drums(track_id: int, request: Request):
+        """Re-analyze the track with the pretrained drum model in the background (one track at a time; others
+        queue). Saved edits move to the new sections as with Re-analyze."""
+        card = _card_or_404(track_id)
+        if _audio_path(card) is None:
+            raise HTTPException(410, "The original audio file is no longer on disk.")
+        if not drum_jobs.available():
+            raise HTTPException(501, drum_jobs.INSTALL_HINT)
+        if not drum_runs.busy(track_id):
+            user = owner_of(request)
+            if hosted:
+                with closing(conn()) as c:
+                    if db.usage_today(c, user, "drums", today()) >= settings.daily_drums:
+                        raise refuse(user, 429, f"You've reached today's limit of {settings.daily_drums} drum model runs.",
+                                     f"daily drum model limit ({settings.daily_drums})")
+                    db.add_usage(c, user, "drums", today())
+            event(user, "drums", "Started detecting drums with the model for 1 track")
+            drum_runs.start(track_id)
+        return _drum_model_status(track_id)
 
     @app.get("/api/tracks/{track_id}/views")
     def track_views(track_id: int):
@@ -593,6 +641,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             # Stems are kept per audio file, so another library holding the same file keeps them.
             shared = card is not None and c.execute(
                 "SELECT 1 FROM tracks WHERE sha256 = ?", (card.source.sha256,)).fetchone() is not None
+        drum_runs.forget(track_id)
         if card is not None and not shared:
             folder = _stems_dir(card, track_id)
             jobs.forget(folder)

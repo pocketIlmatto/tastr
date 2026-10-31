@@ -6,7 +6,9 @@ them analyze, and browse track cards with charts. Plus a small explore view
 across the library.
 
 ## Files
-- Edit: `tastr/web/server.py` (keep `create_app(db_path)` and `run(host, port, db_path)`).
+- Edit: `tastr/web/server.py` (keep `create_app(db_path)` and `run(host, port, db_path)`). Since TAS-34 the routes live in
+  `tastr/web/routes/` (one module per area, each a `router(ctx)`), sharing an `AppContext` from `tastr/web/context.py`;
+  the hosted background loops are in `tastr/web/background.py`.
 - New: `tastr/web/static/` (`index.html`, `app.js`, `style.css`). Plain HTML/JS, no build step; load chart libs only from a CDN with pinned versions, or draw with SVG/canvas.
 - New: `tests/test_web.py`.
 

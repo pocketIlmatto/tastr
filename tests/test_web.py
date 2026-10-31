@@ -69,6 +69,21 @@ def test_index_and_static_assets(client):
         assert client.get(ref).status_code == 200
 
 
+def test_index_versions_its_assets_so_a_deploy_skips_stale_caches(client):
+    """Cloudflare and browsers cache /static/ files; a content hash in the URL makes each deploy a new URL."""
+    import hashlib
+    import re
+
+    from tastr.web.server import STATIC_DIR
+
+    r = client.get("/")
+    assert r.headers["cache-control"] == "no-cache"
+    for name in ("app.js", "strudel.js", "style.css"):
+        v = re.search(rf'"/static/{re.escape(name)}\?v=(\w+)"', r.text).group(1)
+        assert v == hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:10]
+        assert client.get(f"/static/{name}?v={v}").status_code == 200
+
+
 def test_empty_card_serves(client, db_path):
     conn = db.connect(db_path)
     tid = db.save_card(conn, TrackCard(source=Source(kind="file", uri="/e.wav", sha256="e")))

@@ -2625,7 +2625,7 @@ async function runBatch(items, rows) {
     const row = rows[i], link = !!items[i].link;
     Object.assign(row, { active: true, t0: Date.now(), secs: 0, frac: 0, stage: null, say: link ? "Fetching from the link" : "Uploading 0%" });
     rows.slice(i + 1).forEach((q, k) => { q.say = k ? `Waiting · ${k} ahead of it` : "Up next"; });
-    let uploaded = link ? 1 : 0, measured = null;  // measured: 0-1 while the browser runs HPSS (browser signals), else null
+    let uploaded = link ? 1 : 0, measured = null;  // measured: 0-1 while the browser runs HPSS (browser signals), -1 while it makes the whole card (browser engine), else null
     const update = () => {
       row.secs = (Date.now() - row.t0) / 1000;
       const a = row.stage ? analysisFrac(row) : 0;
@@ -2633,6 +2633,7 @@ async function runBatch(items, rows) {
       const left = (1 - row.frac) * perFile + (n - i - 1) * perFile;
       const step = A_STEPS.find(([k]) => k === row.stage);
       const what = row.stage === "fetch" ? "fetching from the link" : step ? step[1].toLowerCase()
+        : measured != null && measured < 0 ? "analyzing in your browser"
         : measured != null ? `measuring in your browser ${Math.round(measured * 100)}%`
         : uploaded < 1 ? `uploading ${Math.round(uploaded * 100)}%` : "analyzing";
       const el = $("status");
@@ -2651,7 +2652,7 @@ async function runBatch(items, rows) {
         update();
       }, (f) => {
         measured = f;
-        row.say = `Measuring in your browser ${Math.round(f * 100)}%`;
+        row.say = f < 0 ? "Analyzing in your browser" : `Measuring in your browser ${Math.round(f * 100)}%`;
         update();
       });
       uploaded = 1;
@@ -2722,8 +2723,10 @@ function uploadFiles(files) {
       await checkUpload(f);
       const fd = new FormData();
       fd.append("files", f);
-      const sig = serverCfg.browser_signals ? await measureInBrowser(f, onMeasure) : null;
-      if (sig) fd.append("signals", sig, "signals.tsg");
+      const card = serverCfg.browser_engine ? await cardInBrowser(f, onMeasure) : null;
+      const sig = !card && serverCfg.browser_signals ? await measureInBrowser(f, onMeasure) : null;
+      if (card) fd.append("signals", card, "card.json");
+      else if (sig) fd.append("signals", sig, "signals.tsg");
       return postWithProgress("/api/analyze?background=1", fd, onProgress);
     },
   })));
@@ -2736,6 +2739,30 @@ async function measureInBrowser(file, onMeasure) {
   onMeasure(0);
   try { return await browserSignals(file, script.src, onMeasure); }
   catch (e) { console.warn("browser signals failed; the server will do that work", e); return null; }
+}
+// TASTR_BROWSER_ENGINE: make the whole card here with the Rust engine's WebAssembly build (static/engine.js, a
+// worker per file so its memory goes when it's done) and send it with the file; the server stores it when it checks
+// out (tastr/engine/browser_card.py). Opus (which the engine can't decode), long tracks and any failure leave the
+// analysis to the server.
+const ENGINE_MAX_MINUTES = 20;
+async function cardInBrowser(file, onMeasure) {
+  const cfg = serverCfg.browser_engine;
+  const script = document.querySelector('script[src*="/static/engine.js"]');
+  if (!cfg || !script || typeof Worker !== "function" || typeof WebAssembly !== "object" || /\.opus$/i.test(file.name)) return null;
+  const min = await audioMinutes(file);
+  if (min != null && min > ENGINE_MAX_MINUTES) return null;
+  onMeasure(-1);
+  const out = await new Promise((resolve) => {
+    const w = new Worker(script.src);
+    const done = (v) => { w.terminate(); resolve(v); };
+    w.onmessage = (e) => done(e.data);
+    w.onerror = (e) => done({ error: e.message || "worker failed" });
+    w.postMessage({ wasm: new URL(cfg.wasm, location.href).href, file });
+  });
+  if (out.error) { console.warn("browser analysis failed; the server will analyze this file", out.error); return null; }
+  const msg = `{"format":"tastr-card","version":1,"engine":${JSON.stringify(cfg.engine)},` +
+    `"engine_version":${JSON.stringify(out.version)},"card":${out.json}}`;
+  return new Blob([msg], { type: "application/json" });
 }
 const drop = $("drop");
 ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));

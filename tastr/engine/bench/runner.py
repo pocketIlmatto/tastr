@@ -26,6 +26,16 @@ DEFAULT_STAGES = ["core", "sections"]
 
 
 def analyze_item(item: Item, stages: list[str] | None = None) -> TrackCard:
+    """The card for one bench track. With TASTR_ENGINE=rust, the Rust engine makes the whole card (every stage),
+    decoding the file itself, so the score includes its decoder and resampler."""
+    from .. import rust
+
+    if rust.chosen() == "rust":
+        from dataclasses import asdict
+
+        src = Source(kind="file", uri=item.path or item.id, local_path=item.path, title=item.id)
+        d = rust.card_from_samples(item.synth()) if item.synth is not None else rust.card_from_file(item.path)
+        return TrackCard.from_dict({**d, "source": asdict(src)})
     if item.synth is not None:
         y = item.synth()
     else:
@@ -120,6 +130,12 @@ def review_queue(rows: list[dict], n: int = 20) -> list[dict]:
             for r in (bad + unsure)[:n]]
 
 
+def _engine_name() -> str:
+    from .. import rust
+
+    return f"rust {rust.version()}" if rust.chosen() == "rust" else "python"
+
+
 def run(items: list[Item], stages: list[str] | None = None, jobs: int = 1, limit: int | None = None,
         progress=None) -> dict:
     items = items[:limit] if limit else items
@@ -145,6 +161,7 @@ def run(items: list[Item], stages: list[str] | None = None, jobs: int = 1, limit
     versions = {name: st.version for name, st in registered_stages().items()}
     return {
         "engine_version": __version__,
+        "engine": _engine_name(),
         "stage_versions": versions,
         "stages": stages or DEFAULT_STAGES,
         "seconds": round(time.time() - t0, 1),

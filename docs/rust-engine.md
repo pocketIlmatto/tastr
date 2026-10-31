@@ -16,7 +16,7 @@ someone re-analyzes them; Opus files, which symphonia can't decode, fall back to
 | P1 | The other shared signals (mel, MFCC, RMS, onsets, filters, drum envelopes); speed and memory | Done (below) |
 | P2 | CQT and chroma, beat tracker, tempogram, Ward clustering | Done (below) |
 | P3 | The stages, and cards from Rust | Done (below) |
-| P4 | Switch-over behind a flag, full benchmarks | Next |
+| P4 | Switch-over behind a flag, full benchmarks | Done (below) |
 | P5 | Retire the Python engine from the analysis path | |
 
 ## Layout
@@ -54,6 +54,12 @@ engine-rs/
   .cargo/config.toml WebAssembly SIMD on (same bits, faster)
 tests/test_rust_engine.py   native vs WebAssembly bit for bit; every signal, beats, chroma and Ward vs librosa;
                             cards vs the Python engine; the copied constants
+tastr/engine/rust.py        the native library through ctypes (tastr_card, tastr_card_f32), TASTR_ENGINE, and
+                            where the WebAssembly build is and its id
+tastr/engine/browser_card.py  checks a card the browser made (TASTR_BROWSER_ENGINE)
+tastr/web/static/engine.js  the worker that runs the WebAssembly card in the page
+tastr/cloud/rust_image.py   builds the native library into the Modal images
+tests/test_rust_switch.py   the switch, the fallbacks, browser card checks, the upload path
 ```
 
 Build both and run the tests:
@@ -222,4 +228,39 @@ float64 and interpolates in float32, axis-0 means added row by row, Python's `ro
 shortest correctly rounded string). The NMF's matrix products are summed in a plain order rather than BLAS's,
 which changes nothing visible after its float32 activations. P4 puts the Rust card behind a flag and runs the
 full benchmarks on Modal.
+
+## P4: the switch (2026-10-31)
+
+Two flags, both off by default:
+
+- **`TASTR_ENGINE=rust`** (server and Modal; or `options["engine"]`): `analyze_file` hands the whole analysis to
+  the native library, which decodes the file and makes the card. The card says `extras["engine"] = "rust
+  0.4.0"`. It falls back to Python, saying why in `extras["engine_fallback"]`, when the library isn't there,
+  for a subset of stages (re-analysis of one part), with browser signals, with the drum model, and when the
+  library can't decode the file (Opus). The Modal images build the library with Rust 1.97.0 in one step and
+  drop the toolchain (`tastr/cloud/rust_image.py`); the server passes its `TASTR_ENGINE` to Modal with each job.
+- **`TASTR_BROWSER_ENGINE=1`** (Fly): the page runs the WebAssembly build on the upload and sends the card; the
+  server stores it after the checks in `browser_card.py` and skips Modal. The Docker image builds the wasm in a
+  Rust stage and serves it at `/engine/tastr_engine.wasm` (cached forever; the URL carries its hash).
+
+Benchmarks: `tastr bench <name> --engine rust` (locally or `--remote` on Modal) runs every stage in Rust,
+decoding the file itself; synthetic audio goes in as samples. The downbeat and Harmonix section benches work
+from spectrograms rather than audio, so they keep the Python path; P3 showed those stages are identical given
+the same input.
+
+What the full benchmarks measured (2026-10-31, `modal run tastr/cloud/modal_app.py --kind bench ... --engine rust`
+from the P4 branch, every stage in Rust including decoding; no failed tracks):
+
+| Bench | Tracks | Python | Rust |
+|---|---|---|---|
+| `giantsteps-key`, exact key | 599 | 0.599 | 0.606 (MIREX weighted 0.682) |
+| `beatport-key`, exact key | 1,275 | 0.491 | 0.491 (MIREX weighted 0.587) |
+| `beatport-tempo`, Acc1 / Acc2 | 774 | 0.897 / 0.930 | 0.897 / 0.930 |
+| `giantsteps-tempo`, Acc1 / Acc2 | 43 | 0.744 / 0.907 | 0.744 / 0.907 |
+
+Tempo is unchanged and key moves within the decoder's noise (GiantSteps up 4 tracks), so no retuning was
+needed. Key errors on GiantSteps: 66 fifths, 27 parallel, 23 relative, 120 other; the fifths stay the biggest
+miss. Wall time on 8 CPUs: 6 min for GiantSteps key, 13 min for Beatport key, 6 min for Beatport tempo. The
+downbeat and Harmonix section benches start from spectrograms, not audio, so they don't exercise the switch;
+P3 showed those stages give identical results on the same input.
 

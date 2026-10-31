@@ -282,7 +282,7 @@ def test_modal_images_add_local_files_last(monkeypatch):
             assert not self.local, "a build step after add_local_python_source"
             return Image()
 
-        apt_install = pip_install = run_commands = env = _step
+        apt_install = pip_install = run_commands = env = add_local_dir = _step  # add_local_dir: copied (rust_image)
 
         def add_local_python_source(self, *a, **kw):
             assert not self.local
@@ -324,7 +324,7 @@ def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
             assert not self.local or self.copied, "a build step after add_local_python_source"
             return Image(self.local, self.copied)
 
-        apt_install = pip_install = run_commands = run_function = env = _step
+        apt_install = pip_install = run_commands = run_function = env = add_local_dir = _step
 
         def add_local_python_source(self, *a, copy=False, **kw):
             assert not self.local

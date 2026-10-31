@@ -123,6 +123,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     @asynccontextmanager
     async def lifespan(_app):
         stop = threading.Event()
+        jobs.resume()  # stem separations the last run left unfinished (e.g. the machine auto-stopped)
         if hosted and settings.audio_days > 0:
             threading.Thread(target=expire_loop, args=(stop,), name="tastr-expiry", daemon=True).start()
         yield

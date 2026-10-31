@@ -239,3 +239,30 @@ def test_hub_offline_only_while_loading_a_cached_model(tmp_path, monkeypatch, ca
     with stems._hub_offline_if_cached():
         assert constants.HF_HUB_OFFLINE is cached
     assert constants.HF_HUB_OFFLINE is False
+
+
+def test_unfinished_jobs_resume_after_a_restart(db_path, track, stub, gate, home, tmp_path):
+    gate.clear()
+    first = TestClient(create_app(db_path))
+    first.post(f"/api/tracks/{track}/stems")
+    wait_for(first, track, "running")
+    folder = home / "stems" / ("f00d" * 4)
+    marker = stems.job_marker(folder)
+    assert marker.read_text() == str(tmp_path / "song.wav")
+    gate.set()
+    wait_for(first, track, "ready")
+    assert not marker.exists()
+
+    # What a machine stopped mid-job leaves behind: a marker and no stems.
+    stems.remove(folder)
+    marker.write_text(str(tmp_path / "song.wav"))
+    with TestClient(create_app(db_path)) as again:  # startup picks the job up again
+        wait_for(again, track, "ready")
+    assert len(stub) == 2 and not marker.exists()
+
+
+def test_stale_job_markers_are_dropped(home):
+    root = home / "stems"
+    root.mkdir(parents=True)
+    (root / "gone.job").write_text(str(home / "missing.wav"))
+    assert stems.Jobs().resume() == 0 and not (root / "gone.job").exists()

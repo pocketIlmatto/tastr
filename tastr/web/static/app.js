@@ -1846,12 +1846,20 @@ function pollStems() {
   stemTimer = setTimeout(async () => {
     for (const [id, st] of [...stemStatus]) {
       if (!stemsBusy(st)) continue;
-      try { setStems(id, await api(`/api/tracks/${id}/stems`)); } catch (_) { stemStatus.delete(id); }
+      // A failed check (offline, the server waking up) keeps the last state and tries again on the next round.
+      try { setStems(id, await api(`/api/tracks/${id}/stems`)); } catch (_) { /* keep polling */ }
     }
     stemTimer = null;
     pollStems();
   }, 2500);
 }
+// Background tabs barely run timers, so check again as soon as the tab is back.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !stemTimer) return;
+  clearTimeout(stemTimer); stemTimer = null;
+  for (const [id, st] of [...stemStatus]) if (stemsBusy(st)) api(`/api/tracks/${id}/stems`).then((x) => setStems(id, x), () => {});
+  pollStems();
+});
 async function startStems(c) {
   setStems(c.id, await api(`/api/tracks/${c.id}/stems`, { method: "POST" }));
   pollStems();

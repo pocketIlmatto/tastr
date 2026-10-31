@@ -41,9 +41,17 @@ def available() -> bool:
     return importlib.util.find_spec("modal" if backend() == "modal" else "demucs") is not None
 
 
+def stems_root() -> Path:
+    return Path(os.environ.get("TASTR_HOME", Path.home() / ".tastr")) / "stems"
+
+
 def stems_dir(sha256: str | None, track_id: int) -> Path:
-    home = Path(os.environ.get("TASTR_HOME", Path.home() / ".tastr"))
-    return home / "stems" / (sha256[:16] if sha256 else f"track-{track_id}")
+    return stems_root() / (sha256[:16] if sha256 else f"track-{track_id}")
+
+
+def job_marker(folder: Path) -> Path:
+    """Holds the audio path while a separation is queued or running, so a restarted server can pick it up again."""
+    return folder.with_name(folder.name + ".job")
 
 
 def stem_path(folder: Path, name: str) -> Path:
@@ -163,7 +171,11 @@ def separate_track(audio_path: str | Path, folder: Path, progress: Progress | No
 
 
 class Jobs:
-    """Background separations for the web server, one at a time; later requests wait their turn."""
+    """Background separations for the web server, one at a time; later requests wait their turn.
+
+    Each queued or running job leaves a `<folder>.job` marker until it ends, and `resume()` restarts
+    them, so a server that stopped meanwhile (a hosted machine that auto-stops, a crash) doesn't lose them.
+    """
 
     def __init__(self) -> None:
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tastr-stems")
@@ -185,8 +197,23 @@ class Jobs:
             if job and job["state"] in ("queued", "running"):
                 return dict(job)
             self._state[folder] = {"state": "queued", "progress": 0.0}
+        folder.parent.mkdir(parents=True, exist_ok=True)
+        job_marker(folder).write_text(str(audio_path))
         self._pool.submit(self._run, audio_path, folder)
         return self.status(folder)
+
+    def resume(self) -> int:
+        """Restart the jobs a previous run of the server left unfinished; returns how many."""
+        n = 0
+        for marker in sorted(stems_root().glob("*.job")):
+            folder, audio = marker.with_suffix(""), Path(marker.read_text().strip())
+            if is_ready(folder) or not audio.is_file():
+                marker.unlink(missing_ok=True)
+                continue
+            log.info("Resuming stem separation for %s", audio)
+            self.start(audio, folder)
+            n += 1
+        return n
 
     def active(self) -> int:
         """Jobs queued or running, for the admin view."""
@@ -221,6 +248,7 @@ class Jobs:
             else:
                 log.info("Stems ready for %s (%.0f s)", audio_path, time.monotonic() - start)
         with self._lock:
+            job_marker(folder).unlink(missing_ok=True)
             job = self._state[folder]
             if job.get("cancelled"):  # the track was deleted meanwhile
                 del self._state[folder]

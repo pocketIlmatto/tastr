@@ -17,6 +17,7 @@ path = "src/main.rs"
 symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "mp3", "flac", "ogg", "vorbis", "isomp4", "aac"] }
 rustfft = "6"
 libm = "0.2"
+miniz_oxide = "0.8"
 
 [profile.release]
 opt-level = 3

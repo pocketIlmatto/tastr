@@ -33,6 +33,15 @@ const W = 1100; // CSS pixels; shots are taken at 1.5x and shown smaller in the 
   await page.waitForTimeout(1500);
   await shotOf("spectrogram", body("Energy & sections"));
 
+  // 2b. The Live tab's 3D view, a few seconds into playback (clicking the chart plays it).
+  await sec("Energy & sections").getByRole("tab", { name: "Live", exact: true }).click();
+  await sec("Energy & sections").getByRole("button", { name: "3D", exact: true }).click();
+  await page.locator("svg.chart").first().click();
+  await page.waitForTimeout(7000);
+  await page.locator("svg.chart").first().click(); // pause, so the shot holds still
+  await shotOf("live-3d", body("Energy & sections"));
+  await sec("Energy & sections").getByRole("tab", { name: "Energy", exact: true }).click();
+
   // 3. Drums, bass & chords for the busiest section.
   await sec("Drums, bass & chords").getByRole("tab", { name: /^Drop/ }).first().click();
   await page.waitForTimeout(300);

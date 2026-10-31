@@ -73,7 +73,11 @@ function vibeBody(c) {
     VIBE_GROUPS.map((g) => ({ g, items: shown.filter((t) => groupOf(t.tag) === g) })).filter((x) => x.items.length).map(({ g, items }) =>
       h("div", { class: "vibe-group", style: `--g:${g.color}` }, h("span", { class: "vibe-glabel" }, g.name),
         h("div", { class: "chips" }, items.map((t) =>
-          h("span", { class: "chip", tabindex: "0", style: `--t:${isNum(t.score) ? Math.max(0, Math.min(1, (t.score - VIBE_MIN) / (1 - VIBE_MIN))) : 0}`, "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`.trim() }, t.tag))))),
+          h("span", { class: "chip" + (lib.vibes.includes(t.tag) ? " on" : ""), role: "button", tabindex: "0", "data-tag": t.tag, "aria-pressed": String(lib.vibes.includes(t.tag)),
+            onclick: () => vibeFilter(t.tag), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); vibeFilter(t.tag); } },
+            style: `--t:${isNum(t.score) ? Math.max(0, Math.min(1, (t.score - VIBE_MIN) / (1 - VIBE_MIN))) : 0}`,
+            "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""} Click to filter the track list; click more vibes to narrow it.`.trim() }, t.tag))))),
+    h("div", { class: "card-filter", "data-kind": "vibe", hidden: "" }),
     h("div", { class: "vibe-foot" }, note, h("a", { class: "link gl-link", href: "#g-vibes", onclick: (e) => { e.preventDefault(); openGlossary("g-vibes"); } }, "What the vibes mean"), btn), list);
 }
 
@@ -157,7 +161,7 @@ document.querySelectorAll("nav button").forEach((b) =>
 );
 
 // ---------- library ----------
-const lib = { q: "", sort: "new", vibe: "", key: "", bmin: "", bmax: "" };
+const lib = { q: "", sort: "new", vibes: [], key: "", bmin: "", bmax: "" };
 const keyRank = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); return m ? +m[1] * 2 + (m[2] === "B" ? 1 : 0) : 999; };
 const SORTS = {
   new: (a, b) => b.id - a.id,
@@ -168,23 +172,36 @@ const SORTS = {
   energy: (a, b) => (b.energy ?? -1) - (a.energy ?? -1),
   len: (a, b) => (b.duration ?? 0) - (a.duration ?? 0),
 };
-const libActive = () => !!(lib.q || lib.vibe || lib.key || lib.bmin || lib.bmax);
+const libActive = () => !!(lib.q || lib.vibes.length || lib.key || lib.bmin || lib.bmax);
 // Search, sort and filters run in the browser, which is fine for a few hundred tracks.
 function visibleTracks() {
   const q = lib.q.trim().toLowerCase(), lo = lib.bmin === "" ? null : +lib.bmin, hi = lib.bmax === "" ? null : +lib.bmax;
   return tracks.filter((t) =>
     (!q || `${t.title} ${t.artist || ""}`.toLowerCase().includes(q)) &&
-    (!lib.vibe || (t.tags || []).includes(lib.vibe)) && (!lib.key || t.camelot === lib.key) &&
+    lib.vibes.every((v) => (t.tags || []).includes(v)) && (!lib.key || keyMatch(t.camelot)) &&
     (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi))).sort(SORTS[lib.sort]);
+}
+// lib.key is a Camelot code, or "8A~" for that key plus the keys that mix with it (one step round the wheel, or the relative major/minor).
+const camelotNear = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); if (!m) return [k]; const n = +m[1], l = m[2], o = l === "A" ? "B" : "A", w = (d) => ((n + d + 11) % 12) + 1; return [k, `${w(-1)}${l}`, `${w(1)}${l}`, `${n}${o}`]; };
+const keyMatch = (cam) => (lib.key.endsWith("~") ? camelotNear(lib.key.slice(0, -1)).includes(cam) : cam === lib.key);
+const vibeLabel = () => lib.vibes.join(" + ");
+// The sidebar selects follow the card filters: an extra "dark + driving" or "8A + compatible" option while one is on.
+function syncFilterSelects() {
+  const vs = $("lib-vibe"), ks = $("lib-key");
+  vs.querySelector("[value='__multi']")?.remove(); ks.querySelector("option[value$='~']")?.remove();
+  if (lib.vibes.length > 1) vs.append(h("option", { value: "__multi" }, vibeLabel()));
+  else if (lib.vibes.length === 1 && ![...vs.options].some((o) => o.value === lib.vibes[0])) vs.append(h("option", { value: "__multi" }, vibeLabel()));
+  if (lib.key.endsWith("~")) ks.append(h("option", { value: lib.key }, `${lib.key.slice(0, -1)} + compatible`));
+  vs.value = vs.querySelector("[value='__multi']") ? "__multi" : lib.vibes[0] || ""; ks.value = lib.key;
 }
 function fillFilterOptions() {
   const vibes = [...new Set(tracks.flatMap((t) => t.tags || []))].sort(), keys = [...new Set(tracks.map((t) => t.camelot).filter(Boolean))].sort((a, b) => keyRank(a) - keyRank(b));
   $("lib-vibe").replaceChildren(h("option", { value: "" }, "Any vibe"), ...vibes.map((v) => h("option", { value: v }, v)));
   $("lib-key").replaceChildren(h("option", { value: "" }, "Any key"), ...keys.map((k) => h("option", { value: k }, k)));
-  $("lib-vibe").value = lib.vibe; $("lib-key").value = lib.key;
+  syncFilterSelects();
 }
 function syncTools() {
-  $("lib-q").value = lib.q; $("lib-sort").value = lib.sort; $("lib-vibe").value = lib.vibe; $("lib-key").value = lib.key; $("lib-bmin").value = lib.bmin; $("lib-bmax").value = lib.bmax;
+  $("lib-q").value = lib.q; $("lib-sort").value = lib.sort; syncFilterSelects(); $("lib-bmin").value = lib.bmin; $("lib-bmax").value = lib.bmax;
 }
 async function loadTracks() {
   tracks = await api("/api/tracks");
@@ -193,11 +210,44 @@ async function loadTracks() {
 async function refresh(selectId) {
   await loadTracks();
   // A freshly analyzed track must be visible, so show everything, newest first.
-  if (selectId != null) { Object.assign(lib, { q: "", vibe: "", key: "", bmin: "", bmax: "", sort: "new" }); syncTools(); }
+  if (selectId != null) { Object.assign(lib, { q: "", vibes: [], key: "", bmin: "", bmax: "", sort: "new" }); syncTools(); }
   renderList();
   if (selectId != null) openTrack(selectId);
 }
-function clearFilters() { Object.assign(lib, { q: "", vibe: "", key: "", bmin: "", bmax: "" }); syncTools(); renderList(); }
+// Clicking a vibe chip on the card filters the track list to that vibe; more chips narrow it (a track needs every picked vibe).
+function vibeFilter(tag) {
+  lib.vibes = lib.vibes.includes(tag) ? lib.vibes.filter((v) => v !== tag) : [...lib.vibes, tag];
+  showFiltered(lib.vibes.includes(tag));
+}
+// Clicking the key or BPM on the card does the same: compatible keys, or the BPM ± 5. Clicking it again turns it off.
+function keyFilter(cam) { const k = cam + "~"; lib.key = lib.key === k ? "" : k; showFiltered(!!lib.key); }
+function bpmFilter(bpm) {
+  const lo = String(Math.round(bpm - 5)), hi = String(Math.round(bpm + 5)), on = lib.bmin === lo && lib.bmax === hi;
+  lib.bmin = on ? "" : lo; lib.bmax = on ? "" : hi; showFiltered(!on);
+}
+function showFiltered(added) {
+  syncTools();
+  if (added && libCollapsed) setLibCollapsed(false);
+  renderList();
+  if (added && matchMedia("(max-width: 700px)").matches) $("lib").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+// The card's own filter lines: one under the vibe chips, one under the key/BPM stats, each with its own Clear.
+function syncCardFilters(n) {
+  document.querySelectorAll("#card .chip[data-tag]").forEach((c) => { const on = lib.vibes.includes(c.dataset.tag); c.classList.toggle("on", on); c.setAttribute("aria-pressed", String(on)); });
+  const bpmOn = lib.bmin !== "" || lib.bmax !== "";
+  document.querySelectorAll("#card .stat-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.f === "key" ? !!lib.key : bpmOn)));
+  const count = `${n} track${n === 1 ? "" : "s"}`;
+  document.querySelectorAll("#card .card-filter").forEach((el) => {
+    const vibe = el.dataset.kind === "vibe";
+    const parts = vibe ? (lib.vibes.length ? [vibeLabel()] : [])
+      : [lib.key ? (lib.key.endsWith("~") ? `${lib.key.slice(0, -1)} + compatible keys` : lib.key) : null, bpmOn ? `${lib.bmin || "…"}–${lib.bmax || "…"} BPM` : null].filter(Boolean);
+    el.hidden = !parts.length;
+    if (!parts.length) { el.replaceChildren(); return; }
+    el.replaceChildren(h("span", { class: "cf-dot", "aria-hidden": "true" }), h("span", {}, `Track list: ${parts.join(" · ")} · ${count}`),
+      h("button", { type: "button", class: "cf-clear", onclick: () => { if (vibe) lib.vibes = []; else { lib.key = ""; lib.bmin = ""; lib.bmax = ""; } syncTools(); renderList(); } }, vibe ? "Clear vibes" : "Clear"));
+  });
+}
+function clearFilters() { Object.assign(lib, { q: "", vibes: [], key: "", bmin: "", bmax: "" }); syncTools(); renderList(); }
 
 // Placeholder rows for files being analyzed (or that failed), shown above the saved tracks.
 const pending = [];
@@ -259,6 +309,7 @@ function renderList() {
   ul.scrollTop = top;
   if (focusId) { const li = ul.querySelector(`li.trk[data-id="${focusId}"]`); if (li) li.focus({ preventScroll: true }); }
   renderBulk(shown);
+  syncCardFilters(shown.length);
 }
 
 // ---------- bulk selection and actions ----------
@@ -512,8 +563,8 @@ setLibCollapsed(libCollapsed);
 matchMedia("(max-width: 700px)").addEventListener("change", () => setLibCollapsed(libCollapsed));
 $("lib-q").addEventListener("input", (e) => { lib.q = e.target.value; renderList(); });
 $("lib-sort").addEventListener("change", (e) => { lib.sort = e.target.value; renderList(); });
-$("lib-vibe").addEventListener("change", (e) => { lib.vibe = e.target.value; renderList(); });
-$("lib-key").addEventListener("change", (e) => { lib.key = e.target.value; renderList(); });
+$("lib-vibe").addEventListener("change", (e) => { const v = e.target.value; if (v !== "__multi") lib.vibes = v ? [v] : []; syncFilterSelects(); renderList(); });
+$("lib-key").addEventListener("change", (e) => { lib.key = e.target.value; syncFilterSelects(); renderList(); });
 $("lib-bmin").addEventListener("input", (e) => { lib.bmin = e.target.value; renderList(); });
 $("lib-bmax").addEventListener("input", (e) => { lib.bmax = e.target.value; renderList(); });
 $("lib-clear").addEventListener("click", clearFilters);
@@ -574,6 +625,8 @@ function lookupLine(c) {
 function stat(value, label, title) {
   return h("div", { class: "stat", ...(title ? { title } : {}) }, h("b", {}, value), h("span", {}, label));
 }
+// A stat that filters the track list when clicked (the card's BPM and key); pressed while its filter is on.
+const statBtn = (f, value, label, tip, onclick) => h("button", { type: "button", class: "stat stat-btn", "data-f": f, "aria-pressed": "false", title: tip, onclick }, h("b", {}, value), h("span", {}, label));
 
 // "BPM · 85% likely right" from the benchmark-calibrated chance; cards analyzed before calibration show the raw score.
 function sureness(likely, raw) {
@@ -598,6 +651,7 @@ function renderCard(c) {
   drumModelOn = !!c.drum_model_available;
   shownCard = c;
   stopAllPlayback();
+  document.querySelectorAll(".chart-backdrop").forEach((b) => b.remove()); document.body.classList.remove("chart-open");
   if (!savedEdits.has(c.id)) loadEdits(c.id).then(() => { if (savedEdits.has(c.id) && currentId === c.id && $("card").dataset.id === String(c.id)) renderCard(c); });
   if (c.stems_state && !stemsBusy(stemStatus.get(c.id) || {})) { stemStatus.set(c.id, { state: c.stems_state }); pollStems(); } // a fresh card knows best
   sectionBus = new EventTarget();
@@ -612,9 +666,14 @@ function renderCard(c) {
     h("div", { class: "title-row" }, h("h2", {}, (c.source && (c.source.title || c.source.uri)) || `Track ${c.id}`), trackMenu(c)),
     h("p", { class: "card-sub" + (c.source.artist ? "" : " muted") }, [c.source.artist, c.source.album].filter(Boolean).join(" · ") || "No artist or album in the file tags"),
     stat(mmss(c.duration), "duration"),
-    stat(isNum(core.bpm) ? core.bpm.toFixed(1) : "–", bpmSure ? `BPM · ${bpmSure.text}` : "BPM", bpmSure && bpmSure.title),
-    stat(key ? `${keyName(key)}` : "–", key ? [key.camelot, key.scale, keySure && keySure.text].filter(Boolean).join(" · ") || "key" : "key",
-      keySure && keySure.title),
+    isNum(core.bpm)
+      ? statBtn("bpm", core.bpm.toFixed(1), bpmSure ? `BPM · ${bpmSure.text}` : "BPM",
+        [bpmSure && bpmSure.title, `Click to show tracks from ${Math.round(core.bpm - 5)} to ${Math.round(core.bpm + 5)} BPM.`].filter(Boolean).join(" "), () => bpmFilter(core.bpm))
+      : stat("–", "BPM"),
+    key && key.camelot
+      ? statBtn("key", keyName(key), [key.camelot, key.scale, keySure && keySure.text].filter(Boolean).join(" · "),
+        [keySure && keySure.title, `Click to show tracks in ${key.camelot} and the keys that mix with it (${camelotNear(key.camelot).slice(1).join(", ")}).`].filter(Boolean).join(" "), () => keyFilter(key.camelot))
+      : stat(key ? `${keyName(key)}` : "–", key ? [key.scale, keySure && keySure.text].filter(Boolean).join(" · ") || "key" : "key", keySure && keySure.title),
     isNum(core.bpm) ? stat(`${beatsPerBar(c)}/4`, core.meter_set ? "time · set by you" : "time", core.meter_set ? METER_TIP.set : METER_TIP.detected) : null
   );
   const en = h("div", { class: "stat" },
@@ -625,6 +684,7 @@ function renderCard(c) {
   head.append(en);
   const listed = lookupLine(c);
   if (listed) head.append(listed);
+  head.append(h("div", { class: "card-filter", "data-kind": "head", hidden: "" }));
   root.append(head);
 
   if (c.metadata) root.append(metadataSection(c.metadata));
@@ -669,7 +729,7 @@ function renderCard(c) {
   const errs = Object.entries(c.errors || {});
   if (errs.length) {
     root.append(h("div", { class: "errors" }, "Some stages failed: ", errs.map(([k, v]) => h("div", {}, `${k}: ${v}`))));
-  }
+  }  syncCardFilters(visibleTracks().length);
 }
 
 // Card sections are <details>; which are open is remembered across tracks (Metadata starts closed).
@@ -956,8 +1016,79 @@ function spectrogramLevels(d, sr) {
   return { level, frames };
 }
 
+// Sharp spectrogram tiles, computed in the browser from the decoded file for exactly the range on screen at the screen's pixel
+// size. Low rows narrower than an FFT bin are interpolated between bins; high rows that span several bins take the strongest.
+// Colors are scaled to `top` dB (the whole track's loudest), so a zoomed-in tile keeps the overview's brightness.
+const specFfts = {};
+function specSetup(N) {
+  if (specFfts[N]) return specFfts[N];
+  const bits = Math.log2(N), win = new Float32Array(N), cosT = new Float32Array(N / 2), sinT = new Float32Array(N / 2), rev = new Uint16Array(N);
+  for (let i = 0; i < N; i++) { win[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1)); let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); rev[i] = r; }
+  for (let i = 0; i < N / 2; i++) { cosT[i] = Math.cos((2 * Math.PI * i) / N); sinT[i] = -Math.sin((2 * Math.PI * i) / N); }
+  return (specFfts[N] = { win, cosT, sinT, rev, re: new Float32Array(N), im: new Float32Array(N), mag: new Float32Array(N / 2) });
+}
+// dB per column (t0..t1) and log-frequency row (SPEC_FMIN..SPEC_FMAX) of an AudioBuffer, mixed to mono on the fly.
+// `part` ({ from, to, db }) fills only those columns of an existing result, so a big tile can be built a slice at a time.
+function specDb(buf, t0, t1, cols, rows, part) {
+  const sr = buf.sampleRate, N = sr > 32000 ? 4096 : 2048, { win, cosT, sinT, rev, re, im, mag } = specSetup(N), binHz = sr / N;
+  const chans = [...Array(buf.numberOfChannels)].map((_, k) => buf.getChannelData(k)), nc = chans.length, len = buf.length;
+  const lo = new Float32Array(rows), hi = new Float32Array(rows);
+  for (let r = 0; r < rows; r++) { lo[r] = (SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, r / rows)) / binHz; hi[r] = (SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (r + 1) / rows)) / binHz; }
+  const db = part ? part.db : new Float32Array(cols * rows); let top = -1e9;
+  for (let f = part ? part.from : 0, fEnd = part ? part.to : cols; f < fEnd; f++) {
+    const c = Math.round((t0 + ((f + 0.5) / cols) * (t1 - t0)) * sr) - N / 2;
+    for (let i = 0; i < N; i++) {
+      const k = c + i; let v = 0;
+      if (k >= 0 && k < len) { for (let ch = 0; ch < nc; ch++) v += chans[ch][k]; v /= nc; }
+      re[rev[i]] = v * win[i]; im[rev[i]] = 0;
+    }
+    for (let size = 2; size <= N; size <<= 1) {
+      const half = size >> 1, stepT = N / size;
+      for (let i = 0; i < N; i += size) for (let j = 0, k = 0; j < half; j++, k += stepT) {
+        const a = i + j, b = a + half, tr = re[b] * cosT[k] - im[b] * sinT[k], ti = re[b] * sinT[k] + im[b] * cosT[k];
+        re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+      }
+    }
+    for (let i = 0; i < N / 2; i++) mag[i] = Math.hypot(re[i], im[i]);
+    for (let r = 0; r < rows; r++) {
+      let m;
+      if (hi[r] - lo[r] < 1) { const p = (lo[r] + hi[r]) / 2, a = Math.floor(p), q = p - a; m = mag[a] * (1 - q) + mag[Math.min(N / 2 - 1, a + 1)] * q; }
+      else { m = 0; for (let k = Math.floor(lo[r]); k < Math.ceil(hi[r]) && k < N / 2; k++) if (mag[k] > m) m = mag[k]; }
+      const v = 20 * Math.log10(m + 1e-6); db[f * rows + r] = v; if (v > top) top = v;
+    }
+  }
+  return { db, top };
+}
+// The whole track's loudest dB, from a coarse pass, as the reference for every tile of this file.
+function specTopOf(audio) {
+  if (audio.specTop == null) audio.specTop = specDb(audio.buf, 0, audio.buf.duration, Math.min(600, Math.max(50, Math.round(audio.buf.duration * 2))), 80).top;
+  return audio.specTop;
+}
+// Built in slices with a pause between them, so the page stays responsive; resolves null if `stale()` turns true meanwhile.
+async function specImage(buf, t0, t1, cols, rows, top, stale = () => false) {
+  const db = new Float32Array(cols * rows), SLICE = 96;
+  for (let from = 0; from < cols; from += SLICE) {
+    if (stale()) return null;
+    specDb(buf, t0, t1, cols, rows, { from, to: Math.min(cols, from + SLICE), db });
+    await delay(0);
+  }
+  if (stale()) return null;
+  const r = { db }, ref = top, n = SPEC_RAMP.length - 1;
+  const cv = document.createElement("canvas"); cv.width = cols; cv.height = rows;
+  const g = cv.getContext("2d"), img = g.createImageData(cols, rows);
+  for (let f = 0; f < cols; f++) for (let y = 0; y < rows; y++) {
+    const u = Math.max(0, Math.min(1, (r.db[f * rows + y] - (ref - 70)) / 70)) * n, i0 = Math.min(n - 1, Math.floor(u)), q = u - i0;
+    const o = ((rows - 1 - y) * cols + f) * 4;
+    for (let ch = 0; ch < 3; ch++) img.data[o + ch] = SPEC_RAMP[i0][ch] + (SPEC_RAMP[i0 + 1][ch] - SPEC_RAMP[i0][ch]) * q;
+    img.data[o + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return cv.toDataURL("image/png");
+}
+
+let liveStyle = "flat"; // Live tab: "flat" scrolling spectrogram or "ridge" 3D landscape, remembered across cards for the session
 function energyChart(series, sections, duration, card) {
-  const W = 700, H = 220, L = 40, R = 8, T = 28, B = 22;
+  let W = 700, H = 220; const L = 40, R = 8, T = 28, B = 22; // W/H grow to the real pixel size when the chart is expanded
   const times = (series && series.times) || [], vals = (series && series.values) || [];
   const end = Math.max(duration || 0, times.length ? times[times.length - 1] : 0, ...sections.map((s) => s.end || 0), 1);
   const letters = [...new Set(sections.map((x) => x.letter || x.label))];
@@ -975,16 +1106,26 @@ function energyChart(series, sections, duration, card) {
       : "Click a section to pick it. Scroll to zoom, drag to pan"));
   const tip = h("div", { class: "chart-tip", hidden: "" });
   const host = h("div", { class: "chart-host" });
-  const MODES = [["energy", "Energy"], ["wave", "Waveform"], ["spec", "Spectrogram"]];
+  const MODES = [["energy", "Energy"], ["wave", "Waveform"], ["spec", "Spectrogram"], ...(canPlay ? [["live", "Live"]] : [])];
   let mode = hasViews ? chartMode : "energy", pics = null;
+  if (mode === "live" && !canPlay) mode = "spec"; // Live streams the playing audio, so it needs the file
   const KEYS = {
     energy: [h("span", { class: "key-line" }), " Energy: how loud and dense the track is at each moment, sampled every ~3 s. ", h("span", { class: "key-box" }), " Shaded blocks are detected sections; same color means the same part repeats."],
     wave: ["Waveform: the shape of the sound over time. Taller means louder. Faint lines are beats, darker lines are bars, numbered from the start."],
     spec: ["Spectrogram: which pitches are present over time. Low sounds at the bottom, high at the top, brighter means stronger."],
+    get live() { return [liveStyle === "ridge"
+      ? "Live 3D: each line is one moment of sound, low notes on the left and highs on the right; taller and brighter means louder. The newest line is at the front and the last 5 seconds roll back toward the top. A white line marks where a new section starts. Click the chart to play or pause."
+      : "Live: the spectrogram draws itself as the track plays, with the newest sound at the right edge and the last 10 seconds scrolling left. Low at the bottom, high at the top, brighter means louder. Click the chart to play or pause."]; },
   };
   const keyP = h("p", { class: "muted chart-key" });
   const modeBtns = MODES.map(([k, label]) => h("button", { type: "button", role: "tab", class: "mode-tab", "aria-selected": String(k === mode), onclick: () => setMode(k) }, label));
-  const modes = h("div", { class: "chart-modes", role: "tablist", "aria-label": "Visualization" }, modeBtns);
+  const styleBtns = [["flat", "2D"], ["ridge", "3D"]].map(([k, label]) => h("button", { type: "button", class: "mode-tab ls-btn", "aria-pressed": String(liveStyle === k), onclick: () => setLiveStyle(k) }, label));
+  const styleRow = h("span", { class: "chart-side", role: "group", "aria-label": "Live view style", hidden: "" }, styleBtns);
+  // Expand: the chart pops out over the page, bigger; full screen from there where the browser allows it
+  const expandBtn = h("button", { type: "button", class: "mode-tab exp-btn", "aria-pressed": "false", title: "Show the chart bigger (Esc to close)" }, "⤢ Expand");
+  const fsBtn = h("button", { type: "button", class: "mode-tab exp-btn", hidden: "", title: "Fill the whole screen" }, "Full screen");
+  const modes = h("div", { class: "chart-modes" }, hasViews ? h("span", { class: "mode-tabs", role: "tablist", "aria-label": "Visualization" }, modeBtns) : h("span"),
+    h("span", { class: "chart-side" }, styleRow, fsBtn, expandBtn));
   const busy = h("div", { class: "chart-busy", hidden: "", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), "Preparing audio preview…");
   const playBtn = h("button", { type: "button", class: "tp-play", "aria-label": "Play" }, "▶");
   const timeL = h("span", { class: "tp-time" }, `0:00 / ${mmss(duration)}`);
@@ -995,7 +1136,9 @@ function energyChart(series, sections, duration, card) {
     ? "The original file is no longer on disk, so playback is off."
     : "The original file isn't on disk (or this track came from a link that wasn't kept), so playback and the waveform and spectrogram views are off.";
   const say = (m) => { note.textContent = m; note.classList.toggle("error", !!m); };
-  wrap.append(...(hasViews ? [modes] : []), bar, h("div", { class: "chart-hostwrap" }, host, busy), tip, ...(canPlay ? [transport] : []), keyP, note);
+  const liveHint = h("div", { class: "live-hint", hidden: "" }, "Press ▶ to stream the spectrogram as the track plays");
+  let savedView = null;
+  wrap.append(modes, bar, h("div", { class: "chart-hostwrap" }, host, liveHint, busy), tip, ...(canPlay ? [transport] : []), keyP, note);
 
   const x = (t) => L + ((t - view.a) / (view.b - view.a)) * (W - L - R);
   const tAt = (px) => view.a + ((px - L) / (W - L - R)) * (view.b - view.a);
@@ -1050,6 +1193,8 @@ function energyChart(series, sections, duration, card) {
         plot.append(svg("polygon", { points: `${x(pts[0][0])},${y(0)} ${line.join(" ")} ${x(pts[pts.length - 1][0])},${y(0)}`, fill: "var(--accent)", opacity: 0.25 }));
         plot.append(svg("polyline", { points: line.join(" "), fill: "none", stroke: "var(--accent)", "stroke-width": 2 }));
       }
+    } else if (mode === "live") {
+      // the canvas over the plot area draws the live view
     } else if (!pics) {
       plot.append(svg("text", { x: (L + W - R) / 2, y: (T + H - B) / 2, "text-anchor": "middle", fill: "var(--muted)" }, txt("Preparing audio preview…")));
     } else if (mode === "wave") {
@@ -1079,6 +1224,12 @@ function energyChart(series, sections, duration, card) {
       plot.append(svg("path", { d, stroke: "var(--accent)", "stroke-width": 1, fill: "none" }));
     } else {
       plot.append(svg("image", { href: pics.spec, x: x(0), y: T, width: x(pics.specEnd) - x(0), height: H - T - B, preserveAspectRatio: "none" }));
+      // A sharp tile for exactly what's on screen, at the screen's pixel size, goes over the stored overview once it's ready.
+      if (canPlay) {
+        const want = specWant();
+        if (specTile && specTile.key === want.key) plot.append(svg("image", { href: specTile.url, x: x(specTile.a), y: T, width: x(specTile.b) - x(specTile.a), height: H - T - B, preserveAspectRatio: "none" }));
+        else queueSpecTile(want);
+      }
     }
     s.append(plot);
     const yLabel = (text) => s.append(svg("text", { x: 10, y: (H - B + T) / 2, "text-anchor": "middle", transform: `rotate(-90 10 ${(H - B + T) / 2})` }, txt(text)));
@@ -1087,6 +1238,10 @@ function energyChart(series, sections, duration, card) {
       yLabel("energy");
     } else if (mode === "wave") {
       yLabel("level");
+    } else if (mode === "live" && liveStyle === "ridge") {
+      // frequency runs along the bottom of the 3D view, under the front line
+      const fx = (f) => L + (W - L - R) * (RIDGE_FRONT[0] + (RIDGE_FRONT[1] - RIDGE_FRONT[0]) * Math.log(f / SPEC_FMIN) / Math.log(SPEC_FMAX / SPEC_FMIN));
+      [[100, "100 Hz"], [1000, "1k"], [10000, "10k"]].forEach(([f, label]) => s.append(svg("text", { x: fx(f), y: H - 6, "text-anchor": "middle" }, txt(label))));
     } else {
       [[100, "100"], [1000, "1k"], [10000, "10k"]].forEach(([f, label]) => {
         const yy = T + (1 - Math.log(f / SPEC_FMIN) / Math.log(SPEC_FMAX / SPEC_FMIN)) * (H - T - B);
@@ -1096,7 +1251,10 @@ function energyChart(series, sections, duration, card) {
     }
     const span = view.b - view.a;
     const step = [5, 10, 15, 30, 60, 120].find((st) => span / st <= 8) || 120;
-    for (let t = Math.ceil(view.a / step) * step; t <= view.b; t += step) s.append(svg("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, txt(mmss(t))));
+    if (mode === "live" && liveStyle === "ridge") { /* frequency runs along the bottom instead */ }
+    else if (mode === "live") [10, 8, 6, 4, 2].forEach((ago) => s.append(svg("text", { x: x(view.b - ago), y: H - 6, "text-anchor": "middle" }, txt(`−${ago} s`))));
+    else for (let t = Math.ceil(view.a / step) * step; t <= view.b; t += step) s.append(svg("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, txt(mmss(t))));
+    if (mode === "live" && liveStyle !== "ridge") s.append(svg("text", { x: W - R, y: H - 6, "text-anchor": "end", fill: "var(--accent)" }, txt("now")));
     s.append(svg("line", { class: "cursor", x1: 0, x2: 0, y1: T, y2: H - B, stroke: "var(--fg)", "stroke-width": 1, opacity: 0, "pointer-events": "none" }));
     s.append(svg("circle", { class: "cursor-dot", r: 4, fill: "var(--accent)", stroke: "var(--bg)", "stroke-width": 2, opacity: 0, "pointer-events": "none" }));
     if (canPlay) {
@@ -1105,7 +1263,8 @@ function energyChart(series, sections, duration, card) {
       paintHead();
     }
     zoomLabel.textContent = view.b - view.a >= end - 0.01 ? "Whole track" : `${mmss(view.a)}–${mmss(view.b)}`;
-    if (!drag) s.style.cursor = view.b - view.a < end - 0.01 ? "grab" : "crosshair";
+    if (mode === "live") s.style.cursor = "pointer";
+    else if (!drag) s.style.cursor = view.b - view.a < end - 0.01 ? "grab" : "crosshair";
     if (cursorT != null) showTip(cursorT);
   }
   const toVB = (e) => { const r = svgEl.getBoundingClientRect(); return { px: ((e.clientX - r.left) / r.width) * W }; };
@@ -1135,12 +1294,14 @@ function energyChart(series, sections, duration, card) {
   const nearHead = (px) => { if (!canPlay) return false; const t = tNow(); return t >= view.a && t <= view.b && Math.abs(px - x(t)) <= 8; };
   const setHot = (on) => svgEl.classList.toggle("head-hot", on);
   svgEl.addEventListener("pointerdown", (e) => {
+    if (mode === "live") { if (playing) me.stop(); else play(); return; } // Live: the chart is one big play/pause button
     svgEl.setPointerCapture(e.pointerId);
     const px = toVB(e).px;
     if (nearHead(px)) { const was = playing; if (was) me.stop(); drag = { scrub: true, was, px }; setHot(true); svgEl.style.cursor = "grabbing"; hideTip(); scrubStart(); return; }
     drag = { px, a: view.a, b: view.b };
   });
   svgEl.addEventListener("pointermove", (e) => {
+    if (mode === "live") return;
     const { px } = toVB(e);
     if (drag && drag.scrub) { if (scrub) scrub.target = Math.max(0, Math.min(end, tAt(Math.max(L, Math.min(W - R, px))))); return; }
     if (!drag) { const hot = nearHead(px); setHot(hot); svgEl.style.cursor = hot || atEdge() ? "grab" : "crosshair"; if (hot) { hideTip(); return; } }
@@ -1152,6 +1313,7 @@ function energyChart(series, sections, duration, card) {
     cursorT = tAt(Math.max(L, Math.min(W - R, px))); showTip(cursorT);
   });
   const up = (e) => {
+    if (mode === "live") return;
     if (drag && drag.scrub) { const was = drag.was; drag = null; setHot(false); svgEl.style.cursor = "grab"; scrubEnd(); if (was) play(); else paintHead(); return; }
     if (e && e.type === "pointerup" && drag && Math.abs(toVB(e).px - drag.px) < 3) {
       const t0 = tAt(toVB(e).px), si = sections.findIndex((q) => t0 >= q.start && t0 < q.end);
@@ -1164,16 +1326,132 @@ function energyChart(series, sections, duration, card) {
   svgEl.addEventListener("pointercancel", up);
   svgEl.addEventListener("pointerleave", () => { if (!drag) { hideTip(); setHot(false); } });
   svgEl.addEventListener("wheel", (e) => {
+    if (mode === "live") return;
     e.preventDefault();
     zoom(Math.exp(Math.sign(e.deltaY) * 0.25), tAt(Math.max(L, Math.min(W - R, toVB(e).px))));
   }, { passive: false });
+
+  // ---- Live: an AnalyserNode on the playing audio drives a canvas over the plot area ----
+  const LIVE_SPAN = 10; // seconds of history across the 2D view
+  const liveCv = h("canvas", { class: "live-spec", hidden: "", "aria-hidden": "true" });
+  host.append(liveCv);
+  let analyser = null, freq = null, liveT = null;
+  function getAnalyser() {
+    if (!analyser) {
+      const ctx = audioCtx();
+      analyser = ctx.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = 0.15;
+      analyser.minDecibels = -95; analyser.maxDecibels = -25; analyser.connect(ctx.destination);
+      freq = new Uint8Array(analyser.frequencyBinCount);
+    }
+    return analyser;
+  }
+  function liveClear() {
+    const r = liveCv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    const w = Math.max(100, Math.round(r.width * dpr)), hh = Math.max(50, Math.round(r.height * dpr));
+    if (liveCv.width !== w || liveCv.height !== hh) { liveCv.width = w; liveCv.height = hh; }
+    const g = liveCv.getContext("2d"); g.fillStyle = "rgb(8 8 24)"; g.fillRect(0, 0, w, hh);
+    liveT = null; ridges = []; ridgeT = null;
+  }
+  function setLiveStyle(k) {
+    liveStyle = k;
+    styleBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(["flat", "ridge"][i] === k)));
+    keyP.replaceChildren(...KEYS.live);
+    liveClear(); draw();
+  }
+  // The strongest analyser bin between two frequencies, 0..255.
+  const binMax = (f0, f1, binHz) => {
+    const a = Math.floor(f0 / binHz), b = Math.max(a + 1, Math.ceil(f1 / binHz));
+    let m = 0; for (let k = a; k < b && k < freq.length; k++) if (freq[k] > m) m = freq[k];
+    return m;
+  };
+  // 3D ridgeline: each line is one moment of sound (low notes left, highs right); older lines step back and shrink toward the horizon.
+  const RIDGE_BINS = 120, RIDGE_LINES = 48, RIDGE_DT = 0.11; // ~5 s of history
+  const RIDGE_FRONT = [0.04, 0.96]; // the front line spans this share of the plot width
+  let ridges = [], ridgeT = null;
+  function ridgeSample() {
+    getAnalyser().getByteFrequencyData(freq);
+    const binHz = audioCtx().sampleRate / analyser.fftSize, v = new Float32Array(RIDGE_BINS);
+    for (let i = 0; i < RIDGE_BINS; i++)
+      v[i] = Math.pow(binMax(SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, i / RIDGE_BINS), SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (i + 1) / RIDGE_BINS), binHz) / 255, 1.6);
+    return v;
+  }
+  function ridgeFrame(t) {
+    if (ridgeT == null || t < ridgeT - 0.05 || t - ridgeT > 1) { liveClear(); ridgeT = t - RIDGE_DT; }
+    if (t - ridgeT < RIDGE_DT) return;
+    while (t - ridgeT >= RIDGE_DT) ridgeT += RIDGE_DT;
+    const sec = sections.some((q) => q.start > t - RIDGE_DT && q.start <= t);
+    ridges.unshift({ v: ridgeSample(), mark: sec }); if (ridges.length > RIDGE_LINES) ridges.pop();
+    const g = liveCv.getContext("2d"), w = liveCv.width, hh = liveCv.height, dpr = w / Math.max(1, liveCv.getBoundingClientRect().width);
+    g.fillStyle = "rgb(8 8 24)"; g.fillRect(0, 0, w, hh);
+    const frontY = hh * 0.97, horizonY = hh * 0.06, cx = w / 2, fw = w * (RIDGE_FRONT[1] - RIDGE_FRONT[0]);
+    for (let a = ridges.length - 1; a >= 0; a--) { // back to front, so each filled line hides the ridges behind it
+      const z = a / RIDGE_LINES, sc = 1 / (1 + z * 2.2), y0 = horizonY + (frontY - horizonY) * sc, lw = fw * (0.55 + 0.45 * sc), amp = hh * 0.62 * sc;
+      const x0 = cx - lw / 2, step = lw / (RIDGE_BINS - 1), r = ridges[a].v;
+      g.beginPath(); g.moveTo(x0, y0);
+      for (let i = 0; i < RIDGE_BINS; i++) g.lineTo(x0 + i * step, y0 - r[i] * amp);
+      g.lineTo(x0 + lw, y0); g.closePath();
+      const grad = g.createLinearGradient(0, y0, 0, y0 - amp);
+      SPEC_RAMP.forEach((c, i) => grad.addColorStop(i / (SPEC_RAMP.length - 1), `rgb(${c[0]} ${c[1]} ${c[2]})`));
+      g.globalAlpha = 0.35 + 0.65 * sc; g.fillStyle = grad; g.fill();
+      g.lineWidth = Math.max(1, 1.2 * dpr * sc); g.strokeStyle = ridges[a].mark ? "rgba(255,255,255,.9)" : "rgba(255,235,160,.55)"; g.stroke();
+    }
+    g.globalAlpha = 1; g.font = `${11 * dpr}px system-ui, sans-serif`; g.fillStyle = "rgba(255,255,255,.7)";
+    g.textAlign = "left"; g.fillText("now", 6 * dpr, frontY - 6 * dpr); g.fillText(`−${Math.round(RIDGE_LINES * RIDGE_DT)} s`, cx - fw * 0.3, horizonY + 10 * dpr);
+  }
+  // 2D: scroll left by the time since the last frame and paint the new columns at the right edge.
+  function liveFrame(t) {
+    if (liveStyle === "ridge") { ridgeFrame(t); return; }
+    const g = liveCv.getContext("2d"), w = liveCv.width, hh = liveCv.height, pxs = w / LIVE_SPAN;
+    if (liveT == null || t < liveT || t - liveT > 1) { liveClear(); liveT = t; } // a seek or a jump starts over
+    const dx = Math.round((t - liveT) * pxs);
+    if (dx < 1) return;
+    liveT += dx / pxs;
+    g.drawImage(liveCv, -dx, 0);
+    getAnalyser().getByteFrequencyData(freq);
+    const binHz = audioCtx().sampleRate / analyser.fftSize, col = g.createImageData(1, hh), n = SPEC_RAMP.length - 1;
+    for (let r = 0; r < hh; r++) {
+      const m = binMax(SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (hh - 1 - r) / hh), SPEC_FMIN * Math.pow(SPEC_FMAX / SPEC_FMIN, (hh - r) / hh), binHz);
+      const u = (m / 255) * n, i0 = Math.min(n - 1, Math.floor(u)), q = u - i0;
+      for (let ch = 0; ch < 3; ch++) col.data[r * 4 + ch] = SPEC_RAMP[i0][ch] + (SPEC_RAMP[i0 + 1][ch] - SPEC_RAMP[i0][ch]) * q;
+      col.data[r * 4 + 3] = 255;
+    }
+    for (let i = 0; i < dx; i++) g.putImageData(col, w - dx + i, 0);
+    // a faint dashed line where a section starts, so section changes scroll by with the sound
+    if (sections.some((q) => q.start > t - dx / pxs && q.start <= t)) { g.fillStyle = "rgba(255,255,255,.35)"; for (let yy = 0; yy < hh; yy += 6) g.fillRect(w - 1, yy, 1, 3); }
+  }
+  function liveView(t) { view.a = t - LIVE_SPAN; view.b = t; }
+
+  // ---- sharp spectrogram tiles: 140 ms after the view settles, render exactly the visible range ----
+  let specTile = null, specTimer = 0, specBusy = null;
+  function specWant() {
+    const px = ((host.clientWidth || W) * (window.devicePixelRatio || 1)) / W, a = Math.max(0, view.a), b = Math.min(end, view.b);
+    const cols = Math.max(50, Math.min(2400, Math.round((x(b) - x(a)) * px))), rows = Math.max(80, Math.min(600, Math.round((H - T - B) * px)));
+    return { a, b, cols, rows, key: `${a.toFixed(2)}|${b.toFixed(2)}|${cols}|${rows}` };
+  }
+  function queueSpecTile(want) {
+    clearTimeout(specTimer);
+    specTimer = setTimeout(async () => {
+      const stale = () => !audio || mode !== "spec" || !wrap.isConnected || specWant().key !== want.key;
+      if (stale() || specBusy === want.key) return;
+      specBusy = want.key;
+      try {
+        const url = await specImage(audio.buf, want.a, want.b, want.cols, want.rows, specTopOf(audio), stale);
+        if (url) { specTile = { ...want, url }; draw(); }
+      } finally { if (specBusy === want.key) specBusy = null; }
+    }, 140);
+  }
 
   // ---- mode switching ----
   function setMode(k) {
     mode = chartMode = k;
     modeBtns.forEach((b, i) => b.setAttribute("aria-selected", String(MODES[i][0] === k)));
     keyP.replaceChildren(...KEYS[k]);
-    if (k !== "energy" && !pics) ensurePics(); else draw();
+    const live = k === "live";
+    bar.hidden = live; liveCv.hidden = !live; styleRow.hidden = !live; liveHint.hidden = !live || playing;
+    if (live) { if (!savedView) savedView = { a: view.a, b: view.b }; liveView(tNow()); requestAnimationFrame(liveClear); }
+    else if (savedView) { view.a = savedView.a; view.b = savedView.b; savedView = null; }
+    if (k === "spec" && canPlay && !audio) trackAudio(card).then((a) => { audio = audio || a; if (mode === "spec") draw(); }, () => {}); // for the sharp tiles; quietly
+    if (k !== "energy" && k !== "live" && !pics) ensurePics(); else draw();
   }
   async function withBusy(work) {
     busy.hidden = false;
@@ -1204,7 +1482,7 @@ function energyChart(series, sections, duration, card) {
   function startSrc() {
     const ctx = audioCtx(); if (ctx.state === "suspended") ctx.resume();
     if (src) { src.onended = null; try { src.stop(); } catch (_) {} }
-    src = ctx.createBufferSource(); src.buffer = audio.buf; src.connect(ctx.destination);
+    src = ctx.createBufferSource(); src.buffer = audio.buf; src.connect(getAnalyser()); // the analyser passes the sound on to the speakers
     src.onended = () => { if (playing) { me.stop(); pos = 0; paintHead(); } };
     src.start(0, pos); startedAt = ctx.currentTime - pos;
   }
@@ -1220,8 +1498,9 @@ function energyChart(series, sections, duration, card) {
     if (!playing) return;
     if (!svgEl.isConnected) { me.stop(); return; }
     const t = tNow();
-    // When zoomed in and the playhead leaves the view, page so it sits 10% from the left.
-    if (t > view.b || t < view.a) { const span = view.b - view.a; view.a = Math.max(0, Math.min(end - span, t - span * 0.1)); view.b = view.a + span; draw(); }
+    // When zoomed in and the playhead leaves the view, page so it sits 10% from the left. Live keeps "now" at the right edge.
+    if (mode === "live") { liveFrame(t); liveView(t); draw(); }
+    else if (t > view.b || t < view.a) { const span = view.b - view.a; view.a = Math.max(0, Math.min(end - span, t - span * 0.1)); view.b = view.a + span; draw(); }
     else paintHead();
     raf = requestAnimationFrame(loop);
   }
@@ -1229,13 +1508,14 @@ function energyChart(series, sections, duration, card) {
     if (!(await ensureAudio()) || !svgEl.isConnected) return;
     stopAllPlayback();
     if (pos >= end - 0.2) pos = 0;
-    startSrc(); playing = true; player = me;
+    startSrc(); playing = true; player = me; liveHint.hidden = true;
     playBtn.textContent = "❚❚"; playBtn.setAttribute("aria-label", "Pause"); loop();
   }
   playBtn.onclick = () => { if (playing) me.stop(); else play(); };
   function seek(t) {
     pos = Math.max(0, Math.min(end, t));
     if (playing) startSrc();
+    if (mode === "live" && !playing) { liveView(pos); draw(); }
     paintHead();
   }
   seekR.addEventListener("input", () => seek(+seekR.value));
@@ -1289,9 +1569,45 @@ function energyChart(series, sections, duration, card) {
     pos = scrub.pos; scrub = null;
   }
 
-  keyP.replaceChildren(...KEYS[mode]);
-  if (mode !== "energy") ensurePics();
-  draw();
+  // ---- Expand: the chart pops out over the page, bigger; Esc, the backdrop or Close puts it back ----
+  let backdrop = null;
+  const onEsc = (e) => { if (e.key === "Escape" && !document.fullscreenElement) setBig(false); };
+  function setBig(on) {
+    wrap.classList.toggle("big", on); document.body.classList.toggle("chart-open", on);
+    expandBtn.setAttribute("aria-pressed", String(on)); expandBtn.textContent = on ? "✕ Close" : "⤢ Expand";
+    fsBtn.hidden = !on || !document.fullscreenEnabled;
+    if (on) { backdrop = h("div", { class: "chart-backdrop", onclick: () => setBig(false) }); document.body.append(backdrop); document.addEventListener("keydown", onEsc); expandBtn.focus(); }
+    else { backdrop?.remove(); backdrop = null; document.removeEventListener("keydown", onEsc); if (document.fullscreenElement === wrap) document.exitFullscreen(); }
+    hideTip();
+    requestAnimationFrame(fitSize);
+  }
+  // Expanded, the viewBox matches the space in pixels, so the chart gets taller and the text stays its normal size.
+  function fitSize() {
+    const big = wrap.classList.contains("big") || document.fullscreenElement === wrap;
+    if (big) {
+      const used = [modes, bar, transport, keyP, note].reduce((n, el) => n + (el.isConnected && !el.hidden ? el.offsetHeight + 10 : 0), 0);
+      W = Math.max(320, Math.round(host.clientWidth)); H = Math.max(220, Math.round(wrap.clientHeight - used - 40));
+    } else { W = 700; H = 220; }
+    svgEl.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const place = { left: `${(L / W) * 100}%`, top: `${(T / H) * 100}%`, width: `${((W - L - R) / W) * 100}%`, height: `${((H - T - B) / H) * 100}%` };
+    Object.assign(liveCv.style, place); Object.assign(liveHint.style, place);
+    if (mode === "live") liveClear();
+    draw();
+  }
+  const onResize = () => {
+    if (!wrap.isConnected) { window.removeEventListener("resize", onResize); document.removeEventListener("fullscreenchange", onFs); return; }
+    if (wrap.classList.contains("big") || document.fullscreenElement === wrap) fitSize();
+  };
+  const onFs = () => {
+    if (!wrap.isConnected) { onResize(); return; }
+    fsBtn.textContent = document.fullscreenElement === wrap ? "Exit full screen" : "Full screen"; requestAnimationFrame(fitSize);
+  };
+  window.addEventListener("resize", onResize);
+  document.addEventListener("fullscreenchange", onFs);
+  expandBtn.onclick = () => setBig(!wrap.classList.contains("big"));
+  fsBtn.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); else wrap.requestFullscreen?.().catch(() => { fsBtn.hidden = true; }); };
+
+  setMode(mode); // a new card opens in the last-used tab, with that tab's full setup (the Live canvas included)
   return wrap;
 }
 

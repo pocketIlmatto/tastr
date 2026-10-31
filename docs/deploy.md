@@ -9,7 +9,8 @@ This page sets up Tastr for a few invited friends, on infrastructure you don't h
 | Library backup | [Litestream](https://litestream.io) to a private R2 bucket `tastr-app` | Copies every database change to R2 within seconds; a new volume restores from it | well under $0.10 a month |
 | Login | [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) | Emails each invited person a one-time code | free up to 50 people; you need a domain on Cloudflare (about $10 a year) |
 
-What hosted mode itself changes (logins, per-person libraries, limits) is in [hosting.md](hosting.md).
+What hosted mode itself changes (logins, per-person libraries, limits) is in [hosting.md](hosting.md), and
+[hosting-map.md](hosting-map.md) shows how the pieces connect and where each setting lives.
 
 You run every command below yourself, so keys never leave your machine and your accounts. Nothing here
 puts a key in the repository.
@@ -156,7 +157,7 @@ Uploaded audio and stems are not backed up; they are on the volume only, and exp
 
 - The machine stops after a few idle minutes and starts on the next request, which takes a few seconds.
   The first analysis after a quiet spell also waits for Modal to start a container (about half a minute).
-- A stem separation runs while the browser waits on it. If everyone closes Tastr mid-separation and the
-  machine stops, that job is lost; start it again.
+- A queued or running stem separation leaves a marker on the volume, so if the machine stops mid-job the
+  server starts it again on its next start.
 - Analysis runs without the pretrained drum model on Modal (it needs PyTorch, which the analysis image
   leaves out to start faster); the drum lanes come from Tastr's own detector.

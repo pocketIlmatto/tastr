@@ -1,0 +1,25 @@
+[package]
+name = "tastr-engine"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+description = "Tastr's analysis engine in Rust, built for the server (native) and the browser (WebAssembly)."
+publish = false
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "tastr-engine"
+path = "src/main.rs"
+
+[dependencies]
+symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "mp3", "flac", "ogg", "vorbis", "isomp4", "aac"] }
+rustfft = "6"
+libm = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

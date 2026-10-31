@@ -342,6 +342,7 @@ tastr/db.py                 SQLite schema and save/load/query
 tastr/service.py            inputs -> engine -> DB, used by the CLI and web app
 tastr/web/                  FastAPI app and UI; hosted.py is the shared-server mode (docs/hosting.md)
 tastr/cloud/                Modal apps: benchmarks and stems (modal_app.py), a hosted server's analysis (modal_web.py)
+engine-rs/                  the engine being rewritten in Rust for server and browser alike (docs/rust-engine.md)
 Dockerfile, fly.toml, deploy/   the hosted server's image, Fly.io config and Litestream backup (docs/deploy.md)
 ```
 
@@ -372,6 +373,8 @@ Third-party pieces it uses or links to:
 
 - **mutagen** (file tags, a required dependency) is GPL-2.0-or-later. Tastr doesn't
   bundle it; pip installs it alongside.
+- The Rust engine (`engine-rs/`) builds in **symphonia** (MPL-2.0, unmodified) for decoding,
+  and **rustfft** and **libm** (MIT/Apache-2.0).
 
 - **Strudel** is AGPL-3.0. Tastr doesn't bundle it: "Open in Strudel" opens
   the generated sketch on strudel.cc. The optional sketch tests install Strudel's

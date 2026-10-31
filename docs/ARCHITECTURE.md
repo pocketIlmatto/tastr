@@ -104,13 +104,14 @@ browser and server cards agree byte for byte. See [rust-engine.md](rust-engine.m
 SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or
 `--db`). Tables:
 
-- `tracks`: one row per track, headline numbers as columns (bpm, key, camelot, energy...). Deduped on `sha256` within one owner's library; `owner` is the uploader's Access email on a hosted server (docs/hosting.md) and NULL on your own machine.
+- `tracks`: one row per track, headline numbers as columns (bpm, key, camelot, energy...), and `created_at`, when it was uploaded (re-analysis keeps it). Deduped on `sha256` within one owner's library; `owner` is the uploader's Access email on a hosted server (docs/hosting.md) and NULL on your own machine.
 - `sections`, `tags`, `suggestions`: one row per item, keyed by `track_id`.
 - `features`: long format `(track_id, name, value)`, so new features need no migration.
 - `series`: long format `(track_id, name, idx, t, value)` for curves.
 - `cards`: the full card JSON, the source of truth for re-rendering.
 - `lookups`: `(track_id, provider, status, bpm, key_name, fetched_at, result_json)`, what online catalogs list for the track (opt-in, `tastr/lookup/`, [lookup.md](lookup.md)). Kept across re-analysis.
-- `track_labels`: `(track_id, bpm, key_name, boundaries, note, updated_at)`, your own labels for a track (`tastr/labels.py`). Never touched by analysis; exported as a bench manifest.
+- `track_labels`: `(track_id, bpm, key_name, boundaries, note, updated_at, kept, tastr_bpm, tastr_key)`, your own labels for a track (`tastr/labels.py`). `kept` marks a "Keep as is"; `tastr_bpm` / `tastr_key` are Tastr's reading when it was saved. Never touched by analysis; exported as a bench manifest.
+- `review_flags`: `(track_id, state, updated_at)`, tracks you put in the review list (`flagged`) or took out of it (`skipped`). Kept across re-analysis.
 
 Example queries:
 

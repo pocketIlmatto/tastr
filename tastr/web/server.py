@@ -705,7 +705,27 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         from .. import labels
 
         with closing(conn()) as c:
-            return labels.review_queue(c, max(1, min(limit, 200)), owner_of(request))
+            return labels.review_queue(c, max(1, min(limit, 1000)), owner_of(request))
+
+    # Put a track in the review list yourself ("flagged"), take it out ("skipped"), or leave it to the queue (null).
+    @app.put("/api/tracks/{track_id}/review")
+    def set_review(track_id: int, body: dict[str, Any] = Body(...)):
+        state = body.get("state")
+        if state not in (None, *db.REVIEW_STATES):
+            raise HTTPException(400, "state must be \"flagged\", \"skipped\" or null")
+        with closing(conn()) as c:
+            _track_or_404(c, track_id)
+            db.set_review_flag(c, track_id, state)
+        return {"state": state}
+
+    # Your labels, newest first, with Tastr's reading when each was saved: the Review tab's log and its CSV.
+    @app.get("/api/labels")
+    def all_labels(request: Request):
+        with closing(conn()) as c:
+            rows = db.list_labels(c, owner_of(request))
+        for r in rows:
+            r.pop("path", None)  # a server path; the UI doesn't need it
+        return rows[::-1]
 
     @app.get("/api/tracks/{track_id}/edit-versions")
     def edit_versions(track_id: int):

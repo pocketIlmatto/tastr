@@ -6,9 +6,12 @@ yields empty dicts rather than an error, and the caller falls back to the file n
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 try:
     import mutagen
@@ -44,7 +47,7 @@ def _first(easy, keys: tuple[str, ...]) -> str | None:
     for k in keys:
         try:
             vals = easy.get(k)
-        except Exception:
+        except Exception:  # mutagen's easy wrappers raise for keys a format doesn't support; try the next key
             continue
         if vals:
             v = str(vals[0]).strip()
@@ -130,26 +133,29 @@ def read_file_meta(path: str | Path) -> tuple[dict[str, str], dict[str, Any]]:
     info: dict[str, Any] = {}
     try:
         info["file_size"] = p.stat().st_size
-    except OSError:
+    except OSError:  # gone or unreadable: the tag read below fails the same way and returns empty dicts
         pass
     if mutagen is None:
         return tags, info
     try:
         easy = mutagen.File(p, easy=True)
-    except Exception:
+    except Exception as e:  # mutagen raises many types for damaged or unknown files
+        log.debug("can't read tags from %s: %s", p.name, e)
         return tags, info
     if easy is None:
         return tags, info
     if isinstance(easy, mutagen.mp4.MP4):  # easy mode hides most atoms, so read the raw ones
         try:
             easy = mutagen.mp4.MP4(p)
-        except Exception:
+        except Exception as e:
+            log.debug("can't read tags from %s: %s", p.name, e)
             return tags, info
         tags = _mp4_tags(easy.tags or {})
     elif isinstance(easy, mutagen.mp3.MP3):  # EasyID3 has no comment/key mapping, so read the frames
         try:
             easy = mutagen.mp3.MP3(p)
-        except Exception:
+        except Exception as e:
+            log.debug("can't read tags from %s: %s", p.name, e)
             return tags, info
         tags = _id3_tags(easy.tags) if easy.tags is not None else {}
     elif hasattr(easy.tags, "getall"):  # plain ID3 (WAV/AIFF): no easy mapping

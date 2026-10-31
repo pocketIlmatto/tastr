@@ -19,6 +19,7 @@ Settings come from environment variables (see `Settings.from_env` and docs/hosti
 
 from __future__ import annotations
 
+import logging
 import base64
 import hashlib
 import hmac
@@ -30,6 +31,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 HEALTH_PATH = "/api/health"
 TOKEN_HEADER = "cf-access-jwt-assertion"
@@ -260,7 +263,8 @@ def audio_minutes(path: str | Path) -> float | None:
             import soundfile
 
             seconds = soundfile.info(str(path)).duration
-        except Exception:
+        except Exception as e:  # neither reader knows the length; the upload size cap still applies
+            log.info("can't read the length of %s from its header: %s", Path(path).name, e)
             return None
     return seconds / 60
 

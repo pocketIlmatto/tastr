@@ -123,8 +123,8 @@ class AnalysisJobs:
             try:
                 if f.stat().st_mtime < cutoff:
                     f.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as e:  # another worker may have removed it first; the next sweep tries again
+                log.debug("can't remove old job file %s: %s", f, e)
 
 
 def new_id() -> str:

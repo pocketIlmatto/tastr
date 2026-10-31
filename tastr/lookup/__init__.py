@@ -83,7 +83,7 @@ def _recently_asked(stored: dict[str, dict], track_id: int, p: Provider, now: fl
         try:
             last = max(last, datetime.fromisoformat(r["fetched_at"]).timestamp())
         except ValueError:
-            pass
+            log.debug("bad fetched_at %r for %s on track %s; asking again", r["fetched_at"], p.name, track_id)
     return now - last < _refresh_seconds()
 
 

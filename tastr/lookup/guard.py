@@ -160,7 +160,7 @@ def _seconds(v, now: float) -> float | None:
     try:
         x = float(v)
         return max(0.0, x - now) if x > 1e9 else max(0.0, x)
-    except ValueError:
+    except ValueError:  # not a number: try it as a date below
         pass
     for parse in (parsedate_to_datetime, lambda s: datetime.fromisoformat(s.replace("Z", "+00:00"))):
         try:
@@ -168,6 +168,6 @@ def _seconds(v, now: float) -> float | None:
             if d.tzinfo is None:
                 d = d.replace(tzinfo=timezone.utc)
             return max(0.0, d.timestamp() - now)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # not this date format: try the next one, then give up with None
             continue
     return None

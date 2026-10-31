@@ -91,8 +91,8 @@ def log_start(ctx: AppContext, cut: list[dict[str, Any]]) -> None:
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(version)
-        except OSError:
-            pass
+        except OSError as e:  # without the marker the next start logs this deploy again, so say why
+            log.warning("can't record the deployed version in %s: %s", marker, e)
     if deployed:
         what = f"{settings.commit[:7]}: {settings.commit_subject[:100]}" if settings.commit_subject else settings.commit[:7]
         ctx.event(None, "deploy", f"Deployed {what or 'a new version'} (the server restarted)", link=settings.deploy_run or None,

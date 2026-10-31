@@ -103,7 +103,7 @@ def _zstd_reader(path: Path):
         import zstandard
 
         return zstandard.ZstdDecompressor().stream_reader(path.open("rb"), closefd=True)
-    except ImportError:
+    except ImportError:  # optional package; fall back to the zstd tool
         pass
     exe = shutil.which("zstd")
     if exe is None:

@@ -118,7 +118,7 @@ def deam(root: str | Path) -> list[Item]:
                 row = {k.strip(): v.strip() for k, v in row.items() if k}
                 try:
                     labels[row["song_id"]] = {"arousal": float(row["arousal_mean"]), "valence": float(row["valence_mean"])}
-                except (KeyError, ValueError):
+                except (KeyError, ValueError):  # a malformed row: that song stays unlabeled and is left out
                     pass
     audio = _audio_by_stem(root)
     return [Item(id=f"deam-{sid}", path=str(audio[sid]), truth=Truth(), meta={"labels": lab})

@@ -19,6 +19,7 @@ Format (version 1): UTF-8 JSON {"format": "tastr-card", "version": 1, "engine": 
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 import re
@@ -28,6 +29,8 @@ from pathlib import Path
 from . import rust
 from .card import Source, TrackCard
 from .pipeline import SR, registered_stages
+
+log = logging.getLogger(__name__)
 
 FORMAT, VERSION = "tastr-card", 1
 MAX_BYTES = 8 << 20  # a 20-minute card is about 1.5 MB, mostly the waveform and spectrogram pictures
@@ -93,12 +96,13 @@ def file_duration(path: str | Path) -> float | None:
         import soundfile
 
         return float(soundfile.info(str(path)).duration)
-    except Exception:
-        pass
+    except Exception as e:  # libsndfile reads only some formats (not MP3 on older builds, not M4A); try mutagen next
+        log.debug("soundfile can't read %s: %s", path, e)
     try:
         import mutagen
 
         f = mutagen.File(str(path))
         return float(f.info.length) if f is not None and f.info.length else None
-    except Exception:
+    except Exception as e:  # mutagen raises many types for damaged files; the caller treats None as "unknown"
+        log.debug("mutagen can't read %s: %s", path, e)
         return None

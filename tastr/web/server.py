@@ -618,13 +618,15 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             paths.append(str(dest))
         with closing(conn()) as c:
             if hosted:
-                db.add_usage(c, request.state.user, "tracks", today(), len(paths))
                 event(request.state.user, "upload", f"Uploaded {len(paths)} track{'s' if len(paths) != 1 else ''}")
             try:
                 with analysis_slot():
-                    return results(service.analyze_inputs(c, paths, owner=owner_of(request)), owner_of(request))
+                    rs = service.analyze_inputs(c, paths, owner=owner_of(request))
             except TimeoutError:
                 raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.")
+            if hosted:  # only tracks that analyzed count toward the daily limit, so a failed try can be retried
+                db.add_usage(c, request.state.user, "tracks", today(), sum(r.track_id is not None for r in rs))
+            return results(rs, owner_of(request))
 
     def check_upload(user: str, files: list[UploadFile]) -> None:
         if len(files) > settings.max_files:

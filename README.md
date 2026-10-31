@@ -74,10 +74,14 @@ Run it on your own machine, or host it for a few invited people behind a login
 
 - **Energy, waveform and spectrogram views** with playback. Click a section to
   play from there, drag the playhead to scrub (you hear it as you drag), and
-  scroll to zoom.
+  scroll to zoom. The spectrogram redraws sharp at your screen's resolution as you zoom.
+- **Live tab:** the spectrogram streams with playback, as a scrolling 2D view or a
+  3D landscape of ridges. **⤢ Expand** shows any chart bigger, or full screen.
 - **Stem separation** into vocals, bass, other and drums with Demucs, on your
   machine or on a [Modal](https://modal.com) GPU (see [Stems](#stems-optional)).
-- **Library sidebar** with search, sort and filters by vibe, key and BPM.
+- **Library sidebar** with search, sort and filters by vibe, key and BPM. Click a
+  vibe, the BPM or the key on a track card to filter the list from there (more vibes
+  narrow it; the key shows the keys that mix with it).
 - **Track and bulk actions:** copy a summary, reload metadata, re-analyze,
   separate stems or delete, for one track or a whole selection.
 - **Explore tab:** a BPM-energy chart, and **Find tracks** to search your library
@@ -90,6 +94,8 @@ Run it on your own machine, or host it for a few invited people behind a login
 - **Keyboard shortcuts** for most things; press `?` for the list.
 
 <img src="docs/images/spectrogram.png" width="560" alt="Spectrogram view with sections and playback">
+
+<img src="docs/images/live-3d.png" width="560" alt="The Live tab's 3D view: a landscape of frequency ridges rolling back from the playing moment">
 
 <img src="docs/images/find-tracks.png" width="560" alt="Find tracks: a key that mixes with 8A and a BPM range, and the matching tracks">
 
@@ -310,7 +316,7 @@ The screenshots in this README are generated, not taken by hand, so they follow 
 - **How they're made:** `scripts/readme_shots.py` builds a throwaway library of three
   synthetic tracks (nothing touches your own library), starts `tastr serve` on it, and
   `scripts/readme-shots.js` takes each shot with Playwright in the default 808 look: the
-  library with an open card, the spectrogram, drums, bass and chords, the Strudel sketch
+  library with an open card, the spectrogram, the Live 3D view, drums, bass and chords, the Strudel sketch
   and the Glossary's Camelot wheel. They land in `docs/images/`.
 - **When they update:** add the `readme-shots` label to a PR that changes how the UI looks.
   After it merges, the `readme-shots` GitHub workflow retakes them on `main` and opens a PR

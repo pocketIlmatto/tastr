@@ -629,3 +629,42 @@ def test_unfinished_jobs_read_as_failed_after_a_restart(db_path, tmp_path, monke
     with TestClient(create_app(db_path)) as c:  # `with` runs the startup, which marks it failed
         job = c.get("/api/analyze/jobs/abc123").json()
     assert job["state"] == "error" and job["error"] == RESTARTED
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_ui_card_filters_vibes_keys_and_bpm():
+    """The card's vibe chips narrow the track list (AND), its key shows compatible keys (wrapping 12<->1), its BPM toggles ±5."""
+    import json
+    import re
+    import subprocess
+
+    from tastr.web.server import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text()
+    grab = lambda n: re.search(rf"^(const {n} = .*?;|function {n}\(.*?\n}})$", js, re.M | re.S).group(0)
+    defs = "\n".join(grab(n) for n in ("isNum", "lib", "keyRank", "SORTS", "visibleTracks", "camelotNear", "keyMatch", "vibeFilter", "keyFilter", "bpmFilter"))
+    script = defs + """
+let tracks = [
+  { id: 1, title: "a", tags: ["dark", "driving"], camelot: "12A", bpm: 124 },
+  { id: 2, title: "b", tags: ["dark"], camelot: "1B", bpm: 128.4 },
+  { id: 3, title: "c", tags: ["driving"], camelot: "2A", bpm: 140 },
+  { id: 4, title: "d", tags: [], camelot: "5A", bpm: 118 },
+];
+const showFiltered = () => {};
+const ids = () => visibleTracks().map((t) => t.id).sort();
+const out = { near1A: camelotNear("1A"), near12B: camelotNear("12B") };
+vibeFilter("dark"); out.dark = ids();
+vibeFilter("driving"); out.darkDriving = ids();
+vibeFilter("dark"); out.driving = ids(); vibeFilter("driving");
+keyFilter("1A"); out.key1A = ids(); out.keyState = lib.key;
+keyFilter("1A"); out.keyOff = lib.key;
+bpmFilter(123.6); out.bpm = [lib.bmin, lib.bmax, ids()];
+bpmFilter(123.6); out.bpmOff = [lib.bmin, lib.bmax];
+console.log(JSON.stringify(out));
+"""
+    got = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert got["near1A"] == ["1A", "12A", "2A", "1B"]
+    assert got["near12B"] == ["12B", "11B", "1B", "12A"]
+    assert got["dark"] == [1, 2] and got["darkDriving"] == [1] and got["driving"] == [1, 3]
+    assert got["key1A"] == [1, 2, 3] and got["keyState"] == "1A~" and got["keyOff"] == ""
+    assert got["bpm"] == ["119", "129", [1, 2]] and got["bpmOff"] == ["", ""]

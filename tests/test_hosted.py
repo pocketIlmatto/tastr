@@ -135,6 +135,15 @@ def test_daily_track_limit_per_person(db_path, home):
     assert r.status_code == 429 and "0 left" in r.json()["detail"]
 
 
+def test_failed_analyses_dont_count_toward_daily_limit(db_path, home):
+    c = make_client(db_path, daily_tracks=1)
+    for _ in range(3):  # e.g. the analysis backend was misconfigured; each retry is still allowed
+        assert upload(c, ("broken.wav", b"not audio at all")).status_code == 200
+    conn = db.connect(db_path)
+    assert db.usage_today(conn, "friend@example.com", "tracks", hosted.today()) == 0
+    conn.close()
+
+
 def test_storage_cap(db_path, home):
     (home / "uploads" / "old").mkdir(parents=True)
     (home / "uploads" / "old" / "a.wav").write_bytes(b"x" * 2048)
@@ -283,7 +292,7 @@ def test_admin_activity_log_and_blocked_requests(db_path, home):
     c.get("/api/config", headers=GOOD)
     c.get("/api/config", headers=GOOD)  # only the first visit counts as a first sign-in
     assert upload(c, ("broken.wav", b"not audio at all")).status_code == 200
-    assert upload(c, ("again.wav", b"RIFF")).status_code == 429
+    assert upload(c, ("a.wav", b"RIFF"), ("b.wav", b"RIFF")).status_code == 429
     for _ in range(3):
         assert c.get("/api/tracks").status_code == 401
     assert c.get("/api/tracks", headers={"cf-access-jwt-assertion": "forged"}).status_code == 401

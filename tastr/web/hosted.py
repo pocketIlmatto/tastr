@@ -59,6 +59,12 @@ class Settings:
     admins: tuple[str, ...] = ()  # emails that may open the admin view
     audio_days: float = 30  # uploaded audio and stems are deleted after this; 0 keeps them
     link_secret: str = ""  # signs the /pub/ links; without it they stop working when the server restarts
+    # For the admin view's links to the logs and to tell a deploy from a restart. Fly sets FLY_APP_NAME and
+    # FLY_IMAGE_REF itself; TASTR_MODAL_WORKSPACE (your Modal workspace name) makes the Modal link go to the app.
+    fly_app: str = ""
+    fly_image: str = ""
+    modal_env: str = ""
+    modal_workspace: str = ""
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -79,6 +85,10 @@ class Settings:
             admins=tuple(e.strip().lower() for e in env.get("TASTR_ADMIN_EMAILS", "").split(",") if e.strip()),
             audio_days=float(env.get("TASTR_AUDIO_DAYS", cls.audio_days)),
             link_secret=env.get("TASTR_LINK_SECRET", "").strip(),
+            fly_app=env.get("FLY_APP_NAME", "").strip(),
+            fly_image=env.get("FLY_IMAGE_REF", "").strip(),
+            modal_env=env.get("MODAL_ENVIRONMENT", "").strip(),
+            modal_workspace=env.get("TASTR_MODAL_WORKSPACE", "").strip(),
         )
         if hosted and not (s.access_team_domain and s.access_aud):
             # Fail closed: a hosted server that can't check logins must not start.
@@ -93,6 +103,24 @@ class Settings:
         return {"max_upload_mb": self.max_upload_mb, "max_minutes": self.max_minutes, "max_files": self.max_files, "daily_tracks": self.daily_tracks,
                 "daily_stems": self.daily_stems, "daily_drums": self.daily_drums, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses,
                 "audio_days": self.audio_days}
+
+
+    def log_links(self, modal_app: str) -> dict[str, str]:
+        """Where an admin can dig into the logs: Fly's monitoring page for the app, and the Modal app."""
+        out = {}
+        if self.fly_app:
+            out["fly"] = f"https://fly.io/apps/{self.fly_app}/monitoring"
+        if self.modal_workspace and self.modal_env:
+            out["modal"] = f"https://modal.com/apps/{self.modal_workspace}/{self.modal_env}/deployed/{modal_app}"
+        else:
+            out["modal"] = "https://modal.com/apps"
+        return out
+
+
+def names(files: list[str], most: int = 3) -> str:
+    """'a.mp3, b.mp3 and 2 more', for log lines."""
+    shown = ", ".join(files[:most])
+    return shown + (f" and {len(files) - most} more" if len(files) > most else "")
 
 
 class AccessVerifier:

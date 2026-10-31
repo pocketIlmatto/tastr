@@ -25,10 +25,10 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .. import db, drum_jobs, lookup, service, stems
-from .analysis_jobs import AnalysisJobs, JobError
+from .analysis_jobs import AnalysisJobs, JobError, new_id, ref
 from ..filemeta import describe, legacy_upload_prefix
 from ..ingest import AUDIO_EXTENSIONS, IngestError, is_url, resolve_inputs
-from .hosted import (HEALTH_PATH, LINK_DAYS, PUBLIC_PREFIX, TOKEN_HEADER, AccessVerifier, AnalysisSlots, LinkSigner, audio_minutes,
+from .hosted import (HEALTH_PATH, LINK_DAYS, PUBLIC_PREFIX, TOKEN_HEADER, AccessVerifier, AnalysisSlots, LinkSigner, audio_minutes, names,
                      Settings, expire_audio, file_bytes, inline_script_hashes, security_headers, stored_bytes, today)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -177,7 +177,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     async def lifespan(_app):
         stop = threading.Event()
         jobs.resume()  # stem separations the last run left unfinished (e.g. the machine auto-stopped)
-        analyses.resume()  # analyses it left unfinished read as failed
+        cut = analyses.resume()  # analyses it left unfinished read as failed
+        if hosted:
+            log_start(cut)
         drum_runs.resume()  # and drum model runs
         if hosted and settings.audio_days > 0:
             threading.Thread(target=expire_loop, args=(stop,), name="tastr-expiry", daemon=True).start()
@@ -265,10 +267,34 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             with closing(conn()) as c:
                 db.add_event(c, user, kind, detail, ok)
 
-    def refuse(user: str, status: int, message: str, limit: str):
-        """Refuse a request over one of the hosted limits, and log which limit it hit."""
-        event(user, "limit", f"Hit the {limit}", ok=False)
+    def refuse(user: str, status: int, message: str, limit: str, name: str | None = None):
+        """Refuse a request over one of the hosted limits, and log which limit it hit (and for which file)."""
+        event(user, "limit", f"Hit the {limit}" + (f": {name}" if name else ""), ok=False)
         return HTTPException(status, message)
+
+    def log_start(cut: list[dict[str, Any]]) -> None:
+        """Admin log lines when the server starts: a new version deployed, and each analysis a restart cut off.
+        A plain wake-up after Fly stopped an idle machine logs nothing."""
+        marker = tastr_home() / "server-version"
+        try:
+            before = marker.read_text().strip()
+        except OSError:
+            before = None
+        deployed = bool(settings.fly_image) and before is not None and before != settings.fly_image
+        if settings.fly_image and before != settings.fly_image:
+            try:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(settings.fly_image)
+            except OSError:
+                pass
+        if deployed:
+            event(None, "restart", "Deployed a new version (the server restarted)")
+        elif cut:
+            event(None, "restart", "The server restarted in the middle of an analysis (it crashed or its machine was stopped)",
+                  ok=False)
+        for job in cut:
+            event(job.get("owner"), "failed", f"Cut off by the restart: {names(job.get('files') or ['upload'])}, "
+                  f"while at step {job.get('stage') or 'waiting'} (ref {ref(job['id'])})", ok=False)
 
     def owns(user: str, track_id: int) -> bool:
         with closing(conn()) as c:
@@ -279,13 +305,15 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         """Whose library a request reads and writes: the signed-in email when hosted, else everything."""
         return request.state.user if hosted else None
 
-    def results(rs, user: str | None = None) -> dict[str, Any]:
+    def results(rs, user: str | None = None, job: str | None = None, stages: list | None = None) -> dict[str, Any]:
         if hosted:  # error text can name server paths; keep it in the log
-            for r in rs:
+            for i, r in enumerate(rs):
                 if r.error:
-                    log.warning("analysis failed for %s: %s", r.source.uri, r.error)
-                    event(user, "failed", f"Analysis failed: {Path(r.source.uri or 'upload').name}, {_failure_reason(r.error)}",
-                          ok=False)
+                    tag = f" (ref {ref(job)})" if job else ""
+                    log.warning("analysis failed for %s%s: %s", r.source.uri, tag, r.error)
+                    at = f" at step {stages[i]}" if stages and i < len(stages) and stages[i] else ""
+                    event(user, "failed", f"Analysis failed: {Path(r.source.uri or 'upload').name}{at}, "
+                          f"{_failure_reason(r.error)}{tag}", ok=False)
                     r.error = _hosted_error(r.error, settings)
         return _results(rs)
 
@@ -334,6 +362,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             history = [{"day": d, "user": u, "kind": k, "n": n} for d, u, k, n in c.execute(
                 "SELECT day, user, kind, n FROM user_usage WHERE day >= date('now', '-29 days') ORDER BY day, user, kind")]
             recent = db.recent_events(c)
+            problems = db.recent_events(c, problems=True)
             blocked = db.blocked_on(c, day)
         for h in history:
             p = person(h["user"])
@@ -343,7 +372,8 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             person(email)
         users = sorted(people.values(), key=lambda p: (p["email"] is None, p["email"] or ""))
         return {"today": day, "users": users, "history": history, "admins": list(settings.admins),
-                "limits": settings.limits(), "recent": recent, "blocked_today": blocked,
+                "limits": settings.limits(), "recent": recent, "problems": problems, "blocked_today": blocked,
+                "log_links": settings.log_links(os.environ.get("TASTR_MODAL_APP", "tastr-web")),
                 "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(settings.storage_gb * 1024 ** 3)},
                 "active_stem_jobs": jobs.active(), "active_drum_jobs": drum_runs.active(), "analyses": slots.status()}
 
@@ -723,7 +753,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             if hosted and size > settings.max_upload_bytes:
                 discard([dest, *map(Path, paths)])
                 raise refuse(request.state.user, 413, f"{name} is larger than {settings.max_upload_mb:g} MB.",
-                             f"upload size limit ({settings.max_upload_mb:g} MB)")
+                             f"upload size limit ({settings.max_upload_mb:g} MB)", name)
             paths.append(str(dest))
             minutes = audio_minutes(dest) if hosted else None
             if minutes is not None and minutes > settings.max_minutes:
@@ -731,13 +761,16 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 raise refuse(request.state.user, 413,
                              f"{name} is {minutes:.0f} minutes long. This server analyzes tracks up to "
                              f"{settings.max_minutes:g} minutes, so a long mix needs cutting into shorter files first.",
-                             f"track length limit ({settings.max_minutes:g} min)")
+                             f"track length limit ({settings.max_minutes:g} min)", f"{name}, {minutes:.0f} min")
         sig = save_signals(signals[0], Path(paths[0])) if browser_signals and signals and len(signals) == len(paths) == 1 else {}
+        given = [Path(p).name for p in paths]
+        job_id = new_id()
         if hosted:
-            event(request.state.user, "upload", f"Uploaded {len(paths)} track{'s' if len(paths) != 1 else ''}")
+            event(request.state.user, "upload", f"Uploaded {names(given)}" + (f" (ref {ref(job_id)})" if background else ""))
         if background:
             user = getattr(request.state, "user", None)
-            return JSONResponse(analyses.start(owner_of(request), len(paths), analysis_work(paths, user, owner_of(request), signals=sig)),
+            return JSONResponse(analyses.start(owner_of(request), given,
+                                               analysis_work(paths, user, owner_of(request), job_id, signals=sig), job_id),
                                 status_code=202)
         with closing(conn()) as c:
             try:
@@ -776,15 +809,25 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         for path in sig.values():
             Path(path).unlink(missing_ok=True)
 
-    def analysis_work(inputs: list[str], user: str | None, owner: str | None, link: bool = False,
+    def analysis_work(inputs: list[str], user: str | None, owner: str | None, job_id: str, link: bool = False,
                       signals: dict[str, str] | None = None):
         """The work of one background analysis job (see analysis_jobs.py), reporting each step as it starts.
-        `signals`: {audio path: browser signals file} for uploads that came with them (deleted once read)."""
+        `signals`: {audio path: browser signals file} for uploads that came with them (deleted once read).
+        Anything that stops the whole job goes in the admin log with the job's ref, as failed analyses do."""
         sig = {str(Path(k).resolve()): v for k, v in (signals or {}).items()}
 
         def work(progress) -> dict[str, Any]:
             try:
                 return run(progress)
+            except JobError as e:
+                event(user, "failed", f"Analysis didn't start: {names([Path(i).name for i in inputs])}, {e} (ref {ref(job_id)})",
+                      ok=False)
+                raise
+            except Exception as e:
+                log.exception("analysis job %s failed", ref(job_id))
+                event(user, "failed", f"Analysis job failed: {names([Path(i).name for i in inputs])}, "
+                      f"{_failure_reason(f'{type(e).__name__}: {e}')} (ref {ref(job_id)})", ok=False)
+                raise
             finally:
                 drop_signals(sig)
 
@@ -811,7 +854,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                     raise JobError("The server is busy analyzing other tracks. Try again in a few minutes.")
                 if hosted:  # as for a plain upload: only tracks that analyzed count toward the daily limit
                     db.add_usage(c, user, "tracks", today(), sum(r.track_id is not None for r in rs))
-            out = results(rs, user)
+            out = results(rs, user, job_id, failed_at)
             for item, stage in zip(out["results"], failed_at):
                 if stage:
                     item["stage"] = stage
@@ -850,7 +893,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         if not is_url(body.url):  # never a path: anyone who can reach the server could read files off its disk
             raise HTTPException(400, "Paste an http(s) link to a track or playlist.")
         if background:
-            return JSONResponse(analyses.start(None, 1, analysis_work([body.url], None, None, link=True)), status_code=202)
+            job_id = new_id()
+            return JSONResponse(analyses.start(None, [body.url], analysis_work([body.url], None, None, job_id, link=True), job_id),
+                                status_code=202)
         with closing(conn()) as c:
             try:
                 results = service.analyze_inputs(c, [body.url])

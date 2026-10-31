@@ -32,9 +32,9 @@ class AnalysisJobs:
         self._jobs: dict[str, dict[str, Any]] = {}
         self._seq = 0
 
-    def resume(self) -> int:
-        """Mark the jobs a previous run of the server left unfinished as failed; returns how many."""
-        n = 0
+    def resume(self) -> list[dict[str, Any]]:
+        """Mark the jobs a previous run of the server left unfinished as failed; returns them (for the admin log)."""
+        cut = []
         for f in self.folder.glob("*.json") if self.folder.is_dir() else []:
             try:
                 job = json.loads(f.read_text())
@@ -42,19 +42,21 @@ class AnalysisJobs:
                 f.unlink(missing_ok=True)
                 continue
             if job.get("state") in ("queued", "running"):
+                cut.append(dict(job))
                 job.update(state="error", error=RESTARTED)
                 f.write_text(json.dumps(job))
-                n += 1
-        return n
+        return cut
 
-    def start(self, owner: str | None, file_count: int, work: Callable[["Progress"], dict[str, Any]]) -> dict[str, Any]:
+    def start(self, owner: str | None, files: list[str], work: Callable[["Progress"], dict[str, Any]],
+              job_id: str | None = None) -> dict[str, Any]:
         """Run `work(progress)` in a thread; it returns the job's results ({"results": [...]}) or raises
-        JobError with a message for the page. Returns the new job's status."""
+        JobError with a message for the page. `files` are the names the person gave (for the admin log after a
+        restart). Returns the new job's status."""
         self._forget_old()
         with self._lock:
             self._seq += 1
-            job = {"id": uuid.uuid4().hex, "owner": owner, "state": "queued", "stage": "waiting", "file_index": 0,
-                   "file_count": file_count, "created": time.time(), "_seq": self._seq}
+            job = {"id": job_id or new_id(), "owner": owner, "state": "queued", "stage": "waiting", "file_index": 0,
+                   "file_count": len(files), "files": files, "created": time.time(), "_seq": self._seq}
             self._jobs[job["id"]] = job
         self._save(job)
         threading.Thread(target=self._run, args=(job, work), name="tastr-analysis", daemon=True).start()
@@ -123,6 +125,15 @@ class AnalysisJobs:
                     f.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def new_id() -> str:
+    return uuid.uuid4().hex
+
+
+def ref(job_id: str) -> str:
+    """The short id the admin log and the server log both show, to find one upload's lines in Fly's logs."""
+    return job_id[:8]
 
 
 class JobError(Exception):

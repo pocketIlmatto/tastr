@@ -56,6 +56,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_DAILY_DRUMS` | 10 | drum model runs ("Detect drums with the model") each person can start per UTC day |
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
+| `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
 | `TASTR_BROWSER_SIGNALS` | off | `1` has each visitor's browser run HPSS before uploading, so the analysis skips it ([ARCHITECTURE.md](ARCHITECTURE.md#browser-signals)). Works on your own machine too |
 
@@ -94,9 +95,10 @@ audio and stem bytes, last upload, last request since the server started, and to
 and visits (page loads), plus 30 days of daily counts, the limits, total storage against the cap and
 the stem jobs and analyses running or waiting. Everyone else gets 404. `/api/config` says `"admin": true` for admins.
 
-It also returns `recent`, the last 20 lines of the activity log, and `blocked_today`, how many requests
+It also returns `recent`, the last 20 lines of the activity log, `problems`, the last 20 that weren't OK,
+`log_links`, where to read the Fly and Modal logs, and `blocked_today`, how many requests
 were refused today (UTC) for a missing or invalid Access token. The log (`events` table) records uploads,
-stem jobs started, re-analyses, first sign-ins, limits hit and failed analyses. A failure keeps only the file
+stem jobs started, re-analyses, first sign-ins, limits hit, failed analyses, deploys and restarts. A failure keeps only the file
 name and a short reason, never the error text, which can name server paths. Rows older than 90 days are
 dropped as new ones come in. Your own machine keeps no log.
 
@@ -119,11 +121,13 @@ anything much past 14 minutes runs out of memory; a one-hour mix would need abou
 
 To find out what happened to an upload:
 
-- **Admin tab > Activity**: an "Uploaded 1 track" line, then "Analysis failed: <file>, <reason>" or a
-  "Hit the ... limit" line. No failure line after the upload usually means the server stopped or restarted
-  mid-analysis (a deploy, for example).
+- **Admin tab > Problems**: failed analyses, limits hit and restarts, each naming the file. An upload's
+  lines carry a ref, e.g. "Uploaded mix.mp3 (ref 1a2b3c4d)", then "Analysis failed: mix.mp3 at step sections,
+  it ran out of memory on Modal (ref 1a2b3c4d)". A restart that cut analyses off logs "The server restarted
+  in the middle of an analysis" and "Cut off by the restart: <file>, while at step <step>"; a deploy logs
+  "Deployed a new version". Each problem line links to the Fly and Modal logs.
 - **Fly**: `fly logs -a <app>` streams the server's log live; failed analyses log
-  `analysis failed for <file>: <error>` with the full error. Older lines are in the Fly dashboard's
+  `analysis failed for <file> (ref <ref>): <error>` with the full error, so search for the ref. Older lines are in the Fly dashboard's
   **Monitoring** page for the app. `fly status -a <app>` shows restarts.
 - **Modal**: `modal app logs tastr-web --env friends` streams the functions' logs, and the dashboard
   (modal.com > the `friends` environment > `tastr-web` > `analyze_stream`) lists each call with its

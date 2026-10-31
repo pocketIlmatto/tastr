@@ -123,7 +123,7 @@ Highlights so far:
 | Danceability vs listeners (AUC) | 0.70 | 0.82 | MTG-Jamendo, 510 tracks |
 
 The [analysis engine report](docs/engine-report.md) has every change, the datasets
-that found and checked it, what's still open, and next steps.
+that found and checked it, and what's still open.
 
 ## Quick start
 

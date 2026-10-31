@@ -2,7 +2,7 @@
 
 Every accuracy change to Tastr's analysis engine so far, grouped by what the track card shows. Each one
 lists the dataset that exposed the problem, the dataset used to check the fix, the scores before and after,
-and what is still open. Suggested next steps are at the end. Written 2026-10-31; the numbers are copied from
+and what is still open. Written 2026-10-31; the numbers are copied from
 the detailed write-ups ([bench.md](bench.md), [rhythm.md](rhythm.md), [drums.md](drums.md),
 [vibes.md](vibes.md)), which have the methods, commands and everything that was tried and dropped.
 
@@ -223,26 +223,3 @@ None of these are in the repo. Non-commercial sets contribute only fitted number
 Most benchmarks are two-minute EDM previews or 30 to 60 s clips, so full-length tracks are not measured
 directly.
 
-## Next steps
-
-Roughly in order of payoff for a dance-music library.
-
-1. **Refresh the quoted scores and the BPM calibration.** The scores in `bench_scores.json` and the BPM
-   "likely right" table predate the tempo meter gate (Beatport listed BPM 0.872 there, 0.897 now). A
-   `--record` run and a calibration refit.
-2. **Labels from your own library.** Use low-confidence tracks and "Listed elsewhere" disagreements as a
-   review queue, save corrections as a `manifest` set, and score changes against it too. It is the only way
-   to check drops, descriptive tags and drum & bass conventions on the music Tastr is used for.
-3. **Key fifths with new inputs.** Profile tweaks are exhausted; try bass-line and chord-progression cues as
-   model inputs, which may also fix the "major read as IV" weakness.
-4. **A held-out check for 3/4 and tempo on Ballroom** (Beat This! release: 173 waltzes, 512 in 4/4; a 4.8 GB
-   zip).
-5. **Drum & bass half tempo.** Try a snare-placement cue (backbeat on 2 and 4 at 174 vs at 87). Needs labels
-   that agree on a convention; hjdb has only 3 tracks at 170 BPM or faster.
-6. **The 55 zero-score Harmonix songs.** About the right section count but no boundary within 3 s, which
-   suggests an offset in the first downbeat or the bench's bar grid.
-7. **Weak vibe tags.** Set the cut-offs for atmospheric, driving and hypnotic (and bass-heavy, percussive,
-   swung) from a library's own spread, then rerun the MTG-Jamendo / DEAM bench to check nothing regresses.
-8. **Drum-model trade-offs.** Measure "ADTOF snare only where the built-in snare also fires" on MDB and IDMT,
-   and compare the model's open hats there.
-9. **Faster lookups.** Read MusicBrainz recording ids from file tags when present, to skip the search.

@@ -244,3 +244,16 @@ def test_tastr_meter_turns_3_4_detection_off(monkeypatch):
     monkeypatch.setenv("TASTR_METER", "4/4")
     assert _beats_per_bar(None, 3) == (4, False)
     assert _beats_per_bar(3, 4) == (3, True)  # a meter the user set still wins
+
+
+def test_pulse_clarity_is_read_on_the_trackers_grid(default_card):
+    """The kick alignment moves the grid a frame or two off the broadband onset peaks; reading pulse after it
+    left it at 0 on most real tracks (Linear TAS-21). A synth four-on-the-floor track has a clear pulse."""
+    card, _ = default_card
+    assert card.features["pulse_clarity"] >= 0.3
+
+
+def test_no_pulse_on_a_steady_tone():
+    t = np.arange(SR * 20) / SR
+    card = analyze((0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32))
+    assert card.features.get("pulse_clarity", 0) <= 0.2

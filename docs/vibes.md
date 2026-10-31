@@ -192,3 +192,12 @@ Reading it:
 - "driving" and "hypnotic" are still at chance, and "atmospheric" still shows on most tracks (1,677 of 2,365
   MTG tracks with mood tags). Their cut-offs are the next thing to tune, best from the spread of your own
   library.
+
+### 2026-10-31: pulse clarity was broken until core 0.3.0
+
+Pulse clarity was read after the kick alignment, which moves the beat grid onto the low-band kick, a frame or
+two before the broadband onset peak. So it came out 0 on 86% of MTG-Jamendo, 81% of DEAM and 18 of 20
+Beatport tracks. The fits above that "drop pulse clarity" were fitting a near-constant input, and driving and
+hypnotic were close to chance (AUC about 0.5), while atmospheric got a free +0.4 on nearly every track. Core
+0.3.0 reads it on the tracker's own grid and scales it as (ratio - 1) / 4; on the 20 Beatport tracks it now
+ranges 0.45 to 1. The vibe benches and the tag cut-offs need rerunning on it (Linear TAS-21, TAS-12).

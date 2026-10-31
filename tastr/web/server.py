@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import mimetypes
 import os
@@ -17,7 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -106,6 +107,19 @@ def _cross_site(request) -> bool:
     if not origin or origin == "null":
         return origin == "null"
     return urlparse(origin).netloc != request.headers.get("host", "")
+
+
+def versioned_index() -> str:
+    """index.html with `?v=<content hash>` on each /static/ file it loads.
+
+    Browsers and Cloudflare cache app.js and style.css for hours when no Cache-Control is sent; a new
+    hash after a deploy is a new URL, so the new files load right away."""
+    def tag(m: re.Match) -> str:
+        f = STATIC_DIR / m.group(2)
+        if not f.is_file():
+            return m.group(0)
+        return f'{m.group(1)}/static/{m.group(2)}?v={hashlib.sha256(f.read_bytes()).hexdigest()[:10]}"'
+    return re.sub(r'((?:src|href)=")/static/([\w.-]+)"', tag, (STATIC_DIR / "index.html").read_text())
 
 
 def create_app(db_path: str | Path | None = None, settings: Settings | None = None, verifier=None) -> FastAPI:
@@ -673,9 +687,12 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             raise HTTPException(400, str(e))
         return {"columns": columns, "rows": rows}
 
+    page = versioned_index()
+
     @app.get("/", include_in_schema=False)
     def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        # The page itself is never cached; its scripts and styles carry a content hash, so a deploy is seen at once.
+        return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

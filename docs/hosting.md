@@ -58,9 +58,8 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
-| `TASTR_BROWSER_SIGNALS` | off | `1` has each visitor's browser run HPSS before uploading, so the analysis skips it ([ARCHITECTURE.md](ARCHITECTURE.md#browser-signals)). Works on your own machine too |
 | `TASTR_BROWSER_ENGINE` | off | `1` has each visitor's browser make the whole card with the Rust engine's WebAssembly build; the server checks it and skips analysis ([ARCHITECTURE.md](ARCHITECTURE.md#browser-engine)). Needs the image's `TASTR_ENGINE_WASM` |
-| `TASTR_ENGINE` | `python` | `rust` has the server (and Modal) make cards with the Rust engine ([rust-engine.md](rust-engine.md)); it falls back to Python for Opus, the drum model and partial re-analysis |
+| `TASTR_ENGINE` | `rust` | which engine makes cards, on the server and on Modal ([rust-engine.md](rust-engine.md)). `python` picks the Python reference engine; the drum model and `tastr analyze --stages` always use it |
 
 With `TASTR_HOSTED=1` but no team domain or AUD tag, `tastr serve` refuses to start rather than run
 without a login check.

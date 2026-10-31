@@ -63,6 +63,9 @@ Series: `energy` (per bar, 0..1, written by core) is the one the UI draws.
 
 ## Pipeline (`tastr/engine/pipeline.py`)
 
+This is the Python reference engine: the Rust engine (`engine-rs/`, [rust-engine.md](rust-engine.md)) is a
+step-by-step port of it and makes the cards; the benchmarks and the drum model use the Python one.
+
 A stage is any object with `name`, `version`, `requires` (tuple of stage
 names) and `run(ctx)`. `register_stage(obj)` at import time of a module in
 `tastr/engine/stages/` makes it part of the default pipeline. `ctx` gives the audio
@@ -77,41 +80,19 @@ row by row on scipy's fast 1-D path, with the same output sample for sample
 (checked against `librosa.effects.hpss`, and `tests/test_engine.py` keeps it so):
 7.1 s in all, HPSS 3.4 s. Sharing the repeated STFTs would save only about 0.3 s more.
 
-## Browser signals
-
-`TASTR_BROWSER_SIGNALS=1` (off by default) moves HPSS, half of the server's analysis time, into the visitor's
-browser. The page decodes the upload with Web Audio (an `OfflineAudioContext` at 22,050 Hz, channels averaged
-like `librosa.to_mono`), runs `hpssHarmonic` from `tastr/web/static/signals.js` in a worker, and uploads a
-signals file next to the audio. The format is in `tastr/engine/browser_signals.py`: the decoded audio and
-HPSS's harmonic part, as int16 with a scale each.
-
-The engine then analyzes that audio instead of decoding the file. It takes the harmonic part as sent and the
-percussive part as audio minus harmonic. HPSS's soft masks add up to one and its STFT round trip rebuilds
-the input, so that difference is HPSS's percussive output to about 1e-7. Signals that don't fit are set aside
-and the file is decoded as usual: a bad file, the wrong rate, or a duration more than 1 s (or 1%) off the
-file's. `extras["browser_signals"]` on the card says which happened. The page sends nothing for tracks over
-20 minutes, tracks too short for the 31-frame median, or files the browser can't decode. Re-analysis and
-links always run fully on the server.
-
-What was measured (2026-10-31), with `tests/test_browser_signals.py` keeping the first two:
-
-- `hpssHarmonic` matches `signals.hpss` to about 1e-7, about 3 s for a 3-minute track in Node on one core.
-- In Chromium, an MP3 and a WAV analyzed from the browser's signals got the same BPM, key, downbeats (within
-  1 ms) and sections as the server decoding the file itself.
-
 ## Browser engine
 
-`TASTR_BROWSER_ENGINE=1` (off by default) goes further than browser signals: the page runs the Rust engine's
+`TASTR_BROWSER_ENGINE=1` (off by default): the page runs the Rust engine's
 WebAssembly build (`/engine/tastr_engine.wasm`, built into the image) on the upload in a worker
 (`tastr/web/static/engine.js`) and sends the finished card with the audio, so the server runs no analysis.
 `tastr/engine/browser_card.py` takes the card only if it was made by the build the server serves now (a hash
 of the wasm file), ran every stage at the server's versions and sample rate, and lasts as long as the file;
 otherwise it is set aside (`extras["browser_card"]` says why) and the server analyzes as usual. Opus files,
-tracks over 20 minutes, and browsers without WebAssembly fall back to browser signals or the server.
+tracks over 20 minutes, and browsers without WebAssembly leave the analysis to the server.
 
-`TASTR_ENGINE=rust` makes the server's own cards with the same engine, natively through ctypes
-(`tastr/engine/rust.py`), so browser and server cards agree byte for byte. See
-[rust-engine.md](rust-engine.md).
+The server makes its own cards with the same engine, natively through ctypes (`tastr/engine/rust.py`), so
+browser and server cards agree byte for byte. See [rust-engine.md](rust-engine.md). (Before the Rust engine,
+`TASTR_BROWSER_SIGNALS` had the browser run only HPSS; the whole card replaced it.)
 - On four synthetic tracks, the only differences from the server-only card were drum velocities, a few
   vibe scores in the third decimal and, on one track, one ghost note in a drum lane. All of them come from the
   int16 rounding: with float32 audio the cards matched except for one velocity. Float32 would double the

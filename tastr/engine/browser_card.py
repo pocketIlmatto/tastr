@@ -9,7 +9,7 @@ The server takes a card only when it checks out, and otherwise analyzes the file
 - it was made by the WebAssembly build the server serves now (`rust.wasm_id()`), so a page left open across a
   deploy doesn't store a card from an older engine;
 - it ran every stage at the versions the server's engine has, at the engine's sample rate;
-- it lasts as long as the uploaded file (the same check as browser signals).
+- it lasts as long as the uploaded file.
 
 A person can only ever put a card in their own library this way, the same as editing their tracks.
 
@@ -23,14 +23,17 @@ import json
 import os
 import re
 from dataclasses import asdict
+from pathlib import Path
 
 from . import rust
-from .browser_signals import DURATION_SLACK, MAX_SECONDS, file_duration
 from .card import Source, TrackCard
 from .pipeline import SR, registered_stages
 
 FORMAT, VERSION = "tastr-card", 1
 MAX_BYTES = 8 << 20  # a 20-minute card is about 1.5 MB, mostly the waveform and spectrogram pictures
+MAX_SECONDS = 20 * 60  # the page makes no card for longer tracks (app.js ENGINE_MAX_MINUTES)
+# The card must last as long as the file says, give or take decoder padding.
+DURATION_SLACK = (1.0, 0.01)  # seconds, share of the duration: the larger applies
 
 
 class BrowserCardError(ValueError):
@@ -82,3 +85,20 @@ def load(data: bytes, source: Source) -> TrackCard:
     card.extras["engine"] = f"rust {v}" if isinstance(v, str) and re.fullmatch(r"[\w.\-]{1,20}", v) else "rust"
     card.extras["browser_card"] = True
     return card
+
+
+def file_duration(path: str | Path) -> float | None:
+    """The file's duration from its headers, without decoding it; None if it can't be read that way."""
+    try:
+        import soundfile
+
+        return float(soundfile.info(str(path)).duration)
+    except Exception:
+        pass
+    try:
+        import mutagen
+
+        f = mutagen.File(str(path))
+        return float(f.info.length) if f is not None and f.info.length else None
+    except Exception:
+        return None

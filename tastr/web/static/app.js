@@ -2625,7 +2625,7 @@ async function runBatch(items, rows) {
     const row = rows[i], link = !!items[i].link;
     Object.assign(row, { active: true, t0: Date.now(), secs: 0, frac: 0, stage: null, say: link ? "Fetching from the link" : "Uploading 0%" });
     rows.slice(i + 1).forEach((q, k) => { q.say = k ? `Waiting · ${k} ahead of it` : "Up next"; });
-    let uploaded = link ? 1 : 0, measured = null;  // measured: 0-1 while the browser runs HPSS (browser signals), -1 while it makes the whole card (browser engine), else null
+    let uploaded = link ? 1 : 0, inBrowser = false;  // true while the browser makes the whole card (browser engine)
     const update = () => {
       row.secs = (Date.now() - row.t0) / 1000;
       const a = row.stage ? analysisFrac(row) : 0;
@@ -2633,8 +2633,7 @@ async function runBatch(items, rows) {
       const left = (1 - row.frac) * perFile + (n - i - 1) * perFile;
       const step = A_STEPS.find(([k]) => k === row.stage);
       const what = row.stage === "fetch" ? "fetching from the link" : step ? step[1].toLowerCase()
-        : measured != null && measured < 0 ? "analyzing in your browser"
-        : measured != null ? `measuring in your browser ${Math.round(measured * 100)}%`
+        : inBrowser ? "analyzing in your browser"
         : uploaded < 1 ? `uploading ${Math.round(uploaded * 100)}%` : "analyzing";
       const el = $("status");
       el.className = "muted";
@@ -2647,12 +2646,12 @@ async function runBatch(items, rows) {
     let results;
     try {
       let r = await items[i].send((f) => {
-        uploaded = f; measured = null;
+        uploaded = f; inBrowser = false;
         row.say = f < 1 ? `Uploading ${Math.round(f * 100)}%` : "Analyzing…";  // "Analyzing…" until the job says which step
         update();
-      }, (f) => {
-        measured = f;
-        row.say = f < 0 ? "Analyzing in your browser" : `Measuring in your browser ${Math.round(f * 100)}%`;
+      }, () => {
+        inBrowser = true;
+        row.say = "Analyzing in your browser";
         update();
       });
       uploaded = 1;
@@ -2724,21 +2723,10 @@ function uploadFiles(files) {
       const fd = new FormData();
       fd.append("files", f);
       const card = serverCfg.browser_engine ? await cardInBrowser(f, onMeasure) : null;
-      const sig = !card && serverCfg.browser_signals ? await measureInBrowser(f, onMeasure) : null;
-      if (card) fd.append("signals", card, "card.json");
-      else if (sig) fd.append("signals", sig, "signals.tsg");
+      if (card) fd.append("card", card, "card.json");
       return postWithProgress("/api/analyze?background=1", fd, onProgress);
     },
   })));
-}
-// TASTR_BROWSER_SIGNALS: run HPSS here (static/signals.js, in a worker loaded from the same versioned URL as the
-// page's copy) and send it with the file, so the server skips it. Any failure just leaves the work to the server.
-async function measureInBrowser(file, onMeasure) {
-  const script = document.querySelector('script[src*="/static/signals.js"]');
-  if (!script || typeof browserSignals !== "function") return null;
-  onMeasure(0);
-  try { return await browserSignals(file, script.src, onMeasure); }
-  catch (e) { console.warn("browser signals failed; the server will do that work", e); return null; }
 }
 // TASTR_BROWSER_ENGINE: make the whole card here with the Rust engine's WebAssembly build (static/engine.js, a
 // worker per file so its memory goes when it's done) and send it with the file; the server stores it when it checks
@@ -2751,7 +2739,7 @@ async function cardInBrowser(file, onMeasure) {
   if (!cfg || !script || typeof Worker !== "function" || typeof WebAssembly !== "object" || /\.opus$/i.test(file.name)) return null;
   const min = await audioMinutes(file);
   if (min != null && min > ENGINE_MAX_MINUTES) return null;
-  onMeasure(-1);
+  onMeasure();
   const out = await new Promise((resolve) => {
     const w = new Worker(script.src);
     const done = (v) => { w.terminate(); resolve(v); };

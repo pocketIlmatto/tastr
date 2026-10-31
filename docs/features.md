@@ -75,7 +75,9 @@ Everything a track card shows and what you can do with it. The [README](../READM
 - **Card sections in your order.** Drag a section by its ⠿ grip, or use the ↑/↓ buttons on its header, to put
   e.g. Vibe above Energy. The order is kept in your browser and used for every track; "Reset order" puts it back.
 - **Track and bulk actions:** copy a summary, reload metadata, re-analyze,
-  separate stems or delete, for one track or a whole selection.
+  separate stems or delete, for one track or a whole selection. Bulk reload, re-analyze and look up run a few
+  tracks at a time (`TASTR_BULK_AT_ONCE`; on a hosted server it follows `TASTR_MAX_ANALYSES`, at home about
+  half the CPU cores); stems and the drum model run one at a time.
 - **Explore tab:** a BPM-energy chart, and **Find tracks** to search your library
   without code (BPM, key and the keys that mix with it, energy, vibe, length,
   sections, text, with AND/OR groups), or in read-only SQL with a table and column

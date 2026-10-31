@@ -409,7 +409,8 @@ let lookupProviders = []; // enabled catalogs (TASTR_LOOKUP), from the last card
 const A_TYPICAL_BULK = 40; // a re-analysis, like A_TYPICAL (the upload aside)
 let drumModelOn = false; // whether the server can run the drum model, from the last card it sent
 const BULK = {
-  // typical: seconds per track to start the time left from, until the batch's own average is known
+  // typical: seconds per track to start the time left from, until the batch's own average is known;
+  // one: run one track at a time even when the server allows more (see runBulk)
   reload: { label: "Reload metadata", doing: "Reloading metadata…", fail: "Couldn't reload metadata", typical: 2,
     done: (n) => `Reloaded metadata for ${plural(n)}.`,
     run: async (id) => (await api(`/api/tracks/${id}/retag`, { method: "POST" })).card },
@@ -426,7 +427,7 @@ const BULK = {
     when: () => lookupProviders.length > 0,
     done: (n) => `Looked up ${plural(n)}.`,
     run: async (id) => (await api(`/api/tracks/${id}/lookup`, { method: "POST" })).card },
-  drums: { label: "Detect drums with the model", note: "slow", doing: "Detecting drums…", fail: "Couldn't detect drums with the model", typical: 90,
+  drums: { label: "Detect drums with the model", note: "slow", one: true, doing: "Detecting drums…", fail: "Couldn't detect drums with the model", typical: 90,
     when: () => drumModelOn,
     done: (n) => { const d = editsGone.size; editsGone.clear(); return `Detected drums with the model for ${plural(n)}.` + (d ? ` Some edits no longer match the new sections in ${plural(d)}, so they were dropped.` : ""); },
     run: async (id, say) => {
@@ -435,7 +436,7 @@ const BULK = {
       dropEdits(id);
       return card;
     } },
-  stems: { label: "Separate stems", note: "slow", doing: "Separating stems…", fail: "Couldn't separate stems", typical: 180,
+  stems: { label: "Separate stems", note: "slow", one: true, doing: "Separating stems…", fail: "Couldn't separate stems", typical: 180,
     done: (n) => `Stems ready for ${plural(n)}.`,
     // The server separates in the background; wait for this track before starting the next one.
     run: async (id, say) => {
@@ -488,52 +489,65 @@ function bulkMenu() {
   });
   return wrap;
 }
-// Jobs run one track at a time. The user can leave select mode and keep browsing meanwhile.
+// Light jobs (reload, re-analyze, look up) run several tracks at once: /api/config's bulk_at_once, which is
+// TASTR_MAX_ANALYSES on a hosted server (its analysis slots queue any extra) and about half the cores at home.
+// Stems and the drum model (`one`: the GPU and 4 GB jobs) go one at a time. Each lane takes the next track from a
+// shared queue until it's empty. The user can leave select mode and keep browsing meanwhile.
 async function runBulk(kind, ids) {
   const b = BULK[kind];
   if (!ids.length || bulkBusy) return;
   bulkBusy = true;
   jobs.clear();
   const doing = b.doing.replace("…", "");
-  let failed = 0, per = b.typical, timed = 0;
-  for (let i = 0; i < ids.length; i++) {
-    const id = ids[i];
-    if (!tracks.some((t) => t.id === id)) { jobs.delete(id); continue; }
-    ids.slice(i + 1).forEach((x, k) => jobs.set(x, { text: k ? `Queued · ${k} ahead of it` : "Up next", active: false }));
-    jobs.set(id, { text: b.doing, active: true });
-    // The bulk line: which track, and the time left for the whole batch
-    const t0 = Date.now();
-    let eta = null;  // {frac, left} when the job reports its own progress (stems)
-    const sayLeft = () => {
-      const el = (Date.now() - t0) / 1000, cur = eta ? eta.left : Math.max(0, per - el);
-      sayBulk(`${doing} ${i + 1} of ${ids.length} · ${fmtLeft(cur + (ids.length - i - 1) * per)}${ids.length > 1 ? " in all" : ""}`);
-      jobTitle("bulk", (i + (eta ? eta.frac : Math.min(0.95, el / per))) / ids.length);
-    };
-    sayLeft();
-    renderList();
-    // Each second, only the bulk line's text changes (and only when it reads differently), so nothing else repaints
-    const tick = setInterval(() => { sayLeft(); const m = $("lib-bulk").querySelector(".bulk-msg"); if (m && m.textContent !== bulkMsg) m.textContent = bulkMsg; }, 1000);
-    try {
-      const card = await b.run(id, (text, st) => {
-        eta = st && st.state === "running" ? stemsEta(st) : null;
-        jobs.set(id, { text, active: st ? st.state === "running" : true, frac: eta ? eta.frac : null });
-        sayLeft();
-        // Update the row in place so a periodic progress update doesn't steal focus from the list.
-        const li = $("track-list").querySelector(`li.trk[data-id="${id}"]`), el = li && li.querySelector(".s.job"), bar = li && li.querySelector(".pbar");
-        if (el && (bar || !eta)) {
-          el.replaceChildren(h("span", { class: "spin" + (jobs.get(id).active ? "" : " idle"), "aria-hidden": "true" }), text);
-          if (bar) bar.replaceWith(progBar(eta.frac, `${text}`));
-        } else renderList();
-      });
-      jobs.delete(id);
-      per = (per * (timed + 1) + (Date.now() - t0) / 1000) / (timed + 2); timed++;  // running average, seeded with the typical time
-      if (card && currentId === id) renderCard(card);
-    } catch (e) {
-      failed++;
-      jobs.set(id, { text: b.fail, error: e.message });
+  const lanes = Math.max(1, Math.min(b.one ? 1 : serverCfg.bulk_at_once || 1, ids.length));
+  const queue = [...ids], running = new Map();  // id -> { t0, eta }; eta is {frac, left} when the job reports its own progress (stems)
+  let failed = 0, finished = 0, per = b.typical, timed = 0, painting = false;
+  const runFrac = (r) => (r.eta ? r.eta.frac : Math.min(0.95, (Date.now() - r.t0) / 1000 / per));
+  const runLeft = (r) => (r.eta ? r.eta.left : Math.max(0, per - (Date.now() - r.t0) / 1000));
+  // The bulk line and the tab title: tracks done, and the time left for the whole batch across all lanes
+  const sayLeft = () => {
+    const run = [...running.values()];
+    const left = (queue.length * per + run.reduce((a, r) => a + runLeft(r), 0)) / lanes;
+    sayBulk(`${doing}${lanes > 1 ? ` ${lanes} at a time` : ""} · ${finished} of ${ids.length} done · ${fmtLeft(left)}${ids.length > 1 ? " in all" : ""}`);
+    jobTitle("bulk", (finished + run.reduce((a, r) => a + runFrac(r), 0)) / ids.length);
+  };
+  const sayQueued = () => queue.forEach((x, k) => jobs.set(x, { text: k ? `Queued · ${k} ahead of it` : "Up next", active: false }));
+  // Several lanes report at once, so the list is rebuilt at most once per tick
+  const paint = () => { if (!painting) { painting = true; setTimeout(() => { painting = false; renderList(); }, 0); } };
+  const lane = async () => {
+    while (queue.length) {
+      const id = queue.shift();
+      if (!tracks.some((t) => t.id === id)) { jobs.delete(id); finished++; continue; }
+      const r = { t0: Date.now(), eta: null };
+      running.set(id, r);
+      jobs.set(id, { text: b.doing, active: true });
+      sayQueued(); sayLeft(); paint();
+      try {
+        const card = await b.run(id, (text, st) => {
+          r.eta = st && st.state === "running" ? stemsEta(st) : null;
+          jobs.set(id, { text, active: st ? st.state === "running" : true, frac: r.eta ? r.eta.frac : null });
+          sayLeft();
+          // Update the row in place so a periodic progress update doesn't steal focus from the list.
+          const li = $("track-list").querySelector(`li.trk[data-id="${id}"]`), el = li && li.querySelector(".s.job"), bar = li && li.querySelector(".pbar");
+          if (el && (bar || !r.eta)) {
+            el.replaceChildren(h("span", { class: "spin" + (jobs.get(id).active ? "" : " idle"), "aria-hidden": "true" }), text);
+            if (bar) bar.replaceWith(progBar(r.eta.frac, `${text}`));
+          } else paint();
+        });
+        jobs.delete(id);
+        per = (per * (timed + 1) + (Date.now() - r.t0) / 1000) / (timed + 2); timed++;  // running average, seeded with the typical time
+        if (card && currentId === id) renderCard(card);
+      } catch (e) {
+        failed++;  // only this row; the other lanes keep going
+        jobs.set(id, { text: b.fail, error: e.message });
+      }
+      running.delete(id); finished++;
+      sayLeft(); paint();
     }
-    clearInterval(tick);
-  }
+  };
+  // Each second, only the bulk line's text changes (and only when it reads differently), so nothing else repaints
+  const tick = setInterval(() => { sayLeft(); const m = $("lib-bulk").querySelector(".bulk-msg"); if (m && m.textContent !== bulkMsg) m.textContent = bulkMsg; }, 1000);
+  try { await Promise.all(Array.from({ length: lanes }, lane)); } finally { clearInterval(tick); }
   bulkBusy = false;
   jobTitle("bulk", null);
   try { await loadTracks(); } catch (_) {}

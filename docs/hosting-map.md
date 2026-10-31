@@ -193,7 +193,7 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 | `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#9b-catalog-lookups-optional)) |
 
 These have defaults and change only if you set a Fly secret of the same name ([hosting.md](hosting.md#settings)):
-`TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_DAILY_STEMS`,
+`TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`, `TASTR_BULK_AT_ONCE` (tracks a bulk action runs at once; defaults to `TASTR_MAX_ANALYSES`), `TASTR_DAILY_STEMS`,
 `TASTR_DAILY_DRUMS`, `TASTR_AUDIO_DAYS`, `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin
 tab's Modal link opens the app) and `TASTR_CF_ACCOUNT_ID` (your Cloudflare account id, so the Admin tab links to
 Access's applications and its log of blocked requests; without it those links are hidden) and `TASTR_WATCH_MINUTES`

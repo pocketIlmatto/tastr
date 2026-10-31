@@ -55,6 +55,9 @@ class Settings:
     daily_tracks: int = 30
     storage_gb: float = 10
     max_analyses: int = 2
+    # How many tracks a bulk action (reload, re-analyze, look up) runs at once in the browser; 0 = automatic:
+    # max_analyses on a hosted server, about half the CPU cores at home. Stems and the drum model always run one at a time.
+    bulk_at_once: int = 0
     daily_stems: int = 10
     daily_drums: int = 10  # "Detect drums with the model" runs per person per UTC day
     admins: tuple[str, ...] = ()  # emails that may open the admin view
@@ -95,6 +98,7 @@ class Settings:
             daily_tracks=int(env.get("TASTR_DAILY_TRACKS", cls.daily_tracks)),
             storage_gb=float(env.get("TASTR_STORAGE_GB", cls.storage_gb)),
             max_analyses=int(env.get("TASTR_MAX_ANALYSES", cls.max_analyses)),
+            bulk_at_once=int(env.get("TASTR_BULK_AT_ONCE", cls.bulk_at_once)),
             daily_stems=int(env.get("TASTR_DAILY_STEMS", cls.daily_stems)),
             daily_drums=int(env.get("TASTR_DAILY_DRUMS", cls.daily_drums)),
             admins=tuple(e.strip().lower() for e in env.get("TASTR_ADMIN_EMAILS", "").split(",") if e.strip()),
@@ -121,6 +125,15 @@ class Settings:
     @property
     def max_upload_bytes(self) -> int:
         return int(self.max_upload_mb * 1024 * 1024)
+
+    def bulk_lanes(self) -> int:
+        """Tracks a bulk action runs at once: TASTR_BULK_AT_ONCE, else max_analyses hosted (the server's slots queue
+        the rest anyway), else about half this machine's cores, 1 to 4."""
+        if self.bulk_at_once > 0:
+            return self.bulk_at_once
+        if self.hosted:
+            return max(1, self.max_analyses)
+        return max(1, min(4, (os.cpu_count() or 2) // 2))
 
     def limits(self) -> dict:
         return {"max_upload_mb": self.max_upload_mb, "max_minutes": self.max_minutes, "max_files": self.max_files, "daily_tracks": self.daily_tracks,

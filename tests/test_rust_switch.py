@@ -210,3 +210,19 @@ def test_browser_engine_off_by_default(db_path, tmp_path, monkeypatch):
     client = TestClient(create_app(db_path))
     assert client.get("/api/config").json()["browser_engine"] is None
     assert client.get(f"/engine/{rust.WASM_NAME}").status_code == 404
+
+
+@needs_lib
+def test_bench_decodes_files_rust_cant(song, monkeypatch):
+    """The bench runner falls back to the Python decoder like analyze_file (FMA Keys has MP3s Rust rejects)."""
+    from tastr.engine.bench import runner
+    from tastr.engine.bench.datasets import Item, Truth
+
+    monkeypatch.setenv("TASTR_ENGINE", "rust")
+
+    def refuse(path, beats_per_bar=None):
+        raise rust.RustDecodeError("the Rust engine could not decode it")
+
+    monkeypatch.setattr(rust, "card_from_file", refuse)
+    card = runner.analyze_item(Item(id="song", truth=Truth(), path=str(song)))
+    assert card.extras["decoded_by"] == "python" and abs(card.core.bpm - 124) < 1

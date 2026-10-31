@@ -34,7 +34,16 @@ def analyze_item(item: Item, stages: list[str] | None = None) -> TrackCard:
         from dataclasses import asdict
 
         src = Source(kind="file", uri=item.path or item.id, local_path=item.path, title=item.id)
-        d = rust.card_from_samples(item.synth()) if item.synth is not None else rust.card_from_file(item.path)
+        if item.synth is not None:
+            d = rust.card_from_samples(item.synth())
+        else:
+            try:
+                d = rust.card_from_file(item.path)
+            except rust.RustDecodeError:  # as analyze_file does: decode here, Rust analyzes the samples
+                from ..audio import load_audio
+
+                d = rust.card_from_samples(load_audio(item.path, SR))
+                d.setdefault("extras", {})["decoded_by"] = "python"
         return TrackCard.from_dict({**d, "source": asdict(src)})
     if item.synth is not None:
         y = item.synth()

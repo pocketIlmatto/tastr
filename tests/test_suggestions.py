@@ -154,6 +154,30 @@ def test_bass_loop_by_section_with_a_bassless_section(sectioned_card):
     assert notes[8:16] == [None] * 8 and notes[16:18] == ["C", "G"]
     assert len(sectioned_card.extras["suggestions.harmony"]["bar_chords"]) == len(notes)
     assert not any(k.startswith("_") for k in sectioned_card.extras["suggestions.bass"])
+    # One note per bar in the synth, so nothing moves inside a bar.
+    assert not any("beats" in s for s in by)
+
+
+def test_bass_that_moves_inside_a_bar_gets_its_beat_notes():
+    from synth import TruthCoreStage, make_track
+
+    from tastr.engine.card import Section
+    from tastr.engine.pipeline import register_stage, registered_stages
+
+    # Am F C G with the bass on the fifth for the last beat of every second bar: F F F C and G G G D.
+    y, truth = make_track(bpm=124, tonic=9, mode="minor", bars_per_section=(8, 8), bass_moves=True, kick_gain=0.6)
+    original = registered_stages()["core"]
+    register_stage(TruthCoreStage(truth), replace=True)
+    try:
+        base = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x")), stages=["suggestions"])
+    finally:
+        register_stage(original, replace=True)
+    card = TrackCard(source=Source(kind="file", uri="x"), core=base.core)
+    card.sections = [Section(0.0, 1.0, "intro", "A", 1, 8, 0.3), Section(1.0, 2.0, "drop", "B", 9, 16, 0.9)]
+    SuggestionsStage().run(AnalysisContext(y=y, sr=SR, card=card))
+    for s in _by_section(card, "bass"):
+        assert s["loop"] == ["A", "F", "C", "G"]
+        assert s["beats"] == [None, ["F", "F", "F", "C"], None, ["G", "G", "G", "D"]], s["label"]
 
 
 def test_section_loop_skips_unknown_bars():

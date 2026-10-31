@@ -36,7 +36,7 @@ def _hat(sr=SR, rng=np.random.default_rng(0)):
 def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per_section=(8, 16, 8), sr: int = SR,
                progression: list[tuple[int, int]] | None = None,
                section_progressions: list[list[tuple[int, int]]] | None = None,
-               bass_sections: tuple[bool, ...] | None = None, kick_gain: float = 1.0):
+               bass_sections: tuple[bool, ...] | None = None, kick_gain: float = 1.0, bass_moves: bool = False):
     """Kick on every beat, off-beat hats, a triad progression in the key.
 
     Sections: an intro with no drums, a full section, and a quiet outro, each
@@ -44,7 +44,8 @@ def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per
     (root, third) pairs in semitones from the tonic, one per bar. `section_progressions`
     gives each section its own list of pairs, restarting at the section's first bar.
     `bass_sections` turns the bass line off in sections marked False. `kick_gain` scales the kick (at 1.0 it is
-    louder against the bass than in most real mixes). Returns (audio, ground_truth).
+    louder against the bass than in most real mixes). `bass_moves` puts the bass's last beat of every second
+    bar on the fifth (root for three beats, then the fifth). Returns (audio, ground_truth).
     """
     beat = 60.0 / bpm
     bar = 4 * beat
@@ -75,7 +76,12 @@ def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per
             for iv in (0, q, 7):
                 add(_tone(220 * 2 ** (((tonic + root + iv) % 12 - 9) / 12), bar), t_bar, 0.6)
             if has_bass:
-                add(_tone(55 * 2 ** (((tonic + root) % 12 - 9) / 12), bar, amp=0.35), t_bar)
+                f0 = 55 * 2 ** (((tonic + root) % 12 - 9) / 12)
+                if bass_moves and b % 2:
+                    add(_tone(f0, 3 * beat, amp=0.35), t_bar)
+                    add(_tone(f0 * 2 ** (7 / 12), beat, amp=0.35), t_bar + 3 * beat)
+                else:
+                    add(_tone(f0, bar, amp=0.35), t_bar)
             if s == 1:
                 for k in range(4):
                     add(_kick(), t_bar + k * beat, kick_gain)

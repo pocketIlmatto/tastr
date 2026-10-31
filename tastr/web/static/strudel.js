@@ -62,10 +62,11 @@ const STRUDEL_STEMS = ["vocals", "bass", "other", "drums"];
 // /stems/<name>); every stem gets a line in stack(), and the ones not listed start commented out.
 // edits: the user's edits from the "Drums, bass & chords" view, {drums|bass|chords: {section idx or "all": …}}.
 // Edited sections use them (drums: a pattern; bass: {notes, rhythm}; chords: {chords}); the rest use the detected data.
+// startBar: the bar the sketch plays from (1 = the top), written as `const start` so it can be changed in strudel.cc.
 //
 // One object per section type holds its drums (and chords and bass), and one `song` list of
 // [bars, part, first bar] drives every layer, so commenting out a line skips that section everywhere.
-function strudelCode(c, audioUrl = null, stems = null, edits = null) {
+function strudelCode(c, audioUrl = null, stems = null, edits = null, startBar = 1) {
   const core = c.core || {}, key = core.key || {}, sugs = c.suggestions || [];
   const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
   // by_section idx is the section's index in card.sections; sections without bars can't be arranged.
@@ -130,9 +131,27 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
     return `${n.toLowerCase()}${i >= 0 && i <= 4 ? 2 : 1}`;
   };
   const okChord = (n) => (n && /^[A-G]/.test(n) ? n : "~");
+  // A bar whose bass moves (beat notes from the engine, e.g. C C C G) as weighted runs: [c2@3 g1].
+  const bassBar = (name, beatNotes) => {
+    if (!Array.isArray(beatNotes) || !beatNotes.length || beatNotes.some((n) => !n)) return rootNote(name);
+    const runs = [];
+    for (const n of beatNotes.map(rootNote)) {
+      if (runs.length && runs[runs.length - 1].n === n) runs[runs.length - 1].k++;
+      else runs.push({ n, k: 1 });
+    }
+    if (runs.length === 1) return runs[0].n;
+    const even = runs.every((r) => r.k === runs[0].k);
+    return `[${runs.map((r) => r.n + (even || r.k === 1 ? "" : "@" + r.k)).join(" ")}]`;
+  };
+  // Sidechain: when the card suggests ducking the bass under the kick, the kick ducks the bass's orbit (2) and the chords' (3).
+  const pump = sugs.some((q) => q.category === "bass" && q.data && q.data.template === "{sidechain}");
+  // Wobble: a bass that sits on one note at dubstep tempo gets Strudel's filter LFO, locked to the bar, on the 8ths.
+  const wobble = Boolean(bassSug && bassSug.data.movement === "pedal" && (c.tags || []).some((t) => t && t.tag === "dubstep/halftime tempo"));
   const bassStruct = (r) => (r && /[xo]/.test(r) ? compactSteps([...r.slice(0, nSteps).padEnd(nSteps, ".")].map((ch) => (ch === "." ? "~" : "x")), beats) : `[~ x]*${beats}`);
+  const duck = pump && (perSection || chordsArr.length > 0);
   const drumsOf = (pat) => {
-    const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string").map(([lane, p]) => strudelLane(lane, p, beats)).filter(Boolean);
+    const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string")
+      .map(([lane, p]) => { const l = strudelLane(lane, p, beats); return l && duck && /kick/i.test(lane) ? l + `.duck("2:3").duckdepth(.6)` : l; }).filter(Boolean);
     return lanes.length ? `stack(\n    ${lanes.join(",\n    ")}\n  )` : "silence";
   };
   // Same letter = same part, holding the first such section's drums (and chords and bass); a section with no chords or no bass is silence.
@@ -145,7 +164,7 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
     if (perSection) {
       const hs = harmSecs[sec.idx], bs = bassSecs[sec.idx];
       const cp = hs ? (hs.progression || []).map(okChord) : chordsArr;
-      const bl = bs ? (bs.loop || []).map(rootNote) : chordsArr.map(rootNote);
+      const bl = bs ? (bs.loop || []).map((n, k) => bassBar(n, bs.beats && bs.beats[k])) : chordsArr.map(rootNote);
       lines.push(`  chords: ${cp.some((n) => n !== "~") ? `chord("${compactBars(cp)}")` : "silence"},`,
         `  bass: ${bl.some((n) => n !== "~") ? `note("${compactBars(bl)}").struct("${bassStruct(bs ? bs.rhythm : null)}")` : "silence"},`);
     }
@@ -165,22 +184,40 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
   }
   out.push("]", "", `const drums = arrange(...song.map(([bars, p]) => [bars, p.drums])).bank("RolandTR909")`);
   const parts = ["drums"];
+  const orbit = (n) => (duck ? `.orbit(${n})` : "");
+  const WOB = wobble ? `.lpsync(${beats * 2}).lpdepth(2).lpq(6)` : "";
+  if (duck || wobble) {
+    out.push("", ...(duck ? ["// Sidechain: the kick ducks the bass (orbit 2) and the chords (orbit 3), the pumping in most house and EDM.",
+      "// Remove .duck(...) from the kicks above for none, or change .duckdepth (0 to 1)."] : []),
+      ...(wobble ? ["// Wobble: the bass's filter sweeps on the 8ths (.lpsync: sweeps per bar; try 12 for triplets, 16 for 16ths)."] : []));
+  }
   if (perSection) {
-    out.push(`const chords = arrange(...song.map(([bars, p]) => [bars, p.chords])).voicing().s("sawtooth").lpf(${CHORD_LPF}).gain(.22).room(.3)`,
-      `const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(${BASS_LPF}).gain(.5)`);
+    out.push(`const chords = arrange(...song.map(([bars, p]) => [bars, p.chords])).voicing().s("sawtooth").lpf(${CHORD_LPF}).gain(.22).room(.3)${orbit(3)}`,
+      `const bass = arrange(...song.map(([bars, p]) => [bars, p.bass])).s("sawtooth").lpf(${BASS_LPF}).gain(.5)${WOB}${orbit(2)}`);
     parts.push("bass", "chords");
   } else if (chordsArr.length) {
     out.push("", `// --- Harmony: ${prog.length ? "the detected chord loop" : `a common loop in ${keyStr} (no confident chord loop was detected)`}, one chord per bar ---`);
-    out.push(`const chords = chord("${compactBars(chordsArr)}").voicing().s("sawtooth").lpf(${CHORD_LPF}).gain(.22).room(.3)`);
-    out.push(`const bass = note("${compactBars(chordsArr.map(rootNote))}").struct("[~ x]*${beats}").s("sawtooth").lpf(${BASS_LPF}).gain(.5)`);
+    out.push(`const chords = chord("${compactBars(chordsArr)}").voicing().s("sawtooth").lpf(${CHORD_LPF}).gain(.22).room(.3)${orbit(3)}`);
+    out.push(`const bass = note("${compactBars(chordsArr.map(rootNote))}").struct("[~ x]*${beats}").s("sawtooth").lpf(${BASS_LPF}).gain(.5)${WOB}${orbit(2)}`);
     parts.push("bass", "chords");
   }
   out.push("");
   const drop = secs.find((x) => x.label === "drop") || song[0], at = drop.start_bar;
   const where = drop.label === "drop" ? "first drop" : "opening bars";
+  const lastBar = Math.max(...song.map((x) => (x.end_bar != null ? x.end_bar : x.start_bar)));
+  const startAt = Number.isInteger(startBar) && startBar >= 1 && startBar <= lastBar ? startBar : 1;
+  const startSec = song.find((x) => x.start_bar === startAt);
+  // One named line per layer: in Strudel `name: pattern` plays, and `_name:` mutes that line.
+  const play = (lines) => {
+    out.push("// --- Play: one named line per layer. Put _ in front of a name to mute it (_drums:), take it away to bring it back ---",
+      `const start = ${startAt} // the bar to play from: 1 is the top${startAt > 1 && startSec && !startSec.whole ? ` (here: ${secName(startSec)})` : ""}`,
+      ...lines,
+      "// all() changes every line: start from bar `start`, and ._punchcard() draws what's playing under the code",
+      "all(x => x.early(start - 1)._punchcard())", "");
+  };
   if (!withAudio) {
-    out.push("// ._punchcard() draws what's playing under the code.", `stack(${parts.join(", ")})._punchcard()`, "",
-      "// Ideas: mute a layer by deleting it from stack(), drag the sliders, skip or reorder lines in song,",
+    play(parts.map((p) => `${p}: ${p}`));
+    out.push("// Ideas: mute a layer with _, drag the sliders, skip or reorder lines in song,",
       "// try .bank(\"RolandTR808\"), or add .fast(2) to the hats for double time.");
     return out.join("\n");
   }
@@ -201,14 +238,14 @@ function strudelCode(c, audioUrl = null, stems = null, edits = null) {
     `// part(name): ${stems ? "one stem" : "the original"}, following the song above`,
     "const part = (name) => arrange(...song.map(([bars, p, from]) => [bars, orig(name, from, from + bars - 1)]))", "");
   const origDrums = !stems || stems.includes("drums");
-  if (stems) out.push("// Comment a line out (//) to mute it, or remove the // to bring it in.");
-  out.push("// ._punchcard() draws what's playing under the code.");
-  out.push("stack(");
-  if (stems) STRUDEL_STEMS.forEach((n) => out.push(`  ${stems.includes(n) ? "" : "// "}part("${n}"),${n === "drums" && !origDrums ? " // the sketch drums below play instead" : ""}`));
-  else out.push(`  part("orig"),`);
-  out.push(`  drums.gain(${slider(origDrums ? ".5" : ".8", 0, 1)}),`, ...(parts.length > 1 ? ["  // bass, chords,"] : []), ")._punchcard()", "",
-    `// Ideas: loop the ${where}${stems ? " of the vocals" : ""} with orig("${stems ? "vocals" : "orig"}", ${at}, ${at + 3}), skip or reorder lines in song,`,
-    "// bring in bass and chords, or load a second track as another sample for a mash-up.");
+  // Stem lines are named <stem>_stem so they don't clash with the sketch's own drums and bass lines.
+  const lines = stems
+    ? STRUDEL_STEMS.map((n) => `${stems.includes(n) ? "" : "_"}${n}_stem: part("${n}")${n === "drums" && !origDrums ? " // the sketch drums below play instead" : ""}`)
+    : [`original: part("orig")`];
+  lines.push(`drums: drums.gain(${slider(origDrums ? ".5" : ".8", 0, 1)})`, ...parts.slice(1).map((p) => `_${p}: ${p}`));
+  play(lines);
+  out.push(`// Ideas: loop the ${where}${stems ? " of the vocals" : ""} with orig("${stems ? "vocals" : "orig"}", ${at}, ${at + 3}), skip or reorder lines in song,`,
+    "// bring in bass and chords (take the _ off), or load a second track as another sample for a mash-up.");
   return out.join("\n");
 }
 

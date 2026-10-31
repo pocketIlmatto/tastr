@@ -109,6 +109,8 @@ svg.chart.head-hot .playhead { stroke-width: 3; }
 .st-stems { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: -4px 0 10px 22px; }
 .st-stems[hidden] { display: none; }
 .st-stems .st-opt { margin: 0; }
+.st-start { display: inline-flex; align-items: center; gap: 6px; }
+.st-start select { font: inherit; }
 .st-stem-go, .st-stem-picks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; flex-basis: 100%; }
 .st-stem-go button { font-size: 13px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 6px; }
 .st-stem-go .spin { margin-right: 0; }

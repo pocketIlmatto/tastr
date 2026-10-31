@@ -641,6 +641,7 @@ const strudelStems = new Set(["vocals", "bass", "other"]); // Drums off: the ske
 let strudelMine = true; // "Patterns: Your edits" (vs Detected) when the track has edits, remembered for the session
 let serverCfg = {}; // /api/config, filled in at startup
 const strudelLinks = new Map(); // track id -> signed audio URL on a shared server (null while it loads)
+const strudelStarts = new Map(); // track id -> the bar the sketch plays from ("Start at"), for the session
 // Where strudel.cc fetches the original audio (stems sit next to it). A shared server is behind a login strudel.cc
 // can't pass, so it hands out a signed link that works for a week; until that arrives the sketch has no audio.
 function strudelAudioUrl(c, repaint) {
@@ -659,6 +660,13 @@ function strudelView(c) {
   const note = h("p", { class: "muted st-note" });
   const stemsRow = h("div", { class: "st-stems" });
   const srcRow = h("div", { class: "st-src", role: "radiogroup", "aria-label": "Which patterns to use" });
+  // "Start at": the sketch's `const start`, so Ctrl+Enter plays from that section instead of the top.
+  const startSel = h("select", { id: "st-start" }, h("option", { value: "1" }, "The top"),
+    ...(c.sections || []).filter((x) => x.start_bar > 1).map((x) =>
+      h("option", { value: String(x.start_bar) }, `${[cap(x.label), x.letter].filter(Boolean).join(" ")} (bar ${x.start_bar})`)));
+  startSel.value = String(strudelStarts.get(c.id) || 1);
+  startSel.addEventListener("change", () => { strudelStarts.set(c.id, +startSel.value); paint(); });
+  const startRow = h("label", { class: "st-opt st-start", for: "st-start" }, "Start at ", startSel);
   let code = "";
   const paint = () => {
     const audioUrl = c.has_audio && strudelAudio ? strudelAudioUrl(c, paint) : null;
@@ -672,7 +680,7 @@ function strudelView(c) {
       return h("label", { class: "st-opt" }, r, " " + label);
     }));
     code = strudelCode(c, audioUrl, useStems ? STRUDEL_STEMS.filter((n) => strudelStems.has(n)) : null,
-      n && strudelMine ? allEdits(c) : null);
+      n && strudelMine ? allEdits(c) : null, +startSel.value || 1);
     pre.textContent = code;
     open.href = strudelLink(code);
     paintStems(audio, st);
@@ -736,6 +744,7 @@ function strudelView(c) {
     srcRow,
     c.has_audio ? h("label", { class: "st-opt", for: "st-audio" }, box, " Include the original audio, cut into bars") : null,
     stemsRow,
+    startSel.options.length > 1 ? startRow : null,
     h("div", { class: "st-actions" }, open, copy, say), pre, note);
 }
 

@@ -663,8 +663,10 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 @media (max-width: 700px) { .adm-two { grid-template-columns: minmax(0, 1fr); } .adm-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 /* ---------- Label and Review (sidebar Review tab, label bar on the card, marking section starts) ---------- */
 /* Tracks | Review: tabs for what the sidebar lists */
-.lib-tabs { display: flex; gap: 2px; margin-right: auto; }
-#lib .lib-tab { white-space: nowrap; background: none; border: 0; box-shadow: none; border-radius: 0; padding: 4px 8px 3px; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; }
+/* The tabs give way before the « button does: tighter in the wide 808/Technics fonts, then the count truncates (Pam, 2026-10-31). */
+.lib-tabs { display: flex; gap: 2px; margin-right: auto; min-width: 0; }
+#lib-collapse { flex: none; }
+#lib .lib-tab { min-width: 0; overflow: hidden; text-overflow: ellipsis; letter-spacing: .02em; white-space: nowrap; background: none; border: 0; box-shadow: none; border-radius: 0; padding: 4px 6px 3px; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; }
 #lib .lib-tab:hover { color: var(--fg); }
 #lib .lib-tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
 .lib-collapsed #lib .lib-tab { border-bottom: 0; padding: 0; }

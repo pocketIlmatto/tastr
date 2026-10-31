@@ -291,6 +291,20 @@ lower is better), raw score / flat overall rate / calibrated: BPM 0.284 / 0.109 
 The raw BPM score is bunched in 0.41-0.47 on all three sets, so it mostly separates the bottom fifth
 (about 60% right) from the rest (about 94%); it says little among confident tracks.
 
+**BPM refit 2026-10-31, core 0.3.0** (pulse clarity fixed, Linear TAS-21; Rust engine, hjdb on the Python
+reference). Same 1,052 tracks, same Acc1 (Beatport 0.897, GiantSteps 0.744, hjdb 0.923; 89.6% right), since
+pulse only feeds the confidence. The raw score now spreads out: Beatport p10/50/90 0.66 / 0.80 / 0.93, against
+0.42 / 0.45 / 0.48 before. Held-out Brier, raw / flat / calibrated: 0.099 / 0.094 / 0.084, against 0.284 /
+0.109 / 0.095. The key table is unchanged.
+
+| BPM raw | Tracks | Predicted | Actual |
+|---|---|---|---|
+| 0.33-0.70 | 210 | 75% | 72% |
+| 0.70-0.76 | 211 | 89% | 89% |
+| 0.76-0.80 | 207 | 93% | 96% |
+| 0.80-0.86 | 212 | 96% | 95% |
+| 0.86-0.98 | 212 | 96% | 96% |
+
 Refit after changing the tempo or key logic (a new `THREE_TWO_RATIO`, a retrained key model). The
 benchmarks are EDM-heavy (Beatport, GiantSteps) plus jungle / hardcore (hjdb), so the figures describe
 those genres best.

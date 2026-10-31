@@ -1,6 +1,7 @@
 """Tests for the web API and static UI."""
 
 import shutil
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -47,6 +48,23 @@ def test_query_is_read_only(client, seeded):
     r = client.post("/api/query", json={"sql": "DELETE FROM tracks"})
     assert r.status_code == 400
     assert len(client.get("/api/tracks").json()) == 1
+
+
+def test_query_refuses_attach_pragma_and_writes(client, seeded, tmp_path):
+    other = tmp_path / "other.db"
+    for sql in [f"ATTACH '{other}' AS o", "PRAGMA journal_mode=delete", "CREATE INDEX i ON tracks(title)",
+                "SELECT * FROM tracks; DELETE FROM tracks"]:
+        r = client.post("/api/query", json={"sql": sql})
+        assert r.status_code == 400, sql
+    assert not other.exists()  # ATTACH would have created it, even on a read-only connection
+    rec = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5) SELECT count(*) FROM n"
+    assert client.post("/api/query", json={"sql": rec}).json()["rows"] == [[5]]
+
+
+def test_runaway_query_is_stopped(db_path, seeded):
+    endless = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n"
+    with pytest.raises(sqlite3.OperationalError, match="interrupted"):
+        db.run_query(db_path, endless, 10, seconds=0.2)
 
 
 def test_query_returns_columns_and_rows(client, seeded):

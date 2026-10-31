@@ -468,8 +468,14 @@ The tune half agrees within 0.02 everywhere. Learnings:
 - The 4-bar snap costs about as much as the long sections; 2 bars beats both 4 and 1 at every length.
 - 16 to 18 s per section with a 2-bar snap gains about 0.10 F at 3 s. Raising the cap past 12 adds
   sections without adding hits.
-- 55 of 912 tracks score 0 at 3 s with about the right count, which looks like a systematic offset on
-  those tracks rather than a counting problem. Not looked into yet.
+- An earlier note said 55 of 912 tracks score 0 at 3 s. Those per-track rows weren't saved, and the
+  count most likely came from the old setting (28 s / 4 bars). At the current setting (18 s / 2 bars, cap 12) a full 912-track pass (2026-10-31, mean F 0.582) has
+  only 4 zeros, 6 at F ≤ 0.1 and 23 at F ≤ 0.2. All 912 mels load and are finite, so there is no data
+  or loading bug. Three of the 4 zeros (0065, 0156, 0278) are slow songs (bars of 3.3 to 4.5 s against a
+  2.0 s median) where the boundaries land about one bar off, just outside the 3 s window; tracks with
+  bars of 2.8 s or more (134) average F 0.538. The fourth (0969) has a 21.5 s intro that the stage
+  splits while the labels start at 21.5 s. Any single constant shift lifts all 4 to F 0.50 to 0.73.
+  A possible next step is scaling the snap or the section length by bar length.
 - A 60-track subset (30 per half) gave the same ranking (current 0.468, 16 s / 2 bars 0.56 on check), so
   subsets are fine for iterating here.
 - The stage now uses 18 s and 2 bars (sections 0.2.0): within 0.004 of the best F with the count closest

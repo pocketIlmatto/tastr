@@ -168,8 +168,8 @@ on a 4-bar phrase. The stage now asks for one section per 18 s and snaps to 2 ba
 | Boundary F within 0.5 s | 0.302 | 0.381 |
 | Sections per song vs labels | 3.1 too few | 0.09 too many |
 
-**Still open:** 55 songs score 0 with about the right count, which looks like a systematic offset. Harmonix
-is mostly pop, and no public dance-music set with drop labels and audio turned up. Details:
+**Still open:** only 4 of 912 songs now score 0 (an earlier count of 55 most likely came from the old setting). Most are slow songs where a
+boundary lands about one bar off, outside the 3 s window. Harmonix is mostly pop, and no public dance-music set with drop labels and audio turned up. Details:
 [bench.md, Sections](bench.md#sections).
 
 ## Danceability, energy and vibe tags

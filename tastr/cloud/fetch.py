@@ -217,12 +217,12 @@ def fetch(dataset: str, dest: str | Path, archives: list[int] | None = None, pro
 
     if dataset == "acousticbrainz":  # a lookup index, not a benchmark: no item index
         return fetch_acousticbrainz(dest, progress=progress)
-    if dataset == "fma-keys":  # no bench loader yet, so no item index
-        return fetch_fma_keys(dest, archives if archives is not None else [0], progress=progress)
     if dataset == "mtg-moods":
         result = fetch_mtg(dest, archives if archives is not None else list(range(6)), progress=progress)
     elif dataset == "deam":
         result = fetch_deam(dest, progress=progress)
+    elif dataset == "fma-keys":
+        result = fetch_fma_keys(dest, archives if archives is not None else [0], progress=progress)
     else:
         raise ValueError(f"unknown dataset {dataset!r}; choose from mtg-moods, deam, acousticbrainz, fma-keys")
     result["index"] = str(write_index(dataset, dest))

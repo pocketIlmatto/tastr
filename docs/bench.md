@@ -62,6 +62,7 @@ redistributing its labels or audio.
 | `giantsteps-key` | global key | 604 two-minute EDM previews | github.com/GiantSteps/giantsteps-key-dataset for the labels; see "Getting the GiantSteps audio" |
 | `giantsteps-tempo` | global BPM | 664 EDM previews | github.com/GiantSteps/giantsteps-tempo-dataset (uses `annotations_v2` when present) |
 | `beatport-key` | global key | 1,486 two-minute EDM previews (1,275 with a plain major/minor label are scored) | Zenodo record 1101082: unzip `keys.zip` and `audio.zip` into one folder; no overlap with GiantSteps Key |
+| `fma-keys` | global key | 5,489 full Free Music Archive songs, 17 genres, about half major; 695 in the first zip | Zenodo record 10719860, `tastr fetch fma-keys` ([cloud.md](cloud.md#fma-keys)); labels for non-commercial research |
 | `beatport-tempo` | Beatport's listed BPM | 774 of those previews with a bpm in `meta/` | same folder plus `original_metadata.zip` unzipped to `<root>/meta/*.json`; see "Tempo notes" for its drum & bass conventions |
 | `harmonix` | BPM, beats, downbeats, sections | 912 pop/EDM tracks | github.com/urinieto/harmonixset; audio is not distributed, put your copies in `<root>/audio` named by track id |
 | `manifest` | whatever you fill in | your tracks | a CSV or JSON file, below |
@@ -100,6 +101,20 @@ Night Shift (Extended Mix).mp3,124,A minor,"0:00 1:01 2:02 3:34",intro build dro
 `path` is relative to the manifest file. `key` accepts "A minor", "Am",
 "F# maj" or Camelot codes like "8A". `boundaries` are section start times in
 seconds or m:ss.
+
+Or label the tracks already in your library and export them. Labels live in their own table, so
+re-analyzing never changes them:
+
+```
+tastr review                                   # tracks most likely analyzed wrong, to label first
+tastr labels set 42 --bpm 174 --key "F minor"  # or --boundaries "0:00 0:32 1:04"; left-out flags are cleared
+tastr labels export my-labels.csv              # a manifest of every labeled track whose audio is on disk
+tastr bench manifest my-labels.csv
+```
+
+`tastr review` lists unlabeled tracks where a catalog lookup ([lookup.md](lookup.md)) disagrees with the
+BPM or key, then those whose BPM or key is under 60% likely right. The web server serves the same as
+`GET /api/review` and `GET`/`PUT /api/tracks/{id}/labels`, for a future labeling view.
 
 ## Key detection notes
 

@@ -229,8 +229,9 @@ the `vibe_bench` function (8 CPUs) and `tastr vibe-fit` refits the weights local
 
 `tastr fetch fma-keys fma-keys --remote --archives 0` downloads FMA Keys' labels and the songs in the
 chosen zips (0 to 9; zip 0 is 4.15 GB with 695 labeled songs), checks each zip's MD5 against Zenodo and
-unpacks the mp3s to `fma-keys/audio/<folder>/<track id>.mp3`. A rerun skips songs already there. There's
-no bench loader for it yet. See [datasets.md](datasets.md).
+unpacks the mp3s to `fma-keys/audio/<folder>/<track id>.mp3`. A rerun skips songs already there, and the
+fetch writes the item index, so `tastr bench fma-keys fma-keys --remote --stages core` scores what's there.
+See [datasets.md](datasets.md).
 
 ## How it fits together
 

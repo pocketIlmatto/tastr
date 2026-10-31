@@ -122,6 +122,17 @@ CREATE TABLE IF NOT EXISTS track_edits (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_track_edits_current ON track_edits(track_id) WHERE name IS NULL;
 CREATE INDEX IF NOT EXISTS idx_track_edits_track ON track_edits(track_id);
 
+-- What a track's BPM, key and section starts really are, set by hand (a correction or a confirmation;
+-- tastr/labels.py). Analysis never changes them, and `tastr labels export` writes them as a bench manifest.
+CREATE TABLE IF NOT EXISTS track_labels (
+    track_id   INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    bpm        REAL,
+    key_name   TEXT,     -- as given, e.g. "A minor"; checked by tastr.engine.bench.datasets.parse_key
+    boundaries TEXT,     -- section starts in seconds, space-separated
+    note       TEXT,
+    updated_at TEXT NOT NULL
+);
+
 -- What online catalogs list for a track (tastr.lookup), one row per provider, kept across re-analysis.
 -- status: found | not_found | pending | no_tags | error. key_name is the key as listed; key_tonic / key_mode /
 -- camelot are parsed from it, so they compare with tracks. result_json is the full LookupResult.
@@ -368,6 +379,34 @@ def get_lookups(conn: sqlite3.Connection, track_id: int) -> list[dict[str, Any]]
     return [json.loads(r[0]) | {"fetched_at": r[1]} for r in rows]
 
 
+LABEL_FIELDS = ("bpm", "key_name", "boundaries", "note")
+
+
+def get_labels(conn: sqlite3.Connection, track_id: int) -> dict[str, Any]:
+    r = conn.execute("SELECT bpm, key_name, boundaries, note, updated_at FROM track_labels WHERE track_id = ?",
+                     (track_id,)).fetchone()
+    return dict(zip(LABEL_FIELDS + ("updated_at",), r)) if r else {}
+
+
+def set_labels(conn: sqlite3.Connection, track_id: int, labels: dict[str, Any]) -> dict[str, Any]:
+    """Replace the track's labels with the given fields (checked by tastr.labels); none set clears them."""
+    vals = [labels.get(f) for f in LABEL_FIELDS]
+    with conn:
+        conn.execute("DELETE FROM track_labels WHERE track_id = ?", (track_id,))
+        if any(v not in (None, "") for v in vals[:3]):
+            conn.execute("INSERT INTO track_labels VALUES (?, ?, ?, ?, ?, ?)", (track_id, *vals, _now()))
+    return get_labels(conn, track_id)
+
+
+def list_labels(conn: sqlite3.Connection, owner: str | None = None) -> list[dict[str, Any]]:
+    """Every labeled track with its audio path and title, oldest label first."""
+    sql = ("SELECT t.id, t.local_path, t.title, t.artist, l.bpm, l.key_name, l.boundaries, l.note, l.updated_at "
+           "FROM track_labels l JOIN tracks t ON t.id = l.track_id")
+    rows = conn.execute(sql + (" WHERE t.owner IS ?" if owner is not None else "") + " ORDER BY l.updated_at",
+                        (owner,) if owner is not None else ())
+    return [dict(zip(("track_id", "path", "title", "artist", *LABEL_FIELDS, "updated_at"), r)) for r in rows]
+
+
 EDIT_PARTS = ("drums", "bass", "chords", "drumsrc")
 
 
@@ -546,7 +585,7 @@ _QUERY_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUN
 
 # A friend's SQL on a hosted server runs on an in-memory copy of their own library: these tables, their rows only,
 # without the columns that name people or server paths. Tables the query doesn't mention are copied empty.
-LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups")
+LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups", "track_labels")
 _PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_json"}
 
 

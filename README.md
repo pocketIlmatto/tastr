@@ -345,6 +345,7 @@ tastr/ingest.py             files/folders/links -> Sources, URL resolver registr
 tastr/resolvers/            link/playlist resolvers
 tastr/lookup/               opt-in catalog lookups (BPM/key by artist + title), one module per provider
 tastr/db.py                 SQLite schema and save/load/query
+tastr/labels.py             your own BPM/key/section labels, the review queue, manifest export
 tastr/service.py            inputs -> engine -> DB, used by the CLI and web app
 tastr/web/                  FastAPI app and UI; hosted.py is the shared-server mode (docs/hosting.md)
 tastr/cloud/                Modal apps: benchmarks and stems (modal_app.py), a hosted server's analysis (modal_web.py)

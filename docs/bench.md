@@ -101,6 +101,20 @@ Night Shift (Extended Mix).mp3,124,A minor,"0:00 1:01 2:02 3:34",intro build dro
 "F# maj" or Camelot codes like "8A". `boundaries` are section start times in
 seconds or m:ss.
 
+Or label the tracks already in your library and export them. Labels live in their own table, so
+re-analyzing never changes them:
+
+```
+tastr review                                   # tracks most likely analyzed wrong, to label first
+tastr labels set 42 --bpm 174 --key "F minor"  # or --boundaries "0:00 0:32 1:04"; left-out flags are cleared
+tastr labels export my-labels.csv              # a manifest of every labeled track whose audio is on disk
+tastr bench manifest my-labels.csv
+```
+
+`tastr review` lists unlabeled tracks where a catalog lookup ([lookup.md](lookup.md)) disagrees with the
+BPM or key, then those whose BPM or key is under 60% likely right. The web server serves the same as
+`GET /api/review` and `GET`/`PUT /api/tracks/{id}/labels`, for a future labeling view.
+
 ## Key detection notes
 
 **Method.** `music.estimate_key` is a learned model: a 24-class logistic regression (one class per key,

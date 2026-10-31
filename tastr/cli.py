@@ -43,6 +43,21 @@ def main(argv: list[str] | None = None) -> int:
     lk.add_argument("--missing", action="store_true", help="skip providers that already answered for a track")
     lk.add_argument("--providers", help="comma-separated provider names (default: TASTR_LOOKUP)")
     lk.add_argument("--usage", action="store_true", help="show requests used and limits per provider, send nothing")
+    lb = sub.add_parser("labels", help="your own BPM, key and section labels (docs/bench.md, \"Your own tracks\")")
+    lbs = lb.add_subparsers(dest="action", required=True)
+    ls_ = lbs.add_parser("set", help="label one track; flags you leave out are cleared")
+    ls_.add_argument("track_id", type=int)
+    ls_.add_argument("--bpm", help="e.g. 174")
+    ls_.add_argument("--key", help='e.g. "A minor", Am or 8A')
+    ls_.add_argument("--boundaries", help='section starts, e.g. "0:00 0:32 1:04"')
+    ls_.add_argument("--note")
+    lbs.add_parser("list", help="every labeled track")
+    lc = lbs.add_parser("clear", help="remove a track's labels")
+    lc.add_argument("track_id", type=int)
+    le = lbs.add_parser("export", help="write the labels as a `tastr bench manifest` CSV")
+    le.add_argument("out")
+    rv = sub.add_parser("review", help="tracks whose analysis is most likely wrong, to label first")
+    rv.add_argument("--limit", type=int, default=20)
     st = sub.add_parser("stems", help="separate one track into vocals, bass, other and drums (needs tastr[stems])")
     st.add_argument("track_id", type=int)
     st.add_argument("--force", action="store_true", help="separate again even if stems exist")
@@ -300,6 +315,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "lookup":
         return _lookup(args)
 
+    if args.cmd in ("labels", "review"):
+        return _labels(args)
+
     if args.cmd == "query":
         db.connect(args.db).close()  # make sure the file and schema exist
         rows = db.query(db.connect(args.db, readonly=True), args.sql)
@@ -337,6 +355,39 @@ def _record(args, bench: str, report: dict, dataset: str | None = None) -> int:
         return 2
     scores.record(key, entry)
     print(f"recorded {key}: {entry['exact']:.3f} on {entry['tracks']} {entry['what']} in {scores.SCORES_PATH}")
+    return 0
+
+
+def _labels(args) -> int:
+    from . import labels
+
+    conn = db.connect(args.db)
+    if args.cmd == "review":
+        for r in labels.review_queue(conn, args.limit):
+            name = " - ".join(x for x in (r["artist"], r["title"]) if x) or f"track {r['track_id']}"
+            bpm = f"{r['bpm']:.1f} BPM" if r["bpm"] else "no BPM"
+            print(f"{r['track_id']:>5}  {name}  ({bpm}, {r['key'] or 'no key'}): {'; '.join(r['reasons'])}")
+        return 0
+    if args.action == "list":
+        for r in db.list_labels(conn):
+            print(json.dumps(r, default=str))
+        return 0
+    if args.action == "export":
+        n = labels.export_manifest(conn, args.out)
+        print(f"wrote {n} labeled tracks to {args.out}; score them with `tastr bench manifest {args.out}`")
+        return 0
+    if db.load_card(conn, args.track_id) is None:
+        print(f"no track {args.track_id}", file=sys.stderr)
+        return 1
+    if args.action == "clear":
+        db.set_labels(conn, args.track_id, {})
+        return 0
+    try:
+        clean = labels.clean({"bpm": args.bpm, "key": args.key, "boundaries": args.boundaries, "note": args.note})
+    except labels.LabelError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(json.dumps(db.set_labels(conn, args.track_id, clean)))
     return 0
 
 

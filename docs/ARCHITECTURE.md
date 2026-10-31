@@ -115,6 +115,7 @@ SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or
 - `series`: long format `(track_id, name, idx, t, value)` for curves.
 - `cards`: the full card JSON, the source of truth for re-rendering.
 - `lookups`: `(track_id, provider, status, bpm, key_name, fetched_at, result_json)`, what online catalogs list for the track (opt-in, `tastr/lookup/`, [lookup.md](lookup.md)). Kept across re-analysis.
+- `track_labels`: `(track_id, bpm, key_name, boundaries, note, updated_at)`, your own labels for a track (`tastr/labels.py`). Never touched by analysis; exported as a bench manifest.
 
 Example queries:
 

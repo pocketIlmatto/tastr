@@ -667,6 +667,32 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             db.set_edits(c, track_id, edits)
         return Response(status_code=204)
 
+    # Your own labels (tastr/labels.py): BPM, key and section starts set by hand, kept apart from the analysis.
+    @app.get("/api/tracks/{track_id}/labels")
+    def track_labels(track_id: int):
+        with closing(conn()) as c:
+            _track_or_404(c, track_id)
+            return db.get_labels(c, track_id)
+
+    @app.put("/api/tracks/{track_id}/labels")
+    def save_track_labels(track_id: int, body: dict[str, Any] = Body(...)):
+        from .. import labels
+
+        try:
+            clean = labels.clean(body)
+        except labels.LabelError as e:
+            raise HTTPException(400, str(e)) from None
+        with closing(conn()) as c:
+            _track_or_404(c, track_id)
+            return db.set_labels(c, track_id, clean)
+
+    @app.get("/api/review")
+    def review(request: Request, limit: int = 20):
+        from .. import labels
+
+        with closing(conn()) as c:
+            return labels.review_queue(c, max(1, min(limit, 200)), owner_of(request))
+
     @app.get("/api/tracks/{track_id}/edit-versions")
     def edit_versions(track_id: int):
         with closing(conn()) as c:

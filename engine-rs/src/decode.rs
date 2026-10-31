@@ -16,6 +16,29 @@ pub struct Decoded {
 }
 
 pub fn decode(bytes: Vec<u8>) -> Result<Decoded, String> {
+    // symphonia 0.5 refuses a whole file whose ID3v2 tag has a compressed frame ("id3v2: compressed frames are
+    // not supported"; some FMA MP3s). Tags carry no audio, so then try again past them; files it reads
+    // already decode exactly as before.
+    let id3 = id3v2_len(&bytes);
+    let retry = (id3 > 0).then(|| bytes[id3..].to_vec());
+    match decode_from(bytes) {
+        Err(e) if e.contains("id3v2") && retry.is_some() => decode_from(retry.unwrap_or_default()),
+        r => r,
+    }
+}
+
+/// The length of the ID3v2 tags at the start of `b` (several can follow each other), 0 if none.
+fn id3v2_len(b: &[u8]) -> usize {
+    let mut at = 0;
+    while b.len() >= at + 10 && &b[at..at + 3] == b"ID3" && b[at + 6..at + 10].iter().all(|&x| x < 0x80) {
+        let size = b[at + 6..at + 10].iter().fold(0usize, |n, &x| (n << 7) | x as usize);
+        let footer = if b[at + 5] & 0x10 != 0 { 10 } else { 0 };
+        at += 10 + size + footer;
+    }
+    at.min(b.len())
+}
+
+fn decode_from(bytes: Vec<u8>) -> Result<Decoded, String> {
     let edit = mp4_edit(&bytes);
     let mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
     // Gapless trims the encoder delay and padding MP3/AAC files declare, as libsndfile/mpg123 do.

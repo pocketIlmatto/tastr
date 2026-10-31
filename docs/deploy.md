@@ -128,6 +128,29 @@ fly ssh console -C "rm /data/library.tar"
 
 Admins' audio is never expired, so your library keeps its audio. It counts toward `TASTR_STORAGE_GB`.
 
+## 9b. Catalog lookups (optional)
+
+"Listed elsewhere" ([lookup.md](lookup.md)) is off until `TASTR_LOOKUP` names providers. Friends' lookups
+spend your API keys, within the per-provider limits in lookup.md. For FreqBlog:
+
+```
+fly secrets set TASTR_LOOKUP=freqblog FREQBLOG_API_KEY=<key>
+```
+
+AcousticBrainz needs no key but reads a 322 MB index (`tastr fetch acousticbrainz`, lookup.md) from the
+volume. Copy it up under a temporary name, so a cut-off upload is never read, then turn it on:
+
+```
+fly ssh sftp shell
+» put /path/to/acousticbrainz-index.sqlite /data/acousticbrainz-index.sqlite.part
+fly ssh console -C "mv /data/acousticbrainz-index.sqlite.part /data/acousticbrainz-index.sqlite"
+fly secrets set TASTR_LOOKUP=freqblog,acousticbrainz
+```
+
+`TASTR_HOME` is `/data`, so the provider finds it there without `ACOUSTICBRAINZ_INDEX`. It isn't backed up
+(the database is the only file Litestream copies); copy it again if the volume is replaced. It counts against
+the volume, not `TASTR_STORAGE_GB`, so leave room for it.
+
 ## 10. Invite friends
 
 Add their emails to the Access application's policy. To remove someone, delete their address there; their

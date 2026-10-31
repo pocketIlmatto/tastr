@@ -125,7 +125,9 @@ To find out what happened to an upload:
   lines carry a ref, e.g. "Uploaded mix.mp3 (ref 1a2b3c4d)", then "Analysis failed: mix.mp3 at step sections,
   it ran out of memory on Modal (ref 1a2b3c4d)". A restart that cut analyses off logs "The server restarted
   in the middle of an analysis" and "Cut off by the restart: <file>, while at step <step>"; a deploy logs
-  "Deployed a new version". Each problem line links to the Fly and Modal logs.
+  "Deployed 49eeecf: <commit message>" with a link to its GitHub Actions run (logged when the new version first
+  starts, so after a deploy to a stopped machine, at its next wake-up). Each problem line links to the Fly and
+  Modal logs.
 - **Fly**: `fly logs -a <app>` streams the server's log live; failed analyses log
   `analysis failed for <file> (ref <ref>): <error>` with the full error, so search for the ref. Older lines are in the Fly dashboard's
   **Monitoring** page for the app. `fly status -a <app>` shows restarts.

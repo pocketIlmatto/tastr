@@ -65,6 +65,11 @@ class Settings:
     fly_image: str = ""
     modal_env: str = ""
     modal_workspace: str = ""
+    # Which commit is running and the GitHub Actions run that deployed it (the deploy workflow bakes them into
+    # the image), for the admin log's deploy lines.
+    commit: str = ""
+    commit_subject: str = ""
+    deploy_run: str = ""
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -89,6 +94,9 @@ class Settings:
             fly_image=env.get("FLY_IMAGE_REF", "").strip(),
             modal_env=env.get("MODAL_ENVIRONMENT", "").strip(),
             modal_workspace=env.get("TASTR_MODAL_WORKSPACE", "").strip(),
+            commit=env.get("TASTR_COMMIT", "").strip(),
+            commit_subject=env.get("TASTR_COMMIT_SUBJECT", "").strip(),
+            deploy_run=env.get("TASTR_DEPLOY_RUN", "").strip(),
         )
         if hosted and not (s.access_team_domain and s.access_aud):
             # Fail closed: a hosted server that can't check logins must not start.

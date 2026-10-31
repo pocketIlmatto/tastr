@@ -157,14 +157,16 @@ CREATE TABLE IF NOT EXISTS user_usage (
 );
 
 -- What people did on a hosted server, for the admin view's activity log (kept about 90 days, see add_event).
--- kind: upload, stems, drums, reanalyze, signin, limit or failed; ok = 0 for limits hit and failures.
+-- kind: upload, stems, drums, reanalyze, signin, limit, failed, restart or deploy; ok = 0 for limits hit and
+-- failures. link: where to read more (a deploy's GitHub Actions run).
 CREATE TABLE IF NOT EXISTS events (
     id     INTEGER PRIMARY KEY,
     at     TEXT NOT NULL,
     user   TEXT,
     kind   TEXT NOT NULL,
     ok     INTEGER NOT NULL DEFAULT 1,
-    detail TEXT
+    detail TEXT,
+    link   TEXT
 );
 
 -- Searches people saved in Explore > Find tracks, per person (owner is the Access email on a hosted server,
@@ -214,6 +216,8 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
         conn.executescript(SCHEMA)
         if "album" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
             conn.execute("ALTER TABLE tracks ADD COLUMN album TEXT")  # databases created before album existed
+        if "link" not in {r[1] for r in conn.execute("PRAGMA table_info(events)")}:
+            conn.execute("ALTER TABLE events ADD COLUMN link TEXT")  # databases created before deploy links
         conn.execute("INSERT OR IGNORE INTO meta VALUES ('db_schema_version', ?)", (str(DB_SCHEMA_VERSION),))
         conn.commit()
     conn.row_factory = sqlite3.Row
@@ -593,19 +597,21 @@ def has_usage(conn: sqlite3.Connection, user: str) -> bool:
 EVENT_DAYS = 90
 
 
-def add_event(conn: sqlite3.Connection, user: str | None, kind: str, detail: str, ok: bool = True) -> None:
+def add_event(conn: sqlite3.Connection, user: str | None, kind: str, detail: str, ok: bool = True,
+              link: str | None = None) -> None:
     """One line for the admin activity log; rows older than EVENT_DAYS go at the same time."""
     with conn:
-        conn.execute("INSERT INTO events (at, user, kind, ok, detail) VALUES (?, ?, ?, ?, ?)",
-                     (_now(), user, kind, int(ok), detail))
+        conn.execute("INSERT INTO events (at, user, kind, ok, detail, link) VALUES (?, ?, ?, ?, ?, ?)",
+                     (_now(), user, kind, int(ok), detail, link))
         conn.execute("DELETE FROM events WHERE at < strftime('%Y-%m-%dT%H:%M:%S', 'now', ?)", (f"-{EVENT_DAYS} days",))
 
 
 def recent_events(conn: sqlite3.Connection, n: int = 20, problems: bool = False) -> list[dict[str, Any]]:
     """The last `n` admin log lines; with `problems`, only failures, limits hit and restarts that cut work off."""
     where = "WHERE ok = 0 " if problems else ""
-    rows = conn.execute(f"SELECT at, user, kind, ok, detail FROM events {where}ORDER BY at DESC, id DESC LIMIT ?", (n,))
-    return [{"at": at, "user": user, "kind": kind, "ok": bool(ok), "detail": detail} for at, user, kind, ok, detail in rows]
+    rows = conn.execute(f"SELECT at, user, kind, ok, detail, link FROM events {where}ORDER BY at DESC, id DESC LIMIT ?", (n,))
+    return [{"at": at, "user": user, "kind": kind, "ok": bool(ok), "detail": detail, "link": link}
+            for at, user, kind, ok, detail, link in rows]
 
 
 def add_blocked(conn: sqlite3.Connection, day: str) -> None:

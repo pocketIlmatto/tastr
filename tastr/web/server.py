@@ -261,11 +261,11 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         with closing(conn()) as c:
             db.add_blocked(c, today())
 
-    def event(user: str | None, kind: str, detail: str, ok: bool = True) -> None:
+    def event(user: str | None, kind: str, detail: str, ok: bool = True, link: str | None = None) -> None:
         """A line in the admin activity log (hosted only; your own machine keeps no log)."""
         if hosted:
             with closing(conn()) as c:
-                db.add_event(c, user, kind, detail, ok)
+                db.add_event(c, user, kind, detail, ok, link)
 
     def refuse(user: str, status: int, message: str, limit: str, name: str | None = None):
         """Refuse a request over one of the hosted limits, and log which limit it hit (and for which file)."""
@@ -275,20 +275,21 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     def log_start(cut: list[dict[str, Any]]) -> None:
         """Admin log lines when the server starts: a new version deployed, and each analysis a restart cut off.
         A plain wake-up after Fly stopped an idle machine logs nothing."""
-        marker = tastr_home() / "server-version"
+        marker, version = tastr_home() / "server-version", settings.fly_image or settings.commit
         try:
             before = marker.read_text().strip()
         except OSError:
             before = None
-        deployed = bool(settings.fly_image) and before is not None and before != settings.fly_image
-        if settings.fly_image and before != settings.fly_image:
+        deployed = bool(version) and before is not None and before != version
+        if version and before != version:
             try:
                 marker.parent.mkdir(parents=True, exist_ok=True)
-                marker.write_text(settings.fly_image)
+                marker.write_text(version)
             except OSError:
                 pass
         if deployed:
-            event(None, "restart", "Deployed a new version (the server restarted)")
+            what = f"{settings.commit[:7]}: {settings.commit_subject[:100]}" if settings.commit_subject else settings.commit[:7]
+            event(None, "deploy", f"Deployed {what or 'a new version'} (the server restarted)", link=settings.deploy_run or None)
         elif cut:
             event(None, "restart", "The server restarted in the middle of an analysis (it crashed or its machine was stopped)",
                   ok=False)

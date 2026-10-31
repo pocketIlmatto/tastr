@@ -50,7 +50,8 @@ Run it on your own machine, or host it for a few invited people behind a login
 - **Edit and play it.** Click steps, pick bass notes and chords, and hear it
   in the browser with a playhead on every part. Solo or mute each drum lane and
   part, drag the BPM box up or down to change the tempo, and export the parts
-  you pick as one MIDI file.
+  you pick as one MIDI file: the section's loop, or the whole track with every
+  section in order.
 - **Saved edits and versions.** Edits save automatically with the track. Name
   a version to come back to later. Re-analyzing keeps your edits for sections
   that didn't move.
@@ -79,12 +80,18 @@ Run it on your own machine, or host it for a few invited people behind a login
 - **Library sidebar** with search, sort and filters by vibe, key and BPM.
 - **Track and bulk actions:** copy a summary, reload metadata, re-analyze,
   separate stems or delete, for one track or a whole selection.
-- **Explore tab** for running read-only SQL against your library in the browser.
+- **Explore tab:** a BPM-energy chart, and **Find tracks** to search your library
+  without code (BPM, key and the keys that mix with it, energy, vibe, length,
+  sections, text, with AND/OR groups), or in read-only SQL with a table and column
+  reference. Save the searches you use as one-click chips, or start from the
+  examples. "Edit as SQL" shows the SQL behind a search.
 - **Two looks:** 808 (a drum-machine panel) and Technics (70s hi-fi), picked
   in the header.
 - **Keyboard shortcuts** for most things; press `?` for the list.
 
 <img src="docs/images/spectrogram.png" width="560" alt="Spectrogram view with sections and playback">
+
+<img src="docs/images/find-tracks.png" width="560" alt="Find tracks: a key that mixes with 8A and a BPM range, and the matching tracks">
 
 ### Glossary
 

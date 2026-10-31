@@ -451,3 +451,24 @@ def test_old_uploaded_audio_expires_but_cards_stay(db_path, home):
     conn.close()
     c = make_client(db_path)
     assert c.get(f"/api/tracks/{ids['old']}", headers=GOOD).json()["has_audio"] is False
+
+
+def test_saved_searches_are_each_persons_own(db_path, home):
+    def verifier(token):
+        return {"good": "friend@example.com", "other": "other@example.com"}[token]
+    c = TestClient(create_app(db_path, Settings(hosted=True, access_team_domain=TEAM, access_aud=AUD), verifier=verifier))
+    OTHER = {"cf-access-jwt-assertion": "other"}
+    mine = c.put("/api/searches", json={"mode": "sql", "name": "Mine", "data": {"sql": "SELECT 1"}}, headers=GOOD).json()
+    c.put("/api/searches", json={"mode": "sql", "name": "Theirs", "data": {"sql": "SELECT 2"}}, headers=OTHER)
+    assert [s["name"] for s in c.get("/api/searches", headers=GOOD).json()] == ["Mine"]
+    assert [s["name"] for s in c.get("/api/searches", headers=OTHER).json()] == ["Theirs"]
+    assert c.delete(f"/api/searches/{mine['id']}", headers=OTHER).status_code == 404  # can't delete someone else's
+    assert c.get("/api/searches").status_code == 401
+
+
+def test_admins_can_query_only_their_own_library(db_path, home):
+    mine = save(db_path, "friend@example.com", sha="a1")
+    save(db_path, "other@example.com", sha="b2")
+    c = make_client(db_path, admins=("friend@example.com",))
+    r = c.post("/api/query", json={"sql": "SELECT id FROM tracks", "mine": True}, headers=GOOD).json()
+    assert r["rows"] == [[mine]]  # the Simple search: its rows open cards, and other people's tracks are 404s

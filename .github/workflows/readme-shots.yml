@@ -31,6 +31,9 @@ jobs:
           cache-dependency-path: pyproject.toml
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
       - run: pip install -e .
+      # The Rust engine analyzes the tracks (the runner image has Rust).
+      - run: cargo build --release --lib --locked
+        working-directory: engine-rs
       - name: Playwright and Chromium
         run: |
           npm install -g playwright@1.63.0

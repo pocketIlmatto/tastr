@@ -20,8 +20,8 @@ RUN tar -C /usr/local/bin -xzf /tmp/litestream.tar.gz litestream && rm /tmp/lite
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY tastr ./tastr
-# The engine's version pins (docs/bench.md), the same as the Modal images.
-RUN pip install --no-cache-dir ".[hosted,cloud]" "numpy<2.3" "numba==0.61.2" "llvmlite==0.44.0" "librosa==0.11.0" "scipy<1.16"
+# No DSP libraries: cards come from Modal or the visitor's browser. numpy at the Modal images' pin.
+RUN pip install --no-cache-dir ".[hosted,cloud]" "numpy<2.3"
 # Which commit this is and the GitHub Actions run that built it (.github/workflows/deploy.yml passes them),
 # for the deploy lines in the admin log. Late in the file, so a new commit doesn't redo the pip install.
 ARG TASTR_COMMIT=""

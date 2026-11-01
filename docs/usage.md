@@ -65,7 +65,7 @@ slower than the built-in lanes, so everyday analysis doesn't use it; re-analyzin
 scores are in [drums.md](drums.md#pretrained-drum-model-adtof).
 
 ```bash
-python -m pip install -e '.[drums]'   # PyTorch only; shared with .[stems]
+python -m pip install -e '.[drums]'   # PyTorch (shared with .[stems]) and librosa
 tastr drum-model fetch                 # shows the license, downloads the weights (optional: first use does it too)
 tastr drum-model run 1                 # re-analyze track 1 with the model, like the menu item
 ```

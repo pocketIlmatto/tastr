@@ -288,6 +288,10 @@ machine, the Fly server and Modal alike.
   change and review the diff), the vibe rules have Rust unit tests (`cargo test --lib`, run in CI), and the
   vibe bench always runs on Rust. A change to core, sections or the drum lanes still goes in both engines,
   and `tests/test_rust_engine.py` checks that they agree.
+- **No DSP libraries in the base install** (TAS-47, part 3): scipy and librosa moved to the `engine` extra (the
+  Python reference engine, the benchmarks, Opus decoding, and the audio the drum model and stems read), which
+  `dev`, `drums` and `stems` pull in. The Fly image (`.[hosted,cloud]`) drops them with numba and llvmlite,
+  about 370 MB of installed packages; the Modal images keep them, pinned.
 - **Browser signals are gone** (`TASTR_BROWSER_SIGNALS`, `signals.js`, `browser_signals.py`): they fed HPSS into
   the Python engine; the browser card (`TASTR_BROWSER_ENGINE`) replaces them. The upload's form field for the
   card is now `card`.

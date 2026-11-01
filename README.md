@@ -65,6 +65,7 @@ From the repo folder:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'    # use '.[dev,links]' to analyze track/playlist links
+(cd engine-rs && cargo build --release --lib)   # the engine that analyzes tracks; needs Rust (rustup.rs)
 tastr serve
 ```
 

@@ -21,7 +21,10 @@ def load_audio(path: str | os.PathLike, sr: int, mono: bool = True) -> np.ndarra
 
     Mono gives shape (n,); `mono=False` keeps the file's channels as (channels, n).
     """
-    import librosa
+    try:
+        import librosa
+    except ImportError as e:  # the base install: the Rust engine decodes everything but Opus itself
+        raise DecodeError(f"decoding {path} here needs the engine extra: pip install 'tastr[engine]'") from e
 
     def read(p):
         y, _ = librosa.load(p, sr=sr, mono=mono)

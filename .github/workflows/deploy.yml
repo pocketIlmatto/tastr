@@ -1,39 +1,96 @@
 name: deploy
 # Deploys the hosted Tastr (docs/deploy.md): the Modal functions (analysis and stems) first, then the web
-# server on Fly.io, so both run the same engine. Manual only: Actions > deploy > Run workflow. Needs the
-# FLY_API_TOKEN, MODAL_TOKEN_ID and MODAL_TOKEN_SECRET repository secrets.
+# server on Fly.io, so both run the same engine. Needs the FLY_API_TOKEN, MODAL_TOKEN_ID and MODAL_TOKEN_SECRET
+# repository secrets.
+#
+# Runs on its own after the tests workflow passes on a push to main, but only when something that ships changed
+# since the last successful deploy (the app, the engine, the image or this file; see the scope step). A merge
+# that only touches docs, tests or Markdown is tested and not deployed. By hand: Actions > deploy > Run workflow,
+# which always deploys.
 on:
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
-# One deploy at a time; a second one waits rather than cancelling a half-done deploy.
+# One deploy at a time; a second one waits rather than cancelling a half-done deploy. (A third replaces the
+# waiting one, which is fine: it deploys a newer main and its scope covers the skipped commit.)
 concurrency:
   group: deploy
   cancel-in-progress: false
 permissions:
   contents: read
+  actions: read  # to find the last successful deploy
 jobs:
   deploy:
+    # Automatic runs only after tests passed on a push to main (not a PR run whose branch happens to be main).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The commit the tests passed on, not whatever main is by the time this starts.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      # Deploy only when this commit is still main's tip (an older run finishing late must not roll the app
+      # back; the newer commit's run deploys it) and a file that ships changed since the last successful deploy.
+      # Those are what the Fly image (Dockerfile, .dockerignore) and the Modal images (tastr/) are built from.
+      # No earlier deploy found in the history: deploy.
+      - id: scope
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch -q origin main
+          if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
+            echo "main has moved on; the run for its newer commit deploys."; echo "ship=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # The newest run whose Fly step actually ran (runs that skipped it also count as successful).
+          last=""
+          for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?branch=main&status=success&per_page=30" \
+                         -q '.workflow_runs[] | "\(.id):\(.head_sha)"' || true); do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/${run%%:*}/jobs" \
+                 -q '.jobs[].steps[] | select(.name == "Deploy the web server to Fly.io" and .conclusion == "success") | .name' \
+                 | grep -q .; then last=${run#*:}; break; fi
+          done
+          if [ -z "$last" ] || ! git merge-base --is-ancestor "$last" HEAD 2>/dev/null; then
+            echo "No earlier deploy in this history; deploying."; echo "ship=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files=$(git diff --name-only "$last" HEAD)
+          ship=$(echo "$files" | grep -E '^(tastr/|engine-rs/|deploy/|Dockerfile$|\.dockerignore$|fly\.toml$|pyproject\.toml$|\.github/workflows/deploy\.yml$)' | grep . || true)
+          if [ -z "$ship" ]; then
+            echo "Nothing that ships changed since ${last:0:7} (docs, tests or Markdown only); not deploying."
+            echo "ship=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed since ${last:0:7}:"; echo "$ship"; echo "ship=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-python@v5
+        if: steps.scope.outputs.ship != 'false'
         with:
           python-version: "3.12"
       # Just the Modal client and the tastr source, which the Modal images upload; the engine installs there.
-      - run: pip install "modal>=1.0" && pip install --no-deps -e .
+      - if: steps.scope.outputs.ship != 'false'
+        run: pip install "modal>=1.0" && pip install --no-deps -e .
       - name: Deploy analysis and stems to Modal
+        if: steps.scope.outputs.ship != 'false'
         env:
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
         run: modal deploy --env friends tastr/cloud/modal_web.py
       - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.scope.outputs.ship != 'false'
+      # The scope step looks this step up by name in earlier runs, so rename both together.
       # The commit and this run go into the image, so the Admin tab's activity log links each deploy here.
       - name: Deploy the web server to Fly.io
+        if: steps.scope.outputs.ship != 'false'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           flyctl deploy --remote-only \
-            --build-arg "TASTR_COMMIT=$GITHUB_SHA" \
+            --build-arg "TASTR_COMMIT=$(git rev-parse HEAD)" \
             --build-arg "TASTR_COMMIT_SUBJECT=$(git log -1 --format=%s)" \
             --build-arg "TASTR_DEPLOY_RUN=$RUN_URL"

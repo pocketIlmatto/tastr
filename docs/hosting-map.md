@@ -12,7 +12,7 @@ Five services, each with one job:
 | Fly.io | Runs the web server (app `tastr-frienz` in `fly.toml`) and keeps the database, uploads and stems on its volume |
 | Modal | Analysis, the on-request drum model and stem separation (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
 | Cloudflare R2 | Litestream's backup of the library database (bucket `tastr-app`) |
-| GitHub Actions | The manual `deploy` workflow, which ships new code to Modal and Fly |
+| GitHub Actions | The `deploy` workflow, which ships new code to Modal and Fly after the tests pass on main (or by hand) |
 
 `tests/test_hosting_map.py` fails when a setting, secret or Modal function in the deploy files is missing
 from this page. Update the page in the same change.
@@ -42,7 +42,8 @@ flowchart TB
     ST[stems, T4 GPU]
   end
   R2[(R2 bucket tastr-app: tastr.db)]
-  GH[GitHub Actions: deploy workflow]
+  GHT[GitHub Actions: tests workflow, on each push to main]
+  GH[GitHub Actions: deploy workflow, after tests pass if app code changed]
   CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, MusicBrainz])
 
   F -->|your hostname| DNS --> ACC -->|request + signed token| WEB
@@ -54,6 +55,7 @@ flowchart TB
   WEB -->|audio bytes, on request| AD -->|track card| WEB
   WEB -->|audio bytes| ST -->|stem files| WEB
   WEB -.->|artist + title| CAT
+  GHT -->|passed| GH
   GH -->|modal deploy| MOD
   GH -->|fly deploy, with the commit and run link| FLY
   WEB -.->|every 15 min: runs on main, for the Admin log| GH
@@ -143,7 +145,7 @@ volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops an
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
-| Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then Fly, from main. |
+| Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then Fly, from main. Runs after `tests` passes on a push to main when something that ships changed since the last deploy, or by hand. |
 
 ## How security works
 
@@ -175,7 +177,7 @@ Modal environment keeps the app's spending apart from benchmarks.
 | `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT`, `TASTR_GITHUB_REPO` and `TASTR_GITHUB_WORKFLOWS` (whose GitHub Actions runs the Admin log shows, and which workflows) |
 | `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image, the restore-then-replicate start, and the backup target |
 | `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
-| `.github/workflows/deploy.yml` | The deploy order, which repository secrets it uses, and the commit and run link it builds into the Fly image |
+| `.github/workflows/deploy.yml` | When it deploys (after `tests` on main, which files count), the deploy order, which repository secrets it uses, and the commit and run link it builds into the Fly image |
 
 ### Fly secrets
 
@@ -225,7 +227,7 @@ Admin tab's deploy line names the commit and links to its GitHub Actions run.
 | --- | --- |
 | Invite someone | Add their email to the Access Allow policy. Nothing on Fly changes. |
 | Remove someone | Delete their email from the policy. Their tracks stay until you delete them. |
-| Ship new code | Merge to main, then **Actions > deploy > Run workflow**. |
+| Ship new code | Merge to main. Once `tests` passes, `deploy` runs on its own (skipped when the merge only touched docs, tests or Markdown). To deploy anyway: **Actions > deploy > Run workflow**. |
 | See usage | The Admin tab (today by hour, 7 or 30 days, or all time); Modal's usage page for actual cost. |
 | Let someone upload more today | Admin tab > ✎ on their row > Today only. |
 | Recover a lost volume | Create a volume named `tastr_data` and deploy. The database comes back from R2; audio and stems don't. |

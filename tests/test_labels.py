@@ -8,6 +8,7 @@ from tastr.cli import main
 from tastr.engine.bench.datasets import manifest
 from tastr.web.server import create_app
 from test_foundation import full_card
+from ui_src import app_js
 
 
 def card(bpm_p=None, key_p=None, path=None, sha="a"):
@@ -181,9 +182,8 @@ def test_ui_key_names_match_the_server():
 
     from tastr.engine.bench.datasets import parse_key
     from tastr.engine.music import camelot
-    from tastr.web.server import STATIC_DIR
 
-    js = (STATIC_DIR / "app.js").read_text()
+    js = re.sub(r"^export ", "", app_js(), flags=re.M)
     grab = lambda n: re.search(rf"^(const {n} = .*?;|function {n}\(.*?\n}})$", js, re.M | re.S).group(0)
     defs = "\n".join(grab(n) for n in ("MAJ_ASCII", "camPc", "CAM_NAME", "ALL_CAMS", "PC_OF", "camOf", "nameToCam"))
     script = defs + """

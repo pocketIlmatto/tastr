@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 FORMAT, VERSION = "tastr-card", 1
 MAX_BYTES = 8 << 20  # a 20-minute card is about 1.5 MB, mostly the waveform and spectrogram pictures
-MAX_SECONDS = 20 * 60  # the page makes no card for longer tracks (app.js ENGINE_MAX_MINUTES)
+MAX_SECONDS = 20 * 60  # the page makes no card for longer tracks (static/app/upload.js ENGINE_MAX_MINUTES)
 # The card must last as long as the file says, give or take decoder padding.
 DURATION_SLACK = (1.0, 0.01)  # seconds, share of the duration: the larger applies
 

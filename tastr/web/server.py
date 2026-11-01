@@ -49,14 +49,26 @@ def _cross_site(request) -> bool:
 def versioned_index() -> str:
     """index.html with `?v=<content hash>` on each /static/ file it loads.
 
-    Browsers and Cloudflare cache app.js and style.css for hours when no Cache-Control is sent; a new
-    hash after a deploy is a new URL, so the new files load right away."""
+    Browsers and Cloudflare cache scripts and style.css for hours when no Cache-Control is sent; a new
+    hash after a deploy is a new URL, so the new files load right away. The UI's modules (static/app/) are
+    loaded by main.js, not the page, so they carry no hash: ModuleFiles serves them with no-cache instead."""
     def tag(m: re.Match) -> str:
         f = STATIC_DIR / m.group(2)
         if not f.is_file():
             return m.group(0)
         return f'{m.group(1)}/static/{m.group(2)}?v={hashlib.sha256(f.read_bytes()).hexdigest()[:10]}"'
-    return re.sub(r'((?:src|href)=")/static/([\w.-]+)"', tag, (STATIC_DIR / "index.html").read_text())
+    return re.sub(r'((?:src|href)=")/static/([\w./-]+)"', tag, (STATIC_DIR / "index.html").read_text())
+
+
+class ModuleFiles(StaticFiles):
+    """/static, with the UI's ES modules (static/app/*.js) revalidated on every load (no-cache: a 304 when
+    unchanged), so a deploy never mixes old and new modules."""
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if Path(full_path).parent == STATIC_DIR / "app":
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def create_app(db_path: str | Path | None = None, settings: Settings | None = None, verifier=None) -> FastAPI:
@@ -172,7 +184,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         # The page itself is never cached; its scripts and styles carry a content hash, so a deploy is seen at once.
         return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", ModuleFiles(directory=STATIC_DIR), name="static")
     return app
 
 

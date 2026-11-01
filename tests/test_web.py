@@ -10,6 +10,7 @@ from tastr import db
 from tastr.engine.card import Source, Tag, TrackCard
 from tastr.web.server import create_app
 from test_foundation import full_card
+from ui_src import app_js
 
 
 @pytest.fixture
@@ -83,7 +84,7 @@ def test_analyze_url_ingest_error_is_400(client):
 def test_index_and_static_assets(client):
     r = client.get("/")
     assert r.status_code == 200 and "text/html" in r.headers["content-type"]
-    for ref in ("/static/app.js", "/static/style.css"):
+    for ref in ("/static/app/main.js", "/static/style.css"):
         assert ref in r.text
         assert client.get(ref).status_code == 200
 
@@ -97,7 +98,7 @@ def test_index_versions_its_assets_so_a_deploy_skips_stale_caches(client):
 
     r = client.get("/")
     assert r.headers["cache-control"] == "no-cache"
-    for name in ("app.js", "strudel.js", "style.css"):
+    for name in ("app/main.js", "strudel.js", "style.css"):
         v = re.search(rf'"/static/{re.escape(name)}\?v=(\w+)"', r.text).group(1)
         assert v == hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:10]
         assert client.get(f"/static/{name}?v={v}").status_code == 200
@@ -130,17 +131,15 @@ def test_track_exposes_metadata_and_album(client, db_path):
 
 
 def test_ui_has_collapsible_sections():
-    from pathlib import Path
 
-    js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
+    js = app_js()
     for key in ("meta", "energy", "vibe", "groove", "try"):
         assert f'section("{key}"' in js
 
 
 def test_ui_has_one_drums_bass_and_chords_section():
-    from pathlib import Path
 
-    js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
+    js = app_js()
     for needle in ('origin === "template"', '"Drums, bass & chords"', "grooveView", "Pattern ideas (by tempo)", "Use in every section",
                    "drumsrc", "partEdits", "by_section", "bassRoll", "miniKeys", "noteOptions", "midiMulti", "startLoop",
                    "Strong", "beat-group", "STYLE_INFO", "sec-link", "Export MIDI ▾", "exp-part", "Reset edits", "Reset this section", "Reset whole track", "Outline Δ from the previous section",
@@ -184,12 +183,12 @@ def test_tracks_uploaded_before_the_move_display_without_the_hash(client, db_pat
     conn.close()
     assert "deadbeef_remix" in [t["title"] for t in client.get("/api/tracks").json()]
 def test_every_vibe_the_engine_can_produce_has_a_ui_group():
-    """Fails when a vibe is added to the engine but not to VIBE_GROUPS in app.js."""
+    """Fails when a vibe is added to the engine but not to VIBE_GROUPS in the UI (app/core.js)."""
     import re
     from pathlib import Path
 
     root = Path(__file__).parents[1]
-    src = (root / "tastr" / "web" / "static" / "app.js").read_text()
+    src = app_js()
     groups = src[src.index("const VIBE_GROUPS"):src.index("const groupOf")]
     mapped = set(re.findall(r'"([^"]+)"', " ".join(re.findall(r"tags: \[([^\]]*)\]", groups))))
     has_tempo_group = "/tempo$/" in groups
@@ -206,7 +205,7 @@ def test_ui_walks_dropped_folders():
     from pathlib import Path
 
     static = Path(__file__).parents[1] / "tastr" / "web" / "static"
-    js = (static / "app.js").read_text()
+    js = app_js()
     assert "webkitGetAsEntry" in js and "createReader" in js
     assert "webkitdirectory" in (static / "index.html").read_text()
 def test_track_list_has_artist_and_vibes_for_the_library_filters(client, db_path):
@@ -300,7 +299,7 @@ def test_reanalyze_with_a_time_signature(client, db_path, synth_wav):
 def test_ui_saves_edits_and_versions():
     from tastr.web.server import STATIC_DIR
 
-    js = (STATIC_DIR / "app.js").read_text()
+    js = app_js()
     for needle in ("/edits`", "edit-versions", "Versions ▾", "Discard all edits (back to detected)", "Undo", "sec-tab", '"edited"',
                    "edit-pill", "Revert", "Your edit", "flushEdits", "edits_dropped", "Some edits no longer match the new sections",
                    'new CustomEvent("edits")', "Patterns:", "Detected", "Your edits ("):
@@ -320,14 +319,13 @@ def test_ui_has_808_and_technics_looks():
     css = (STATIC_DIR / "style.css").read_text()
     assert ':root[data-look="808"]' in css and ':root[data-look="technics"]' in css
     assert css.count("--edit: #1f6fd1") == 2  # blue edits inside both looks: 808 uses yellow for beats
-    js = (STATIC_DIR / "app.js").read_text()
+    js = app_js()
     assert 'const LOOKS = ["808", "technics"]' in js and 'localStorage.setItem("tastr-look"' in js
 
 
 def test_ui_has_track_actions_menu():
-    from tastr.web.server import STATIC_DIR
 
-    js = (STATIC_DIR / "app.js").read_text()
+    js = app_js()
     assert "Track actions" in js and "/retag" in js and "/reanalyze" in js and "Copy track summary" in js
     assert "confirm(" not in js  # deleting confirms inside the menu, not with a browser dialog
 
@@ -357,9 +355,8 @@ def test_tracks_without_audio_or_views_say_so(client, seeded):
 
 
 def test_ui_has_audio_views_and_transport():
-    from pathlib import Path
 
-    js = (Path(__file__).parents[1] / "tastr/web/static/app.js").read_text()
+    js = app_js()
     for needle in ("/audio`", "/views`", "decodeAudioData", '"Waveform"', '"Spectrogram"', "chartMode", "scrubStart", "spectrogramLevels",
                    "downbeat_times", 'aria-label": "Seek"', "Preparing audio preview", "player = me"):
         assert needle in js
@@ -506,7 +503,7 @@ def test_ui_has_the_glossary():
     from pathlib import Path
 
     static = Path(__file__).parents[1] / "tastr/web/static"
-    html, js = (static / "index.html").read_text(), (static / "app.js").read_text()
+    html, js = (static / "index.html").read_text(), app_js()
     assert 'data-view="glossary"' in html and 'id="view-glossary"' in html
     for key in ("giantsteps-key", "beatport-key", "beatport-tempo", "giantsteps-tempo", "downbeat"):
         assert f'data-bench="{key}"' in html
@@ -530,16 +527,15 @@ def test_cross_site_writes_are_refused(client, headers, status):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_ui_roman_numerals_match_the_engine_for_in_key_chords():
-    """romanOf in app.js counts from the key's own scale, like music.roman_numeral: in A minor, F is VI."""
+    """romanOf in the UI counts from the key's own scale, like music.roman_numeral: in A minor, F is VI."""
     import json
     import re
     import subprocess
 
     from tastr.engine import music
-    from tastr.web.server import STATIC_DIR
 
-    js = (STATIC_DIR / "app.js").read_text()
-    defs = [re.search(rf"^const {n} = .*?;$", js, re.M | re.S).group(0) for n in ("NOTES", "ROMAN", "pcOf", "parseChord", "romanOf")]
+    js = re.sub(r"^export ", "", app_js(), flags=re.M)
+    defs = [re.search(rf"^(const {n} = .*?;)(?: //[^\n]*)?$", js, re.M | re.S).group(1) for n in ("NOTES", "ROMAN", "pcOf", "parseChord", "romanOf")]
     cases = []
     for mode, scale in (("major", "Major"), ("minor", "Minor")):
         for tonic in (0, 9, 4):
@@ -643,9 +639,7 @@ def test_ui_card_filters_vibes_keys_and_bpm():
     import re
     import subprocess
 
-    from tastr.web.server import STATIC_DIR
-
-    js = (STATIC_DIR / "app.js").read_text()
+    js = re.sub(r"^export ", "", app_js(), flags=re.M)
     grab = lambda n: re.search(rf"^(const {n} = .*?;|function {n}\(.*?\n}})$", js, re.M | re.S).group(0)
     defs = "\n".join(grab(n) for n in ("isNum", "LIB_CLEAR", "lib", "DAY", "upMatch", "keyRank", "SORTS", "visibleTracks", "camelotNear", "keyMatch", "vibeFilter", "keyFilter", "bpmFilter"))
     script = defs + """
@@ -682,3 +676,24 @@ console.log(JSON.stringify(out));
     assert got["newest"] == [4, 2, 3, 1] and got["oldest"] == [1, 3, 2, 4]  # by upload time
     assert got["week"] == [2, 3, 4] and got["older"] == [1]
     assert got["need"] == [2] and got["labeled"] == [4] and got["unlabeled"] == [1, 2, 3]
+
+
+def test_ui_modules_skip_stale_caches_and_core_loads_first(client):
+    """index.html versions only main.js; the modules it imports carry no hash, so they're revalidated (TAS-36).
+
+    core.js imports nothing: every module reads its helpers ($, h, api) while it loads, so core has to run first.
+    """
+    import re
+
+    from ui_src import APP_DIR
+
+    mods = sorted(p.name for p in APP_DIR.glob("*.js"))
+    assert client.get("/static/app/core.js").headers["cache-control"] == "no-cache"
+    seen, todo = set(), ["main.js"]  # every module is reachable from main.js
+    while todo:
+        m = todo.pop()
+        if m not in seen:
+            seen.add(m)
+            todo += re.findall(r'from "\./([\w-]+\.js)"', (APP_DIR / m).read_text())
+    assert sorted(seen) == mods
+    assert not re.search(r"^import ", (APP_DIR / "core.js").read_text(), re.M)

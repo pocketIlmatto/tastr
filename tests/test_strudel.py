@@ -8,6 +8,7 @@ import urllib.parse
 from pathlib import Path
 
 import pytest
+from ui_src import app_js
 
 STRUDEL_JS = Path(__file__).parents[1] / "tastr" / "web" / "static" / "strudel.js"
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -194,12 +195,12 @@ def test_audio_is_left_out_without_a_url_or_duration():
 
 def test_ui_offers_strudel_in_the_picker():
     static = STRUDEL_JS.parent
-    js = (static / "app.js").read_text()
+    js = app_js()
     assert 'strudel: { name: "Strudel", code: true }' in js
     assert "Open in Strudel" in js and "Copy code" in js
     assert "Include the original audio, cut into bars" in js and "c.has_audio" in js
     html = (static / "index.html").read_text()
-    assert html.index("/static/strudel.js") < html.index("/static/app.js")
+    assert html.index("/static/strudel.js") < html.index("/static/app/main.js")
 
 
 def run_js_stems(card: dict, audio_url: str, stems: list[str]) -> str:

@@ -1,7 +1,7 @@
 // The sequencer (WebAudio, no samples), MIDI export and the drum pattern legend.
 
 import { h } from "./core.js";
-import { laneName } from "./groove.js";
+import { laneName } from "./groove-lanes.js";
 
 export let actx = null, noiseBuf = null, player = null;
 // Ableton-style number box: drag up or down to change the value (Shift for fine steps). A click without a drag still lets you type.

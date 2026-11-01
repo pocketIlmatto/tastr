@@ -6,7 +6,7 @@ import { inReview, setInReview } from "./labels.js";
 import { beatsPerBar, renderCard } from "./card.js";
 import { keyName } from "./daw.js";
 import { setViewsCache } from "./audio.js";
-import { dropEdits, flushEdits, loadEdits } from "./groove.js";
+import { dropEdits, flushEdits, loadEdits } from "./groove-edits.js";
 
 function trackSummary(c) {
   const core = c.core || {}, k = core.key, src = c.source || {};

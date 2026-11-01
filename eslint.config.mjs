@@ -1,6 +1,8 @@
 // Lint for the web UI scripts (tastr/web/static). strudel.js, engine.js and hpss.js are plain browser scripts that
 // share globals, so no-undef stays off for them. The UI itself (static/app/) is ES modules: there no-undef is on, with
 // the browser APIs it uses and the plain scripts' globals listed, so a missing import fails lint.
+// complexity caps how tangled one function can get (TAS-36 split energyChart, grooveView, labelBar, renderCard and
+// strudelCode, which were up to 101); the ceiling is library.js renderList, so lower it when that one is split.
 // CI runs it with `npx eslint@10.12.0` only when a script changes; see .github/workflows/test.yml.
 const BROWSER = ["Audio", "Blob", "CustomEvent", "Event", "EventTarget", "FormData", "Image", "TextEncoder", "URL",
   "URLSearchParams", "Worker", "XMLHttpRequest", "atob", "cancelAnimationFrame", "clearInterval", "clearTimeout", "console",
@@ -30,6 +32,7 @@ export default [
       "use-isnan": "error",
       "valid-typeof": "error",
       "eqeqeq": ["error", "smart"],
+      "complexity": ["error", 35],
     },
   },
   {

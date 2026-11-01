@@ -3,7 +3,7 @@
 import { $, NOTES, api, cap, currentId, h, isNum, svg } from "./core.js";
 import { shownCard, switchTo } from "./card.js";
 import { accid } from "./daw.js";
-import { laneRows } from "./groove.js";
+import { laneRows } from "./groove-lanes.js";
 import { audioCtx, stopAllPlayback } from "./sequencer.js";
 
 // openGlossary switches to the Glossary and scrolls to an anchor, with the wheel and Hear it set to the open track's key.

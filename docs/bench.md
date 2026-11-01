@@ -291,6 +291,26 @@ calibrated 0.225). It is a modest fix: 168 of 355 FMA major songs are still read
 parallel minor or a minor chord of their own key. The real fix is non-EDM major songs in the training set,
 for example from the other FMA Keys zips, with zip 0 kept for checking.
 
+**Training on more FMA songs (2026-11-01, TAS-61): tried, not shipped.** Zips 050-059 and 060-069 (1,057
+labeled songs, 559 major, now in the bucket) were added to the training profiles at several weights, with zip
+0 still held out. Weighted score; "new FMA" is the held-out half of the 1,057:
+
+| Training set | Major bonus | FMA zip 0 all | zip 0 major | zip 0 major read as minor | GiantSteps held out | Beatport held out | New FMA held out |
+|---|---|---|---|---|---|---|---|
+| GiantSteps + Beatport (shipped) | 0.35 | 0.571 | 0.445 | 170 | 0.673 | 0.614 | 0.635 (never trained on) |
+| + new FMA, full weight | 0 | 0.558 | 0.418 | 189 | 0.659 | 0.600 | 0.638 |
+| + new FMA, full weight | 0.35 | 0.581 | 0.484 | 144 | 0.636 | 0.605 | 0.654 |
+| + new FMA x0.1 | 0.35 | 0.572 | 0.447 | 169 | 0.673 | 0.620 | 0.627 |
+| + new FMA x0.25 | 0.35 | 0.574 | 0.453 | 165 | 0.661 | 0.617 | 0.636 |
+| + new FMA x0.5 | 0.35 | 0.578 | 0.461 | 158 | 0.652 | 0.615 | 0.644 |
+
+Within the GiantSteps rule (no more than 0.01 below before), the best variant (x0.1) ties the shipped model
+on zip 0, and every variant that helps zip 0 more costs GiantSteps 0.02 to 0.05. The bigger finding is that
+zip 0 overstates the problem. On the 1,057 new songs, which it never saw, the shipped model scores 0.635: major
+0.608, minor 0.666, and only 168 of 559 major songs (30%) read as minor, against 48% on zip 0. Across all
+1,752 FMA songs it is about 0.60. Zip 0 (track ids 0-19,999, the oldest uploads) has unusually hard major
+songs; a per-genre look would say why. Key profiles for the new songs took 698 s on Modal.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:

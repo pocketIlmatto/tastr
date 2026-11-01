@@ -83,13 +83,18 @@ def test_every_card_comes_from_rust(song, tmp_path, monkeypatch):
     assert seen[-1] == "decode"
 
 
-def test_no_library_is_a_clear_error(song, monkeypatch):
-    """Without the library there is no other engine to fall back to: the error says how to build it."""
-    monkeypatch.setattr(rust, "_lib", None)
-    monkeypatch.setattr(rust, "_lib_error", None)
-    monkeypatch.setenv("TASTR_ENGINE_LIB", str(song.parent / "missing.so"))
-    with pytest.raises(rust.RustEngineError, match="cargo build --release"):
-        analyze_file(song)
+def test_no_library_is_a_clear_error(song, tmp_path):
+    """Without the library there is no other engine to fall back to: the error says how to build it. (In a
+    process of its own, since the library loads once per process.)"""
+    import os
+    import sys
+
+    code = ("import sys; from tastr.engine import analyze_file, rust\n"
+            "try: analyze_file(sys.argv[1])\n"
+            "except rust.RustEngineError as e: print(e)")
+    env = {**os.environ, "TASTR_ENGINE_LIB": str(tmp_path / "missing.so")}
+    out = subprocess.run([sys.executable, "-c", code, str(song)], env=env, capture_output=True, text=True, check=True)
+    assert "cargo build --release" in out.stdout
 
 
 @needs_lib

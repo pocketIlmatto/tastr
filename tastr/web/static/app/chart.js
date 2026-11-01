@@ -1,14 +1,16 @@
 // The Energy & sections chart (Energy, Waveform, Spectrogram and Live tabs): its controls, tabs, pointer handling and Expand.
-// Drawing is in chart-draw.js, the Live canvas in chart-live.js, playback and scrubbing in chart-play.js. They share one
-// state object per chart (c, made by chartState).
+// Drawing is in chart-draw.js, the Live canvas in chart-live.js, playback and scrubbing in chart-play.js, the section
+// loop and cue points in chart-loop.js. They share one state object per chart (c, made by chartState).
 
 import { h, isNum, mmss, svg } from "./core.js";
 import { charts, markHook, snapBar } from "./labels.js";
 import { sectionBus } from "./card.js";
-import { chartMode, setChartMode, trackAudio, trackViews } from "./audio.js";
+import { bandsFromAudio, chartMode, setChartMode, setWaveColor, trackAudio, trackViews, waveColor } from "./audio.js";
 import { B, L, R, T, draw, hideTip, showTip, specTiles } from "./chart-draw.js";
 import { liveOpts, liveView } from "./chart-live.js";
 import { transport } from "./chart-play.js";
+import { loopAndCues } from "./chart-loop.js";
+import { dragLoopEdge } from "./chart-math.js";
 
 function chartState(series, sections, duration, card) {
   const times = (series && series.times) || [], vals = (series && series.values) || [];
@@ -23,6 +25,7 @@ function chartState(series, sections, duration, card) {
     letters: [...new Set(sections.map((x) => x.letter || x.label))],
     pts: times.map((t, i) => [t, vals[i]]).filter(([t, v]) => isNum(t) && isNum(v)),
     pics: null, audio: null, selIdx: -1, cursorT: null, drag: null, savedView: null,
+    loop: { on: false, a: 0, b: 0 }, cues: [], // the loop resets with the track; cues come from the server
     MODES: [["energy", "Energy"], ["wave", "Waveform"], ["spec", "Spectrogram"], ...(canPlay ? [["live", "Live"]] : [])],
   };
   c.x = (t) => L + ((t - c.view.a) / (c.view.b - c.view.a)) * (c.W - L - R);
@@ -46,19 +49,26 @@ function zoom(c, f, center) {
 
 const chartKeys = () => ({
   energy: [h("span", { class: "key-line" }), " Energy: how loud and dense the track is at each moment, sampled every ~3 s. ", h("span", { class: "key-box" }), " Shaded blocks are detected sections; same color means the same part repeats."],
-  wave: ["Waveform: the shape of the sound over time. Taller means louder. Faint lines are beats, darker lines are bars, numbered from the start."],
+  get wave() { return waveColor === "freq"
+    ? ["Waveform: the shape of the sound over time. Taller means louder. The color shows what's loud there: ", h("span", { class: "wv-sw", style: "--c:rgb(255 40 40)" }), " bass, ", h("span", { class: "wv-sw", style: "--c:rgb(60 230 60)" }), " mids, ", h("span", { class: "wv-sw", style: "--c:rgb(60 120 255)" }), " highs. Mixes show between them: yellow (olive on a light page) is bass and mids, cyan is mids and highs, white (grey on a light page) is everything at once. Faint lines are beats, darker lines are bars."]
+    : ["Waveform: the shape of the sound over time. Taller means louder. Faint lines are beats, darker lines are bars, numbered from the start."]; },
   spec: ["Spectrogram: which pitches are present over time. Low sounds at the bottom, high at the top, brighter means stronger."],
   get live() { return [liveOpts.style === "ridge"
     ? "Live 3D: each line is one moment of sound, low notes on the left and highs on the right; taller and brighter means louder. The newest line is at the front and the last 5 seconds roll back toward the top. A white line marks where a new section starts. Click the chart to play or pause."
     : "Live: the spectrogram draws itself as the track plays, with the newest sound at the right edge and the last 10 seconds scrolling left. Low at the bottom, high at the top, brighter means louder. Click the chart to play or pause."]; },
 });
 
-// The zoom bar: −, +, Reset, the visible range and a hint.
+// The zoom bar: −, +, Reset, the visible range, the Waveform tab's Color switch and a hint.
 function zoomBar(c) {
   const btn = (label, title, fn) => h("button", { type: "button", title, "aria-label": title, onclick: fn }, label);
   c.zoomLabel = h("span", { class: "muted" });
+  const wcBtns = [["freq", "By frequency"], ["one", "One color"]].map(([k, label]) => h("button", { type: "button", class: "wc-btn", "aria-pressed": String(waveColor === k), onclick: () => {
+    setWaveColor(k); wcBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(i === (k === "freq" ? 0 : 1))));
+    c.keyP.replaceChildren(...c.keys.wave); needBands(c); c.draw();
+  } }, label));
+  c.wcRow = h("span", { class: "wc-row", role: "group", "aria-label": "Waveform color", hidden: "" }, h("span", { class: "muted" }, "Color:"), ...wcBtns);
   return h("div", { class: "chart-bar" }, btn("−", "Zoom out", () => zoom(c, 1.6)), btn("+", "Zoom in", () => zoom(c, 1 / 1.6)),
-    btn("Reset", "Show whole track", () => { c.view.a = 0; c.view.b = c.end; c.draw(); }), c.zoomLabel,
+    btn("Reset", "Show whole track", () => { c.view.a = 0; c.view.b = c.end; c.draw(); }), c.zoomLabel, c.wcRow,
     h("span", { class: "muted hint" }, c.canPlay
       ? "Click the chart to pick a section and play from there. Drag the playhead to scrub; you hear the track as you drag. Scroll to zoom, drag to pan"
       : "Click a section to pick it. Scroll to zoom, drag to pan"));
@@ -80,7 +90,7 @@ function transportRow(c) {
   c.playBtn = h("button", { type: "button", class: "tp-play", "aria-label": "Play" }, "▶");
   c.timeL = h("span", { class: "tp-time" }, `0:00 / ${mmss(c.duration)}`);
   c.seekR = h("input", { type: "range", class: "tp-seek", min: "0", max: String(c.end), step: "0.1", value: "0", "aria-label": "Seek" });
-  return h("div", { class: "transport" }, c.playBtn, c.timeL, c.seekR);
+  return h("div", { class: "transport" }, c.playBtn, c.timeL, c.seekR, c.loopBtn, c.cueBtn);
 }
 
 // Every element of the chart, in place in c.wrap; the SVG itself stays empty until the first draw.
@@ -92,6 +102,7 @@ function buildChrome(c) {
   c.keys = chartKeys();
   c.keyP = h("p", { class: "muted chart-key" });
   c.modes = modeRow(c);
+  loopAndCues(c);
   c.busy = h("div", { class: "chart-busy", hidden: "", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), "Preparing audio preview…");
   c.transport = transportRow(c);
   c.note = h("p", { class: "muted chart-key" });
@@ -101,7 +112,7 @@ function buildChrome(c) {
   c.say = (m) => { c.note.textContent = m; c.note.classList.toggle("error", !!m); };
   c.liveHint = h("div", { class: "live-hint", hidden: "" }, "Press ▶ to stream the spectrogram as the track plays");
   c.markBar = h("div", { class: "mark-bar", hidden: "" }); // while you mark section starts from the label panel
-  c.wrap.append(c.modes, c.bar, c.markBar, h("div", { class: "chart-hostwrap" }, c.host, c.liveHint, c.busy), c.tip, ...(c.canPlay ? [c.transport] : []), c.keyP, c.note);
+  c.wrap.append(c.modes, c.bar, c.markBar, h("div", { class: "chart-hostwrap" }, c.host, c.liveHint, c.busy), c.tip, ...(c.canPlay ? [c.transport, c.loopSay, c.cueRow, c.keysHint] : []), c.keyP, c.note);
   c.svgEl = svg("svg", { class: "chart", viewBox: `0 0 ${c.W} ${c.H}`, role: "img", "aria-label": "Energy over time with sections" });
   c.host.append(c.svgEl);
   c.clipId = "clip" + Math.random().toString(36).slice(2, 8);
@@ -112,7 +123,8 @@ export function energyChart(series, sections, duration, card) {
   buildChrome(c);
   sectionBus.addEventListener("section", (e) => { if (e.detail.from !== "chart") { c.selIdx = e.detail.idx; c.draw(); } });
   wirePointer(c);
-  charts.set(card.id, { now: () => c.play.tNow(), draw: () => c.draw(), mode: () => c.mode, setMode: (k) => setMode(c, k), el: c.wrap, big: (on) => { if (on !== c.wrap.classList.contains("big")) c.setBig(on); } });
+  charts.set(card.id, { now: () => c.play.tNow(), draw: () => c.draw(), mode: () => c.mode, setMode: (k) => setMode(c, k), el: c.wrap, big: (on) => { if (on !== c.wrap.classList.contains("big")) c.setBig(on); },
+    keys: c.canPlay ? (k) => chartKeyAct(c, k) : null }); // Space, L, C and 1-9 (chart-loop.js initChartKeys)
   c.live = liveView(c);
   c.host.append(c.live.cv);
   c.tiles = specTiles(c);
@@ -123,6 +135,13 @@ export function energyChart(series, sections, duration, card) {
   return c.wrap;
 }
 
+function chartKeyAct(c, k) {
+  if (k.act === "toggle") c.play.toggle();
+  else if (k.act === "loop") c.toggleLoop();
+  else if (k.act === "cue" || k.act === "cue-exact") c.addCue(k.act === "cue-exact");
+  else if (k.act === "jump") c.jumpCue(k.n);
+}
+
 // ---- pointer: click to pick a section and seek, drag to pan, drag the playhead to scrub, and add, move or remove marks ----
 function wirePointer(c) {
   const el = c.svgEl;
@@ -130,12 +149,20 @@ function wirePointer(c) {
   const inPlot = (px) => Math.max(L, Math.min(c.W - R, px));
   const nearMark = (px) => { const mk = c.markList(); if (!mk) return -1; let bi = -1, bd = 7; mk.forEach((t, i) => { const d = Math.abs(c.x(t) - px); if (d <= bd) { bd = d; bi = i; } }); return bi; };
   const atEdge = () => c.view.b - c.view.a < c.end - 0.01;
+  // within 7 px of the loop's start or end: "a" or "b"
+  const nearLoopEdge = (px) => {
+    if (!c.loop.on || c.mode === "live") return null;
+    const da = Math.abs(px - c.x(c.loop.a)), db = Math.abs(px - c.x(c.loop.b));
+    return Math.min(da, db) > 7 ? null : da <= db ? "a" : "b";
+  };
   const nearHead = (px) => { if (!c.canPlay) return false; const t = c.play.tNow(); return t >= c.view.a && t <= c.view.b && Math.abs(px - c.x(t)) <= 8; };
   const setHot = (on) => el.classList.toggle("head-hot", on);
   el.addEventListener("pointerdown", (e) => {
     if (c.mode === "live") { c.play.toggle(); return; } // Live: the chart is one big play/pause button
+    if (e.target.dataset && e.target.dataset.cue != null) { c.jumpCue(+e.target.dataset.cue); return; } // a cue's flag
     el.setPointerCapture(e.pointerId);
-    const px = toVB(e).px, mi = nearMark(px);
+    const px = toVB(e).px, le = nearLoopEdge(px), mi = nearMark(px);
+    if (le) { c.drag = { loopEdge: le, px }; el.style.cursor = "ew-resize"; hideTip(c); return; }
     if (mi >= 0) { c.drag = { mark: mi, list: c.markList(), px, moved: false }; el.style.cursor = "ew-resize"; hideTip(c); return; }
     if (nearHead(px)) { const was = c.play.isPlaying(); if (was) c.play.stop(); c.drag = { scrub: true, was, px }; setHot(true); el.style.cursor = "grabbing"; hideTip(c); c.play.scrubStart(); return; }
     c.drag = { px, a: c.view.a, b: c.view.b };
@@ -147,8 +174,15 @@ function wirePointer(c) {
     d.moved = true;
     const t = c.tAt(inPlot(px)); d.list[d.mark] = +(e.altKey ? t : snapBar(c.card, t)).toFixed(2); markHook.set(d.list, false); c.draw();
   };
+  // Dragging a loop edge moves it, snapped to a bar line unless Alt, keeping the loop at least a bar long.
+  const moveLoopEdge = (e, px) => {
+    const raw = c.tAt(inPlot(px)), t = e.altKey ? raw : snapBar(c.card, raw);
+    [c.loop.a, c.loop.b] = dragLoopEdge(c.drag.loopEdge, t, c.loop.a, c.loop.b, c.loopMin(), c.end);
+    c.paintLoopSay(); c.draw();
+  };
   // Hovering: the cursor shows what a press would do; returns true when the tip should stay hidden.
   const hover = (px) => {
+    if (nearLoopEdge(px)) { el.style.cursor = "ew-resize"; setHot(false); hideTip(c); return true; }
     if (c.markList() && nearMark(px) >= 0) { el.style.cursor = "ew-resize"; setHot(false); hideTip(c); return true; }
     const hot = nearHead(px); setHot(hot); el.style.cursor = hot || atEdge() ? "grab" : "crosshair";
     if (hot) hideTip(c);
@@ -164,6 +198,7 @@ function wirePointer(c) {
     const { px } = toVB(e), d = c.drag;
     if (d && d.scrub) { c.play.scrubTo(Math.max(0, Math.min(c.end, c.tAt(inPlot(px))))); return; }
     if (d && d.mark != null) { moveMark(e, px); return; }
+    if (d && d.loopEdge) { moveLoopEdge(e, px); return; }
     if (!d && hover(px)) return;
     if (d && atEdge()) { pan(px); return; }
     c.cursorT = c.tAt(inPlot(px)); showTip(c, c.cursorT);
@@ -173,12 +208,14 @@ function wirePointer(c) {
     const t0 = c.tAt(toVB(e).px);
     if (c.markList()) { if (c.canPlay) c.play.seek(t0); markHook.add(t0, !e.altKey); c.drag = null; return; }
     const si = c.sections.findIndex((q) => t0 >= q.start && t0 < q.end);
+    if (si >= 0) c.loopToSection(si); // while looping, clicking a section loops that instead
     if (c.canPlay) c.play.seek(t0);
     if (si >= 0) { c.selIdx = si; c.draw(); sectionBus.dispatchEvent(new CustomEvent("section", { detail: { idx: si, from: "chart" } })); }
   };
   const up = (e) => {
     if (c.mode === "live") return;
     const d = c.drag;
+    if (d && d.loopEdge) { c.drag = null; el.style.cursor = "crosshair"; c.play.restart(); return; } // playing: the new range starts looping
     if (d && d.scrub) { c.drag = null; setHot(false); el.style.cursor = "grab"; c.play.scrubEnd(); if (d.was) c.play.play(); else c.play.paintHead(); return; }
     // marking: a click without a move removes the mark it's on
     if (d && d.mark != null) { c.drag = null; if (!d.moved) d.list.splice(d.mark, 1); if (markHook) markHook.set(d.list); c.draw(); el.style.cursor = "crosshair"; return; }
@@ -207,11 +244,11 @@ function setMode(c, k) {
   c.modeBtns.forEach((b, i) => b.setAttribute("aria-selected", String(c.MODES[i][0] === k)));
   c.keyP.replaceChildren(...c.keys[k]);
   const live = k === "live", v = c.view;
-  c.bar.hidden = live; c.live.cv.hidden = !live; c.styleRow.hidden = !live; c.liveHint.hidden = !live || c.play.isPlaying();
+  c.bar.hidden = live; c.wcRow.hidden = k !== "wave"; c.live.cv.hidden = !live; c.styleRow.hidden = !live; c.liveHint.hidden = !live || c.play.isPlaying();
   if (live) { if (!c.savedView) c.savedView = { a: v.a, b: v.b }; c.live.follow(c.play.tNow()); requestAnimationFrame(c.live.clear); }
   else if (c.savedView) { v.a = c.savedView.a; v.b = c.savedView.b; c.savedView = null; }
   if (k === "spec" && c.canPlay && !c.audio) trackAudio(c.card).then((a) => { c.audio = c.audio || a; if (c.mode === "spec") c.draw(); }, () => {}); // for the sharp tiles; quietly
-  if (k !== "energy" && k !== "live" && !c.pics) ensurePics(c); else c.draw();
+  if (k !== "energy" && k !== "live" && !c.pics) ensurePics(c); else { needBands(c); c.draw(); }
 }
 async function withBusy(c, work) {
   c.busy.hidden = false;
@@ -221,7 +258,15 @@ async function withBusy(c, work) {
 }
 async function ensurePics(c) {
   if (!c.pics) c.pics = await withBusy(c, () => trackViews(c.card));
+  needBands(c);
   c.draw();
+}
+// Cards analyzed before the engine stored the waveform's bands: split them from the file, if it's here, once.
+function needBands(c) {
+  const p = c.pics;
+  if (!p || p.bands || p.bandsAsked || waveColor !== "freq" || c.mode !== "wave" || !c.canPlay) return;
+  p.bandsAsked = true;
+  bandsFromAudio(c.card, p).then((b) => { p.bands = b; if (c.mode === "wave") c.draw(); }, () => {});
 }
 
 // ---- Expand: the chart pops out over the page, bigger; Esc, the backdrop or Close puts it back ----
@@ -245,7 +290,7 @@ function expander(c) {
   function fitSize() {
     const big = wrap.classList.contains("big") || document.fullscreenElement === wrap;
     if (big) {
-      const used = [c.modes, c.bar, c.markBar, c.transport, c.keyP, c.note].reduce((n, el) => n + (el.isConnected && !el.hidden ? el.offsetHeight + 10 : 0), 0);
+      const used = [c.modes, c.bar, c.markBar, c.transport, c.loopSay, c.cueRow, c.keysHint, c.keyP, c.note].reduce((n, el) => n + (el.isConnected && !el.hidden ? el.offsetHeight + 10 : 0), 0);
       c.W = Math.max(320, Math.round(c.host.clientWidth)); c.H = Math.max(220, Math.round(wrap.clientHeight - used - 40));
     } else { c.W = 700; c.H = 220; }
     const { W, H } = c;

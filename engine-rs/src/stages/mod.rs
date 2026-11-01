@@ -115,7 +115,7 @@ const STAGES: [(&str, &str, &[&str], StageFn); 5] = [
     ("sections", "0.2.0", &["core"], sections::run),
     ("tags", "0.2.0", &["core", "sections"], tags::run),
     ("suggestions", "0.5.0", &["core", "sections", "tags"], suggestions::run),
-    ("views", "0.1.0", &[], views::run),
+    ("views", "0.2.0", &[], views::run),
 ];
 
 /// run_pipeline: every stage over the audio; a failing stage is recorded in card.errors and the stages that

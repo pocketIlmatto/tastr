@@ -3,19 +3,24 @@
 import { SEC_COLORS, cap, h, isNum, mmss, svg } from "./core.js";
 import { fmtMark, markHook } from "./labels.js";
 import { beatsPerBar } from "./card.js";
-import { SPEC_FMAX, SPEC_FMIN, specImage, specTopOf, txt } from "./audio.js";
+import { SPEC_FMAX, SPEC_FMIN, isDarkPage, specImage, specTopOf, txt, waveColor } from "./audio.js";
+import { CUE_COLORS, bandAvg, columnColor } from "./chart-math.js";
 import { RIDGE_FRONT, liveOpts } from "./chart-live.js";
 
 export const L = 40, R = 8, T = 28, B = 22; // plot margins inside the viewBox (c.W x c.H)
 const spanAll = (c) => c.view.b - c.view.a >= c.end - 0.01;
 
+// The frequency-colored waveform is on screen (it has its own plain plot, see drawPlot).
+const freqWave = (c) => c.mode === "wave" && waveColor === "freq" && !!(c.pics && c.pics.bands);
+
 function drawSection(c, plot, sec, si) {
-  const { W, H, view, mode, x } = c, sel = si === c.selIdx;
+  const { W, H, view, mode, x } = c, sel = si === c.selIdx, fw = freqWave(c), dark = mode === "spec" || (fw && c.pageDark);
   if (!isNum(sec.start) || !isNum(sec.end) || sec.end < view.a || sec.start > view.b) return;
   const color = SEC_COLORS[c.letters.indexOf(sec.letter || sec.label) % SEC_COLORS.length];
-  // The spectrogram has its own colors, so sections there are dashed boundaries plus a light tint on the selected one.
-  plot.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: mode === "spec" ? (sel ? 0.28 : 0) : sel ? 0.4 : 0.18, stroke: sel ? color : "none", "stroke-width": 2 }));
-  if (mode === "spec") plot.append(svg("line", { x1: x(sec.start), x2: x(sec.start), y1: T, y2: H - B, stroke: "#fff", opacity: 0.3, "stroke-dasharray": "3 3" }));
+  // The spectrogram and the frequency-colored waveform have their own colors, so sections there are dashed
+  // boundaries plus a faint tint on the selected one.
+  plot.append(svg("rect", { x: x(sec.start), y: T, width: Math.max(1, x(sec.end) - x(sec.start)), height: H - T - B, fill: color, opacity: dark || fw ? (sel ? (mode === "wave" ? 0.08 : 0.28) : 0) : sel ? 0.4 : 0.18, stroke: sel ? color : "none", "stroke-width": 2 }));
+  if (dark || fw) plot.append(svg("line", { x1: x(sec.start), x2: x(sec.start), y1: T, y2: H - B, stroke: dark ? "#fff" : "var(--fg)", opacity: dark ? 0.3 : 0.35, "stroke-dasharray": "3 3" }));
   // Label band above the grid: solid block per section, text shortens to the letter, then disappears.
   const x0 = Math.max(L, x(sec.start)), x1 = Math.min(W - R, x(sec.end)), room = x1 - x0;
   plot.append(svg("rect", { x: x0, y: 4, width: Math.max(1, room), height: 18, rx: 2, fill: color, stroke: sel ? "var(--fg)" : "var(--panel)", "stroke-width": sel ? 2 : 1 }));
@@ -35,20 +40,20 @@ function drawEnergy(c, plot) {
 
 // Beat grid: bar lines thinned by stride to stay >= 10 px apart, labels >= 30 px apart, beats only when >= 6 px apart.
 function drawBeatGrid(c, plot) {
-  const { W, H, view, x, card } = c;
+  const { W, H, view, x, card } = c, dark = freqWave(c) && c.pageDark; // on the dark plot: white lines, light numbers
   const beats = (card.core.beat_times || []).filter((t) => t >= view.a && t <= view.b), bars = card.core.downbeat_times || [];
   const pxPer = (W - L - R) / (view.b - view.a), barGap = bars.length > 1 ? (bars[1] - bars[0]) * pxPer : 0;
   if (beats.length && barGap / beatsPerBar(card) >= 6) {
     let bd = ""; for (const t of beats) bd += `M${x(t).toFixed(1)},${T}V${H - B}`;
-    plot.append(svg("path", { d: bd, stroke: "var(--muted)", "stroke-width": 0.5, opacity: 0.35 }));
+    plot.append(svg("path", { d: bd, stroke: dark ? "#fff" : "var(--muted)", "stroke-width": 0.5, opacity: dark ? 0.12 : 0.35 }));
   }
   const inView = (t) => t >= view.a && t <= view.b;
   const stride = [1, 2, 4, 8, 16, 32].find((k) => barGap * k >= 10) || 64;
   let bd2 = "";
   bars.forEach((t, i) => { if (!(i % stride) && inView(t)) bd2 += `M${x(t).toFixed(1)},${T}V${H - B}`; });
-  if (bd2) plot.append(svg("path", { d: bd2, stroke: "var(--fg)", "stroke-width": 1, opacity: 0.3 }));
+  if (bd2) plot.append(svg("path", { d: bd2, stroke: dark ? "#fff" : "var(--fg)", "stroke-width": 1, opacity: dark ? 0.22 : 0.3 }));
   const labelEvery = [1, 2, 4, 8, 16, 32, 64].find((k) => barGap * k >= 30) || 128;
-  bars.forEach((t, i) => { if (!(i % labelEvery) && inView(t)) plot.append(svg("text", { class: "barnum", x: x(t) + 3, y: T + 11 }, txt(String(i + 1)))); });
+  bars.forEach((t, i) => { if (!(i % labelEvery) && inView(t)) plot.append(svg("text", { class: "barnum", x: x(t) + 3, y: T + 11, ...(dark ? { style: "fill:#aaa" } : {}) }, txt(String(i + 1)))); });
 }
 
 function drawWave(c, plot) {
@@ -56,15 +61,17 @@ function drawWave(c, plot) {
   const mid = (T + H - B) / 2, amp = (H - T - B) / 2 - 2, cols = W - L - R;
   plot.append(svg("line", { x1: L, x2: W - R, y1: mid, y2: mid, stroke: "var(--line)" }));
   drawBeatGrid(c, plot);
-  let d = "";
+  // One vertical stroke per pixel column; by frequency, one path per (rounded) color, so a full track stays a handful of paths.
+  const fw = freqWave(c), avg = fw ? (pics.bandAvg ||= bandAvg(pics.bands)) : null, byCol = new Map();
   for (let i = 0; i < cols; i++) {
     const t0 = tAt(L + i), t1 = tAt(L + i + 1);
     const b0 = Math.max(0, Math.floor(t0 * pics.perSec)), b1 = Math.min(pics.mn.length - 1, Math.max(b0, Math.floor(t1 * pics.perSec)));
     let lo = 1, hi = -1; for (let k = b0; k <= b1; k++) { if (pics.mn[k] < lo) lo = pics.mn[k]; if (pics.mx[k] > hi) hi = pics.mx[k]; }
     if (hi < lo) continue;
-    d += `M${(L + i + 0.5).toFixed(1)},${(mid - (hi / pics.peak) * amp).toFixed(1)}V${(mid - (lo / pics.peak) * amp).toFixed(1)}`;
+    const key = fw ? `rgb(${columnColor(pics.bands, avg, b0, Math.min(b1, pics.bands[0].length - 1), c.pageDark).join(" ")})` : "var(--accent)";
+    byCol.set(key, (byCol.get(key) || "") + `M${(L + i + 0.5).toFixed(1)},${(mid - (hi / pics.peak) * amp).toFixed(1)}V${(mid - (lo / pics.peak) * amp).toFixed(1)}`);
   }
-  plot.append(svg("path", { d, stroke: "var(--accent)", "stroke-width": 1, fill: "none" }));
+  for (const [col, d] of byCol) plot.append(svg("path", { d, stroke: col, "stroke-width": fw ? 1.2 : 1, fill: "none" }));
 }
 
 function drawSpec(c, plot) {
@@ -80,6 +87,10 @@ function drawSpec(c, plot) {
 function drawPlot(c) {
   const { W, H, mode } = c;
   const plot = svg("g", { "clip-path": `url(#${c.clipId})` });
+  // The frequency-colored waveform sits on a plain plot that follows the page: dark on a dark page, the page's own
+  // background on a light one (the section tints muddied its colors under the looks).
+  c.pageDark = isDarkPage();
+  if (freqWave(c)) plot.append(svg("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: c.pageDark ? "#121218" : "var(--bg)" }));
   c.sections.forEach((sec, si) => drawSection(c, plot, sec, si));
   if (mode === "energy") drawEnergy(c, plot);
   else if (mode === "live") { /* the canvas over the plot area draws the live view */ }
@@ -101,6 +112,34 @@ function drawMarks(c, s) {
     g.append(svg("line", { x1: xx, x2: xx, y1: T, y2: H - B, stroke: "var(--accent)", "stroke-width": 2, "stroke-dasharray": "5 3" }));
     g.append(svg("rect", { x: xx - 9, y: H - B - 15, width: 18, height: 15, rx: 3, fill: "var(--accent)" }));
     g.append(svg("text", { x: xx, y: H - B - 4, "text-anchor": "middle", fill: "#fff", style: "font-size:10px;font-weight:700" }, txt(String(i + 1))));
+  });
+  s.append(g);
+}
+
+// The loop, as a bracket with a grip on each edge (drag them to move the loop's start and end).
+function drawLoop(c, s) {
+  const { H, view, x, loop } = c;
+  if (!loop.on || c.mode === "live" || loop.b <= view.a || loop.a >= view.b) return;
+  const dark = c.mode === "spec" || (freqWave(c) && c.pageDark), x0 = x(loop.a), x1 = x(loop.b);
+  const g = svg("g", { class: "loop-mark", "clip-path": `url(#${c.clipId})`, "pointer-events": "none" });
+  for (const [xx, edge] of [[x0, "a"], [x1, "b"]]) g.append(svg("rect", { class: "loop-grip", x: xx - (edge === "a" ? 0 : 7), y: T + (H - T - B) / 2 - 14, width: 7, height: 28, rx: 2, fill: "var(--accent)" }));
+  g.append(svg("rect", { x: x0, y: T, width: Math.max(2, x1 - x0), height: H - T - B, fill: dark ? "#fff" : "var(--accent)", "fill-opacity": dark ? 0.1 : 0.08, stroke: "var(--accent)", "stroke-width": 2 }));
+  g.append(svg("path", { d: `M${x0 + 1},${T + 10}V${T + 1}H${x0 + 10}M${x1 - 1},${T + 10}V${T + 1}H${x1 - 10}`, stroke: "var(--accent)", "stroke-width": 3, fill: "none" }));
+  g.append(svg("text", { x: x1 - 6, y: T + 14, "text-anchor": "end", style: "font-size:11px;font-weight:700", fill: "var(--accent)" }, txt("⟲ loop")));
+  s.append(g);
+}
+
+// Cue points: a colored line with a numbered flag at the bottom of the plot; clicking the flag jumps there.
+function drawCues(c, s) {
+  const { H, view, x } = c;
+  if (c.mode === "live" || !c.cues.length) return;
+  const g = svg("g", { class: "cues", "clip-path": `url(#${c.clipId})` });
+  c.cues.forEach((cu, i) => {
+    if (cu.t < view.a || cu.t > view.b) return;
+    const xx = x(cu.t), col = CUE_COLORS[cu.color % CUE_COLORS.length];
+    g.append(svg("line", { x1: xx, x2: xx, y1: T, y2: H - B, stroke: col, "stroke-width": 1.5, opacity: 0.9, "pointer-events": "none" }));
+    g.append(svg("path", { class: "cue-flag", d: `M${xx},${H - B} v-16 h14 l-4 8 l4 8 z`, fill: col, "data-cue": i, style: "cursor:pointer" }, svg("title", {}, txt(`${cu.name} (${i + 1})`))));
+    g.append(svg("text", { x: xx + 5, y: H - B - 4, fill: "#fff", style: "font-size:10px;font-weight:700", "pointer-events": "none" }, txt(String(i + 1))));
   });
   s.append(g);
 }
@@ -156,6 +195,8 @@ export function draw(c) {
   s.append(svg("defs", {}, svg("clipPath", { id: c.clipId }, svg("rect", { x: L, y: 0, width: W - L - R, height: H }))));
   s.append(drawPlot(c));
   drawMarks(c, s);
+  drawLoop(c, s);
+  drawCues(c, s);
   drawYAxis(c, s);
   drawTimeAxis(c, s);
   drawCursor(c, s);

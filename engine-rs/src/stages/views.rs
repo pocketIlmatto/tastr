@@ -42,6 +42,39 @@ pub fn waveform(y: &[f32]) -> Vec<i8> {
     mm.iter().map(|v| round_half_even((v / peak * 127.0) as f64).clamp(-127.0, 127.0) as i8).collect()
 }
 
+/// Per block of 256 samples (the waveform's blocks), how loud the lows, mids and highs are, for the UI's
+/// frequency-colored waveform (GitHub #3). Two one-pole low-passes at 250 Hz and 2.5 kHz split the signal:
+/// low = lp250, mid = lp2500 - lp250, high = x - lp2500. Each band's RMS per block is scaled to that band's
+/// loudest block and stored as round(255 * sqrt(rms / peak)), so quiet blocks keep some resolution; the page
+/// squares it back. Interleaved low, mid, high per block.
+pub fn bands(y: &[f32], sr: f64) -> Vec<u8> {
+    let n = y.len().div_ceil(WAVE_BLOCK);
+    let k1 = 1.0 - libm::exp(-2.0 * std::f64::consts::PI * 250.0 / sr);
+    let k2 = 1.0 - libm::exp(-2.0 * std::f64::consts::PI * 2500.0 / sr);
+    let (mut f1, mut f2) = (0.0f64, 0.0f64);
+    let mut rms = vec![0.0f64; 3 * n];
+    for b in 0..n {
+        let (a, e) = (b * WAVE_BLOCK, ((b + 1) * WAVE_BLOCK).min(y.len()));
+        let mut s = [0.0f64; 3];
+        for &v in &y[a..e] {
+            let v = v as f64;
+            f1 += k1 * (v - f1);
+            f2 += k2 * (v - f2);
+            s[0] += f1 * f1;
+            s[1] += (f2 - f1) * (f2 - f1);
+            s[2] += (v - f2) * (v - f2);
+        }
+        for k in 0..3 {
+            rms[3 * b + k] = (s[k] / (e - a).max(1) as f64).sqrt();
+        }
+    }
+    let mut peak = [1e-12f64; 3];
+    for (i, v) in rms.iter().enumerate() {
+        peak[i % 3] = peak[i % 3].max(*v);
+    }
+    rms.iter().enumerate().map(|(i, v)| (255.0 * (v / peak[i % 3]).sqrt()).round().clamp(0.0, 255.0) as u8).collect()
+}
+
 /// (rows, frames) row-major, row 0 = SPEC_FMIN. Each row takes the strongest FFT bin in its band.
 pub fn spectrogram(y: &[f32], sr: f64) -> (Vec<u8>, usize) {
     let hop = (round_half_even(SPEC_HOP * sr) as usize).max(1);
@@ -127,6 +160,7 @@ pub fn base64(data: &[u8]) -> String {
 pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     let wave = waveform(&ctx.y);
     let wave_bytes: Vec<u8> = wave.iter().map(|&v| v as u8).collect();
+    let band_bytes = bands(&ctx.y, ctx.sr);
     let (spec, frames) = spectrogram(&ctx.y, ctx.sr);
     // The PNG has fmax at the top: rows flipped.
     let flipped: Vec<u8> =
@@ -134,7 +168,14 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     let png = gray_png(&flipped, SPEC_ROWS, frames);
     let sr = ctx.sr;
     let views = Json::obj()
-        .with("waveform", Json::obj().with("sr", sr as i64).with("block", WAVE_BLOCK).with("data", base64(&wave_bytes)))
+        .with(
+            "waveform",
+            Json::obj()
+                .with("sr", sr as i64)
+                .with("block", WAVE_BLOCK)
+                .with("data", base64(&wave_bytes))
+                .with("bands", base64(&band_bytes)),
+        )
         .with(
             "spectrogram",
             Json::obj()

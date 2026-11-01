@@ -289,6 +289,18 @@ CREATE TABLE IF NOT EXISTS strudel_templates (
 );
 CREATE INDEX IF NOT EXISTS idx_strudel_templates_owner ON strudel_templates(owner);
 
+-- Cue points people mark on a track's chart (GitHub #3), per person (owner as in saved_searches), at most 9
+-- per track (tastr/web/routes/edits.py). t is seconds; color indexes the page's 9 cue colors. Re-analyzing keeps
+-- them; deleting the track deletes them.
+CREATE TABLE IF NOT EXISTS track_cues (
+    owner    TEXT,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    t        REAL NOT NULL,
+    name     TEXT NOT NULL,
+    color    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_track_cues_track ON track_cues(track_id, owner);
+
 -- Requests a hosted server refused for a missing or invalid Cloudflare Access token, per UTC day.
 CREATE TABLE IF NOT EXISTS blocked_requests (
     day     TEXT PRIMARY KEY,
@@ -771,6 +783,22 @@ def update_template(conn: sqlite3.Connection, owner: str | None, template_id: in
 def delete_template(conn: sqlite3.Connection, owner: str | None, template_id: int) -> bool:
     with conn:
         return conn.execute("DELETE FROM strudel_templates WHERE id = ? AND owner IS ?", (template_id, owner)).rowcount > 0
+
+
+def get_cues(conn: sqlite3.Connection, owner: str | None, track_id: int) -> list[dict[str, Any]]:
+    """One person's cue points on a track, by time."""
+    rows = conn.execute("SELECT t, name, color FROM track_cues WHERE track_id = ? AND owner IS ? ORDER BY t",
+                        (track_id, owner))
+    return [{"t": r["t"], "name": r["name"], "color": r["color"]} for r in rows]
+
+
+def set_cues(conn: sqlite3.Connection, owner: str | None, track_id: int, cues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Replace one person's cue points on a track with `cues` ({t, name, color}, already checked)."""
+    with conn:
+        conn.execute("DELETE FROM track_cues WHERE track_id = ? AND owner IS ?", (track_id, owner))
+        conn.executemany("INSERT INTO track_cues (owner, track_id, t, name, color) VALUES (?, ?, ?, ?, ?)",
+                         [(owner, track_id, q["t"], q["name"], q["color"]) for q in cues])
+    return get_cues(conn, owner, track_id)
 
 
 def list_lists(conn: sqlite3.Connection, owner: str | None) -> list[dict[str, Any]]:

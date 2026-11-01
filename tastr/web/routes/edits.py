@@ -1,4 +1,5 @@
-"""Your edits to a track (drums, bass, chords) and their named versions, your labels, pattern reviews and the review list."""
+"""Your edits to a track (drums, bass, chords) and their named versions, your cue points, labels, pattern reviews and
+the review list."""
 
 from __future__ import annotations
 
@@ -10,6 +11,15 @@ from pydantic import BaseModel, Field
 
 from ... import db
 from ..context import AppContext
+
+
+MAX_CUES, MAX_CUE_NAME, CUE_COLORS = 9, 30, 9  # cues per person per track, a name's length, the page's colors
+
+
+class Cue(BaseModel):
+    t: float = Field(ge=0, allow_inf_nan=False)
+    name: str = Field(min_length=1, max_length=MAX_CUE_NAME)
+    color: int = Field(ge=0, lt=CUE_COLORS)
 
 
 class VersionBody(BaseModel):
@@ -33,6 +43,22 @@ def router(ctx: AppContext) -> APIRouter:
             ctx.track_or_404(c, track_id)
             db.set_edits(c, track_id, edits)
         return Response(status_code=204)
+
+    # Cue points (GitHub #3): spots on the track to jump back to, per person. PUT replaces the whole list.
+    @api.get("/api/tracks/{track_id}/cues")
+    def track_cues(track_id: int, request: Request):
+        with closing(ctx.conn()) as c:
+            ctx.track_or_404(c, track_id)
+            return db.get_cues(c, ctx.owner_of(request), track_id)
+
+    @api.put("/api/tracks/{track_id}/cues")
+    def save_track_cues(track_id: int, request: Request, cues: list[Cue] = Body(...)):
+        if len(cues) > MAX_CUES:
+            raise HTTPException(422, f"A track holds at most {MAX_CUES} cues.")
+        clean = [{"t": round(q.t, 2), "name": q.name.strip() or "Cue", "color": q.color} for q in cues]
+        with closing(ctx.conn()) as c:
+            ctx.track_or_404(c, track_id)
+            return db.set_cues(c, ctx.owner_of(request), track_id, clean)
 
     # Your own labels (tastr/labels.py): BPM, key and section starts set by hand, kept apart from the analysis.
     @api.get("/api/tracks/{track_id}/labels")

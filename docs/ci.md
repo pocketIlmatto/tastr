@@ -86,8 +86,29 @@ Full runs had been 2–4 minutes, then on 2026-10-31 rose to 5–12. Step timing
 First warm run on PR #73: 2.9 min in all, with apt 20 s (nothing downloaded), Rust 33 s and pytest 73 s, against
 up to 503 s, 78 s and 90 s on the slow runs.
 
-A daily scheduled check (03:17 UTC) reads the last 5 successful full runs on `main` and starts a Claude thread
-to investigate when their median goes over 5 minutes. Docs-only runs (under a minute) don't count.
+## Slow tests
+
+`.github/workflows/slow-tests.yml` keeps the run time in check without anyone watching. After each successful
+`tests` run on a push to `main`, `.github/scripts/slow_tests.py` takes the median of the last 5 full runs
+(docs-only runs, under a minute, don't count). When it is over 5 minutes:
+
+1. it opens an issue labeled `slow-tests` with the runs and the newest run's slowest steps, and
+2. starts Claude Code in Actions (`anthropics/claude-code-action`), which compares step timings, fixes the cause
+   on a `claude/slow-tests-<issue>` branch and opens a pull request that closes the issue. It may not skip or
+   weaken tests, or raise the limit or the job timeout. If the slowness was outside the repo and has passed (a
+   mirror outage), it comments and closes the issue instead.
+
+While a `slow-tests` issue is open, nothing new starts, so a slow week opens one issue, not one per merge. The
+pull request runs the usual `tests` and waits for the owner to merge it.
+
+- **Secret:** `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` locally; uses the owner's Claude plan) or
+  `ANTHROPIC_API_KEY` (billed per use), under Settings > Secrets and variables > Actions. Without either, the
+  issue still opens and gets a comment saying Claude didn't start.
+- **Try it:** Actions > slow-tests > Run workflow with "force" ticked opens a test issue and starts Claude, which
+  should comment that the setup works and close it.
+- **Cost:** the check is one short job after each main run. Claude runs only when the tests are slow, for up to
+  45 minutes and 60 turns.
+- **Change the limit:** `LIMIT_MIN` and `RUNS` in `.github/scripts/slow_tests.py`.
 
 ## Deploy workflow
 

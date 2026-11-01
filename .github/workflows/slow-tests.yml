@@ -1,0 +1,126 @@
+name: slow-tests
+# Watches how long the `tests` workflow takes and, when it gets slow, has Claude fix it (docs/ci.md#slow-tests).
+# After each successful `tests` run on a push to main, .github/scripts/slow_tests.py takes the median of the last
+# 5 full runs. Over 5 minutes, it opens a `slow-tests` issue and starts Claude Code (anthropics/claude-code-action),
+# which investigates and opens a pull request. While a `slow-tests` issue is open nothing new starts.
+# Needs one repository secret: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY.
+on:
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Open the issue and start Claude even if the tests are fast (to try the setup)"
+        type: boolean
+        default: false
+concurrency:
+  group: slow-tests
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  check:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
+      contents: read
+    outputs:
+      issue: ${{ steps.issue.outputs.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: median
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .github/scripts/slow_tests.py | tee report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - id: issue
+        if: steps.median.outputs.slow == 'true' || inputs.force
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCED: ${{ inputs.force && 'true' || 'false' }}
+        run: |
+          open=$(gh issue list --label slow-tests --state open --json number --jq '.[0].number // empty')
+          if [ -n "$open" ]; then
+            echo "Issue #$open is already open, so nothing new starts." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh label create slow-tests --color D93F0B --description "The tests workflow got slow (slow-tests.yml)" --force
+          title="Tests are slow: median ${{ steps.median.outputs.median }} min"
+          [ "$FORCED" = true ] && title="Trying the slow-tests setup (started by hand)"
+          url=$(gh issue create --label slow-tests --title "$title" --body-file report.md)
+          echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
+
+  fix:
+    needs: check
+    if: needs.check.outputs.issue != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write
+    steps:
+      - id: auth
+        env:
+          OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$OAUTH$API_KEY" ]; then
+            gh issue comment "${{ needs.check.outputs.issue }}" --repo "$GITHUB_REPOSITORY" --body \
+              "Claude didn't start: add the repository secret CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY (docs/ci.md#slow-tests)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.auth.outputs.ok == 'true'
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        if: steps.auth.outputs.ok == 'true'
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          additional_permissions: |
+            actions: read
+          claude_args: |
+            --max-turns 60
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh api:*),Bash(gh run:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh pr create:*),Bash(gh pr list:*),Bash(python3:*),Bash(ls:*),Bash(cat:*)"
+          prompt: |
+            REPO: ${{ github.repository }}
+            ISSUE: #${{ needs.check.outputs.issue }}
+            STARTED BY HAND TO TRY THE SETUP: ${{ inputs.force && 'yes' || 'no' }}
+
+            The `tests` GitHub Actions workflow (.github/workflows/test.yml) has a median run time over 5 minutes
+            across its last 5 full runs on main. The issue above holds the run list and the newest run's slowest
+            steps. Find out why and fix it in a pull request.
+
+            How to work:
+            1. Read docs/ci.md first, especially "Speed pass, 2026-11-01": it records what was slow before (the
+               ffmpeg apt download, the Rust build, numba JIT warm-up) and the caches that fixed it.
+            2. Compare step timings of recent slow runs with older fast ones:
+               `gh api repos/${{ github.repository }}/actions/workflows/test.yml/runs?branch=main&event=push&status=success&per_page=40`
+               and `gh api repos/${{ github.repository }}/actions/runs/<id>/jobs`. For logs, `gh run view <id> --log`.
+               Look for a step that grew, a cache that stopped hitting, or a new slow test (pytest durations).
+            3. Fix the cause. Never skip, disable, mark xfail or delete a test, never lower what is tested, never
+               raise timeout-minutes or the 5-minute limit to get under it. Speed up the slow thing instead (a cache,
+               a cheaper fixture, a narrower scope rule, parallelism).
+            4. Add a dated note on the cause and the fix to docs/ci.md.
+            5. Commit on a new branch named `claude/slow-tests-${{ needs.check.outputs.issue }}`, push, and open a
+               pull request against main whose body starts with "Fixes #${{ needs.check.outputs.issue }}" and gives
+               before/after step timings. Request no reviewers; the repository owner reviews and merges.
+
+            If the slowness came from outside this repository and has already passed (for example a GitHub or
+            Ubuntu mirror outage, and the newest runs are fast again), open no pull request: comment on the issue
+            with what you found and close it. If the run was started by hand to try the setup and the tests are not
+            slow, just comment on the issue that the setup works, with the current median, and close it.

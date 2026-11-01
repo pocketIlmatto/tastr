@@ -1,8 +1,8 @@
 """Web UI + JSON API. See docs/modules/ui.md.
 
 `create_app` builds the shared state (context.py), the login and same-origin middleware, and mounts the API
-from routes/, one module per area: tracks, media (audio, stems, drum model), edits and labels, analyze,
-search and admin."""
+from routes/, one module per area: tracks, media (audio, stems, drum model), files (sizes, zips, deleting stems),
+edits and labels, analyze, search and admin."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from ..engine import rust
 from . import background
 from .context import STATIC_DIR, AppContext, _failure_reason, _hosted_error, log  # noqa: F401 - tests import these
 from .hosted import HEALTH_PATH, PUBLIC_PREFIX, TOKEN_HEADER, Settings, today
-from .routes import admin, analyze, edits, media, search, tracks
+from .routes import admin, analyze, edits, files, media, search, tracks
 
 # Every route about one track; on a hosted server only its owner gets past the login middleware.
 TRACK_PATH = re.compile(r"^/api/tracks/(\d+)(?:/|$)")
@@ -174,7 +174,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     def health():
         return {"ok": True}
 
-    for area in (admin, tracks, media, edits, analyze, search):
+    for area in (admin, tracks, media, files, edits, analyze, search):
         app.include_router(area.router(ctx))
 
     page = versioned_index()

@@ -641,7 +641,7 @@ def test_ui_card_filters_vibes_keys_and_bpm():
 
     js = re.sub(r"^export ", "", app_js(), flags=re.M)
     grab = lambda n: re.search(rf"^(const {n} = .*?;|function {n}\(.*?\n}})$", js, re.M | re.S).group(0)
-    defs = "\n".join(grab(n) for n in ("isNum", "LIB_CLEAR", "lib", "DAY", "upMatch", "keyRank", "SORTS", "visibleTracks", "camelotNear", "keyMatch", "vibeFilter", "keyFilter", "bpmFilter"))
+    defs = "\n".join(grab(n) for n in ("isNum", "LIB_CLEAR", "lib", "DAY", "upMatch", "keyRank", "SORTS", "matchTracks", "visibleTracks", "camelotNear", "keyMatch", "vibeFilter", "keyFilter", "bpmFilter"))
     script = defs + """
 const labels = new Map([[4, {}]]), reviewRows = [{ track_id: 2 }];
 const now = Date.now();

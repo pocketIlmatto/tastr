@@ -14,6 +14,7 @@ from tastr import cli, db, drum_jobs, service
 from tastr.engine import adt
 from tastr.web.server import create_app
 from test_foundation import full_card
+from ui_src import app_js
 
 
 @pytest.fixture
@@ -192,8 +193,7 @@ def test_cli_run(db_path, track, home, engine, capsys):
 
 
 def test_ui_has_the_menu_item_and_bulk_action():
-    from tastr.web.server import STATIC_DIR
 
-    js = (STATIC_DIR / "app.js").read_text()
+    js = app_js()
     for needle in ('"Detect drums with the model"', "/drum-model`", "drumModelOn", "pip install 'tastr[drums]'"):
         assert needle in js

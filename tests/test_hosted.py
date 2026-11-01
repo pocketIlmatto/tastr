@@ -94,7 +94,7 @@ def test_link_analysis_never_reads_server_paths(db_path, home, tmp_path, hosted_
 
 
 def test_requests_without_a_valid_login_are_refused(client):
-    for path in ["/", "/api/tracks", "/static/app.js", "/api/config", "/docs", "/openapi.json"]:
+    for path in ["/", "/api/tracks", "/static/app/main.js", "/api/config", "/docs", "/openapi.json"]:
         r = client.get(path)
         assert r.status_code == 401, path
         assert client.get(path, headers={"cf-access-jwt-assertion": "forged"}).status_code == 401

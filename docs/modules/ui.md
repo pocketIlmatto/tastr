@@ -9,7 +9,7 @@ across the library.
 - Edit: `tastr/web/server.py` (keep `create_app(db_path)` and `run(host, port, db_path)`). Since TAS-34 the routes live in
   `tastr/web/routes/` (one module per area, each a `router(ctx)`), sharing an `AppContext` from `tastr/web/context.py`;
   the hosted background loops are in `tastr/web/background.py`.
-- New: `tastr/web/static/` (`index.html`, `app.js`, `style.css`). Plain HTML/JS, no build step; load chart libs only from a CDN with pinned versions, or draw with SVG/canvas.
+- New: `tastr/web/static/` (`index.html`, `app/*.js` ES modules with `app/main.js` as the entry, `style.css`). Plain HTML/JS, no build step; load chart libs only from a CDN with pinned versions, or draw with SVG/canvas.
 - New: `tests/test_web.py`.
 
 ## API (JSON). Existing endpoints must keep their shape.
@@ -54,7 +54,7 @@ Render from the card JSON, tolerating any field being null/empty:
 - Scatter of BPM (x) vs energy (y) for all tracks, point label on hover, click opens the card.
 - Filter by tag and BPM range.
 - **Find tracks**, with a Simple / SQL toggle (remembered in localStorage `tastr-query-mode`):
-  - Simple: conditions (BPM, key or the keys that mix with it, energy, vibe, length, section, text) in groups one level deep; AND/OR inside each group and between groups. The page builds the SQL (`qSql()` in app.js) and runs it through `/api/query` with `mine: true`; "Edit as SQL" opens that SQL in the SQL box.
+  - Simple: conditions (BPM, key or the keys that mix with it, energy, vibe, length, section, text) in groups one level deep; AND/OR inside each group and between groups. The page builds the SQL (`qSql()` in app/find.js) and runs it through `/api/query` with `mine: true`; "Edit as SQL" opens that SQL in the SQL box.
   - SQL: the box posting to `/api/query`, and a "Tables and columns" reference (`Q_SCHEMA`; a friend's copy leaves out the private columns).
   - Saved searches as chips (`/api/searches`), and built-in examples in an "Examples ▾" menu, separate for each mode.
 

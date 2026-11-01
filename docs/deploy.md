@@ -171,8 +171,9 @@ Actions**):
 
 Or run the two commands from step 7 yourself.
 
-The page loads `app.js`, `strudel.js` and `style.css` with a content hash in the URL (`?v=…`), so a deploy
-shows up on the next page load even though Cloudflare caches static files. Deploys before this change could
+The page loads `app/main.js`, `strudel.js` and `style.css` with a content hash in the URL (`?v=…`), and the UI's
+other modules (`tastr/web/static/app/*.js`, which `main.js` imports) are served with `Cache-Control: no-cache`, so a
+deploy shows up on the next page load even though Cloudflare caches static files. Deploys before this change could
 stay stale for a few hours; **Caching > Configuration > Purge Everything** in Cloudflare clears that.
 
 ## Backups and restores

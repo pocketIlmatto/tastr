@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from tastr import cli, db, stems
 from tastr.web.server import create_app
 from test_foundation import full_card
+from ui_src import app_js
 
 
 @pytest.fixture
@@ -192,9 +193,8 @@ def test_cli_without_demucs_prints_install_hint(db_path, track, home, monkeypatc
 
 
 def test_ui_has_stems_menu_item_and_strudel_picker():
-    from tastr.web.server import STATIC_DIR
 
-    js = (STATIC_DIR / "app.js").read_text()
+    js = app_js()
     for needle in ('"Separate stems"', '"Stems ready"', "/stems`", '"Full mix"', '"Stems"', "STRUDEL_STEMS", "pip install 'tastr[stems]'"):
         assert needle in js
     assert 'new Set(["vocals", "bass", "other"])' in js  # drums off by default

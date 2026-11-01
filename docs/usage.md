@@ -92,7 +92,8 @@ npx eslint@10.12.0 tastr/web/static                  # web UI scripts; rules in 
 (cd engine-rs && cargo clippy --release --all-targets -- -D warnings)   # Rust engine
 ```
 
-`ruff check --fix .` fixes the simple ones (unused imports).
+`ruff check --fix .` fixes the simple ones (unused imports). Ruff also refuses a Python function whose
+cyclomatic complexity is over 20 (C901); split it into steps rather than raising the limit.
 
 `tests/test_strudel_runtime.py` plays the generated Strudel sketches in Strudel itself.
 It skips unless Strudel's packages are installed for it (Node 22.15 or newer):

@@ -25,6 +25,7 @@ Design notes, what was tried and dropped, and known weaknesses: docs/drums.md.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -219,6 +220,98 @@ def _mid_kind(body_share: float, peaky: float, n_bursts: int) -> dict[str, float
     return {"perc": perc, "clap": clap, "snare": max(0.0, 1 - perc - clap)}
 
 
+@dataclass
+class _LaneFeatures:
+    """What lane_activations reads at each hit, computed once per track."""
+    nov: dict[str, np.ndarray]  # onset novelty per family (kick, snare, hat)
+    env: dict[str, np.ndarray]
+    model: dict[str, np.ndarray] | None
+    sr: int
+    hop: int
+    gap: float
+    V: np.ndarray  # sqrt of the percussive mel spectrogram
+    rise: np.ndarray  # how much each band rose over the last two frames
+    kick_template: np.ndarray
+    freqs: np.ndarray
+    snare_ref: float
+
+    @property
+    def n(self) -> int:
+        return next(iter(self.nov.values())).size
+
+
+BODY_HZ, MID_HZ, TONAL_HZ, LOW_HZ = (100, 400), (400, 5000), (400, 3000), (30, 400)
+
+
+def _band(freqs: np.ndarray, hz: tuple[float, float]) -> np.ndarray:
+    return (freqs >= hz[0]) & (freqs < hz[1])
+
+
+def _lane_features(ctx: AnalysisContext, nov: dict[str, np.ndarray], model, step_seconds: float | None) -> _LaneFeatures:
+    mel, freqs = ctx.get("mel_percussive", signals.mel_percussive)
+    V = np.sqrt(np.maximum(mel, 0.0))
+    W = ctx.get("drum_nmf", decompose)["_W"]
+    return _LaneFeatures(
+        nov=nov, env=ctx.get("drum_envelopes", _envelopes), model=model, sr=ctx.sr, hop=ctx.hop,
+        gap=step_seconds or 0.125, V=V, rise=np.maximum(0.0, V - np.concatenate([V[:, :2], V[:, :-2]], axis=1)),
+        kick_template=W[:, list(TEMPLATES).index("kick")], freqs=freqs,
+        snare_ref=float(np.percentile(nov["snare"], 99)) + 1e-12)
+
+
+def _tom_share(F: _LaneFeatures, a: int, b: int, snare: float) -> float:
+    """How much of a low hit is a tom: a kick's energy sits under ~90 Hz, a tom's higher up (its pitch)."""
+    t = a + int(np.argmax(F.nov["kick"][a:b]))
+    low = _band(F.freqs, LOW_HZ)
+    lo = F.V[low, min(F.n - 1, t + 1)]  # a moment in, after a kick's pitch drop
+    pitch = float(F.freqs[low][int(np.argmax(lo))])
+    # ...unless a mid hit lands at the same time: then that pitch is most likely the snare's body.
+    return float(_ramp(pitch, TOM_PITCH[0], TOM_PITCH[1]) * (1 - _ramp(snare / F.snare_ref, 0.15, 0.4)))
+
+
+def _mid_shares(F: _LaneFeatures, a: int, b: int, i: int) -> dict[str, float]:
+    """The mid hit's own spectrum (what rose here, less what the kick part explains) split into snare, clap, perc."""
+    t = a + int(np.argmax(F.nov["snare"][a:b]))
+    spec = np.maximum(F.rise[:, t] - F.kick_template * F.nov["kick"][t], 0.0)
+    body, mid = spec[_band(F.freqs, BODY_HZ)].sum(), spec[_band(F.freqs, MID_HZ)].sum()
+    body_share = float(body / (body + mid + 1e-12))
+    tm = spec[_band(F.freqs, TONAL_HZ)]
+    peaky = float(tm.max() / (tm.mean() + 1e-12)) if tm.size and tm.max() > 0 else 0.0
+    return _mid_kind(body_share, peaky, _bursts(F.env["mid"], i, F.sr))
+
+
+def _model_hit(F: _LaneFeatures, out: dict[str, np.ndarray], k: int, a: int, b: int, hat: float) -> None:
+    """Put the drum model's hits at frame index k in place of the built-in kick, tom and hat lanes."""
+    m = {lane: float(v[a:b].max()) for lane, v in F.model.items()}
+    out["kick"][k], out["tom"][k], out["cymbal"][k] = m["kick"], m["tom"], m["cymbal"]
+    if MODEL_OPEN_HATS:
+        t = a + int(np.argmax(F.model["hat"][a:b]))
+        ring = _ringing(F.env["air"], int(t * F.hop), F.sr, F.gap) if m["hat"] > 0 else 0.0
+        out["hat"][k], out["open_hat"][k] = m["hat"] * (1 - ring), m["hat"] * ring
+    else:
+        # Our open-hat lane stays; the model's hi-hats replace the closed ones.
+        out["hat"][k] = m["hat"] * (1 - _ramp(out["open_hat"][k] / (hat + 1e-12), 0.5, 0.9)) if hat > 0 else m["hat"]
+
+
+def _hit(F: _LaneFeatures, out: dict[str, np.ndarray], k: int, f: int, slop: int) -> None:
+    """Fill every lane at frame index k (analysis frame f)."""
+    a, b = max(0, f - slop), min(F.n, f + slop + 1)
+    s = {name: float(v[a:b].max()) for name, v in F.nov.items()}
+    i = int(f * F.hop)
+    if s["kick"] > 0:
+        tom = _tom_share(F, a, b, s["snare"])
+        out["kick"][k] = s["kick"] * (1 - tom)
+        out["tom"][k] += s["kick"] * tom
+    if s["snare"] > 0:
+        for lane, share in _mid_shares(F, a, b, i).items():
+            out[lane][k] += s["snare"] * share
+    if s["hat"] > 0:
+        ring = _ringing(F.env["air"], i, F.sr, F.gap)
+        out["hat"][k] = s["hat"] * (1 - ring)
+        out["open_hat"][k] = s["hat"] * ring
+    if F.model:
+        _model_hit(F, out, k, a, b, s["hat"])
+
+
 def lane_activations(ctx: AnalysisContext, frames: np.ndarray, step_seconds: float | None = None,
                      slop: int = 2) -> dict[str, np.ndarray]:
     """Strength of each drum lane at each frame index in `frames` (any shape), allowing `slop` frames of timing error."""
@@ -227,62 +320,10 @@ def lane_activations(ctx: AnalysisContext, frames: np.ndarray, step_seconds: flo
     model = ctx.get("drum_model", model_lanes)
     out = {lane: np.zeros(flat.size) for lane in LANES + (("cymbal",) if model else ())}
     nov = ctx.get("drum_onsets", onsets)
-    n = next(iter(nov.values())).size
-    if n < 3 or flat.size == 0:
-        return {k: v.reshape(frames.shape) for k, v in out.items()}
-    env = ctx.get("drum_envelopes", _envelopes)
-    sr, hop = ctx.sr, ctx.hop
-    gap = step_seconds or 0.125
-
-    mel, freqs = ctx.get("mel_percussive", signals.mel_percussive)
-    V = np.sqrt(np.maximum(mel, 0.0))
-    rise = np.maximum(0.0, V - np.concatenate([V[:, :2], V[:, :-2]], axis=1))
-    W = ctx.get("drum_nmf", decompose)["_W"]
-    names = list(TEMPLATES)
-    body, mid = (freqs >= 100) & (freqs < 400), (freqs >= 400) & (freqs < 5000)
-    tonal = (freqs >= 400) & (freqs < 3000)
-    low = (freqs >= 30) & (freqs < 400)
-    snare_ref = float(np.percentile(nov["snare"], 99)) + 1e-12
-
-    for k, f in enumerate(flat):
-        a, b = max(0, f - slop), min(n, f + slop + 1)
-        s = {name: float(v[a:b].max()) for name, v in nov.items()}
-        i = int(f * hop)
-        if s["kick"] > 0:
-            # Low hits: a kick's energy sits under ~90 Hz, a tom's higher up (its pitch).
-            t = a + int(np.argmax(nov["kick"][a:b]))
-            lo = V[low, min(n - 1, t + 1)]  # a moment in, after a kick's pitch drop
-            pitch = float(freqs[low][int(np.argmax(lo))])
-            # ...unless a mid hit lands at the same time: then that pitch is most likely the snare's body.
-            tom = float(_ramp(pitch, TOM_PITCH[0], TOM_PITCH[1]) * (1 - _ramp(s["snare"] / snare_ref, 0.15, 0.4)))
-            out["kick"][k] = s["kick"] * (1 - tom)
-            out["tom"][k] += s["kick"] * tom
-        if s["snare"] > 0:
-            # The mid hit's own spectrum: what rose here, less what the kick part explains.
-            t = a + int(np.argmax(nov["snare"][a:b]))
-            spec = rise[:, t] - W[:, names.index("kick")] * nov["kick"][t]
-            spec = np.maximum(spec, 0.0)
-            body_share = float(spec[body].sum() / (spec[body].sum() + spec[mid].sum() + 1e-12))
-            tm = spec[tonal]
-            peaky = float(tm.max() / (tm.mean() + 1e-12)) if tm.size and tm.max() > 0 else 0.0
-            n_bursts = _bursts(env["mid"], i, sr)
-            w = _mid_kind(body_share, peaky, n_bursts)
-            for lane, share in w.items():
-                out[lane][k] += s["snare"] * share
-        if s["hat"] > 0:
-            ring = _ringing(env["air"], i, sr, gap)
-            out["hat"][k] = s["hat"] * (1 - ring)
-            out["open_hat"][k] = s["hat"] * ring
-        if model:
-            m = {lane: float(v[a:b].max()) for lane, v in model.items()}
-            out["kick"][k], out["tom"][k], out["cymbal"][k] = m["kick"], m["tom"], m["cymbal"]
-            if MODEL_OPEN_HATS:
-                t = a + int(np.argmax(model["hat"][a:b]))
-                ring = _ringing(env["air"], int(t * hop), sr, gap) if m["hat"] > 0 else 0.0
-                out["hat"][k], out["open_hat"][k] = m["hat"] * (1 - ring), m["hat"] * ring
-            else:
-                # Our open-hat lane stays; the model's hi-hats replace the closed ones.
-                out["hat"][k] = m["hat"] * (1 - _ramp(out["open_hat"][k] / (s["hat"] + 1e-12), 0.5, 0.9)) if s["hat"] > 0 else m["hat"]
+    if next(iter(nov.values())).size >= 3 and flat.size:
+        F = _lane_features(ctx, nov, model, step_seconds)
+        for k, f in enumerate(flat):
+            _hit(F, out, k, f, slop)
     return {k: v.reshape(frames.shape) for k, v in out.items()}
 
 

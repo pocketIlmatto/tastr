@@ -114,6 +114,52 @@ def _catalog_reasons(card, res: dict[str, Any], cmp: dict[str, Any]) -> list[tup
     return out
 
 
+def _score_reasons(card, settled: bool) -> tuple[list[str], list[float]]:
+    """Why a low "likely right" score puts the track in review, and the scores themselves."""
+    reasons, scores = [], []
+    key_p = card.core.key.likely_correct if card.core.key else None
+    for name, p in (("BPM", card.core.bpm_likely_correct), ("key", key_p)):
+        if p is not None:
+            scores.append(p)
+            if p < 0.6 and not settled:
+                reasons.append(f"{name} {round(100 * p)}% likely right")
+    return reasons, scores
+
+
+def _catalog_disagreements(conn: sqlite3.Connection, track_id: int, card) -> tuple[list[str], Any, Any]:
+    """(a reason per catalog disagreement, the first disagreeing catalog BPM, the first disagreeing Camelot key)."""
+    from . import lookup
+
+    reasons, first = [], {"bpm": None, "key": None}
+    for r in db.get_lookups(conn, track_id):
+        if r.get("status") != "found":
+            continue
+        for what, why, value in _catalog_reasons(card, r, lookup.compare(card, r)):
+            reasons.append(why)
+            if first[what] is None:
+                first[what] = value
+    return reasons, first["bpm"], first["key"]
+
+
+def _queue_row(conn: sqlite3.Connection, track_id: int, card, marks: list[dict[str, Any]], flag: str | None,
+               settled: bool, labeled: bool) -> dict[str, Any] | None:
+    """The track's review_queue entry, or None when nothing puts it there."""
+    pat_reasons, way_off = pattern_reasons(_with_status(card, marks))
+    score_reasons, scores = _score_reasons(card, settled)
+    cat_reasons, cat_bpm, cat_key = _catalog_disagreements(conn, track_id, card) if not settled else ([], None, None)
+    mine = flag == "flagged"
+    reasons = pat_reasons + score_reasons + cat_reasons
+    if mine:
+        reasons.insert(0, "You put this back in review (it has a label)" if labeled else "You added this to review")
+    if not reasons:
+        return None
+    k = card.core.key
+    return {"track_id": track_id, "title": card.source.title, "artist": card.source.artist,
+            "bpm": card.core.bpm, "key": k.name if k else None, "camelot": k.camelot if k else None,
+            "chance_right": min(scores) if scores else None, "disagreements": len(cat_reasons), "reasons": reasons,
+            "mine": mine, "catalog_bpm": cat_bpm, "catalog_key": cat_key, "way_off": way_off}
+
+
 def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = None) -> list[dict[str, Any]]:
     """Tracks most worth a look, most suspect first. Tracks you put in the list yourself come first (`mine`,
     labeled or not); ones you took out never show. The rest are unlabeled tracks with a low "likely right" score
@@ -124,8 +170,6 @@ def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = 
     Pattern reviews add tracks too, labeled or not: a part you marked Way off and haven't saved the right pattern
     for, or a mark a re-analysis made stale (pattern_reasons). Way-off tracks come right after yours; `way_off`
     counts their sections."""
-    from . import lookup
-
     labeled = {r["track_id"] for r in db.list_labels(conn, owner)}
     flags = db.review_flags(conn, owner)
     marks: dict[int, list[dict[str, Any]]] = {}
@@ -138,39 +182,9 @@ def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = 
         if flag == "skipped" or (settled and t["id"] not in marks):
             continue
         card = db.load_card(conn, t["id"])
-        if card is None:
-            continue
-        pat_reasons, way_off = pattern_reasons(_with_status(card, marks.get(t["id"], [])))
-        reasons, scores = [], []
-        bpm_p = card.core.bpm_likely_correct
-        key_p = card.core.key.likely_correct if card.core.key else None
-        for name, p in (("BPM", bpm_p), ("key", key_p)):
-            if p is not None:
-                scores.append(p)
-                if p < 0.6 and not settled:
-                    reasons.append(f"{name} {round(100 * p)}% likely right")
-        disagree, cat_bpm, cat_key = 0, None, None
-        for r in db.get_lookups(conn, t["id"]) if not settled else []:
-            if r.get("status") != "found":
-                continue
-            for what, why, value in _catalog_reasons(card, r, lookup.compare(card, r)):
-                disagree += 1
-                reasons.append(why)
-                if what == "bpm" and cat_bpm is None:
-                    cat_bpm = value
-                if what == "key" and cat_key is None:
-                    cat_key = value
-        mine = flag == "flagged"
-        reasons = pat_reasons + reasons
-        if mine:
-            reasons.insert(0, "You put this back in review (it has a label)" if t["id"] in labeled else "You added this to review")
-        if not reasons:
-            continue
-        k = card.core.key
-        out.append({"track_id": t["id"], "title": card.source.title, "artist": card.source.artist,
-                    "bpm": card.core.bpm, "key": k.name if k else None, "camelot": k.camelot if k else None,
-                    "chance_right": min(scores) if scores else None, "disagreements": disagree, "reasons": reasons,
-                    "mine": mine, "catalog_bpm": cat_bpm, "catalog_key": cat_key, "way_off": way_off})
+        if card is not None and (row := _queue_row(conn, t["id"], card, marks.get(t["id"], []), flag, settled,
+                                                   t["id"] in labeled)):
+            out.append(row)
     out.sort(key=lambda r: (not r["mine"], -r["way_off"], -r["disagreements"],
                             r["chance_right"] if r["chance_right"] is not None else 1.0))
     return out[:limit]
@@ -233,23 +247,36 @@ def detected_patterns(card) -> dict[tuple[str, int, int], dict[str, Any]]:
     return out
 
 
+STEPS = re.compile(r"[x.o]{1,32}")
+
+
+def _clean_drums(v: dict[str, Any]) -> dict[str, Any]:
+    if not all(isinstance(s, str) and STEPS.fullmatch(s) for s in v.values()):
+        raise LabelError("drum lanes are step strings like \"x...x...\"")
+    return {str(k): s for k, s in v.items()}
+
+
+def _clean_seq(part: str, v: dict[str, Any]) -> list[str | None]:
+    what = "notes" if part == "bass" else "chords"
+    seq = v.get(what)
+    if not isinstance(seq, list) or len(seq) > 16 or not all(x is None or isinstance(x, str) for x in seq):
+        raise LabelError(f"the {part} need a list of up to 16 {what}")
+    return [x or None for x in seq]
+
+
 def _clean_truth(part: str, v: Any) -> dict[str, Any]:
     """A right pattern as the app sends it (its edit), in the stored shape."""
     if not isinstance(v, dict):
         raise LabelError("the right pattern must be an object")
     if part == "drums":
-        if not all(isinstance(s, str) and re.fullmatch(r"[x.o]{1,32}", s) for s in v.values()):
-            raise LabelError("drum lanes are step strings like \"x...x...\"")
-        return {str(k): s for k, s in v.items()}
-    seq = v.get("notes" if part == "bass" else "chords")
-    if not isinstance(seq, list) or len(seq) > 16 or not all(x is None or isinstance(x, str) for x in seq):
-        raise LabelError(f"the {part} need a list of up to 16 {'notes' if part == 'bass' else 'chords'}")
+        return _clean_drums(v)
+    seq = _clean_seq(part, v)
     if part == "chords":
-        return {"chords": [x or None for x in seq]}
+        return {"chords": seq}
     rhythm = v.get("rhythm")
-    if rhythm is not None and not (isinstance(rhythm, str) and re.fullmatch(r"[x.o]{1,32}", rhythm)):
+    if rhythm is not None and not (isinstance(rhythm, str) and STEPS.fullmatch(rhythm)):
         raise LabelError("the bass rhythm is a step string like \"x.......x.......\"")
-    return {"notes": [x or None for x in seq], "rhythm": rhythm}
+    return {"notes": seq, "rhythm": rhythm}
 
 
 def save_pattern_review(conn: sqlite3.Connection, track_id: int, body: dict[str, Any]) -> list[dict[str, Any]]:

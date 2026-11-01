@@ -61,6 +61,33 @@ def _save_index(cache_dir: Path, index: dict) -> None:
     (cache_dir / INDEX_NAME).write_text(json.dumps(index, indent=2))
 
 
+def _read_info(yt_dlp, url: str) -> tuple[dict, list, bool]:
+    """(the link's info, its entries (just the info for a single track), whether it is a playlist)."""
+    info_opts = {"quiet": True, "no_warnings": True, "playlistend": MAX_PLAYLIST}
+    try:
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            is_playlist = info.get("entries") is not None
+            items = list(itertools.islice(info["entries"], MAX_PLAYLIST)) if is_playlist else [info]
+    except Exception as e:
+        raise IngestError(f"Could not read {url}: {e}") from e
+    return info, items, is_playlist
+
+
+def _entry_source(yt_dlp, entry: dict, info: dict, url: str, cache_dir: Path) -> Source:
+    """Download one entry (unless it is cached already) and describe it. Raises on any failure."""
+    key = _safe(f"{entry.get('extractor') or info.get('extractor') or 'link'}-{entry['id']}")
+    track_url = entry.get("webpage_url") or entry.get("url") or url
+    path = _find_download(cache_dir, key)
+    if path is None:
+        _download(yt_dlp, track_url, cache_dir, key)
+        path = _find_download(cache_dir, key)
+    if path is None:
+        raise IngestError(f"yt-dlp finished but produced no audio file for {track_url}")
+    return Source(kind="url", uri=track_url, local_path=str(path), title=entry.get("title"),
+                  artist=entry.get("artist") or entry.get("creator") or entry.get("uploader"), album=entry.get("album"))
+
+
 class YtDlpResolver:
     name = "yt-dlp"
 
@@ -74,43 +101,16 @@ class YtDlpResolver:
             return [Source(**s) for s in cached]
 
         yt_dlp = _import_yt_dlp()
-        info_opts = {"quiet": True, "no_warnings": True, "playlistend": MAX_PLAYLIST}
-        try:
-            with yt_dlp.YoutubeDL(info_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                is_playlist = info.get("entries") is not None
-                items = list(itertools.islice(info["entries"], MAX_PLAYLIST)) if is_playlist else [info]
-        except Exception as e:
-            raise IngestError(f"Could not read {url}: {e}") from e
-
+        info, items, is_playlist = _read_info(yt_dlp, url)
         sources: list[Source] = []
-        for entry in items:
-            if not entry:
-                continue
-            key = _safe(f"{entry.get('extractor') or info.get('extractor') or 'link'}-{entry['id']}")
-            track_url = entry.get("webpage_url") or entry.get("url") or url
+        for entry in filter(None, items):
             try:
-                path = _find_download(cache_dir, key)
-                if path is None:
-                    _download(yt_dlp, track_url, cache_dir, key)
-                    path = _find_download(cache_dir, key)
-                if path is None:
-                    raise IngestError(f"yt-dlp finished but produced no audio file for {track_url}")
+                sources.append(_entry_source(yt_dlp, entry, info, url, cache_dir))
             except Exception as e:
+                track_url = entry.get("webpage_url") or entry.get("url") or url
                 if not is_playlist:
                     raise IngestError(f"Could not download {track_url}: {e}") from e
                 logger.warning("Skipping playlist entry %s: %s", track_url, e)
-                continue
-            sources.append(
-                Source(
-                    kind="url",
-                    uri=track_url,
-                    local_path=str(path),
-                    title=entry.get("title"),
-                    artist=entry.get("artist") or entry.get("creator") or entry.get("uploader"),
-                    album=entry.get("album"),
-                )
-            )
 
         if not sources:
             raise IngestError(f"No tracks could be downloaded from {url}")

@@ -37,24 +37,33 @@ class GetSongBPM(Provider):
     def base(self) -> str:
         return os.environ.get("GETSONGBPM_API_BASE", DEFAULT_BASE).rstrip("/")
 
-    def lookup(self, q: TrackQuery) -> LookupResult:
-        auth = {"X-API-KEY": self.api_key() or ""}
+    def _search(self, q: TrackQuery, auth: dict[str, str]) -> list | None:
+        """The search hits; None when it found nothing."""
         _, body = self.get_json(f"{self.base()}/search/", {"type": "both", "lookup": f"song:{q.title} artist:{q.artist}"}, auth)
         hits = (body or {}).get("search") if isinstance(body, dict) else None
         if isinstance(hits, dict) and hits.get("error"):  # {"search": {"error": "no result"}}
             if "no result" in str(hits["error"]).lower():
-                return LookupResult(self.name, "not_found")
+                return None
             raise ProviderError(f"{self.label}: {hits['error']}")
         if not isinstance(hits, list):
             raise ProviderError(f"{self.label} sent an unexpected search response")
+        return hits
+
+    def _full(self, song: dict, auth: dict[str, str]) -> dict:
+        """Some search hits are thin; the song endpoint has the full record."""
+        sid = song.get("song_id") or song.get("id")
+        if num(song.get("tempo")) is not None or song.get("key_of") or not sid:
+            return song
+        _, full = self.get_json(f"{self.base()}/song/", {"id": str(sid)}, auth)
+        return (full or {}).get("song") or song
+
+    def lookup(self, q: TrackQuery) -> LookupResult:
+        auth = {"X-API-KEY": self.api_key() or ""}
+        hits = self._search(q, auth) or []
         song = next((h for h in hits if same_artists(_artist(h), q.artist) and same_text(_title(h), q.title)), None)
         if song is None:
             return LookupResult(self.name, "not_found")
-        sid = song.get("song_id") or song.get("id")
-        if num(song.get("tempo")) is None and not song.get("key_of") and sid:
-            # Some search hits are thin; the song endpoint has the full record.
-            _, full = self.get_json(f"{self.base()}/song/", {"id": str(sid)}, auth)
-            song = (full or {}).get("song") or song
+        song = self._full(song, auth)
         return LookupResult(
             self.name, "found", bpm=num(song.get("tempo")), key=song.get("key_of") or None,
             matched_artist=_artist(song), matched_title=_title(song),

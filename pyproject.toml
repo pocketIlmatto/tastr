@@ -55,8 +55,16 @@ line-length = 120
 extend-exclude = ["tests/strudel-runtime"]
 
 [tool.ruff.lint]
-select = ["F", "E9", "B"]
+select = ["F", "E9", "B", "C901"]
 ignore = ["B008", "B905"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 20  # radon's D starts at 21 (TAS-41)
+
+[tool.ruff.lint.per-file-ignores]
+# mccabe counts the route closures into the function that defines them; each route on its own is far below 20.
+"tastr/web/routes/*.py" = ["C901"]
+"tastr/web/server.py" = ["C901"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

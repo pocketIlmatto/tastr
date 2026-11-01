@@ -368,35 +368,43 @@ def _record(args, bench: str, report: dict, dataset: str | None = None) -> int:
     return 0
 
 
-def _labels(args) -> int:
-    from . import labels
+def _track_name(r: dict) -> str:
+    return " - ".join(x for x in (r["artist"], r["title"]) if x) or f"track {r['track_id']}"
 
-    conn = db.connect(args.db)
-    if args.cmd == "review":
-        for r in labels.review_queue(conn, args.limit):
-            name = " - ".join(x for x in (r["artist"], r["title"]) if x) or f"track {r['track_id']}"
-            bpm = f"{r['bpm']:.1f} BPM" if r["bpm"] else "no BPM"
-            print(f"{r['track_id']:>5}  {name}  ({bpm}, {r['key'] or 'no key'}): {'; '.join(r['reasons'])}")
-        return 0
-    if args.action == "list":
-        for r in db.list_labels(conn):
-            print(json.dumps(r, default=str))
-        return 0
-    if args.action == "patterns":
-        for r in labels.all_pattern_reviews(conn):
-            name = " - ".join(x for x in (r["artist"], r["title"]) if x) or f"track {r['track_id']}"
-            what = labels.VERDICT_NAMES.get(r["verdict"], "no verdict") + (", right pattern saved" if r["truth"] else "")
-            where = f"bars {r['start_bar']}-{r['end_bar']}" if r["end_bar"] else "whole track"
-            print(f"{r['track_id']:>5}  {name}  {r['part']} {where}: {what}{' (stale)' if r['stale'] else ''}")
-        return 0
-    if args.action == "export" and args.patterns:
+
+def _labels_review(conn, args, labels) -> int:
+    for r in labels.review_queue(conn, args.limit):
+        bpm = f"{r['bpm']:.1f} BPM" if r["bpm"] else "no BPM"
+        print(f"{r['track_id']:>5}  {_track_name(r)}  ({bpm}, {r['key'] or 'no key'}): {'; '.join(r['reasons'])}")
+    return 0
+
+
+def _labels_list(conn, args, labels) -> int:
+    for r in db.list_labels(conn):
+        print(json.dumps(r, default=str))
+    return 0
+
+
+def _labels_patterns(conn, args, labels) -> int:
+    for r in labels.all_pattern_reviews(conn):
+        what = labels.VERDICT_NAMES.get(r["verdict"], "no verdict") + (", right pattern saved" if r["truth"] else "")
+        where = f"bars {r['start_bar']}-{r['end_bar']}" if r["end_bar"] else "whole track"
+        print(f"{r['track_id']:>5}  {_track_name(r)}  {r['part']} {where}: {what}{' (stale)' if r['stale'] else ''}")
+    return 0
+
+
+def _labels_export(conn, args, labels) -> int:
+    if args.patterns:
         n = labels.export_patterns(conn, args.out)
         print(f"wrote {n} pattern reviews to {args.out}")
-        return 0
-    if args.action == "export":
+    else:
         n = labels.export_manifest(conn, args.out)
         print(f"wrote {n} labeled tracks to {args.out}; score them with `tastr bench manifest {args.out}`")
-        return 0
+    return 0
+
+
+def _labels_set(conn, args, labels) -> int:
+    """`tastr label set` and `clear`: both need the track to exist."""
     if db.load_card(conn, args.track_id) is None:
         print(f"no track {args.track_id}", file=sys.stderr)
         return 1
@@ -410,6 +418,17 @@ def _labels(args) -> int:
         return 2
     print(json.dumps(db.set_labels(conn, args.track_id, clean)))
     return 0
+
+
+_LABEL_ACTIONS = {"list": _labels_list, "patterns": _labels_patterns, "export": _labels_export}
+
+
+def _labels(args) -> int:
+    from . import labels
+
+    conn = db.connect(args.db)
+    run = _labels_review if args.cmd == "review" else _LABEL_ACTIONS.get(args.action, _labels_set)
+    return run(conn, args, labels)
 
 
 def _lookup(args) -> int:

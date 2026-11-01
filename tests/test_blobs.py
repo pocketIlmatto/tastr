@@ -476,3 +476,31 @@ def test_unfinished_direct_uploads_are_pruned(bucket, home, db_path, monkeypatch
     assert prune_uploads(db_path, now=time.time() + 3 * blobs.UPLOAD_SECONDS) == 1
     assert objects("uploads/") == {}
     assert c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD).status_code == 404
+
+
+def test_an_upload_is_checked_before_its_turn(bucket, home, db_path, monkeypatch):
+    c = direct_client(db_path, monkeypatch, max_upload_mb=10 / 1048576)  # 10 bytes
+    ask = lambda: c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"][0]  # noqa: E731
+    up = ask()
+    assert c.post(f"/api/uploads/{up['id']}/check", headers=GOOD).status_code == 409  # not there yet
+    browser_put(up, b"RIFFsong")
+    r = c.post(f"/api/uploads/{up['id']}/check", headers=GOOD)
+    assert r.status_code == 200 and r.json() == {"id": up["id"], "name": "a.wav"}
+    r = c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD)  # still open, and analyzes
+    assert r.status_code == 200 and r.json()["results"][0]["track_id"] is not None
+    big = ask()
+    browser_put(big, b"RIFF-but-too-long")
+    r = c.post(f"/api/uploads/{big['id']}/check", headers=GOOD)
+    assert r.status_code == 413
+    assert f"uploads/{big['id']}/a.wav" not in objects("uploads/")  # the refused copy is gone at once
+    assert c.post("/api/analyze/uploaded", data={"ids": [big["id"]]}, headers=GOOD).status_code == 404
+
+
+def test_a_storage_refusal_is_logged_for_the_admin(bucket, home, db_path, monkeypatch):
+    c = direct_client(db_path, monkeypatch)
+    (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+    assert c.post(f"/api/uploads/{up['id']}/failed", json={"status": 0}, headers=GOOD).json() == {"ok": True}
+    with closing(db.connect(db_path)) as conn:
+        (e,) = [e for e in db.recent_events(conn, problems=True) if e["source"] == "r2"]
+    assert e["kind"] == "failed" and not e["ok"] and "a.wav" in e["detail"] and "CORS" in e["detail"]
+    assert c.post(f"/api/uploads/{up['id']}/failed", json={}, headers=GOOD).status_code == 404  # closed; Retry starts anew

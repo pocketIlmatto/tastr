@@ -200,9 +200,11 @@ the server could later run without one:
   before it is analyzed. If the copy fails the upload is refused (503) and nothing is kept.
 - With `TASTR_DIRECT_UPLOAD=1` the page uploads straight to the bucket instead. `POST /api/uploads` checks the
   limits (count, type, size, the daily track limit, the storage cap) before any bytes move and answers with a
-  signed PUT link per file (an hour; `POST /api/uploads/{id}/link` renews one). The page PUTs the file, then
-  `POST /api/analyze/uploaded` checks what arrived (size, and length once read back into the cache) and analyzes
-  it like any upload. A refused upload is deleted from the bucket; one that got a link and was never finished is
+  signed PUT link per file (an hour; `POST /api/uploads/{id}/link` renews one). The page PUTs the files, 3 at a
+  time, then `POST /api/uploads/{id}/check` checks what arrived (size, and length once read back into the cache)
+  and `POST /api/analyze/uploaded` analyzes it like any upload when its turn comes. A PUT the bucket refuses
+  (usually a missing CORS rule) is reported with `POST /api/uploads/{id}/failed` and shows in the admin
+  activity log and Problems. A refused upload is deleted from the bucket; one that got a link and was never finished is
   deleted by the six-hourly sweep after two hours.
 - Modal gets a signed link to the upload instead of its bytes, and uploads stems to signed links of its own.
 - Playback (`/api/tracks/{id}/audio`, `/stems/{name}`, and the signed `/pub` links for strudel.cc) answers with

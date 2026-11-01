@@ -111,10 +111,14 @@ sequenceDiagram
     B->>W: POST /api/uploads: name and size
     W->>W: check limits (count, type, size, daily tracks, storage cap)
     W-->>B: a signed upload link (one hour), with an id
-    B->>A: PUT the file to the link (a run-out link is renewed once)
-    B->>W: POST /api/analyze/uploaded: the id (+ its card)
+    B->>A: PUT the file to the link (3 at a time; a run-out link is renewed once)
+    opt the bucket refuses the PUT
+      B->>W: POST /api/uploads/{id}/failed (logged for the admin, source r2)
+    end
+    B->>W: POST /api/uploads/{id}/check
     W->>A: is it there, and how big?
     W->>W: read it back into the cache, check its length from the header
+    B->>W: POST /api/analyze/uploaded, on its turn: the id (+ its card)
   else the upload goes through the server
     B->>C: upload a track (+ its card)
     C->>W: upload + token

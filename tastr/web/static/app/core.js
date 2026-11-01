@@ -114,7 +114,7 @@ export async function api(path, opts) {
   if (!r.ok) {
     let detail = null;
     try { detail = (await r.json()).detail; } catch (_) {}
-    throw new Error(httpError(r.status, detail, r.statusText));
+    throw Object.assign(new Error(httpError(r.status, detail, r.statusText)), { status: r.status });
   }
   return r.status === 204 ? null : r.json();
 }

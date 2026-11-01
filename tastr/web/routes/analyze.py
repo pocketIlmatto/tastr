@@ -39,6 +39,10 @@ class UploadsBody(BaseModel):
     files: list[UploadFileInfo] = Field(min_length=1)
 
 
+class UploadRefused(BaseModel):
+    status: int = Field(0, ge=0, le=999)  # the bucket's HTTP status; 0 when the browser got no answer (CORS)
+
+
 def safe_name(name: str | None) -> str:
     """A stored upload's file name: the one the user gave, without a path or unusual characters."""
     return re.sub(r"[^\w.\- ]", "_", Path(name or "upload").name) or "upload"
@@ -162,6 +166,39 @@ def router(ctx: AppContext) -> APIRouter:
         user = request.state.user
         paths = [upload_path(i, user) for i in ids]  # all of them are this person's before anything is touched
         check_upload(user, [p.name for p in paths])
+        kept = check_arrived(request, ids, paths)
+        for upload_id in ids:
+            uploads.remove(upload_id)
+        sig = save_card(card[0], paths[0]) if ctx.browser_engine and card and len(card) == len(paths) == 1 else {}
+        return begin(request, kept, sig, background)
+
+    @api.post("/api/uploads/{upload_id}/check")
+    def check_uploaded(upload_id: str, request: Request):
+        """Check one upload once the page has PUT it (it arrived, its size, it reads back, its length), before
+        it waits its turn for /api/analyze/uploaded. A refusal deletes the stored copy, as there."""
+        if not direct():
+            raise HTTPException(404, "Uploads go through /api/analyze on this server.")
+        path = upload_path(upload_id, request.state.user)
+        check_arrived(request, [upload_id], [path])
+        return {"id": upload_id, "name": path.name}
+
+    @api.post("/api/uploads/{upload_id}/failed")
+    def upload_refused(upload_id: str, body: UploadRefused, request: Request):
+        """The page says the bucket refused a PUT on a fresh link: a setup problem (the bucket's CORS rule, the
+        signing key), logged for the admin. The upload is closed; the page starts a new one to retry."""
+        if not direct():
+            raise HTTPException(404, "Uploads go through /api/analyze on this server.")
+        path = upload_path(upload_id, request.state.user)
+        why = f"HTTP {body.status}" if body.status else "no answer, likely the bucket's CORS rule"
+        ctx.event(request.state.user, "failed", f"The audio bucket refused the upload of {path.name} ({why})",
+                  ok=False, source="r2")
+        give_up([upload_id], [path])
+        return {"ok": True}
+
+    def check_arrived(request: Request, ids: list[str], paths: list[Path]) -> list[str]:
+        """What reached the bucket for each upload, read back into the cache and checked against the size and
+        length limits; refused uploads are deleted (all of them, as one request). Returns the stored paths."""
+        user = request.state.user
         kept: list[str] = []
         for upload_id, path in zip(ids, paths):
             size = blobs.arrived(path)
@@ -182,10 +219,7 @@ def router(ctx: AppContext) -> APIRouter:
             except HTTPException:
                 give_up(ids, paths)
                 raise
-        for upload_id in ids:
-            uploads.remove(upload_id)
-        sig = save_card(card[0], paths[0]) if ctx.browser_engine and card and len(card) == len(paths) == 1 else {}
-        return begin(request, kept, sig, background)
+        return kept
 
     def give_up(ids: list[str], paths: list[Path]) -> None:
         """A refused direct upload: nothing of it stays, here or in the bucket."""

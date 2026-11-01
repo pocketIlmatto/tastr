@@ -50,11 +50,15 @@ jobs:
           cache-dependency-path: pyproject.toml
       # The ~70 MB ffmpeg download from the Ubuntu mirror has taken anywhere from 17 s to 8 min, so keep the
       # .deb files between runs; apt then only downloads what changed. A new runner image starts from the last cache.
+      # ImageVersion is a shell variable on GitHub's runners, not in the `env` context, so read it in a step.
+      - id: image
+        if: steps.scope.outputs.code == 'true'
+        run: echo "version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         if: steps.scope.outputs.code == 'true'
         with:
           path: ~/apt-archives
-          key: apt-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}
+          key: apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.version }}
           restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - if: steps.scope.outputs.code == 'true'
         run: |

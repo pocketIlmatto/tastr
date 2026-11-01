@@ -918,40 +918,42 @@ def recent_events(conn: sqlite3.Connection, n: int = 20, problems: bool = False)
     return [_event_row(*r) for r in rows]
 
 
+def _blocked_lines(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """The blocked-request count per day, as Cloudflare log lines."""
+    rows = conn.execute("SELECT day, n, last_at FROM blocked_requests WHERE day >= date('now', ?)", (f"-{EVENT_DAYS} days",))
+    return [{"at": last_at or f"{day}T23:59:59+00:00", "user": None, "kind": "blocked", "ok": False,
+             "detail": f"{n} request{'' if n == 1 else 's'} blocked without a valid Access token",
+             "link": None, "type": "blocked", "source": "cloudflare"} for day, n, last_at in rows]
+
+
+def _event_filters(type: str, who: str, source: str, since: str, until: str, problems: bool) -> tuple[list[str], list]:
+    """SQL conditions (joined with AND) and their arguments for find_events' filters."""
+    conds = [("type = ?", type), ("source = ?", source), ("at >= ?", since),
+             ("at < ?", until and until + "T99")]  # until: through the end of that day
+    if who == "-":
+        conds.append(("user IS NULL", None))
+    elif who:
+        conds.append(("user = ?", who))
+    if problems:
+        conds.append(("ok = 0", None))
+    where = [c for c, v in conds if v is None or v]
+    return where, [v for _, v in conds if v]
+
+
 def find_events(conn: sqlite3.Connection, type: str = "", who: str = "", source: str = "", since: str = "",
                 until: str = "", problems: bool = False, limit: int = 200) -> dict[str, Any]:
     """Admin log lines matching every filter given, newest first, with the blocked-request count per day as
     Cloudflare lines. who "-" = lines with no person. since/until are UTC days, both included.
     Returns {events (at most `limit`), matched, total, people (everyone named in the log)}."""
-    blocked = [{"at": last_at or f"{day}T23:59:59+00:00", "user": None, "kind": "blocked", "ok": False,
-                "detail": f"{n} request{'' if n == 1 else 's'} blocked without a valid Access token",
-                "link": None, "type": "blocked", "source": "cloudflare"}
-               for day, n, last_at in conn.execute("SELECT day, n, last_at FROM blocked_requests "
-                                                   "WHERE day >= date('now', ?)", (f"-{EVENT_DAYS} days",))]
+    blocked = _blocked_lines(conn)
     total = conn.execute("SELECT count(*) FROM events").fetchone()[0] + len(blocked)
-    where, args = [], []
-    for col, v in (("type", type), ("source", source)):
-        if v:
-            where.append(f"{col} = ?")
-            args.append(v)
-    if who == "-":
-        where.append("user IS NULL")
-    elif who:
-        where.append("user = ?")
-        args.append(who)
-    if since:
-        where.append("at >= ?")
-        args.append(since)
-    if until:
-        where.append("at < ?")
-        args.append(until + "T99")  # through the end of that day
-    if problems:
-        where.append("ok = 0")
+    where, args = _event_filters(type, who, source, since, until, problems)
     sql = f"SELECT {EVENT_COLS} FROM events {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY at DESC, id DESC"
     matched = conn.execute(f"SELECT count(*) FROM ({sql})", args).fetchone()[0]
     rows = [_event_row(*r) for r in conn.execute(sql + " LIMIT ?", (*args, limit))]
-    keep_blocked = (type in ("", "blocked") and source in ("", "cloudflare") and who in ("", "-"))
-    extra = [b for b in blocked if keep_blocked and (not since or b["at"] >= since) and (not until or b["at"] < until + "T99")]
+    extra = []
+    if type in ("", "blocked") and source in ("", "cloudflare") and who in ("", "-"):
+        extra = [b for b in blocked if b["at"] >= since and (not until or b["at"] < until + "T99")]
     rows = sorted(rows + extra, key=lambda e: e["at"], reverse=True)[:limit]
     people = [u for (u,) in conn.execute("SELECT DISTINCT user FROM events WHERE user IS NOT NULL ORDER BY user")]
     return {"events": rows, "matched": matched + len(extra), "total": total, "people": people}

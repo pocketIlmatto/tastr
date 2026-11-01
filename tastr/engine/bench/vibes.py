@@ -308,6 +308,25 @@ def _agree(X, rows, weights, label) -> float | None:
     return v
 
 
+def _with_inputs(rows: list[dict], inputs, setting) -> tuple[list, list[dict]]:
+    """(inputs, rows) for the rows that have inputs at `setting`."""
+    pairs = [(r, inputs(r, *setting)) for r in rows]
+    pairs = [(r, x) for r, x in pairs if x is not None]
+    return [x for _, x in pairs], [r for r, _ in pairs]
+
+
+def _best_weights(train: list[dict], inputs, label: str, settings) -> tuple:
+    """(train agreement, weights, setting) of the best weights on the simplex over every setting."""
+    best = None
+    for s in settings:
+        X, R = _with_inputs(train, inputs, s)
+        for w in simplex(len(X[0])):
+            v = _agree(X, R, w, label)
+            if v is not None and (best is None or v > best[0]):
+                best = (v, w, s)
+    return best
+
+
 def fit_weights(rows: list[dict], inputs, label: str, baseline, settings=((),), base_setting=()) -> dict | None:
     """Best weights on the simplex for agreement with `label` on the train split, with held-out scores.
 
@@ -319,28 +338,17 @@ def fit_weights(rows: list[dict], inputs, label: str, baseline, settings=((),), 
     test = [r for r in rows if not in_train(r["id"])]
     if len(train) < 20 or len(test) < 10:
         return None
-    best = None
-    for s in settings:
-        tr = [(r, inputs(r, *s)) for r in train]
-        tr = [(r, x) for r, x in tr if x is not None]
-        X, R = [x for _, x in tr], [r for r, _ in tr]
-        for w in simplex(len(X[0])):
-            v = _agree(X, R, w, label)
-            if v is not None and (best is None or v > best[0]):
-                best = (v, w, s)
+    best = _best_weights(train, inputs, label, settings)
 
     def held_out(w, s):
-        te = [(r, inputs(r, *s)) for r in test]
-        te = [(r, x) for r, x in te if x is not None]
-        return _agree([x for _, x in te], [r for r, _ in te], w, label), len(te)
+        X, R = _with_inputs(test, inputs, s)
+        return _agree(X, R, w, label), len(X)
 
-    base_s = base_setting
-    base_test, n_test = held_out(baseline, base_s)
-    tr = [(r, inputs(r, *base_s)) for r in train]
-    tr = [(r, x) for r, x in tr if x is not None]
-    return {"label": label, "n_train": len(tr), "n_test": n_test,
-            "baseline": {"weights": list(baseline), "setting": list(base_s),
-                         "train": _agree([x for _, x in tr], [r for r, _ in tr], baseline, label), "test": base_test},
+    base_test, n_test = held_out(baseline, base_setting)
+    X, R = _with_inputs(train, inputs, base_setting)
+    return {"label": label, "n_train": len(X), "n_test": n_test,
+            "baseline": {"weights": list(baseline), "setting": list(base_setting),
+                         "train": _agree(X, R, baseline, label), "test": base_test},
             "fitted": {"weights": list(best[1]), "setting": list(best[2]), "train": best[0], "test": held_out(best[1], best[2])[0]}}
 
 

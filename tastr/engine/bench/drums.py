@@ -178,6 +178,38 @@ def _merged(onsets: dict[str, list[float]], lanes, gap: float = 0.03) -> np.ndar
     return np.asarray(keep, dtype=float)
 
 
+def _lenient(acts, lanes, want, hop: int, sr: int) -> list[int]:
+    """Lenient counts: against the lane's own loudest moment, not its family's. Tells a lane that ranks its
+    hits right but too quietly (it would rarely show in the groove) from one that misses them."""
+    x = sum(acts[lane] for lane in lanes)
+    le, lr = _match(_peaks(x, 0.4 * float(x.max())) * hop / sr if x.max() > 0 else [], want)
+    return [int(lr.sum()), int((~le).sum()), int((~lr).sum())]
+
+
+def _split(want, hit_r, ref) -> dict[str, list[int]]:
+    """Recall of hits alone vs with a kick or snare: {"alone"|"with": [found, labeled]}."""
+    others = [t for c in ("kick", "snare", "KD", "SD") for t in ref.get(c, [])]
+    split = {"alone": [0, 0], "with": [0, 0]}
+    for t, h in zip(want, hit_r):
+        s = split["with" if _near(t, others, WITH_TOL) else "alone"]
+        s[0] += int(h)
+        s[1] += 1
+    return split
+
+
+def _score_label(out: dict, label: str, classes, est, ref, excused: dict) -> tuple[list, np.ndarray]:
+    """Counts and false-positive places for one label; returns (reference onsets, which were found)."""
+    want = sorted(t for c in classes for t in ref.get(c, []))
+    hit_e, hit_r = _match(est, want)
+    ok = [t for c in excused.get(label, ()) for t in ref.get(c, [])]
+    fps = [e for e, h in zip(est, hit_e) if not h and not _near(e, ok, TOL)]
+    if label == "hats":  # it covers both hat lanes; counting the others too would count onsets twice
+        out["excused"] = int((~hit_e).sum()) - len(fps)
+    out["counts"][label] = [int(hit_r.sum()), len(fps), int((~hit_r).sum())]
+    out["fp_at"][label] = dict(Counter(_nearest(e, ref, classes) for e in fps))
+    return want, hit_r
+
+
 def score_track(acts: dict[str, np.ndarray] | None, ref: dict[str, list[float]], labels: dict, excused: dict | None = None,
                 spare=("tom", "perc", "clap"), hop: int = 512, sr: int = SR, onsets: dict | None = None) -> dict:
     """Counts for one track: per label tp/fp/fn, where its false positives landed, tom/perc recall alone vs
@@ -188,31 +220,13 @@ def score_track(acts: dict[str, np.ndarray] | None, ref: dict[str, list[float]],
     for label, (classes, lanes) in labels.items():
         if onsets is None and not all(lane in acts for lane in lanes):
             continue  # e.g. cymbal without the drum model
-        want = sorted(t for c in classes for t in ref.get(c, []))
         est = _merged(onsets, lanes) if onsets is not None else lane_onsets(acts, lanes) * hop / sr
-        hit_e, hit_r = _match(est, want)
-        ok = [t for c in excused.get(label, ()) for t in ref.get(c, [])]
-        fps = [e for e, h in zip(est, hit_e) if not h and not _near(e, ok, TOL)]
-        if label == "hats":  # it covers both hat lanes; counting the others too would count onsets twice
-            out["excused"] = int((~hit_e).sum()) - len(fps)
-        out["counts"][label] = [int(hit_r.sum()), len(fps), int((~hit_r).sum())]
-        out["fp_at"][label] = dict(Counter(_nearest(e, ref, classes) for e in fps))
-        if label in ("tom", "perc") and onsets is None:
-            # Lenient: against the lane's own loudest moment, not its family's. Tells a lane that ranks its
-            # hits right but too quietly (it would rarely show in the groove) from one that misses them.
-            x = sum(acts[lane] for lane in lanes)
-            le, lr = _match(_peaks(x, 0.4 * float(x.max())) * hop / sr if x.max() > 0 else [], want)
-            out["lenient"] = out.get("lenient", {}) | {label: [int(lr.sum()), int((~le).sum()), int((~lr).sum())]}
-        elif label in ("tom", "perc"):
-            out["lenient"] = out.get("lenient", {}) | {label: out["counts"][label]}  # nothing laxer to try
+        want, hit_r = _score_label(out, label, classes, est, ref, excused)
         if label in ("tom", "perc"):
-            others = [t for c in ("kick", "snare", "KD", "SD") for t in ref.get(c, [])]
-            split = {"alone": [0, 0], "with": [0, 0]}  # [found, labeled]
-            for t, h in zip(want, hit_r):
-                s = split["with" if _near(t, others, WITH_TOL) else "alone"]
-                s[0] += int(h)
-                s[1] += 1
-            out["split"][label] = split
+            # With another transcriber's onsets there is nothing laxer to try.
+            lenient = out["counts"][label] if onsets is not None else _lenient(acts, lanes, want, hop, sr)
+            out["lenient"] = out.get("lenient", {}) | {label: lenient}
+            out["split"][label] = _split(want, hit_r, ref)
     labeled = {c for classes, _ in labels.values() for c in classes}
     for lane in spare:
         if lane not in labeled:  # e.g. clap on MDB, which labels none; it still counts towards snare above
@@ -243,49 +257,62 @@ def _work(job) -> dict:
     return {"id": item_id, "seconds": round(len(audio) / SR, 1)} | score_track(acts, ref, labels, excused, hop=hop)
 
 
+def _score_all(work: list, jobs: int) -> list[dict]:
+    if jobs <= 1 or len(work) <= 1:
+        return [_work(w) for w in work]
+    # One track here first so librosa's numba kernels are compiled and cached before the workers start
+    # (see runner.run).
+    rows = [_work(work[0])]
+    # Spawned, not forked: that first track may have started PyTorch's threads (the drum model), and
+    # forked workers then hang in them (Linux forks by default; it hung every drum-model run on Modal).
+    import multiprocessing
+
+    with ProcessPoolExecutor(jobs, mp_context=multiprocessing.get_context("spawn")) as pool:
+        rows += list(pool.map(_work, work[1:]))
+    return rows
+
+
+def _pool(rows: list[dict], labels: dict) -> dict:
+    """The per-track counts added up: {counts, split, fp_at, lenient, unlabeled}."""
+    seen = {label for r in rows for label in r["counts"]}  # labels whose lanes this run produced
+    counts = {label: np.zeros(3, dtype=int) for label in labels if label in seen}
+    split = {label: {"alone": [0, 0], "with": [0, 0]} for label in ("tom", "perc") if label in labels}
+    pooled = {"counts": counts, "split": split, "fp_at": {label: Counter() for label in counts},
+              "lenient": {label: np.zeros(3, dtype=int) for label in split}, "unlabeled": Counter()}
+    for r in rows:
+        for label, c in r.get("lenient", {}).items():
+            pooled["lenient"][label] += c
+        for label, c in r["counts"].items():
+            counts[label] += c
+            pooled["fp_at"][label].update(r["fp_at"][label])
+        for label, s in r["split"].items():
+            for cond in s:
+                split[label][cond] = [a + b for a, b in zip(split[label][cond], s[cond])]
+        pooled["unlabeled"].update(r["unlabeled"])
+    return pooled
+
+
+def _summary(pooled: dict) -> dict:
+    summary = {label: _prf(*c) for label, c in pooled["counts"].items()}
+    for label, s in pooled["split"].items():
+        summary[label] |= {"lenient": _prf(*pooled["lenient"][label])}
+        summary[label] |= {f"r_{cond}": round(f / max(1, n), 3) for cond, (f, n) in s.items()}
+        summary[label] |= {f"n_{cond}": n for cond, (_, n) in s.items()}
+    return summary
+
+
 def run_onsets(suite: str, items: list, labels: dict, excused: dict | None = None, jobs: int = 1) -> dict:
     """Score `items` [(id, audio path or samples, {class: onset seconds}[, {lane: onsets}])] and pool the
     counts per label."""
     work = [(it[0], it[1], it[2], labels, excused, *it[3:]) for it in items]
     t0 = time.time()
-    if jobs > 1 and len(work) > 1:
-        # One track here first so librosa's numba kernels are compiled and cached before the workers start
-        # (see runner.run).
-        rows = [_work(work[0])]
-        # Spawned, not forked: that first track may have started PyTorch's threads (the drum model), and
-        # forked workers then hang in them (Linux forks by default; it hung every drum-model run on Modal).
-        import multiprocessing
-
-        with ProcessPoolExecutor(jobs, mp_context=multiprocessing.get_context("spawn")) as pool:
-            rows += list(pool.map(_work, work[1:]))
-    else:
-        rows = [_work(w) for w in work]
-    seen = {label for r in rows for label in r["counts"]}  # labels whose lanes this run produced
-    counts = {label: np.zeros(3, dtype=int) for label in labels if label in seen}
-    split = {label: {"alone": [0, 0], "with": [0, 0]} for label in ("tom", "perc") if label in labels}
-    fp_at: dict[str, Counter] = {label: Counter() for label in counts}
-    unlabeled: Counter = Counter()
-    lenient = {label: np.zeros(3, dtype=int) for label in split}
-    for r in rows:
-        for label, c in r.get("lenient", {}).items():
-            lenient[label] += c
-        for label, c in r["counts"].items():
-            counts[label] += c
-            fp_at[label].update(r["fp_at"][label])
-        for label, s in r["split"].items():
-            for cond in s:
-                split[label][cond] = [a + b for a, b in zip(split[label][cond], s[cond])]
-        unlabeled.update(r["unlabeled"])
-    summary = {label: _prf(*c) for label, c in counts.items()}
-    for label, s in split.items():
-        summary[label] |= {"lenient": _prf(*lenient[label])}
-        summary[label] |= {f"r_{cond}": round(f / max(1, n), 3) for cond, (f, n) in s.items()}
-        summary[label] |= {f"n_{cond}": n for cond, (_, n) in s.items()}
-    n_ref = sum(int(c[0] + c[2]) for label, c in counts.items() if label != "hats")
-    return {"suite": suite, "tracks": len(rows), "summary": summary,
-            "fp_at": {label: dict(c.most_common()) for label, c in fp_at.items() if c},
+    rows = _score_all(work, jobs)
+    pooled = _pool(rows, labels)
+    n_ref = sum(int(c[0] + c[2]) for label, c in pooled["counts"].items() if label != "hats")
+    return {"suite": suite, "tracks": len(rows), "summary": _summary(pooled),
+            "fp_at": {label: dict(c.most_common()) for label, c in pooled["fp_at"].items() if c},
             "excused_cymbal_onsets": sum(r["excused"] for r in rows),
-            "unlabeled_onsets_per_ref": {lane: round(n / max(1, n_ref), 3) for lane, n in unlabeled.items()},
+            "unlabeled_onsets_per_ref": {lane: round(n / max(1, n_ref), 3) for lane, n in pooled["unlabeled"].items()},
             "seconds": round(time.time() - t0, 1), "audio_seconds": round(sum(r["seconds"] for r in rows), 1),
             "rows": rows}
 

@@ -201,15 +201,9 @@ LABELS = {
 }
 
 
-def format_summary(report: dict, baseline: dict | None = None) -> str:
-    s = report["summary"]
-    b = (baseline or {}).get("summary", {})
-    lines = [f"{s['tracks']} tracks ({s['failed']} failed) in {report['seconds']} s"]
-    for m in SUMMARY_METRICS:
-        if m not in s:
-            continue
-        delta = f"   ({s[m] - b[m]:+.3f} vs baseline)" if m in b else ""
-        lines.append(f"  {LABELS[m]:24} {s[m]:.3f}  n={s[m + '_n']}{delta}")
+def _detail_lines(s: dict) -> list[str]:
+    """Key result categories, meter accuracy and BPM octave errors, where the report has them."""
+    lines = []
     if "key_categories" in s:
         lines.append("  key results: " + ", ".join(f"{k} {v}" for k, v in s["key_categories"].items()))
     if "meter_3_n" in s or "meter_4_n" in s:
@@ -217,13 +211,26 @@ def format_summary(report: dict, baseline: dict | None = None) -> str:
                                              for m in (3, 4) if f"meter_{m}_n" in s))
     if "tempo_octave_errors" in s:
         lines.append("  BPM octave errors: " + ", ".join(f"{k} {v}" for k, v in s["tempo_octave_errors"].items()))
-    if report["review"]:
-        lines.append("  review first:")
-        for r in report["review"][:5]:
-            est = " ".join(str(x) for x in (r.get("est_bpm"), r.get("est_key")) if x is not None)
-            ref = " ".join(str(x) for x in (r.get("ref_bpm"), r.get("ref_key")) if x is not None)
-            lines.append(f"    {r['id']}: got {est or '?'}, expected {ref or '?'} ({r['reason']})")
-    return "\n".join(lines)
+    return lines
+
+
+def _review_lines(review: list[dict]) -> list[str]:
+    lines = ["  review first:"] if review else []
+    for r in review[:5]:
+        est = " ".join(str(x) for x in (r.get("est_bpm"), r.get("est_key")) if x is not None)
+        ref = " ".join(str(x) for x in (r.get("ref_bpm"), r.get("ref_key")) if x is not None)
+        lines.append(f"    {r['id']}: got {est or '?'}, expected {ref or '?'} ({r['reason']})")
+    return lines
+
+
+def format_summary(report: dict, baseline: dict | None = None) -> str:
+    s = report["summary"]
+    b = (baseline or {}).get("summary", {})
+    lines = [f"{s['tracks']} tracks ({s['failed']} failed) in {report['seconds']} s"]
+    for m in (m for m in SUMMARY_METRICS if m in s):
+        delta = f"   ({s[m] - b[m]:+.3f} vs baseline)" if m in b else ""
+        lines.append(f"  {LABELS[m]:24} {s[m]:.3f}  n={s[m + '_n']}{delta}")
+    return "\n".join(lines + _detail_lines(s) + _review_lines(report["review"]))
 
 
 def save(report: dict, path: str | Path) -> None:

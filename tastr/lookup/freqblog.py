@@ -45,18 +45,18 @@ class FreqBlog(Provider):
     def may_store(self) -> bool:
         return os.environ.get("FREQBLOG_PLAN", "").strip().lower() == "paid"
 
-    def lookup(self, q: TrackQuery) -> LookupResult:
+    def _fetch(self, q: TrackQuery) -> tuple[int | None, dict]:
+        """(HTTP status, body); status None when the API has no such track (a 404)."""
         try:
             status, body = self.get_json(f"{self.base()}/lookup", {"track": q.title, "artist": q.artist},
                                          headers={"X-API-Key": self.api_key() or ""})
         except ProviderError as e:
             if e.status == 404:
-                return LookupResult(self.name, "not_found")
+                return None, {}
             raise
-        body = body if isinstance(body, dict) else {}
-        if status == 202:
-            return LookupResult(self.name, "pending", extra={"message": body.get("message") or body.get("status")})
-        track = body.get("track") if isinstance(body.get("track"), dict) else body  # flat or wrapped
+        return status, body if isinstance(body, dict) else {}
+
+    def _match(self, track: dict, q: TrackQuery) -> LookupResult:
         title, artist = _text(track, "track_name", "title", "track"), _text(track, "artist_name", "artist")
         if num(track.get("bpm")) is None and not track.get("key"):
             return LookupResult(self.name, "not_found")
@@ -68,6 +68,15 @@ class FreqBlog(Provider):
             camelot=track.get("camelot") or None, matched_artist=artist, matched_title=title,
             url=track.get("url") or self.homepage,
             extra={k: track[k] for k in ("bpm_alt", "open_key", "id") if track.get(k) is not None})
+
+    def lookup(self, q: TrackQuery) -> LookupResult:
+        status, body = self._fetch(q)
+        if status is None:
+            return LookupResult(self.name, "not_found")
+        if status == 202:
+            return LookupResult(self.name, "pending", extra={"message": body.get("message") or body.get("status")})
+        track = body.get("track") if isinstance(body.get("track"), dict) else body  # flat or wrapped
+        return self._match(track, q)
 
 
 register(FreqBlog())

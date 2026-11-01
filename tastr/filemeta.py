@@ -126,57 +126,76 @@ def _mp4_tags(raw) -> dict[str, str]:
     return out
 
 
+def _reopen(cls, p: Path):
+    """The file again as `cls` (mutagen.mp4.MP4 or mutagen.mp3.MP3), whose raw tags easy mode hides; None on failure."""
+    try:
+        return cls(p)
+    except Exception as e:  # mutagen raises many types for damaged or unknown files
+        log.debug("can't read tags from %s: %s", p.name, e)
+        return None
+
+
+def _easy_tags(easy) -> dict[str, str]:
+    tags: dict[str, str] = {}
+    for name, keys in _TAG_KEYS.items():
+        if easy.tags is not None and (v := _first(easy.tags, keys)):
+            tags[name] = v
+    return tags
+
+
+def _read_tags(p: Path, easy):
+    """(the mutagen file the tags came from, tags); (None, {}) when it can't be read."""
+    if isinstance(easy, mutagen.mp4.MP4):  # easy mode hides most atoms, so read the raw ones
+        raw = _reopen(mutagen.mp4.MP4, p)
+        return (raw, _mp4_tags(raw.tags or {})) if raw is not None else (None, {})
+    if isinstance(easy, mutagen.mp3.MP3):  # EasyID3 has no comment/key mapping, so read the frames
+        raw = _reopen(mutagen.mp3.MP3, p)
+        return (raw, _id3_tags(raw.tags) if raw.tags is not None else {}) if raw is not None else (None, {})
+    if hasattr(easy.tags, "getall"):  # plain ID3 (WAV/AIFF): no easy mapping
+        return easy, _id3_tags(easy.tags)
+    return easy, _easy_tags(easy)
+
+
+_INFO_ATTRS = (("sample_rate", "sample_rate"), ("channels", "channels"), ("bits_per_sample", "bit_depth"),
+               ("bitrate", "bitrate"), ("length", "duration"))
+
+
+def _audio_info(f, p: Path) -> dict[str, Any]:
+    a = getattr(f, "info", None)
+    if a is None:
+        return {}
+    info: dict[str, Any] = {"format": _FORMATS.get(p.suffix.lower(), p.suffix.lstrip(".").upper() or None)}
+    lossy_mp4 = isinstance(f, mutagen.mp4.MP4) and getattr(a, "codec", "") != "alac"
+    for attr, key in _INFO_ATTRS:
+        v = getattr(a, attr, None)
+        if v and not (lossy_mp4 and key == "bit_depth"):  # AAC reports a nominal 16 that isn't real
+            info[key] = v
+    codec = getattr(a, "codec_description", None) or getattr(a, "codec", None) or type(a).__module__.rsplit(".", 1)[-1].upper()
+    info["codec"] = str(codec)
+    return info
+
+
 def read_file_meta(path: str | Path) -> tuple[dict[str, str], dict[str, Any]]:
     """Return (tags, audio_info) for `path`. Both are empty when nothing could be read."""
     p = Path(path)
-    tags: dict[str, str] = {}
     info: dict[str, Any] = {}
     try:
         info["file_size"] = p.stat().st_size
     except OSError:  # gone or unreadable: the tag read below fails the same way and returns empty dicts
         pass
     if mutagen is None:
-        return tags, info
+        return {}, info
     try:
         easy = mutagen.File(p, easy=True)
     except Exception as e:  # mutagen raises many types for damaged or unknown files
         log.debug("can't read tags from %s: %s", p.name, e)
-        return tags, info
+        return {}, info
     if easy is None:
+        return {}, info
+    f, tags = _read_tags(p, easy)
+    if f is None:
         return tags, info
-    if isinstance(easy, mutagen.mp4.MP4):  # easy mode hides most atoms, so read the raw ones
-        try:
-            easy = mutagen.mp4.MP4(p)
-        except Exception as e:
-            log.debug("can't read tags from %s: %s", p.name, e)
-            return tags, info
-        tags = _mp4_tags(easy.tags or {})
-    elif isinstance(easy, mutagen.mp3.MP3):  # EasyID3 has no comment/key mapping, so read the frames
-        try:
-            easy = mutagen.mp3.MP3(p)
-        except Exception as e:
-            log.debug("can't read tags from %s: %s", p.name, e)
-            return tags, info
-        tags = _id3_tags(easy.tags) if easy.tags is not None else {}
-    elif hasattr(easy.tags, "getall"):  # plain ID3 (WAV/AIFF): no easy mapping
-        tags = _id3_tags(easy.tags)
-    else:
-        for name, keys in _TAG_KEYS.items():
-            v = _first(easy.tags, keys) if easy.tags is not None else None
-            if v:
-                tags[name] = v
-    a = getattr(easy, "info", None)
-    lossy_mp4 = isinstance(easy, mutagen.mp4.MP4) and getattr(a, "codec", "") != "alac"
-    if a is not None:
-        info["format"] = _FORMATS.get(p.suffix.lower(), p.suffix.lstrip(".").upper() or None)
-        for attr, key in (("sample_rate", "sample_rate"), ("channels", "channels"), ("bits_per_sample", "bit_depth"),
-                          ("bitrate", "bitrate"), ("length", "duration")):
-            v = getattr(a, attr, None)
-            if v and not (lossy_mp4 and key == "bit_depth"):  # AAC reports a nominal 16 that isn't real
-                info[key] = v
-        codec = getattr(a, "codec_description", None) or getattr(a, "codec", None) or type(a).__module__.rsplit(".", 1)[-1].upper()
-        info["codec"] = str(codec)
-    return tags, info
+    return tags, info | _audio_info(f, p)
 
 
 _TAG_LABELS = [("title", "Title"), ("artist", "Artist"), ("album", "Album"), ("album_artist", "Album artist"), ("year", "Year"),

@@ -14,6 +14,7 @@ You can also put a track in the list yourself or take one out (the `review_flags
 from __future__ import annotations
 
 import csv
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -118,29 +119,38 @@ def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = 
     labeled or not); ones you took out never show. The rest are unlabeled tracks with a low "likely right" score
     on BPM or key, or a catalog listing that disagrees. `chance_right` is the lower of the BPM and key "likely
     right" scores (None on cards analyzed before calibration); `reasons` says why each is listed, and
-    `catalog_bpm` / `catalog_key` (Camelot) are what a disagreeing catalog lists."""
+    `catalog_bpm` / `catalog_key` (Camelot) are what a disagreeing catalog lists.
+
+    Pattern reviews add tracks too, labeled or not: a part you marked Way off and haven't saved the right pattern
+    for, or a mark a re-analysis made stale (pattern_reasons). Way-off tracks come right after yours; `way_off`
+    counts their sections."""
     from . import lookup
 
     labeled = {r["track_id"] for r in db.list_labels(conn, owner)}
     flags = db.review_flags(conn, owner)
+    marks: dict[int, list[dict[str, Any]]] = {}
+    for r in db.list_pattern_reviews(conn, owner):
+        marks.setdefault(r["track_id"], []).append(r)
     out = []
     for t in db.list_tracks(conn, owner):
         flag = flags.get(t["id"])
-        if flag == "skipped" or (t["id"] in labeled and flag != "flagged"):
+        settled = t["id"] in labeled and flag != "flagged"  # its BPM and key are labeled: only pattern reasons count
+        if flag == "skipped" or (settled and t["id"] not in marks):
             continue
         card = db.load_card(conn, t["id"])
         if card is None:
             continue
+        pat_reasons, way_off = pattern_reasons(_with_status(card, marks.get(t["id"], [])))
         reasons, scores = [], []
         bpm_p = card.core.bpm_likely_correct
         key_p = card.core.key.likely_correct if card.core.key else None
         for name, p in (("BPM", bpm_p), ("key", key_p)):
             if p is not None:
                 scores.append(p)
-                if p < 0.6:
+                if p < 0.6 and not settled:
                     reasons.append(f"{name} {round(100 * p)}% likely right")
         disagree, cat_bpm, cat_key = 0, None, None
-        for r in db.get_lookups(conn, t["id"]):
+        for r in db.get_lookups(conn, t["id"]) if not settled else []:
             if r.get("status") != "found":
                 continue
             for what, why, value in _catalog_reasons(card, r, lookup.compare(card, r)):
@@ -151,6 +161,7 @@ def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = 
                 if what == "key" and cat_key is None:
                     cat_key = value
         mine = flag == "flagged"
+        reasons = pat_reasons + reasons
         if mine:
             reasons.insert(0, "You put this back in review (it has a label)" if t["id"] in labeled else "You added this to review")
         if not reasons:
@@ -159,7 +170,180 @@ def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = 
         out.append({"track_id": t["id"], "title": card.source.title, "artist": card.source.artist,
                     "bpm": card.core.bpm, "key": k.name if k else None, "camelot": k.camelot if k else None,
                     "chance_right": min(scores) if scores else None, "disagreements": disagree, "reasons": reasons,
-                    "mine": mine, "catalog_bpm": cat_bpm, "catalog_key": cat_key})
-    out.sort(key=lambda r: (not r["mine"], -r["disagreements"],
+                    "mine": mine, "catalog_bpm": cat_bpm, "catalog_key": cat_key, "way_off": way_off})
+    out.sort(key=lambda r: (not r["mine"], -r["way_off"], -r["disagreements"],
                             r["chance_right"] if r["chance_right"] is not None else 1.0))
     return out[:limit]
+
+
+# ---------- pattern reviews: your verdict on the generated drums, bass and chords, per section ----------
+# The engine writes one pattern per part and section (the suggestions' data.by_section; an older card, or a part
+# without by_section, has one pattern for every section). You mark each Right, Close or Way off, and can save your
+# edit as the right pattern. Reviews are keyed by the section's bars, so a re-analysis keeps them; the pattern you
+# judged is stored too, so a re-analysis that changes it marks the review stale and the track goes back in review.
+
+PART_NAMES = {"drums": "Drums", "bass": "Bass", "chords": "Chords"}
+VERDICT_NAMES = {"right": "right", "close": "close", "way_off": "way off"}
+NO_SECTIONS = (0, 0)  # the bars a review is stored under on a card without sections
+
+
+def _pattern_sugs(card) -> dict[str, Any]:
+    """The suggestion behind each part, found the way the app's Drums, bass & chords view finds them."""
+    out: dict[str, Any] = {}
+    for s in card.suggestions:
+        d = s.data or {}
+        if d.get("origin") == "template":
+            continue
+        if "drums" not in out and d.get("origin") == "detected" and isinstance(d.get("pattern"), dict):
+            out["drums"] = s
+        elif "bass" not in out and s.category == "bass" and isinstance(d.get("loop"), list):
+            out["bass"] = s
+        elif "chords" not in out and s.category == "harmony" and isinstance(d.get("progression"), list):
+            out["chords"] = s
+    return out
+
+
+def _shape(part: str, d: dict[str, Any]) -> dict[str, Any]:
+    if part == "drums":
+        return {k: v for k, v in (d.get("pattern") or {}).items() if isinstance(v, str)}
+    if part == "bass":
+        return {"notes": list(d.get("loop") or []), "rhythm": d.get("rhythm") or None}
+    return {"chords": list(d.get("progression") or [])}
+
+
+def detected_patterns(card) -> dict[tuple[str, int, int], dict[str, Any]]:
+    """{(part, start_bar, end_bar): {"section": {idx, label, letter} or None, "pattern": ...}} for each part and
+    section the card has a pattern for. Patterns are drums {lane: steps}, bass {notes, rhythm}, chords {chords}."""
+    sugs = _pattern_sugs(card)
+    by_sec = {p: s.data.get("by_section") for p, s in sugs.items() if s.data.get("by_section")}
+    secs = next(iter(by_sec.values()), None)
+    out: dict[tuple[str, int, int], dict[str, Any]] = {}
+    for part, sug in sugs.items():
+        if not secs:
+            out[(part, *NO_SECTIONS)] = {"section": None, "pattern": _shape(part, sug.data)}
+            continue
+        mine = {x.get("idx"): x for x in by_sec.get(part) or []}
+        for x in secs:
+            if x.get("start_bar") is None or x.get("end_bar") is None:
+                continue
+            src = mine.get(x.get("idx")) or sug.data  # a part without by_section plays its one loop everywhere
+            out[(part, x["start_bar"], x["end_bar"])] = {
+                "section": {"idx": x.get("idx"), "label": x.get("label"), "letter": x.get("letter")},
+                "pattern": _shape(part, src)}
+    return out
+
+
+def _clean_truth(part: str, v: Any) -> dict[str, Any]:
+    """A right pattern as the app sends it (its edit), in the stored shape."""
+    if not isinstance(v, dict):
+        raise LabelError("the right pattern must be an object")
+    if part == "drums":
+        if not all(isinstance(s, str) and re.fullmatch(r"[x.o]{1,32}", s) for s in v.values()):
+            raise LabelError("drum lanes are step strings like \"x...x...\"")
+        return {str(k): s for k, s in v.items()}
+    seq = v.get("notes" if part == "bass" else "chords")
+    if not isinstance(seq, list) or len(seq) > 16 or not all(x is None or isinstance(x, str) for x in seq):
+        raise LabelError(f"the {part} need a list of up to 16 {'notes' if part == 'bass' else 'chords'}")
+    if part == "chords":
+        return {"chords": [x or None for x in seq]}
+    rhythm = v.get("rhythm")
+    if rhythm is not None and not (isinstance(rhythm, str) and re.fullmatch(r"[x.o]{1,32}", rhythm)):
+        raise LabelError("the bass rhythm is a step string like \"x.......x.......\"")
+    return {"notes": [x or None for x in seq], "rhythm": rhythm}
+
+
+def save_pattern_review(conn: sqlite3.Connection, track_id: int, body: dict[str, Any]) -> list[dict[str, Any]]:
+    """Store {part, section (its idx in card.sections, or "all"), verdict?, truth?, note?}: a verdict on the detected
+    pattern, the right pattern (your edit, or null to drop it), or both. Neither removes the review. Returns the
+    track's reviews (pattern_reviews)."""
+    card = db.load_card(conn, track_id)
+    if card is None:
+        raise LabelError(f"no track {track_id}")
+    part = body.get("part")
+    if part not in db.PATTERN_PARTS:
+        raise LabelError(f"part must be one of {', '.join(db.PATTERN_PARTS)}")
+    verdict = body.get("verdict") or None
+    if verdict is not None and verdict not in db.PATTERN_VERDICTS:
+        raise LabelError(f"verdict must be one of {', '.join(db.PATTERN_VERDICTS)} or null")
+    found = detected_patterns(card)
+    sec = body.get("section", "all")
+    if sec in (None, "all"):
+        bars = NO_SECTIONS
+    else:
+        try:
+            s = card.sections[int(sec)]
+        except (TypeError, ValueError, IndexError):
+            raise LabelError(f"no section {sec!r} on this track") from None
+        bars = (s.start_bar, s.end_bar)
+    det = found.get((part, *bars))
+    if det is None:
+        raise LabelError(f"this track has no generated {part} for that section")
+    truth = body.get("truth")
+    review = {"verdict": verdict, "truth": _clean_truth(part, truth) if truth is not None else None,
+              "judged": det["pattern"], "stage_version": card.stages_run.get("suggestions"),
+              "note": str(body["note"]).strip()[:500] if body.get("note") else None}
+    db.set_pattern_review(conn, track_id, part, *bars, review)
+    return pattern_reviews(conn, track_id, card)
+
+
+def _with_status(card, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each review plus `section` (where it is now, or None once the section is gone) and `stale` (the pattern it
+    judged isn't what the card has now: a re-analysis changed it, or its section is gone)."""
+    found = detected_patterns(card) if card else {}
+    for r in rows:
+        det = found.get((r["part"], r["start_bar"], r["end_bar"]))
+        r["section"] = det["section"] if det else None
+        r["stale"] = det is None or det["pattern"] != r["judged"]
+    return rows
+
+
+def pattern_reviews(conn: sqlite3.Connection, track_id: int, card=None) -> list[dict[str, Any]]:
+    """A track's pattern reviews, each with `section` and `stale` (see _with_status)."""
+    return _with_status(card or db.load_card(conn, track_id), db.get_pattern_reviews(conn, track_id))
+
+
+def all_pattern_reviews(conn: sqlite3.Connection, owner: str | None = None) -> list[dict[str, Any]]:
+    """Every pattern review (db.list_pattern_reviews) with `section` and `stale`, oldest first."""
+    rows, cards, out = db.list_pattern_reviews(conn, owner), {}, []
+    for r in rows:
+        tid = r["track_id"]
+        if tid not in cards:
+            cards[tid] = db.load_card(conn, tid)
+        out.extend(_with_status(cards[tid], [r]))
+    return out
+
+
+def _where(r: dict[str, Any]) -> str:
+    s = r.get("section")
+    if s:
+        return f" in {' '.join(x for x in (str(s.get('label') or 'section').capitalize(), s.get('letter')) if x)}"
+    return "" if (r["start_bar"], r["end_bar"]) == NO_SECTIONS else f" in bars {r['start_bar']}-{r['end_bar']}"
+
+
+def pattern_reasons(rows: list[dict[str, Any]]) -> tuple[list[str], int]:
+    """Why a track's pattern reviews put it in the review list, and how many sections are marked Way off: a Way off
+    part with no right pattern saved yet, or a mark a re-analysis made stale."""
+    reasons, way_off = [], 0
+    for r in rows:
+        name = PART_NAMES[r["part"]]
+        if r["stale"]:
+            reasons.append(f"{name}{_where(r)} changed since you marked it" if r["section"]
+                           else f"{name} you marked in bars {r['start_bar']}-{r['end_bar']}: that section is gone")
+        elif r["verdict"] == "way_off" and r["truth"] is None:
+            way_off += 1
+            reasons.append(f"{name} way off{_where(r)}")
+    return reasons, way_off
+
+
+def export_patterns(conn: sqlite3.Connection, out: str | Path, owner: str | None = None) -> int:
+    """Write every pattern review as JSON for a pattern bench: one object per track with its audio path and its
+    reviews (verdict, the right pattern if saved, the pattern judged and the stage version). Returns the count of
+    reviews written."""
+    tracks: dict[int, dict[str, Any]] = {}
+    for r in all_pattern_reviews(conn, owner):
+        t = tracks.setdefault(r["track_id"], {"id": f"track-{r['track_id']}", "title": r["title"], "artist": r["artist"],
+                                              "path": str(Path(r["path"]).resolve()) if r["path"] else None, "reviews": []})
+        t["reviews"].append({k: r[k] for k in ("part", "start_bar", "end_bar", "verdict", "truth", "judged",
+                                               "stage_version", "stale", "note", "updated_at")})
+    Path(out).write_text(json.dumps(list(tracks.values()), indent=1) + "\n")
+    return sum(len(t["reviews"]) for t in tracks.values())

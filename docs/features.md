@@ -120,8 +120,15 @@ the music you actually use, and every label also scores future engine changes
     M while it plays.
   - A note, and a "Will save" line that always shows what Save stores. **Save & next** opens the next track to
     review.
-- Labels and review flags are per person on a hosted server, like the library, and re-analyzing never changes
-  them.
+- **Pattern marks** in **Drums, bass & chords**: under each part, "Detected: ✓ Right · ≈ Close · ✗ Way off" for
+  the section shown (click a pressed one to take it off), and **Right everywhere else** to mark the sections you
+  haven't. After editing a part, **Save my edit as the right pattern** keeps your edit as the answer for that
+  section, which the pattern benchmark scores the engine against. A part marked Way off without a saved right
+  pattern puts the track in **To review** ("Bass way off in Drop B"), right after the tracks you added. Marks
+  are kept by the section's bars, so a re-analysis keeps them; one whose pattern the re-analysis changed shows
+  "marked on an older analysis" and puts the track back in review. **Reviewed** lists them beside your labels.
+- Labels, review flags and pattern marks are per person on a hosted server, like the library, and re-analyzing
+  never changes them.
 
 ## Glossary
 

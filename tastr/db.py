@@ -146,6 +146,25 @@ CREATE TABLE IF NOT EXISTS review_flags (
     updated_at TEXT NOT NULL
 );
 
+-- Your verdict on a generated drum, bass or chord pattern in one section (tastr/labels.py, "Pattern reviews").
+-- Keyed by the section's bars (0, 0 on a card without sections) so it outlives a re-analysis, like edits do.
+-- judged_json is the detected pattern you judged and stage_version the suggestions stage that made it, so a
+-- re-analysis that changes the pattern shows the mark as stale. truth_json is the right pattern, when you saved
+-- your edit as the answer: what `tastr labels export --patterns` writes for a pattern bench.
+CREATE TABLE IF NOT EXISTS pattern_reviews (
+    track_id      INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    part          TEXT NOT NULL CHECK (part IN ('drums', 'bass', 'chords')),
+    start_bar     INTEGER NOT NULL,
+    end_bar       INTEGER NOT NULL,
+    verdict       TEXT CHECK (verdict IN ('right', 'close', 'way_off')),
+    truth_json    TEXT,
+    judged_json   TEXT,
+    stage_version TEXT,
+    note          TEXT,
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (track_id, part, start_bar, end_bar)
+);
+
 -- What online catalogs list for a track (tastr.lookup), one row per provider, kept across re-analysis.
 -- status: found | not_found | pending | no_tags | error. key_name is the key as listed; key_tonic / key_mode /
 -- camelot are parsed from it, so they compare with tracks. result_json is the full LookupResult.
@@ -511,6 +530,50 @@ def set_review_flag(conn: sqlite3.Connection, track_id: int, state: str | None) 
             conn.execute("INSERT OR REPLACE INTO review_flags VALUES (?, ?, ?)", (track_id, state, _now()))
 
 
+PATTERN_PARTS = ("drums", "bass", "chords")
+PATTERN_VERDICTS = ("right", "close", "way_off")
+_PATTERN_COLS = ("part", "start_bar", "end_bar", "verdict", "truth_json", "judged_json", "stage_version", "note", "updated_at")
+
+
+def _pattern_row(r) -> dict[str, Any]:
+    d = dict(zip(_PATTERN_COLS, r))
+    for k in ("truth", "judged"):
+        raw = d.pop(f"{k}_json")
+        d[k] = json.loads(raw) if raw else None
+    return d
+
+
+def get_pattern_reviews(conn: sqlite3.Connection, track_id: int) -> list[dict[str, Any]]:
+    """The track's pattern reviews, in section order, drums before bass before chords."""
+    rows = conn.execute(f"SELECT {', '.join(_PATTERN_COLS)} FROM pattern_reviews WHERE track_id = ? "
+                        "ORDER BY start_bar, CASE part WHEN 'drums' THEN 0 WHEN 'bass' THEN 1 ELSE 2 END", (track_id,))
+    return [_pattern_row(r) for r in rows]
+
+
+def set_pattern_review(conn: sqlite3.Connection, track_id: int, part: str, start_bar: int, end_bar: int,
+                       review: dict[str, Any] | None) -> None:
+    """Store one section's review of one part (checked by tastr.labels.clean_pattern_review); None or a review
+    with neither a verdict nor a right pattern removes it."""
+    with conn:
+        conn.execute("DELETE FROM pattern_reviews WHERE track_id = ? AND part = ? AND start_bar = ? AND end_bar = ?",
+                     (track_id, part, start_bar, end_bar))
+        if review and (review.get("verdict") or review.get("truth") is not None):
+            def dump(v):
+                return json.dumps(v) if v is not None else None
+            conn.execute(f"INSERT INTO pattern_reviews (track_id, {', '.join(_PATTERN_COLS)}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (track_id, part, start_bar, end_bar, review.get("verdict"), dump(review.get("truth")),
+                          dump(review.get("judged")), review.get("stage_version"), review.get("note"), _now()))
+
+
+def list_pattern_reviews(conn: sqlite3.Connection, owner: str | None = None) -> list[dict[str, Any]]:
+    """Every pattern review with its track's id, audio path and title, oldest first."""
+    sql = (f"SELECT t.id, t.local_path, t.title, t.artist, {', '.join('p.' + c for c in _PATTERN_COLS)} "
+           "FROM pattern_reviews p JOIN tracks t ON t.id = p.track_id")
+    rows = conn.execute(sql + (" WHERE t.owner IS ?" if owner is not None else "") + " ORDER BY p.updated_at",
+                        (owner,) if owner is not None else ())
+    return [dict(zip(("track_id", "path", "title", "artist"), r[:4])) | _pattern_row(r[4:]) for r in map(tuple, rows)]
+
+
 EDIT_PARTS = ("drums", "bass", "chords", "drumsrc")
 
 
@@ -690,7 +753,7 @@ _QUERY_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUN
 # A friend's SQL on a hosted server runs on an in-memory copy of their own library: these tables, their rows only,
 # without the columns that name people or server paths. Tables the query doesn't mention are copied empty.
 LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups", "track_labels",
-                  "review_flags")
+                  "review_flags", "pattern_reviews")
 _PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_json"}
 
 

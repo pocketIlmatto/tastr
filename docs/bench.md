@@ -113,8 +113,25 @@ tastr labels export my-labels.csv              # a manifest of every labeled tra
 tastr bench manifest my-labels.csv
 ```
 
+Patterns have labels too. In a card's **Drums, bass & chords**, mark what was detected Right, Close or Way off
+per part and section, and save an edited part as the right pattern ([features.md](features.md#label-and-review)).
+`tastr labels patterns` lists the marks and `tastr labels export --patterns patterns.json` writes them, one
+object per track with its audio path and each review: `part`, `start_bar` / `end_bar` (0 / 0 without sections),
+`verdict` (`right`, `close`, `way_off` or null), `truth` (the right pattern, if saved: drums `{lane: steps}`,
+bass `{notes, rhythm}`, chords `{chords}`), `judged` (what the engine made then), `stage_version` and `stale`
+(a re-analysis has changed the pattern since). The verdicts describe the analysis you looked at; only the saved
+right patterns can score a new engine version. A pattern bench that scores them is planned (Linear TAS-59).
+Its API: `GET`/`PUT /api/tracks/{id}/pattern-reviews` (`{part, section: idx | "all", verdict, truth, note}`;
+neither verdict nor truth removes the review) and `GET /api/pattern-reviews`.
+
+How many tracks to label: about 30 for a first useful read (a share right is then known to within about ±15
+to 18 points, enough to catch a big regression), 50 for a steady headline number, and around 100 to tell apart engine
+changes of 5 to 10 points. Spread them over the genres you use, five or more each. For patterns, count tracks
+rather than sections: sections of one track tend to be right or wrong together.
+
 `tastr review` lists unlabeled tracks where a catalog lookup ([lookup.md](lookup.md)) disagrees with the
-BPM or key, then those whose BPM or key is under 60% likely right. The app's Review tab shows the same list
+BPM or key, then those whose BPM or key is under 60% likely right. Tracks with a pattern marked Way off (and no
+right pattern saved) or a mark a re-analysis made stale are listed too, labeled or not, right after yours. The app's Review tab shows the same list
 and the panel to label each track ([features.md](features.md#label-and-review)). Its API: `GET /api/review`
 (tracks you put in the list first, marked `mine`; each row has its reasons plus `catalog_bpm` / `catalog_key`),
 `GET`/`PUT /api/tracks/{id}/labels` (`kept: true` marks a "Keep as is"), `GET /api/labels` (your labels, newest

@@ -242,7 +242,8 @@ learned per-mode profiles, compressing the chroma (power 0.35 to 0.7), tonic or 
 bonuses, and overtone-suppressed chroma. On 200-track subsets, differences under about 0.03 MIREX were noise.
 
 - Environment: librosa 1.0 with numba 0.68 and numpy 2.5 segfaults in `onset_detect`. These worked:
-  numpy<2.3, numba 0.61.2, llvmlite 0.44.0, librosa 0.11.0, scipy<1.16.
+  numpy<2.3, numba 0.61.2, llvmlite 0.44.0, librosa 0.11.0, scipy<1.16 (the Modal images pin them; locally
+  they come with the `engine` extra, which `dev` includes).
   A segfault in `beat_track` with matching versions came from a numba cache corrupted when parallel workers
   compiled into it at once. `--jobs` now analyzes one track before starting workers; if a cache is already
   broken, delete the `.nbi`/`.nbc` files under librosa's `__pycache__` or point `NUMBA_CACHE_DIR` at a fresh folder.

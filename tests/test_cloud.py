@@ -26,16 +26,22 @@ def test_modal_image_deps_match_pyproject(name):
     consts = _consts(name)
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
     web = ("fastapi", "uvicorn", "python-multipart")
-    assert sorted(consts["ENGINE_DEPS"]) == sorted(d for d in project["dependencies"] if not d.startswith(web))
-    assert consts["STEMS_DEPS"] == project["optional-dependencies"]["stems"]
+    extras = project["optional-dependencies"]
+    base = [d for d in project["dependencies"] if not d.startswith(web)]
+    assert sorted(consts["ENGINE_DEPS"]) == sorted(base + extras["engine"])
+    assert consts["STEMS_DEPS"] == [d for d in extras["stems"] if d != "tastr[engine]"]
     if "TORCH_CPU" in (ROOT / "tastr/cloud" / name).read_text():
         assert f'TORCH_CPU = ("{project["optional-dependencies"]["drums"][0]}"' in (ROOT / "tastr/cloud" / name).read_text()
     assert consts["PINS"] == _consts("modal_app.py")["PINS"]
 
 
-def test_docker_image_uses_the_engine_pins():
+def test_docker_image_has_no_dsp_libraries():
+    """The web server analyzes nothing itself (Modal or the browser does), so its image leaves out the engine
+    extra; it keeps the Modal images' numpy pin."""
+    docker = (ROOT / "Dockerfile").read_text()
     pins = _consts("modal_app.py")["PINS"]
-    assert all(f'"{p}"' in (ROOT / "Dockerfile").read_text() for p in pins)
+    assert '".[hosted,cloud]"' in docker and all(f'"{p}"' in docker for p in pins if p.startswith("numpy"))
+    assert not any(lib in docker for lib in ("librosa", "scipy", "numba", "llvmlite", "engine]"))
 
 
 @pytest.mark.audio

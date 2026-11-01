@@ -32,7 +32,7 @@ flowchart TB
     BYP[Access app on /pub: Bypass]
   end
   subgraph FLY[Fly.io app tastr-frienz]
-    WEB[Tastr web server, 512 MB, serves the Rust engine's WebAssembly build]
+    WEB[Tastr web server, 512 MB, no DSP libraries, serves the Rust engine's WebAssembly build]
     VOL[(Volume tastr_data at /data: tastr.db, uploads, stems, analysis-jobs, optional AcousticBrainz index)]
     LS[Litestream]
   end
@@ -175,7 +175,7 @@ Modal environment keeps the app's spending apart from benchmarks.
 | File | What it sets |
 | --- | --- |
 | `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT`, `TASTR_GITHUB_REPO` and `TASTR_GITHUB_WORKFLOWS` (whose GitHub Actions runs the Admin log shows, and which workflows) |
-| `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image, the restore-then-replicate start, and the backup target |
+| `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image (`.[hosted,cloud]`: no librosa, scipy or numba, since the server analyzes nothing itself), the restore-then-replicate start, and the backup target |
 | `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
 | `.github/workflows/deploy.yml` | When it deploys (after `tests` on main, which files count), the deploy order, which repository secrets it uses, and the commit and run link it builds into the Fly image |
 

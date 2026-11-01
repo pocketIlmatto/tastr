@@ -234,6 +234,12 @@ The first run also had 8 songs the Rust decoder refused: symphonia 0.5's ID3v2 r
 probe time when any ID3v2.4 frame is flagged compressed ("id3v2: compressed frames are not supported"). ffmpeg and librosa read them fine. PR #53 makes the Rust decoder retry past the leading ID3v2 tags, and
 adds the same Python fallback to the bench that the app already has.
 
+**Rerun with all 695 (2026-11-01, main 696c32c, after PR #53):** every song decodes now. MIREX weighted
+**0.550**, exact 0.475 (330 exact, 65 fifth, 21 relative, 66 parallel, 213 other). Major refs (355) 0.395,
+minor refs (340) 0.711; 199 of 355 major songs read as minor. Of the 8 newly decoded songs, 3 are right, 4
+are major songs read as their parallel minor and 1 is other, so they match the rest. The confidence split
+holds (top half 0.678, bottom half 0.421). The minor lean (TAS-30) is still the thing to fix.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:

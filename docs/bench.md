@@ -311,6 +311,12 @@ zip 0 overstates the problem. On the 1,057 new songs, which it never saw, the sh
 1,752 FMA songs it is about 0.60. Zip 0 (track ids 0-19,999, the oldest uploads) has unusually hard major
 songs; a per-genre look would say why. Key profiles for the new songs took 698 s on Modal.
 
+**All 1,752 FMA Keys songs (2026-11-01, core 0.4.0, Rust):** MIREX weighted **0.610**, exact **0.519** (909 exact,
+208 fifth, 118 relative, 100 parallel, 417 other). Major songs (914) 0.545, 336 (37%) read as minor; minor songs
+(838) 0.680. By zip: 000-019 0.572 (major 0.447, 47% read as minor), 050-059 0.620 (major 0.580, 34%), 060-069
+0.650 (major 0.633, 27%). Outside zip 0 the misses lean to fifth and relative more than parallel. This is the
+Glossary's FMA Keys number (`tastr bench fma-keys ... --record` now records it).
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:

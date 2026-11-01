@@ -26,7 +26,8 @@ def seeded(client, db_path):
     return tid
 
 
-def test_upload_analyzes_and_lists(client, synth_wav, truth_core):
+@pytest.mark.rust
+def test_upload_analyzes_and_lists(client, synth_wav):
     path, _ = synth_wav
     with open(path, "rb") as f:
         r = client.post("/api/analyze", files=[("files", (path.name, f, "audio/wav"))])
@@ -151,6 +152,7 @@ def test_ui_has_one_drums_bass_and_chords_section():
         assert gone not in js
 
 
+@pytest.mark.rust
 def test_upload_keeps_the_file_name_without_a_hash(client, synth_wav):
     path, _ = synth_wav
     with open(path, "rb") as f:
@@ -244,6 +246,7 @@ def test_retag_endpoint(client, db_path, synth_wav):
     assert client.post("/api/tracks/999/retag").status_code == 404
 
 
+@pytest.mark.rust
 def test_reanalyze_endpoint(client, db_path, synth_wav):
     path, _ = synth_wav
     conn = db.connect(db_path)
@@ -270,6 +273,7 @@ def test_reanalyze_endpoint(client, db_path, synth_wav):
     assert client.post("/api/tracks/999/reanalyze").status_code == 404
 
 
+@pytest.mark.rust
 def test_reanalyze_with_a_time_signature(client, db_path, synth_wav):
     path, _ = synth_wav
     conn = db.connect(db_path)
@@ -328,7 +332,8 @@ def test_ui_has_track_actions_menu():
     assert "confirm(" not in js  # deleting confirms inside the menu, not with a browser dialog
 
 
-def test_audio_streams_with_range_and_views_load_separately(client, synth_wav, truth_core):
+@pytest.mark.rust
+def test_audio_streams_with_range_and_views_load_separately(client, synth_wav):
     path, _ = synth_wav
     with open(path, "rb") as f:
         tid = client.post("/api/analyze", files=[("files", (path.name, f, "audio/wav"))]).json()["results"][0]["track_id"]
@@ -585,7 +590,7 @@ def test_background_analysis_reports_each_step(client, monkeypatch):
 
     go, seen = threading.Event(), []
 
-    def fake(source, stages, options, on_stage=None, signals=None):
+    def fake(source, options, on_stage=None, signals=None):
         for name in ("decode", "core", "sections"):
             on_stage(name, 0, 1)
             seen.append(name)

@@ -12,7 +12,6 @@ import time
 from pathlib import Path
 
 from . import db
-from .engine.pipeline import resolve_order
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,7 +21,6 @@ def main(argv: list[str] | None = None) -> int:
 
     a = sub.add_parser("analyze", help="analyze audio files, folders or links")
     a.add_argument("inputs", nargs="+")
-    a.add_argument("--stages", help="comma-separated stage names (default: all)")
     a.add_argument("--json", action="store_true", help="print full cards as JSON")
 
     sub.add_parser("list", help="list analyzed tracks")
@@ -61,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     st = sub.add_parser("stems", help="separate one track into vocals, bass, other and drums (needs tastr[stems])")
     st.add_argument("track_id", type=int)
     st.add_argument("--force", action="store_true", help="separate again even if stems exist")
-    sub.add_parser("stages", help="list registered pipeline stages in run order")
+    sub.add_parser("stages", help="list the engine's stages and their versions")
     w = sub.add_parser("serve", help="run the web UI")
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=8000)
@@ -146,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--remote", action="store_true",
                    help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
     b.add_argument("--engine", choices=["python", "rust"],
-                   help="which engine analyzes (default: TASTR_ENGINE, else python); rust always runs every stage")
+                   help="which engine analyzes (default: TASTR_ENGINE, else rust); rust always runs every stage")
     b.add_argument("--record", action="store_true",
                    help="save the headline score to tastr/engine/bench_scores.json, quoted in the UI (full runs only)")
 
@@ -240,8 +238,10 @@ def _bench_local(args) -> int:
 
 
 def _stages(args) -> int:
-    for st in resolve_order():
-        print(f"{st.name:12} {st.version:14} requires={','.join(st.requires) or '-'}")
+    from .engine import rust
+
+    for name, version in rust.STAGES.items():
+        print(f"{name:12} {version}")
     return 0
 
 
@@ -257,9 +257,8 @@ def _analyze(args) -> int:
     from .service import analyze_inputs
 
     conn = db.connect(args.db)
-    stages = args.stages.split(",") if args.stages else None
     try:
-        results = analyze_inputs(conn, args.inputs, stages)
+        results = analyze_inputs(conn, args.inputs)
     except IngestError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

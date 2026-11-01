@@ -309,7 +309,8 @@ def test_each_person_sees_only_their_own_tracks(db_path, home):
     conn.close()
 
 
-def test_uploads_go_to_the_uploaders_library(db_path, home, synth_wav, truth_core):
+@pytest.mark.rust
+def test_uploads_go_to_the_uploaders_library(db_path, home, synth_wav):
     c = make_client(db_path)
     path, _ = synth_wav
     with open(path, "rb") as f:
@@ -365,6 +366,7 @@ def test_admin_usage(db_path, home, tmp_path):
     assert body["recent"] == [] and body["blocked_today"] == 0  # friend had usage before their first page load here
 
 
+@pytest.mark.rust
 def test_admin_activity_log_and_blocked_requests(db_path, home):
     c = make_client(db_path, admins=("friend@example.com",), daily_tracks=1)
     c.get("/api/config", headers=GOOD)

@@ -37,7 +37,7 @@ flowchart TB
     LS[Litestream]
   end
   subgraph MOD[Modal app tastr-web, environment friends]
-    AN[analyze_stream, 2 CPUs, Python engine or Rust library]
+    AN[analyze_stream, 2 CPUs, Rust engine library]
     AD[analyze_drums, 2 CPUs + PyTorch + drum model]
     ST[stems, T4 GPU]
   end
@@ -95,7 +95,7 @@ sequenceDiagram
   opt a card came and checks out
     W->>W: save the card, skip Modal
   end
-  W->>M: audio bytes, with TASTR_ENGINE in the options (if set)
+  W->>M: audio bytes and options (meter, drum model)
   Note over M: cold start about 30 s after a quiet spell
   loop every 1-2 s until done
     M--)W: the step it's on (decode, core, sections...)
@@ -141,7 +141,7 @@ volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops an
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
 | Whole analysis (optional) | The visitor's browser | With `TASTR_BROWSER_ENGINE` on, `tastr/web/static/engine.js` runs the Rust engine's WebAssembly build in a worker and the upload carries the card. The Docker image builds the `.wasm` in a Rust stage and the server serves it from `TASTR_ENGINE_WASM`. |
-| Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. Cards come from the Rust engine, whose library the image builds (`tastr/cloud/rust_image.py`); `TASTR_ENGINE=python` picks the Python reference engine instead. |
+| Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. Cards always come from the Rust engine, whose library the image builds (`tastr/cloud/rust_image.py`). |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
@@ -200,7 +200,7 @@ These have defaults and change only if you set a Fly secret of the same name ([h
 tab's Modal link opens the app) and `TASTR_CF_ACCOUNT_ID` (your Cloudflare account id, so the Admin tab links to
 Access's applications and its log of blocked requests; without it those links are hidden) and `TASTR_WATCH_MINUTES`
 (default 15: how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off). `TASTR_BROWSER_ENGINE=1` (off by default) has the browser make the whole card
-with the Rust engine, and `TASTR_ENGINE=python` (default `rust`) has Modal analyze with the Python reference engine. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
+with the Rust engine. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
 (a change since the last start is logged as a deploy) on its own. The deploy workflow builds `TASTR_COMMIT`,
 `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` into the image (Docker build arguments, not secrets), so the
 Admin tab's deploy line names the commit and links to its GitHub Actions run.

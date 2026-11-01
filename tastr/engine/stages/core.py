@@ -38,7 +38,7 @@ PULSE_SCALE = 4.0
 
 class CoreStage:
     name = "core"
-    version = "0.3.0"
+    version = "0.4.0"
     requires: tuple[str, ...] = ()
 
     def run(self, ctx: AnalysisContext) -> None:

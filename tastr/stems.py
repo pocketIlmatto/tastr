@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import blobs
+from .markers import Markers, legacy_files
 
 STEM_NAMES = ("vocals", "bass", "other", "drums")
 MODEL = "htdemucs"
@@ -51,8 +52,8 @@ def stems_dir(sha256: str | None, track_id: int) -> Path:
     return stems_root() / (sha256[:16] if sha256 else f"track-{track_id}")
 
 
-def job_marker(folder: Path) -> Path:
-    """Holds the audio path while a separation is queued or running, so a restarted server can pick it up again."""
+def legacy_marker(folder: Path) -> Path:
+    """Where older servers kept a queued or running separation's audio path (read once by `Jobs.resume()`)."""
     return folder.with_name(folder.name + ".job")
 
 
@@ -209,11 +210,13 @@ def _separate_into_bucket(audio_path: str | Path, folder: Path, progress: Progre
 class Jobs:
     """Background separations for the web server, one at a time; later requests wait their turn.
 
-    Each queued or running job leaves a `<folder>.job` marker until it ends, and `resume()` restarts
-    them, so a server that stopped meanwhile (a hosted machine that auto-stops, a crash) doesn't lose them.
+    Each queued or running job leaves a marker in the database (tastr/markers.py) until it ends, and
+    `resume()` restarts them, so a server that stopped meanwhile (a hosted machine that auto-stops, a crash)
+    doesn't lose them. `db_path`: the database that keeps the markers (None: the default one).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, db_path=None) -> None:
+        self.markers = Markers(db_path, "stems")
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tastr-stems")
         self._lock = threading.Lock()
         self._state: dict[Path, dict] = {}
@@ -242,18 +245,20 @@ class Jobs:
                 return dict(job)
             self._seq += 1
             self._state[folder] = {"state": "queued", "progress": 0.0, "_seq": self._seq}
-        folder.parent.mkdir(parents=True, exist_ok=True)
-        job_marker(folder).write_text(str(audio_path))
+        self.markers.put(folder.name, {"audio": str(audio_path)})
         self._pool.submit(self._run, audio_path, folder)
         return self.status(folder)
 
     def resume(self) -> int:
         """Restart the jobs a previous run of the server left unfinished; returns how many."""
+        for f in legacy_files(stems_root(), "*.job"):  # from a server that kept them as files
+            self.markers.put(f.stem, {"audio": f.read_text().strip()})
+            f.unlink(missing_ok=True)
         n = 0
-        for marker in sorted(stems_root().glob("*.job")):
-            folder, audio = marker.with_suffix(""), Path(marker.read_text().strip())
-            if is_ready(folder) or not blobs.exists(audio):
-                marker.unlink(missing_ok=True)
+        for key, data, _ in self.markers.items():
+            folder, audio = stems_root() / key, Path(data.get("audio") or "")
+            if is_ready(folder) or not data.get("audio") or not blobs.exists(audio):
+                self.markers.remove(key)
                 continue
             log.info("Resuming stem separation for %s", audio)
             self.start(audio, folder)
@@ -293,7 +298,7 @@ class Jobs:
             else:
                 log.info("Stems ready for %s (%.0f s)", audio_path, time.monotonic() - start)
         with self._lock:
-            job_marker(folder).unlink(missing_ok=True)
+            self.markers.remove(folder.name)
             job = self._state[folder]
             if job.get("cancelled"):  # the track was deleted meanwhile
                 del self._state[folder]

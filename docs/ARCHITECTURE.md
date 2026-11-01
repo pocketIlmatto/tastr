@@ -30,7 +30,7 @@ The single contract between modules. Every stage writes only its own part:
 | `suggestions` | `suggestions` stage | list of `Suggestion(category, title, body, data)` |
 | `features` | any stage | flat `name -> float`; see the feature registry below |
 | `series` | any stage | named curves `Series(times, values)` for plots |
-| `extras` | any stage | structured JSON; keys prefixed with the stage name (`"suggestions.drum_grid"`). `extras["views"]` (the `views` stage) holds the waveform (int8 min/max per block, base64) and spectrogram (grayscale log-frequency PNG data URL); the web API serves it from `/api/tracks/{id}/views` and leaves it out of the card body |
+| `extras` | any stage | structured JSON; keys prefixed with the stage name (`"suggestions.drum_grid"`). `extras["views"]` (the `views` stage) holds the waveform (int8 min/max per block, base64) and spectrogram (grayscale log-frequency PNG data URL); the web API serves it from `/api/tracks/{id}/views` and leaves it out of the card body. With a hosted server's audio bucket on, the data lives in the bucket and the card holds `{"in_bucket": true}` (`tastr/blobs.py`) |
 | `stages_run`, `errors` | pipeline | a failed stage lands in `errors`; its dependents are skipped |
 
 Changing an existing field is a schema change: bump `CARD_SCHEMA_VERSION`

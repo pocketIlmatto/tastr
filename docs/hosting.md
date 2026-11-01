@@ -201,6 +201,11 @@ the server could later run without one:
   the server deletes local copies the bucket holds that are more than an hour old.
 - Deleting a track, or expiring its audio, deletes the bucket's copy; the storage cap and the admin view's
   storage figures count what the bucket holds.
+- Each card's waveform and spectrogram data (about a megabyte) goes to the bucket as `views/<track id>.json`,
+  gzipped, and the card in the database keeps only a marker; `/api/tracks/{id}/views` redirects to a signed link.
+  Cards saved before keep their data inline until they are re-analyzed. If the bucket can't take it, the data
+  stays in the card. `tastr db-size` shows the database's size by table and how much waveform data is still inline.
+- `tastr unpack` copies the archive's audio and stems to the bucket as well.
 
 Files uploaded before the bucket was turned on stay on the disk only, and keep working from there.
 

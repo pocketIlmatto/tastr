@@ -4,6 +4,7 @@ Runs against moto's in-memory S3, so no network or credentials are needed.
 """
 
 import os
+from contextlib import closing
 import time
 
 import pytest
@@ -202,3 +203,80 @@ def test_modal_jobs_take_bytes_or_an_https_link(tmp_path):
     assert dest.read_bytes() == b"RIFF"
     with pytest.raises(ValueError):
         jobs._write_audio("file:///etc/passwd", dest)
+
+
+VIEWS = {"waveform": {"data": "AAEC"}, "spectrogram": {"png": "data:image/png;base64,AA=="}}
+
+
+def test_views_data_goes_to_the_bucket_and_the_card_keeps_a_marker(bucket, home, db_path):
+    card = full_card()
+    card.extras["views"] = VIEWS
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, card)
+    assert card.extras["views"] == VIEWS  # the caller's card is left alone
+    assert db.load_card(conn, tid).extras["views"] == blobs.IN_BUCKET
+    head = blobs.client().head_object(Bucket=BUCKET, Key=f"views/{tid}.json")
+    assert head["ContentEncoding"] == "gzip" and head["ContentType"] == "application/json"
+    assert blobs.get_views(tid) == VIEWS
+    db.retag_track(conn, tid)  # rewrites the card: the marker stays
+    assert db.load_card(conn, tid).extras["views"] == blobs.IN_BUCKET
+
+    c = TestClient(create_app(db_path))
+    assert c.get(f"/api/tracks/{tid}").json()["has_views"] is True
+    got = c.get(f"/api/tracks/{tid}/views", follow_redirects=False)
+    assert got.status_code == 302 and f"views/{tid}.json" in got.headers["location"]
+    assert db.delete_track(conn, tid)
+    assert objects("views/") == {}
+    conn.close()
+
+
+def test_views_stay_in_the_card_when_the_bucket_cant_take_them(bucket, db_path, monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("bucket down")
+
+    monkeypatch.setattr(blobs, "put_views", broken)
+    card = full_card()
+    card.extras["views"] = VIEWS
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, card)
+    assert db.load_card(conn, tid).extras["views"] == VIEWS
+    assert TestClient(create_app(db_path)).get(f"/api/tracks/{tid}/views").json() == VIEWS
+    conn.close()
+
+
+def test_unpacked_libraries_go_into_the_bucket(bucket, home, db_path, tmp_path):
+    import sqlite3
+    import tarfile
+
+    from tastr import library
+
+    src = tmp_path / "src.db"
+    conn = db.connect(src)
+    card = full_card()
+    card.source.local_path = "uploads/ab/song.wav"
+    db.save_card(conn, card)
+    conn.close()
+    with closing(sqlite3.connect(src)) as c:
+        c.execute("UPDATE tracks SET local_path = 'uploads/ab/song.wav'")
+        c.commit()
+    song = write(tmp_path / "song.wav")
+    with tarfile.open(tmp_path / "lib.tar", "w") as tar:
+        tar.add(src, library.DB_NAME)
+        tar.add(song, "uploads/ab/song.wav")
+    assert library.unpack(tmp_path / "lib.tar", home, db_path)["files"] == 1
+    assert list(objects("uploads/")) == ["uploads/ab/song.wav"]
+
+
+def test_db_size_reports_cards_and_inline_views(db_path, capsys):
+    from tastr import cli
+
+    card = full_card()
+    card.extras["views"] = VIEWS
+    conn = db.connect(db_path)
+    db.save_card(conn, card)  # no bucket: the data stays in the card
+    conn.close()
+    r = db.size_report(db_path)
+    assert r["cards"] == 1 and r["inline_views"] == 1 and r["inline_view_bytes"] > 0
+    assert r["cards_over_d1_row_limit"] == 0 and r["file_bytes"] > 0
+    assert cli.main(["--db", str(db_path), "db-size"]) == 0
+    assert "with waveform data inline: 1" in capsys.readouterr().out

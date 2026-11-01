@@ -37,7 +37,7 @@ flowchart TB
   end
   subgraph FLY[Fly.io app tastr-frienz]
     WEB[Tastr web server, 512 MB, no DSP libraries, serves the Rust engine's WebAssembly build]
-    VOL[(Volume tastr_data at /data: tastr.db, analysis-jobs, optional AcousticBrainz index, and uploads and stems, only a cache once the audio bucket is on)]
+    VOL[(Volume tastr_data at /data: tastr.db with unfinished jobs, optional AcousticBrainz index, and uploads and stems, only a cache once the audio bucket is on)]
     LS[Litestream]
   end
   subgraph MOD[Modal app tastr-web, environment friends]
@@ -46,7 +46,7 @@ flowchart TB
     ST[stems, T4 GPU]
   end
   R2[(R2 bucket tastr-app: tastr.db)]
-  R2A[(R2 bucket tastr-audio, if TASTR_AUDIO_BUCKET is set: uploads, stems)]
+  R2A[(R2 bucket tastr-audio, if TASTR_AUDIO_BUCKET is set: uploads, stems, each card's waveform data)]
   GHT[GitHub Actions: tests workflow, on each push to main]
   GH[GitHub Actions: deploy workflow, after tests pass if app code changed]
   CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, MusicBrainz])
@@ -60,7 +60,8 @@ flowchart TB
   WEB -->|audio bytes or a signed link, on request| AD -->|track card| WEB
   WEB -->|audio bytes or a signed link| ST -->|stem files, or a note that they're in the bucket| WEB
   WEB -->|each upload, as it arrives| R2A
-  R2A -.->|signed links: audio and stems| F
+  R2A -.->|signed links: audio, stems, waveform data| F
+  WEB -->|each card's waveform data| R2A
   R2A -.->|signed links| S
   R2A -->|the upload| AN
   ST -->|stems, to signed upload links| R2A
@@ -122,6 +123,9 @@ sequenceDiagram
     W-->>B: the step, for the progress bar
   end
   M-->>W: track card
+  opt TASTR_AUDIO_BUCKET is set
+    W->>A: the card's waveform data (the card keeps a marker)
+  end
   W->>W: save the card in tastr.db, owner = the email
   W-)R: Litestream copies the change within seconds
   B->>W: GET /api/analyze/jobs/{id}
@@ -145,15 +149,17 @@ Otherwise, and for Opus files, tracks over 20 minutes or any failure in the brow
 usual. Both run the same Rust engine, so a card is the same wherever it was made. Off by default; see
 [rust-engine.md](rust-engine.md).
 
-The job's state is a small file under `analysis-jobs/` on the volume too, so if the machine stops mid-analysis,
-the page hears that it failed and can upload again. An app deployed before `analyze_stream` existed still
+The job's state is also kept in the database (`job_markers`, `tastr/markers.py`), so if the machine stops
+mid-analysis, the page hears that it failed and can upload again, even on a fresh machine with a restored database. An app deployed before `analyze_stream` existed still
 works: the server falls back to Modal's `analyze`, without steps.
 
 Stems work the same way through Modal's `stems` function; the server saves the files it gets back on the
 volume. "Detect drums with the model" in a track's menu re-analyzes it through `analyze_drums`, which is
 `analyze` plus PyTorch and the pretrained drum model's weights, kept in its own image so everyday uploads
-don't wait for PyTorch to load. A queued or running separation or drum model run leaves a marker on the
-volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops and starts again.
+don't wait for PyTorch to load. A queued or running separation or drum model run leaves a marker in the
+database (`job_markers`), so it resumes if the machine stops and starts again. Servers before that kept these as
+files (`analysis-jobs/`, `stems/*.job`, `drum-jobs/*.job`); the first start after an upgrade reads them into the
+database and deletes them.
 
 ## Which service handles which step
 
@@ -165,7 +171,7 @@ volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops an
 | Checking the login | Tastr on Fly | `AccessVerifier` in `tastr/web/hosted.py` checks the token on every request and takes the email from it. |
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
-| Audio and stems (optional) | R2 bucket `tastr-audio` | With `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT` and the bucket's own token (`TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY`), `tastr/blobs.py` copies each upload up before analysis, plays audio and stems from signed links (`TASTR_AUDIO_REGION` defaults to `auto`), and the page's Content-Security-Policy allows that host. The bucket's CORS rule lets any origin GET, since strudel.cc follows the redirect. |
+| Audio and stems (optional) | R2 bucket `tastr-audio` | With `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT` and the bucket's own token (`TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY`), `tastr/blobs.py` copies each upload up before analysis, plays audio and stems from signed links (`TASTR_AUDIO_REGION` defaults to `auto`), and the page's Content-Security-Policy allows that host. The bucket's CORS rule lets any origin GET, since strudel.cc follows the redirect. Each card's waveform and spectrogram data goes there too (`views/<track id>.json`, gzipped), so the database keeps a marker instead of about a megabyte per card; `/api/tracks/{id}/views` redirects to it. `tastr db-size` shows how big the database is and what's still inline. |
 | Whole analysis (optional) | The visitor's browser | With `TASTR_BROWSER_ENGINE` on, `tastr/web/static/engine.js` runs the Rust engine's WebAssembly build in a worker and the upload carries the card. The Docker image builds the `.wasm` in a Rust stage and the server serves it from `TASTR_ENGINE_WASM`. |
 | Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. Cards always come from the Rust engine, whose library the image builds (`tastr/cloud/rust_image.py`). |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. The model runs in Python and the Rust library, built into this image too, makes the card. |

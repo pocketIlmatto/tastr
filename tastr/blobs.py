@@ -8,6 +8,8 @@ disk loses no audio and the server no longer needs a volume for it.
   the bucket.
 - `push()` copies a new file up; `ensure()` brings a file back down when something here has to read it (a
   re-read of its tags, local analysis); `evict()` deletes local copies that are safely in the bucket.
+- Each card's waveform and spectrogram data (`views`, about a megabyte) is kept here too, as
+  `views/<track id>.json` (gzipped), so the database stays small: `put_views()`, `views_url()`.
 - Browsers and strudel.cc play audio and stems from short-lived signed links (`signed_url()`); Modal reads the
   audio from one too, and writes stems to signed upload links (`put_url()`), so audio never passes through
   the server twice.
@@ -19,6 +21,8 @@ a token that can read and write that bucket only. Needs boto3 (`pip install 'tas
 
 from __future__ import annotations
 
+import gzip
+import json
 import logging
 import mimetypes
 import os
@@ -199,6 +203,43 @@ def put_url(path: str | Path, seconds: int = LINK_SECONDS) -> str | None:
     return client().generate_presigned_url("put_object", Params={"Bucket": bucket(), "Key": k,
                                                                  "ContentType": content_type(path)},
                                            ExpiresIn=seconds)
+
+
+# ---- a card's waveform and spectrogram data ---------------------------------------------------------------
+
+IN_BUCKET = {"in_bucket": True}  # what the card stores in extras["views"] when the data is in the bucket
+
+
+def views_key(track_id: int) -> str:
+    return f"views/{int(track_id)}.json"
+
+
+def put_views(track_id: int, views) -> bool:
+    """Store a card's views data; False (nothing done) when off."""
+    if not enabled():
+        return False
+    body = gzip.compress(json.dumps(views, separators=(",", ":")).encode(), mtime=0)
+    client().put_object(Bucket=bucket(), Key=views_key(track_id), Body=body, ContentType="application/json",
+                        ContentEncoding="gzip")
+    return True
+
+
+def get_views(track_id: int):
+    """A card's views data from the bucket (the CLI and tests; the page fetches it from `views_url()`)."""
+    body = client().get_object(Bucket=bucket(), Key=views_key(track_id))["Body"].read()
+    return json.loads(gzip.decompress(body) if body[:2] == b"\x1f\x8b" else body)
+
+
+def views_url(track_id: int, seconds: int = LINK_SECONDS) -> str | None:
+    if not enabled():
+        return None
+    return client().generate_presigned_url("get_object", Params={"Bucket": bucket(), "Key": views_key(track_id)},
+                                           ExpiresIn=seconds)
+
+
+def remove_views(track_id: int) -> None:
+    if enabled():
+        client().delete_object(Bucket=bucket(), Key=views_key(track_id))
 
 
 # ---- many files -------------------------------------------------------------------------------------------

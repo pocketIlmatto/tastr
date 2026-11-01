@@ -630,6 +630,14 @@ def test_unfinished_jobs_read_as_failed_after_a_restart(db_path, tmp_path, monke
     with TestClient(create_app(db_path)) as c:  # `with` runs the startup, which marks it failed
         job = c.get("/api/analyze/jobs/abc123").json()
     assert job["state"] == "error" and job["error"] == RESTARTED
+    assert not (folder / "abc123.json").exists()  # the file was an older server's; the database has it now
+
+    from tastr.web.analysis_jobs import AnalysisJobs
+
+    AnalysisJobs(db_path).markers.put("def456", {"id": "def456", "owner": None, "state": "queued", "stage": "waiting"})
+    with TestClient(create_app(db_path)) as c:
+        job = c.get("/api/analyze/jobs/def456").json()
+    assert job["state"] == "error" and job["error"] == RESTARTED
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

@@ -103,9 +103,10 @@ class AppContext:
         self.extra_headers = (security_headers(inline_script_hashes((STATIC_DIR / "index.html").read_text()),
                                                media_origin=blobs.origin())
                               if hosted else {})
-        self.stem_jobs = stems.Jobs()
-        self.analyses = AnalysisJobs(tastr_home() / "analysis-jobs")
-        self.drum_runs = drum_jobs.Jobs(self.run_drum_model)
+        # Their unfinished jobs are kept in the database (tastr/markers.py), so a restart picks them up.
+        self.stem_jobs = stems.Jobs(db_path)
+        self.analyses = AnalysisJobs(db_path, legacy_folder=tastr_home() / "analysis-jobs")
+        self.drum_runs = drum_jobs.Jobs(self.run_drum_model, db_path)
         self.last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
         self.snapshot_day = ""  # the UTC day storage was last recorded for (storage_days)
 

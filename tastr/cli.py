@@ -11,7 +11,7 @@ import tarfile
 import time
 from pathlib import Path
 
-from . import db
+from . import blobs, db
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("track_id", type=int)
     q = sub.add_parser("query", help="run read-only SQL against the database")
     q.add_argument("sql")
+    sub.add_parser("db-size", help="how big the database is, by table, and its largest cards (for the move to D1)")
     sub.add_parser("retag", help="re-read file tags for analyzed tracks without re-analyzing")
     so = sub.add_parser("set-owner", help="give tracks with no owner to EMAIL, to move a library to a hosted server")
     so.add_argument("email", help="the Access email whose library they join (docs/hosting.md)")
@@ -287,7 +288,9 @@ def _show(args) -> int:
     if card is None:
         print(f"no track {args.track_id}", file=sys.stderr)
         return 1
-    if "views" in card.extras:  # hundreds of KB of base64 picture data; the web UI is where it's useful
+    if card.extras.get("views") == blobs.IN_BUCKET:
+        card.extras["views"] = "<waveform + spectrogram data, in the audio bucket>"
+    elif "views" in card.extras:  # hundreds of KB of base64 picture data; the web UI is where it's useful
         card.extras["views"] = f"<waveform + spectrogram data, {len(json.dumps(card.extras['views'])) // 1024} KB>"
     print(card.to_json(indent=2))
     return 0
@@ -327,6 +330,19 @@ def _unpack(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(f"unpacked {r['tracks']} track(s) and {r['files']} file(s)")
+    return 0
+
+
+def _db_size(args) -> int:
+    r = db.size_report(args.db)
+    mb = lambda b: f"{b / 1e6:,.1f} MB"  # noqa: E731
+    print(f"database file: {mb(r['file_bytes'])}")
+    for name, size in list(r["tables"].items())[:12]:
+        print(f"  {name:32} {mb(size)}")
+    print(f"cards: {r['cards']}, {mb(r['card_bytes'])} in all, largest {mb(r['largest_card_bytes'])}")
+    print(f"  over D1's 2 MB row limit: {r['cards_over_d1_row_limit']}")
+    print(f"  with waveform data inline: {r['inline_views']} ({mb(r['inline_view_bytes'])}; "
+          "re-analysis with the audio bucket on moves it out)")
     return 0
 
 
@@ -708,7 +724,7 @@ def _fmt_row(t: dict) -> str:
 
 # Each subcommand's handler; main() checks that every subcommand has one.
 COMMANDS = {
-    "analyze": _analyze, "list": _list, "show": _show, "query": _query, "retag": _retag,
+    "analyze": _analyze, "list": _list, "show": _show, "query": _query, "db-size": _db_size, "retag": _retag,
     "set-owner": _set_owner, "pack": _pack, "unpack": _unpack, "lookup": _lookup, "labels": _labels,
     "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
     "key-profiles": _key_profiles, "drum-model": _drum_model, "drum-bench": _drum_bench,

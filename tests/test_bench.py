@@ -384,3 +384,13 @@ def test_record_refuses_subset_runs(capsys):
     assert main(["bench", "giantsteps-key", "/nowhere", "--limit", "20", "--record"]) == 2
     assert "full run" in capsys.readouterr().err
     assert main(["bench", "harmonix", "/nowhere", "--record"]) == 2
+
+
+def test_spec_bench_record_refuses_subset_runs(capsys, monkeypatch):
+    from tastr.cloud import jobs
+
+    monkeypatch.setattr(jobs, "run_spec_bench", lambda *a: pytest.fail("ran a bench that can't be recorded"))
+    assert main(["spec-bench", "downbeats", "/nowhere", "--limit", "3", "--record"]) == 2
+    assert "full run" in capsys.readouterr().err
+    assert main(["spec-bench", "tempo", "/nowhere", "--record"]) == 2
+    assert "no score to keep" in capsys.readouterr().err

@@ -436,6 +436,12 @@ def _spec_bench(args) -> int:
 
     from .cloud import jobs, remote
 
+    if args.record:
+        err = _record_error(args)
+        if err:
+            print(f"error: {err}", file=sys.stderr)
+            return 2
+
     dataset = args.dataset or {"tempo": "hjdb", "sections": "harmonix"}.get(args.bench, "gtzan")
     mod = jobs.spec_module(args.bench)
     try:

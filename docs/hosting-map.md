@@ -38,7 +38,7 @@ flowchart TB
   end
   subgraph MOD[Modal app tastr-web, environment friends]
     AN[analyze_stream, 2 CPUs, Rust engine library]
-    AD[analyze_drums, 2 CPUs + PyTorch + drum model]
+    AD[analyze_drums, 2 CPUs + PyTorch + drum model + Rust engine library]
     ST[stems, T4 GPU]
   end
   R2[(R2 bucket tastr-app: tastr.db)]
@@ -142,7 +142,7 @@ volume (`stems/*.job`, `drum-jobs/*.job`), so it resumes if the machine stops an
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
 | Whole analysis (optional) | The visitor's browser | With `TASTR_BROWSER_ENGINE` on, `tastr/web/static/engine.js` runs the Rust engine's WebAssembly build in a worker and the upload carries the card. The Docker image builds the `.wasm` in a Rust stage and the server serves it from `TASTR_ENGINE_WASM`. |
 | Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. Cards always come from the Rust engine, whose library the image builds (`tastr/cloud/rust_image.py`). |
-| Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. |
+| Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. The model runs in Python and the Rust library, built into this image too, makes the card. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
 | Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then Fly, from main. Runs after `tests` passes on a push to main when something that ships changed since the last deploy, or by hand. |

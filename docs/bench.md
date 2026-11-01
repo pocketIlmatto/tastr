@@ -317,6 +317,15 @@ songs; a per-genre look would say why. Key profiles for the new songs took 698 s
 0.650 (major 0.633, 27%). Outside zip 0 the misses lean to fifth and relative more than parallel. This is the
 Glossary's FMA Keys number (`tastr bench fma-keys ... --record` now records it).
 
+**Why zip 0 is harder: rock.** From the mp3s' ID3 genre tags (1,499 of 1,752 songs tagged), major songs read
+as minor by genre, zip 0 against the two new zips: Rock 52% / 49% (79 / 35 songs), Blues 100% / 56% (4 / 9),
+Punk 60% / 30%, Electronic 50% / 37%, Folk 35% / 18%, Pop 42% / 12% (19 / 89), Classical none / 12%. Zip 0
+has 165 Rock songs of 695, the new zips 54 of 1,057 but 143 Pop. Major rock and blues songs read as minor about
+half the time in either set, so genre, not the zip, drives the lean, and no single artist accounts for it (at
+most 6 of zip 0's 168 misses). That fits the music: power chords carry no third, and rock and blues riffs use
+the minor pentatonic over major keys. More training data won't fix that. Ideas, not started: lower the key
+confidence or call the mode uncertain when the third and sixth degrees are weak, and bench rock separately.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:

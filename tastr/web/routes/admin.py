@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ... import db
+from .. import claude
 from ..context import AppContext, tastr_home
 from ..hosted import stored_bytes, today
 
@@ -24,6 +25,7 @@ USAGE_RANGES = {"1": 1, "7": 7, "30": 30, "all": 365}  # the admin chart's range
 class LimitsBody(BaseModel):
     daily_tracks: int | None = Field(None, ge=0, le=10_000)  # None = the server default
     daily_stems: int | None = Field(None, ge=0, le=1_000)
+    daily_asks: int | None = Field(None, ge=0, le=1_000)  # Ask Claude in Strudel
     scope: Literal["today", "standing"] = "today"  # today only (ends at 00:00 UTC), or until an admin changes it
 
 
@@ -44,7 +46,7 @@ def router(ctx: AppContext) -> APIRouter:
         def person(email):
             return people.setdefault(email, {"email": email, "tracks": 0, "audio_bytes": 0, "stems_bytes": 0,
                                              "last_upload": None, "last_seen": ctx.last_seen.get(email),
-                                             "today": {"tracks": 0, "stems": 0, "drums": 0, "visits": 0}})
+                                             "today": {"tracks": 0, "stems": 0, "drums": 0, "visits": 0, "asks": 0}})
 
         with closing(ctx.conn()) as c:
             library = ctx.scan_library(c)
@@ -72,7 +74,8 @@ def router(ctx: AppContext) -> APIRouter:
             if p["email"]:
                 o = changed.get(p["email"])
                 p["override"] = o
-                p["caps"] = {k: ctx.settings.daily_tracks if k == "tracks" else ctx.settings.daily_stems for k in ("tracks", "stems")}
+                s = ctx.settings
+                p["caps"] = {"tracks": s.daily_tracks, "stems": s.daily_stems, "asks": s.daily_asks}
                 for k in p["caps"]:
                     if o and o[f"daily_{k}"] is not None:
                         p["caps"][k] = o[f"daily_{k}"]
@@ -82,13 +85,15 @@ def router(ctx: AppContext) -> APIRouter:
                 "log_links": ctx.settings.log_links(os.environ.get("TASTR_MODAL_APP", "tastr-web")),
                 "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(ctx.settings.storage_gb * 1024 ** 3)},
                 "active_stem_jobs": ctx.stem_jobs.active(), "active_drum_jobs": ctx.drum_runs.active(), "analyses": ctx.slots.status(),
-                "series": series}
+                "series": series,
+                # Ask Claude's cost: tokens are counted per person per day (user_usage ask_in/ask_out), priced here.
+                "claude": {"model": claude.MODEL, "price_in": claude.PRICE_IN, "price_out": claude.PRICE_OUT}}
 
     def usage_series(c: sqlite3.Connection, rng: str, day: str, library: list[dict[str, Any]]) -> dict[str, Any]:
         """Per person: tracks, stems, visits and storage (bytes) for each bucket of the range, oldest first.
         Today: 24 UTC hours; storage there counts each track from the hour it was uploaded, at today's size.
         Days: storage is each day's last snapshot (storage_days), carried forward over days without one."""
-        kinds = ("tracks", "stems", "visits")
+        kinds = ("tracks", "stems", "visits", "ask_in", "ask_out")
         out: dict[str, dict[str, list]] = {}
         if rng == "1":
             n, now_hour = 24, datetime.now(timezone.utc).hour
@@ -159,7 +164,7 @@ def router(ctx: AppContext) -> APIRouter:
 
     @api.put("/api/admin/limits/{email}")
     def set_limits(email: str, body: LimitsBody, request: Request):
-        """Change one person's daily track and stem job limits, today only or until changed (None = the default).
+        """Change one person's daily track, stem job and Claude ask limits, today only or until changed (None = the default).
         Logged as an admin change. Admins only."""
         admin = ctx.require_admin(request)
         email = email.strip().lower()
@@ -167,7 +172,8 @@ def router(ctx: AppContext) -> APIRouter:
             raise HTTPException(400, "That isn't an email address.")
         day = today()
         with closing(ctx.conn()) as c:
-            db.set_override(c, email, body.daily_tracks, body.daily_stems, day if body.scope == "today" else None, admin)
+            db.set_override(c, email, body.daily_tracks, body.daily_stems, day if body.scope == "today" else None, admin,
+                            body.daily_asks)
             o = db.get_override(c, email, day)
         who = email.split("@")[0]
         if o is None:
@@ -175,7 +181,8 @@ def router(ctx: AppContext) -> APIRouter:
         else:
             t = body.daily_tracks if body.daily_tracks is not None else ctx.settings.daily_tracks
             st = body.daily_stems if body.daily_stems is not None else ctx.settings.daily_stems
-            ctx.event(admin, "admin", f"Set {who}'s daily limits to {t} tracks, {st} stem jobs "
+            ak = body.daily_asks if body.daily_asks is not None else ctx.settings.daily_asks
+            ctx.event(admin, "admin", f"Set {who}'s daily limits to {t} tracks, {st} stem jobs, {ak} Claude asks "
                   f"({'today only' if body.scope == 'today' else 'until changed'})")
         return {"email": email, "override": o}
 

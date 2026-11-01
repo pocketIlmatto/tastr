@@ -182,6 +182,20 @@ fly secrets set TASTR_LOOKUP=freqblog,acousticbrainz
 (the database is the only file Litestream copies); copy it again if the volume is replaced. It counts against
 the volume, not `TASTR_STORAGE_GB`, so leave room for it.
 
+## 9c. Ask Claude in Strudel (optional)
+
+"Ask Claude to change it" under Try this in › Strudel sends the code on screen, the ask and the track's BPM,
+key and sections to the Claude API (`claude-sonnet-5-5`, `tastr/web/claude.py`), on Tastr's own key. Make a key
+in the Anthropic Console (**Settings > API Keys**), give its workspace a monthly spend limit (**Limits**), then
+set it from your own terminal, never in a chat or a file in the repository:
+
+```
+fly secrets set ANTHROPIC_API_KEY=<key>
+```
+
+Each person gets `TASTR_DAILY_ASKS` asks a day (default 20); the Admin tab shows their asks and what the tokens
+cost, and raises one person's limit from the ✎ on their row. Without the secret the panel says Ask is off.
+
 ## 10. Invite friends
 
 Add their emails to the Access application's policy. To remove someone, delete their address there; their

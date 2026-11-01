@@ -34,6 +34,20 @@ tastr bench synth                # score the engine on labeled tracks (bench.md)
 The database lives at `~/.tastr/tastr.db`. Override it with `--db` or the
 `TASTR_DB` environment variable. The web UI reads the same database.
 
+## Ask Claude in Strudel (optional)
+
+"Ask Claude to change it" under Try this in › Strudel rewrites the code with Claude (`claude-sonnet-5-5`), using
+your own Anthropic API key. Install the SDK and set the key before starting the server:
+
+```bash
+python -m pip install -e '.[claude]'
+export ANTHROPIC_API_KEY=<your key>   # from the Anthropic Console; keep it out of files you share
+tastr serve
+```
+
+Each ask sends the code on screen, what you asked and the track's BPM, key and sections. Nothing else leaves your
+machine, and the code never runs inside Tastr.
+
 ## Stems (optional)
 
 "Separate stems" in a track's ⋯ menu (or `tastr stems ID`) splits one track into

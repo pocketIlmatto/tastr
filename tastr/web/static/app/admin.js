@@ -9,6 +9,9 @@ import { serverCfg } from "./daw.js";
 // Cloud cost is an estimate: Modal bills about $0.001 per analysis and $0.008 per stem job (T4, ~50 s), against the
 // friends environment's monthly budget, which is set in Modal and not known to the server.
 const ADM_TRACK_COST = 0.001, ADM_STEM_COST = 0.008, ADM_BUDGET = 10;
+// Ask Claude (Strudel): tokens counted per person per day, priced at the model's list prices the server sends (claude).
+let admClaude = { price_in: 2, price_out: 10 };
+const askCost = (tin, tout) => (tin * admClaude.price_in + tout * admClaude.price_out) / 1e6;
 // The activity log's filters: event types and where they come from (db.EVENT_TYPES and db.EVENT_SOURCES on the server).
 const ACT_TYPES = { upload: "Uploads", analysis: "Analysis", stems: "Stem jobs", limit: "Limits hit", error: "Errors", signin: "Sign-ins",
   blocked: "Blocked requests", deploy: "Deploys and CI", backup: "Backups", admin: "Admin changes" };
@@ -63,8 +66,9 @@ function renderAdmin() {
   const A = admData;
   if (!A) return;
   const L = A.limits, dayMs = 86400000, today = Date.parse(A.today + "T00:00:00Z");
+  if (A.claude) admClaude = A.claude;
   // One row per person, with 30 days of [tracks, stem jobs] (index 29 is today) from the usage history.
-  const all = A.users.map((u) => ({ ...u, admin: A.admins.includes(u.email), days: Array.from({ length: 30 }, () => [0, 0]),
+  const all = A.users.map((u) => ({ ...u, admin: A.admins.includes(u.email), days: Array.from({ length: 30 }, () => [0, 0, 0, 0]),
     active: false, lastDay: null, bytes: u.audio_bytes + u.stems_bytes }));
   const P = all.filter((p) => p.email), byEmail = Object.fromEntries(P.map((p) => [p.email, p]));
   for (const x of A.history) {
@@ -72,12 +76,15 @@ function renderAdmin() {
     if (!p || i < 0 || i > 29) continue;
     if (x.kind === "tracks") p.days[i][0] += x.n;
     if (x.kind === "stems") p.days[i][1] += x.n;
+    if (x.kind === "ask_in") p.days[i][2] += x.n;
+    if (x.kind === "ask_out") p.days[i][3] += x.n;
     if (i >= 23) p.active = true;
     p.lastDay = Math.max(p.lastDay ?? 0, i);
   }
   for (const p of all) {
     p.tracks30 = p.days.reduce((a, d) => a + d[0], 0); p.stems30 = p.days.reduce((a, d) => a + d[1], 0);
-    p.cost = p.tracks30 * ADM_TRACK_COST + p.stems30 * ADM_STEM_COST;
+    p.claude = askCost(p.days.reduce((a, d) => a + d[2], 0), p.days.reduce((a, d) => a + d[3], 0));
+    p.cost = p.tracks30 * ADM_TRACK_COST + p.stems30 * ADM_STEM_COST + p.claude;
   }
   const sum = (f) => P.reduce((a, p) => a + f(p), 0), cost = sum((p) => p.cost);
   const used = A.storage.used_bytes, capB = A.storage.cap_bytes, an = A.analyses;
@@ -88,11 +95,12 @@ function renderAdmin() {
     tile(String(sum((p) => p.today.stems)), `stem jobs today, ${sum((p) => p.stems30)} in 30 days`),
     tile(admGB(used), `stored of ${L.storage_gb} GB`, admMeter(used / capB, used / capB >= 0.9)),
     tile(`${an.running} / ${an.max}`, `analyzing now, ${an.waiting} waiting`, admMeter(an.running / an.max, an.running / an.max >= 0.9)),
-    tile(`$${cost.toFixed(2)}`, "cloud cost, 30 days (est.)", admMeter(cost / ADM_BUDGET, cost / ADM_BUDGET >= 0.9)));
+    tile(`$${cost.toFixed(2)}`, `cloud cost, 30 days (est.), $${sum((p) => p.claude).toFixed(2)} of it Claude, ${sum((p) => p.today.asks || 0)} asks today`,
+      admMeter(cost / ADM_BUDGET, cost / ADM_BUDGET >= 0.9)));
   renderAdmChart(A, P);
   renderPeople(A, all, P);
   const kv = [["Upload size", `${L.max_upload_mb} MB`, "TASTR_MAX_UPLOAD_MB"], ["Track length", `${L.max_minutes} min`, "TASTR_MAX_MINUTES"], ["Files per upload", L.max_files, "TASTR_MAX_FILES"],
-    ["Tracks per person per day", L.daily_tracks, "TASTR_DAILY_TRACKS"], ["Stem jobs per person per day", L.daily_stems, "TASTR_DAILY_STEMS"],
+    ["Tracks per person per day", L.daily_tracks, "TASTR_DAILY_TRACKS"], ["Stem jobs per person per day", L.daily_stems, "TASTR_DAILY_STEMS"], ["Claude asks per person per day", L.daily_asks, "TASTR_DAILY_ASKS"],
     ["Total storage", `${L.storage_gb} GB`, "TASTR_STORAGE_GB"], ["Analyses at once", L.max_analyses, "TASTR_MAX_ANALYSES"],
     ["Modal budget (friends env)", `$${ADM_BUDGET}/mo`, "set in Modal"]];
   $("adm-limits").replaceChildren(h("tbody", {}, ...kv.map(([a, b, c]) => h("tr", {}, h("td", {}, a, h("br"), h("code", {}, c)), h("td", {}, String(b))))));
@@ -113,7 +121,7 @@ function renderAdmChart(A, P) {
     const s = S.people[p.email];
     if (!s || (hourly && i > S.now_hour)) return 0;
     if (admKind === "storage") return s.storage[i] / 1024 ** 3;
-    if (admKind === "cost") return s.tracks[i] * ADM_TRACK_COST + s.stems[i] * ADM_STEM_COST;
+    if (admKind === "cost") return s.tracks[i] * ADM_TRACK_COST + s.stems[i] * ADM_STEM_COST + askCost((s.ask_in || [])[i] || 0, (s.ask_out || [])[i] || 0);
     return s[admKind][i];
   };
   const fmtV = (v) => admKind === "storage" ? `${v.toFixed(v >= 1 ? 1 : 2)} GB` : admKind === "cost" ? `$${v.toFixed(v >= 0.1 ? 2 : 3)}` : `${v} ${what}`;
@@ -143,7 +151,7 @@ function renderAdmChart(A, P) {
   $("adm-chart").replaceChildren(g);
   const note = admKind === "storage" ? (hourly ? "Audio and stems each person has now, counted from the hour they were uploaded. Tracks added before sharing (no owner) aren't shown."
     : "Audio and stems stored at the end of each day (recorded once a day, and when this tab opens). Tracks added before sharing (no owner) aren't shown.")
-    : admKind === "cost" ? `Estimated from Modal run time: ~$${ADM_TRACK_COST} per analysis, ~$${ADM_STEM_COST} per stem job. Not from Modal's billing.`
+    : admKind === "cost" ? `Estimated from Modal run time: ~$${ADM_TRACK_COST} per analysis, ~$${ADM_STEM_COST} per stem job, plus Ask Claude's tokens at ${admClaude.model || "the model"}'s list prices. Not from Modal's or Anthropic's billing.`
     : admKind === "visits" ? "A visit is a person's first request after 30 minutes without one." : null;
   $("adm-legend").replaceChildren(...P.map((p, j) => h("span", {}, h("i", { style: `background:${admColor(j)}` }), p.email)),
     ...(note ? [h("span", { class: "muted adm-note" }, note)] : []));
@@ -152,7 +160,7 @@ function renderAdmChart(A, P) {
 function renderPeople(A, all, P) {
   const L = A.limits;
   const quota = (p, k, n) => {
-    const capN = p.caps[k], o = p.override, def = k === "tracks" ? L.daily_tracks : L.daily_stems, raised = o && o[`daily_${k}`] != null;
+    const capN = p.caps[k] ?? L[`daily_${k}`], o = p.override, def = L[`daily_${k}`], raised = o && o[`daily_${k}`] != null;
     const tip = raised ? `Changed from the default of ${def}${o.until_day ? ", today only (until 00:00 UTC)" : ", until an admin changes it"}` : "";
     return h("div", { class: "adm-quota" }, h("span", { title: tip }, `${n} / ${capN}`, raised ? h("span", { class: "adm-raised" }, o.until_day ? " ↑ today" : " ↑") : null),
       admMeter(capN ? n / capN : 1, n >= capN),
@@ -160,19 +168,19 @@ function renderPeople(A, all, P) {
   };
   const seen = (p) => (p.last_seen ? admAgo(p.last_seen).replace(/^(\d.*)$/, "$1 ago") : p.lastDay != null ? admDaysAgo(29 - p.lastDay) : "–");
   $("adm-people").replaceChildren(
-    h("thead", {}, h("tr", {}, ...["Person", "Last seen", "Visits today", "Tracks today", "Stems today", "Tracks, 30 d", "Library", "Storage", "Cost, 30 d", ""]
-      .map((t, i) => h("th", { class: i === 2 || (i > 4 && i < 9) ? "num" : "" }, t, i === 9 ? h("span", { class: "sr-only" }, "Limits") : null)))),
+    h("thead", {}, h("tr", {}, ...["Person", "Last seen", "Visits today", "Tracks today", "Stems today", "Claude asks today", "Tracks, 30 d", "Library", "Storage", "Cost, 30 d", ""]
+      .map((t, i) => h("th", { class: i === 2 || (i > 5 && i < 10) ? "num" : "" }, t, i === 10 ? h("span", { class: "sr-only" }, "Limits") : null)))),
     h("tbody", {}, ...all.flatMap((p) => {
-      if (!p.email) return [h("tr", { class: "adm-none" }, h("td", {}, "No owner", h("span", { class: "muted" }, " · added before sharing")), h("td", { colspan: "5" }),
+      if (!p.email) return [h("tr", { class: "adm-none" }, h("td", {}, "No owner", h("span", { class: "muted" }, " · added before sharing")), h("td", { colspan: "6" }),
         h("td", { class: "num" }, String(p.tracks)), h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td"), h("td"))];
       const j = P.indexOf(p), pick = () => { admFocus = admFocus === j ? null : j; renderAdmin(); };
       const tr = h("tr", { class: admFocus === j ? "sel" : "", tabindex: "0", title: "Pick out in the chart", onclick: pick,
         onkeydown: (e) => { if (e.target === tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); pick(); } } },
         h("td", {}, h("span", { class: "adm-who", style: `background:${admColor(j)}` }), p.email, p.admin ? h("span", { class: "muted" }, " · admin") : null),
         h("td", {}, seen(p)), h("td", { class: "num" }, String(p.today.visits)),
-        h("td", {}, quota(p, "tracks", p.today.tracks)), h("td", {}, quota(p, "stems", p.today.stems)),
+        h("td", {}, quota(p, "tracks", p.today.tracks)), h("td", {}, quota(p, "stems", p.today.stems)), h("td", {}, quota(p, "asks", p.today.asks || 0)),
         h("td", { class: "num" }, String(p.tracks30)), h("td", { class: "num" }, String(p.tracks)),
-        h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", { class: "num" }, `$${p.cost.toFixed(2)}`),
+        h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", { class: "num", title: p.claude ? `$${p.claude.toFixed(2)} of it Ask Claude` : null }, `$${p.cost.toFixed(2)}`),
         h("td", {}, h("button", { type: "button", class: "adm-lim-btn", "aria-expanded": String(admEdit === p.email), title: `Change ${p.email}'s daily limits`,
           "aria-label": `Change ${p.email}'s daily limits`, onclick: (e) => { e.stopPropagation(); admEdit = admEdit === p.email ? null : p.email; renderAdmin(); } }, "✎")));
       return admEdit === p.email ? [tr, limitRow(p, L)] : [tr];
@@ -183,6 +191,7 @@ function limitRow(p, L) {
   const o = p.override || {};
   const tIn = h("input", { type: "number", min: "0", max: "10000", value: o.daily_tracks ?? "", placeholder: String(L.daily_tracks), "aria-label": "Tracks per day" });
   const sIn = h("input", { type: "number", min: "0", max: "1000", value: o.daily_stems ?? "", placeholder: String(L.daily_stems), "aria-label": "Stem jobs per day" });
+  const aIn = h("input", { type: "number", min: "0", max: "1000", value: o.daily_asks ?? "", placeholder: String(L.daily_asks ?? 20), "aria-label": "Claude asks per day" });
   const until = h("select", { "aria-label": "How long" }, h("option", { value: "today" }, "Today only (resets at 00:00 UTC)"), h("option", { value: "standing" }, "Until I change it"));
   until.value = p.override && !o.until_day ? "standing" : "today";
   const err = h("span", { class: "error", role: "alert" });
@@ -192,19 +201,19 @@ function limitRow(p, L) {
     catch (e) { err.textContent = e.message; }
   };
   const save = () => {
-    const t = tIn.value === "" ? null : +tIn.value, st = sIn.value === "" ? null : +sIn.value;
-    if ([t, st].some((v) => v != null && (!Number.isInteger(v) || v < 0))) { err.textContent = "Limits are whole numbers, 0 or more."; return; }
-    send({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ daily_tracks: t, daily_stems: st, scope: until.value }) });
+    const t = tIn.value === "" ? null : +tIn.value, st = sIn.value === "" ? null : +sIn.value, ak = aIn.value === "" ? null : +aIn.value;
+    if ([t, st, ak].some((v) => v != null && (!Number.isInteger(v) || v < 0))) { err.textContent = "Limits are whole numbers, 0 or more."; return; }
+    send({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ daily_tracks: t, daily_stems: st, daily_asks: ak, scope: until.value }) });
   };
   setTimeout(() => tIn.focus(), 0);
-  return h("tr", { class: "adm-lim-row" }, h("td", { colspan: "10" },
+  return h("tr", { class: "adm-lim-row" }, h("td", { colspan: "11" },
     h("div", { class: "adm-lim", onkeydown: (e) => { if (e.key === "Enter" && e.target.tagName === "INPUT") save(); if (e.key === "Escape") { admEdit = null; renderAdmin(); } } },
       h("b", {}, `Daily limits for ${p.email}`),
-      h("label", {}, "Tracks per day", tIn), h("label", {}, "Stem jobs per day", sIn), h("label", {}, "For", until),
+      h("label", {}, "Tracks per day", tIn), h("label", {}, "Stem jobs per day", sIn), h("label", {}, "Claude asks per day", aIn), h("label", {}, "For", until),
       h("button", { type: "button", class: "primary", onclick: save }, "Save"),
       p.override ? h("button", { type: "button", class: "linklike", onclick: () => send({ method: "DELETE" }) }, "Back to defaults") : null,
       h("button", { type: "button", class: "linklike", onclick: () => { admEdit = null; renderAdmin(); } }, "Cancel"),
-      h("span", { class: "muted" }, `Empty means the server default (${L.daily_tracks} tracks, ${L.daily_stems} stem jobs, from TASTR_DAILY_*). Only this person changes.`), err)));
+      h("span", { class: "muted" }, `Empty means the server default (${L.daily_tracks} tracks, ${L.daily_stems} stem jobs, ${L.daily_asks ?? 20} Claude asks, from TASTR_DAILY_*). Only this person changes.`), err)));
 }
 // Recent activity: filtered on the server by type, person, source and time (AND), each line with its source.
 function fillActFilters() {

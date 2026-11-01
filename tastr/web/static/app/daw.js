@@ -5,6 +5,7 @@ import { sectionBus, switchTo } from "./card.js";
 import { allEdits, editedKeys } from "./groove-edits.js";
 import { laneName } from "./groove-lanes.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
+import { askPanel, claudeCode, findTemplate, loadMine, mashCard, mashRow, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
 
 // Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.
 // Ableton Live is the only glossary so far; Strudel shows generated code instead. Other DAWs show in the picker but can't be selected.
@@ -76,6 +77,8 @@ export function strudelView(c) {
   const note = h("p", { class: "muted st-note" });
   const stemsRow = h("div", { class: "st-stems" });
   const srcRow = h("div", { class: "st-src", role: "radiogroup", "aria-label": "Which patterns to use" });
+  const tplBox = h("div", { class: "st-tpl-box" }), edBox = h("div", { class: "st-ed-box" }), mashBox = h("div", { class: "st-mash" });
+  const tplWarn = h("p", { class: "st-ed-warn", role: "status" });
   // "Start at": the sketch's `const start`, so Ctrl+Enter plays from that section instead of the top.
   const startSel = h("select", { id: "st-start" }, h("option", { value: "1" }, "The top"),
     ...(c.sections || []).filter((x) => x.start_bar > 1).map((x) =>
@@ -83,26 +86,60 @@ export function strudelView(c) {
   startSel.value = String(strudelStarts.get(c.id) || 1);
   startSel.addEventListener("change", () => { strudelStarts.set(c.id, +startSel.value); paint(); });
   const startRow = h("label", { class: "st-opt st-start", for: "st-start" }, "Start at ", startSel);
-  let code = "";
-  const paint = () => {
-    const audioUrl = c.has_audio && strudelAudio ? strudelAudioUrl(c, paint) : null;
-    const audio = !!audioUrl, st = stemsOf(c);
-    const useStems = audio && strudelMix === "stems" && st.state === "ready";
+  let code = "", base = "", tpl = STRUDEL_TEMPLATES[0], ctx = {};
+  const chainKey = () => `${c.id}|${tpl.id}`;
+  // What the fill-ins are made from: the audio (always, except Full sketch where it's the checkbox), the picked stems,
+  // your edits when "Your edits" is on, and for a mash-up the second track.
+  const ctxFor = (text, full) => {
+    const wantsAudio = full ? strudelAudio : strudelUsesAudio(text);
+    const audioUrl = c.has_audio && wantsAudio ? strudelAudioUrl(c, paint) : null, st = stemsOf(c);
     const n = editedKeys(allEdits(c)).length;
+    const b = strudelUsesMash(text) ? mashCard(c, paint) : null;
+    return { wantsAudio, audioUrl, st, useStems: !!audioUrl && strudelMix === "stems" && st.state === "ready",
+      stems: audioUrl && strudelMix === "stems" && st.state === "ready" ? STRUDEL_STEMS.filter((x) => strudelStems.has(x)) : null,
+      edits: n && strudelMine ? allEdits(c) : null, n, startBar: +startSel.value || 1,
+      b: b ? { card: b, audioUrl: b.has_audio ? strudelAudioUrl(b, paint) : null } : null };
+  };
+  const fillsFor = (text) => strudelFillins(c, ctxFor(text, false));
+  const editor = (start) => {
+    edBox.replaceChildren(templateEditor(c, fillsFor, start, (stay) => { edBox.replaceChildren(); paint(); if (stay) editor(findTemplate(tplState.pick)); }));
+    const ta = edBox.querySelector("textarea");
+    if (ta) ta.focus();
+  };
+  const ask = askPanel({ getCode: () => code, summary: () => strudelSummary(c), key: chainKey, base: () => base, onChange: () => paint(),
+    onSave: (newCode) => { editor({ name: `${tpl.name} + Claude`.slice(0, 40), text: strudelUnfill(newCode, strudelFillins(c, ctx)) }); edBox.scrollIntoView({ block: "nearest" }); } });
+  const paint = () => {
+    loadMine(paint);
+    tpl = findTemplate(tplState.pick) || STRUDEL_TEMPLATES[0];
+    if (tpl.id !== tplState.pick && !findTemplate(tplState.pick)) tplState.pick = tpl.id;
+    const full = tpl.id === "full";
+    ctx = ctxFor(tpl.text, full);
+    const audio = !!ctx.audioUrl, n = ctx.n;
     srcRow.hidden = !n;
     srcRow.replaceChildren(h("span", { class: "muted" }, "Patterns:"), ...[["detected", "Detected"], ["mine", `Your edits (${n} section${n === 1 ? "" : "s"})`]].map(([val, label]) => {
       const r = h("input", { type: "radio", name: "st-src", value: val, ...((val === "mine") === strudelMine ? { checked: "" } : {}) });
       r.addEventListener("change", () => { strudelMine = val === "mine"; paint(); });
       return h("label", { class: "st-opt" }, r, " " + label);
     }));
-    code = strudelCode(c, audioUrl, useStems ? STRUDEL_STEMS.filter((n) => strudelStems.has(n)) : null,
-      n && strudelMine ? allEdits(c) : null, +startSel.value || 1);
+    let unknown = [];
+    if (full) base = strudelCode(c, ctx.audioUrl, ctx.stems, ctx.edits, ctx.startBar);
+    else ({ code: base, unknown } = strudelFill(tpl.text, strudelFillins(c, ctx)));
+    tplWarn.textContent = tplWarnText(unknown);
+    const changed = claudeCode(chainKey(), base);
+    code = changed != null ? changed : base;
     pre.textContent = code;
+    pre.classList.toggle("claude", changed != null);
     open.href = strudelLink(code);
-    paintStems(audio, st);
+    tplBox.replaceChildren(templatesBar((id) => { tplState.pick = id; edBox.replaceChildren(); paint(); }, editor));
+    audioOpt.hidden = !full || !c.has_audio;
+    startRow.hidden = startSel.options.length < 2 || !(full || tpl.text.includes("{song}"));
+    paintStems(c.has_audio && ctx.wantsAudio, ctx.st);
+    mashBox.hidden = !strudelUsesMash(tpl.text);
+    if (!mashBox.hidden) mashBox.replaceChildren(...mashRow(c, ctx.b && ctx.b.card, (id) => { tplState.mashB = id; paint(); }));
+    ask.paint();
     note.textContent = "Opens strudel.cc in a new tab with this code loaded. Drum sounds load from Strudel's sample library the first time you play." +
-      (!audio ? "" : serverCfg.hosted ? ` The original ${useStems ? "stems stream" : "audio streams"} from this Tastr server through a private link that works for a week.`
-        : ` The original ${useStems ? "stems stream" : "audio streams"} from your Tastr server, so keep it running; the first time, your browser may ask to allow strudel.cc to reach your local network.`);
+      (!audio ? "" : serverCfg.hosted ? ` The original ${ctx.useStems ? "stems stream" : "audio streams"} from this Tastr server through a private link that works for a week.`
+        : ` The original ${ctx.useStems ? "stems stream" : "audio streams"} from your Tastr server, so keep it running; the first time, your browser may ask to allow strudel.cc to reach your local network.`);
   };
   // Full mix / Stems, under the audio checkbox. Stems need a separation first; the code uses the full mix until it is done.
   const paintStems = (audio, st) => {
@@ -152,19 +189,18 @@ export function strudelView(c) {
   });
   const box = h("input", { type: "checkbox", id: "st-audio", ...(strudelAudio ? { checked: "" } : {}) });
   box.addEventListener("change", () => { strudelAudio = box.checked; paint(); });
+  const audioOpt = h("label", { class: "st-opt", for: "st-audio" }, box, " Include the original audio, cut into bars");
   const copy = h("button", { type: "button", onclick: async () => {
     try { await navigator.clipboard.writeText(code); say.textContent = "Copied"; } catch (_) { say.textContent = "Couldn't copy here"; }
     setTimeout(() => (say.textContent = ""), 2500);
   } }, "Copy code");
   paint();
   return h("div", { class: "strudel" },
-    h("p", { class: "st-intro" }, "A sketch of this track as ", h("a", { href: "https://strudel.cc", target: "_blank", rel: "noopener" }, "Strudel"), " live-code: each section's drums (and bass and chords, when detected) for its length, at this track's tempo. Your edits from Drums, bass & chords can go in too.",
-      c.has_audio ? " Add the original audio, cut into bars, to remix the real thing." : " It won't sound like the original, but it follows its structure, so it's a starting point for remixes."),
-    srcRow,
-    c.has_audio ? h("label", { class: "st-opt", for: "st-audio" }, box, " Include the original audio, cut into bars") : null,
-    stemsRow,
-    startSel.options.length > 1 ? startRow : null,
-    h("div", { class: "st-actions" }, open, copy, say), pre, note);
+    h("p", { class: "st-intro" }, "This track as ", h("a", { href: "https://strudel.cc", target: "_blank", rel: "noopener" }, "Strudel"),
+      " live-code. Pick a template, or make your own with fill-ins from the track, then open it in Strudel to play and change it.",
+      c.has_audio ? " Templates can use the original audio, cut into bars, to remix the real thing." : ""),
+    tplBox, edBox, tplWarn, srcRow, audioOpt, stemsRow, mashBox, startRow,
+    h("div", { class: "st-actions" }, open, copy, say), pre, ask.el, note);
 }
 
 // Key names as musicians spell them (the Camelot wheel's spellings: B♭ not A#), with real ♭ and ♯ signs. Display only;

@@ -355,7 +355,7 @@ def test_admin_usage(db_path, home, tmp_path):
     assert set(by) == {"friend@example.com", "pam@example.com", None}
     f = by["friend@example.com"]
     assert f["tracks"] == 1 and f["audio_bytes"] == 1000 and f["last_seen"]
-    assert f["today"] == {"tracks": 2, "stems": 0, "drums": 0, "visits": 2}  # two /api/config page loads above
+    assert f["today"] == {"tracks": 2, "stems": 0, "drums": 0, "visits": 2, "asks": 0}  # two /api/config page loads above
     assert by[None]["tracks"] == 1 and by["pam@example.com"]["tracks"] == 0
     assert body["limits"]["daily_tracks"] == 30 and body["storage"]["cap_bytes"] == 10 * 1024 ** 3
     assert body["limits"]["storage_gb"] == 10 and body["limits"]["max_analyses"] == 2
@@ -656,10 +656,10 @@ def test_upload_and_stem_limits_use_the_override(db_path, home, tmp_path, monkey
     assert upload(admin, ("a.wav", b"RIFF"), ("b.wav", b"RIFF")).status_code == 200  # 3 of 3, over the default of 1
     body = admin.get("/api/admin/usage", headers=GOOD).json()
     me = next(u for u in body["users"] if u["email"] == "friend@example.com")
-    assert me["caps"] == {"tracks": 3, "stems": 1} and me["override"]["set_by"] == "friend@example.com"
+    assert me["caps"] == {"tracks": 3, "stems": 1, "asks": 20} and me["override"]["set_by"] == "friend@example.com"
     log = [e["detail"] for e in body["recent"] if e["kind"] == "admin"]
     assert all(e["type"] == "admin" and e["source"] == "app" for e in body["recent"] if e["kind"] == "admin")
-    assert log == ["Set friend's daily limits to 3 tracks, 1 stem jobs (today only)"]
+    assert log == ["Set friend's daily limits to 3 tracks, 1 stem jobs, 20 Claude asks (today only)"]
     assert admin.put("/api/admin/limits/friend@example.com", json={"daily_tracks": -1}, headers=GOOD).status_code == 422
     assert admin.put("/api/admin/limits/not-an-email", json={"daily_tracks": 1}, headers=GOOD).status_code == 400
     assert admin.delete("/api/admin/limits/friend@example.com", headers=GOOD).json()["override"] is None

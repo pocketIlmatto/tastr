@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import sqlite3
 import threading
@@ -52,6 +53,19 @@ def router(ctx: AppContext) -> APIRouter:
             if ctx.hosted:
                 query_slot.release()
         return {"columns": columns, "rows": rows}
+
+    @api.get("/api/query/library")
+    def query_library(request: Request, mine: bool = False):
+        """Your library as a SQLite file, for the page to run SQL on in the browser with sql.js (TAS-49): on a
+        hosted server your own tracks without the columns that name people or server paths, admins everyone's
+        (`?mine=1`: only their own); on your own machine every track."""
+        owner = request.state.user if ctx.hosted and (mine or request.state.user not in ctx.settings.admins) else None
+        data = db.library_snapshot(ctx.db_path or db.default_db_path(), owner)
+        headers = {"Cache-Control": "private, no-store", "X-Library-Bytes": str(len(data)),
+                   "Access-Control-Expose-Headers": "X-Library-Bytes"}
+        if "gzip" in request.headers.get("accept-encoding", ""):  # SQLite pages compress well (3 to 5 times)
+            data, headers["Content-Encoding"] = gzip.compress(data, compresslevel=6, mtime=0), "gzip"
+        return Response(data, media_type="application/vnd.sqlite3", headers=headers)
 
     # Saved searches (Explore > Find tracks), each person's own: the signed-in email when hosted, else everyone's.
     @api.get("/api/searches")

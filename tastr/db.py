@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import sqlite3
+import tempfile
 import time
 from contextlib import closing
 from datetime import datetime, timezone
@@ -827,6 +828,30 @@ def _library_copy(path: str | os.PathLike, owner: str, sql: str) -> sqlite3.Conn
     mem.commit()
     mem.execute("DETACH DATABASE src")
     return mem
+
+
+def library_snapshot(path: str | os.PathLike, owner: str | None) -> bytes:
+    """A SQLite file of one person's library (LIBRARY_TABLES, their rows, no private columns), or with `owner`
+    None every library's rows with all their columns (hosted admins), for the page to query in the browser with
+    sql.js (TAS-49). Indexes on tracks are added so the page's searches stay quick."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "library.db"
+        with closing(sqlite3.connect(f"file:{out}", uri=True)) as dst:
+            dst.execute("ATTACH DATABASE ? AS src", (f"file:{Path(path)}?mode=ro",))
+            cols = ", ".join(f'"{r[1]}"' for r in dst.execute("PRAGMA src.table_info(tracks)")
+                             if owner is None or r[1] not in _PRIVATE_COLUMNS)
+            where, args = ("WHERE owner = ?", (owner,)) if owner is not None else ("", ())
+            dst.execute(f"CREATE TABLE tracks AS SELECT {cols} FROM src.tracks {where}", args)
+            for t in LIBRARY_TABLES[1:]:
+                dst.execute(f"CREATE TABLE {t} AS SELECT * FROM src.{t} WHERE track_id IN (SELECT id FROM tracks)")
+            dst.commit()
+            dst.execute("DETACH DATABASE src")
+            for name, cols in (("tracks", "id"), ("tracks", "bpm"), ("tracks", "camelot"), ("tags", "tag"),
+                               ("tags", "track_id"), ("features", "name, value")):
+                dst.execute(f"CREATE INDEX idx_{name}_{cols.split(',')[0]} ON {name}({cols})")
+            dst.commit()
+            dst.execute("VACUUM")
+        return out.read_bytes()
 
 
 def run_query(path: str | os.PathLike, sql: str, max_rows: int, seconds: float = 5.0,

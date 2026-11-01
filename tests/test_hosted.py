@@ -835,3 +835,40 @@ def test_backup_goes_stale():
     assert watch.backup_events(old, None, newest, day, now)[0] == []
     assert watch._table("replica  generation  index  size  created\ns3  g  1  5  2026-11-01T00:00:00Z\n") == [
         {"replica": "s3", "generation": "g", "index": "1", "size": "5", "created": "2026-11-01T00:00:00Z"}]
+
+
+def _snapshot(resp):
+    import sqlite3
+    import tempfile
+
+    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    f.write(resp.content)  # the client undoes the gzip
+    f.close()
+    return sqlite3.connect(f.name)
+
+
+def test_library_snapshot_for_the_browser_is_your_own_library(db_path, home):
+    """TAS-49: the page runs SQL in the browser (sql.js) on this file; it holds only what /api/query would show."""
+    mine = save(db_path, "friend@example.com", sha="a1")
+    theirs = save(db_path, "other@example.com", sha="b2")
+    c = make_client(db_path)
+    r = c.get("/api/query/library", headers={**GOOD, "accept-encoding": "gzip"})
+    assert r.status_code == 200 and r.headers["content-encoding"] == "gzip"
+    assert r.headers["cache-control"] == "private, no-store" and int(r.headers["x-library-bytes"]) == len(r.content)
+    snap = _snapshot(r)
+    assert snap.execute("SELECT id FROM tracks").fetchall() == [(mine,)]
+    assert snap.execute("SELECT DISTINCT track_id FROM tags").fetchall() == [(mine,)]
+    assert snap.execute("SELECT count(*) FROM sections WHERE track_id = ?", (theirs,)).fetchone() == (0,)
+    cols = {r[1] for r in snap.execute("PRAGMA table_info(tracks)")}
+    assert not cols & {"owner", "local_path", "source_uri", "stages_json", "errors_json"} and "title" in cols
+    tables = {r[0] for r in snap.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert tables == set(db.LIBRARY_TABLES)  # no events, usage, edits or cards
+    assert c.get("/api/query/library").status_code in (401, 403)  # needs the login like everything else
+
+
+def test_admins_snapshot_holds_every_library_unless_mine(db_path, home):
+    save(db_path, "friend@example.com", sha="a1"), save(db_path, "other@example.com", sha="b2")
+    c = make_client(db_path, admins=("friend@example.com",))
+    snap = _snapshot(c.get("/api/query/library", headers=GOOD))
+    assert snap.execute("SELECT owner FROM tracks ORDER BY owner").fetchall() == [("friend@example.com",), ("other@example.com",)]
+    assert _snapshot(c.get("/api/query/library?mine=1", headers=GOOD)).execute("SELECT count(*) FROM tracks").fetchone() == (1,)

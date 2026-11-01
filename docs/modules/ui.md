@@ -71,7 +71,7 @@ Render from the card JSON, tolerating any field being null/empty:
 
 ## Admin view (hosted mode, admins only)
 - The Admin header button shows only when `/api/config` says `"admin": true`; `#admin` opens it, and falls back to the Library for everyone else.
-- Fetches `/api/admin/usage` each time it opens (no polling): tiles, a stacked 30-day chart per person (Tracks / Stem jobs), the people table (click or Enter picks a person out in the chart), the activity log, limits and the blocked-request count. The 30-day cloud cost is estimated in the client (`ADM_TRACK_COST`, `ADM_STEM_COST`, `ADM_BUDGET` in app.js).
+- Fetches `/api/admin/usage` each time it opens (no polling): tiles, a stacked 30-day chart per person (Tracks / Stem jobs), the people table (click or Enter picks a person out in the chart), the activity log, limits and the blocked-request count. The 30-day cloud cost is estimated in the client (`ADM_TRACK_COST`, `ADM_STEM_COST`, `ADM_BUDGET` in app/admin.js).
 
 ## Tests (`tests/test_web.py`) with `fastapi.testclient.TestClient`
 Seed the DB with `db.save_card` (see `full_card()` in `tests/test_foundation.py`) instead of running analysis, except one upload test using the synth wav.

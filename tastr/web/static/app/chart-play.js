@@ -3,6 +3,7 @@
 import { mmss } from "./core.js";
 import { actx, audioCtx, player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { T } from "./chart-draw.js";
+import { loopPos } from "./chart-math.js";
 
 const stopSrc = (s, when) => { try { s.stop(when); } catch (_) { /* already stopped */ } };
 
@@ -17,7 +18,8 @@ function reversed(ctx, b) {
 // Playback for one chart (c is the chart's state, see chart.js).
 export function transport(c) {
   let pos = 0, src = null, startedAt = 0, playing = false, raf = 0;
-  const tNow = () => (playing ? Math.min(c.end, actx.currentTime - startedAt) : pos);
+  const loopRange = () => (c.loop.on ? [c.loop.a, c.loop.b] : null);
+  const tNow = () => (playing ? loopPos(actx.currentTime - startedAt, loopRange(), c.end) : pos);
   function paintHead() {
     const ph = c.svgEl.querySelector(".playhead"); if (!ph) return;
     const t = tNow(), vis = t >= c.view.a && t <= c.view.b, x = c.x(t);
@@ -29,6 +31,8 @@ export function transport(c) {
     const ctx = audioCtx(); if (ctx.state === "suspended") ctx.resume();
     if (src) { src.onended = null; stopSrc(src); }
     src = ctx.createBufferSource(); src.buffer = c.audio.buf; src.connect(c.live.analyser()); // the analyser passes the sound on to the speakers
+    const lr = loopRange();
+    if (lr) { if (pos < lr[0] || pos >= lr[1]) pos = lr[0]; src.loop = true; src.loopStart = lr[0]; src.loopEnd = lr[1]; } // gapless: the browser loops the buffer itself
     src.onended = () => { if (playing) { me.stop(); pos = 0; paintHead(); } };
     src.start(0, pos); startedAt = ctx.currentTime - pos;
   }
@@ -113,5 +117,7 @@ export function transport(c) {
     pos = scrub.pos; scrub = null;
   }
   const scrubTo = (t) => { if (scrub) scrub.target = t; };
-  return { tNow, paintHead, play, toggle, seek, stop: () => me.stop(), isPlaying: () => playing, scrubStart, scrubTo, scrubEnd };
+  // After the loop changes: keep playing from where it is, with (or without) the new loop.
+  const restart = () => { if (playing) { pos = tNow(); startSrc(); } };
+  return { tNow, paintHead, play, toggle, seek, restart, stop: () => me.stop(), isPlaying: () => playing, scrubStart, scrubTo, scrubEnd };
 }

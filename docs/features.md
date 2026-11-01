@@ -78,6 +78,12 @@ Everything a track card shows and what you can do with it. The [README](../READM
 - **Energy, waveform and spectrogram views** with playback. Click a section to
   play from there, drag the playhead to scrub (you hear it as you drag), and
   scroll to zoom. The spectrogram redraws sharp at your screen's resolution as you zoom.
+- **Frequency-colored waveform:** red where the bass leads, green for mids, blue for highs (mixes show
+  between them). **One color** on the Waveform tab's bar switches back; the choice is kept in your browser.
+- **Section loop and cue points:** **⟲ Loop** (or <kbd>L</kbd>) loops the picked section without a gap; drag
+  its edges on the chart to change it (they snap to bars, Alt for the exact spot). **＋ Cue** (or <kbd>C</kbd>)
+  marks up to 9 spots per track to jump back to with <kbd>1</kbd>–<kbd>9</kbd>; they're saved per person and
+  kept when the track is re-analyzed. <kbd>Space</kbd> plays and pauses.
 - **Live tab:** the spectrogram streams with playback, as a scrolling 2D view or a
   3D landscape of ridges. **⤢ Expand** shows any chart bigger, or full screen.
 - **Stem separation** into vocals, bass, other and drums with Demucs, on your

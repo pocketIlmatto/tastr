@@ -2,11 +2,18 @@
 
 import { api } from "./core.js";
 import { audioCtx } from "./sequencer.js";
+import { bandsFromBytes, isDarkColor, splitBands } from "./chart-math.js";
 
 export const SPEC_ROWS = 120, SPEC_HOP = 0.1, SPEC_FMIN = 40, SPEC_FMAX = 10000;
 export const SPEC_RAMP = [[8, 8, 24], [60, 20, 120], [170, 40, 120], [240, 120, 40], [255, 235, 160]];
 export let chartMode = "energy"; // Energy | Waveform | Spectrogram, remembered across cards for the session
 export let audioCache = null, viewsCache = null;
+// Waveform color: "freq" (by frequency, the default) or "one" (the accent color), remembered in this browser.
+export let waveColor = "freq";
+try { if (localStorage.getItem("tastr-wave-color") === "one") waveColor = "one"; } catch (_) { /* storage off */ }
+export function setWaveColor(v) { waveColor = v; try { localStorage.setItem("tastr-wave-color", v); } catch (_) { /* storage off */ } return v; }
+// Is the page light or dark right now (look + theme)? Read from the page background, so any future look works too.
+export const isDarkPage = () => isDarkColor(window.getComputedStyle(document.body).backgroundColor);
 export const txt = (s) => document.createTextNode(s);
 export const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 // The decoded original file (plus a mono reversed copy, made on first backwards scrub). Fetched on first need, not on card open.
@@ -48,7 +55,9 @@ async function viewsFromCard(c) {
   const g = cv.getContext("2d"); g.drawImage(im, 0, 0);
   const px = g.getImageData(0, 0, im.width, im.height).data, level = new Uint8Array(im.width * im.height);
   for (let i = 0; i < level.length; i++) level[i] = px[i * 4];
-  return { mn, mx, peak: 1, perSec: v.waveform.sr / v.waveform.block, spec: rampImage(level, im.width, im.height), specEnd: s.frames * s.hop };
+  let bands = null; // low, mid, high per block, from cards analyzed since the engine stores them (views 0.2.0)
+  if (v.waveform.bands) { const bb = atob(v.waveform.bands), u = new Uint8Array(bb.length); for (let i = 0; i < bb.length; i++) u[i] = bb.charCodeAt(i); bands = bandsFromBytes(u); }
+  return { mn, mx, peak: 1, perSec: v.waveform.sr / v.waveform.block, bands, spec: rampImage(level, im.width, im.height), specEnd: s.frames * s.hop };
 }
 // Cards analyzed before the `views` stage existed: compute both from the decoded file in the browser.
 async function viewsFromAudio(c) {
@@ -65,8 +74,18 @@ async function viewsFromAudio(c) {
     mn[b] = lo; mx[b] = hi; peak = Math.max(peak, -lo, hi);
   }
   await delay(0);
+  const bands = splitBands(d, sr, BLK, nBlk);
+  await delay(0);
   const s = spectrogramLevels(d, sr);
-  return { mn, mx, peak, perSec: sr / BLK, spec: rampImage(s.level, s.frames, SPEC_ROWS), specEnd: s.frames * SPEC_HOP };
+  return { mn, mx, peak, perSec: sr / BLK, bands, spec: rampImage(s.level, s.frames, SPEC_ROWS), specEnd: s.frames * SPEC_HOP };
+}
+// Cards analyzed before the engine stored the bands: split them from the decoded file, on the waveform's blocks.
+export async function bandsFromAudio(c, pics) {
+  const { buf } = await trackAudio(c);
+  const chans = [...Array(buf.numberOfChannels)].map((_, k) => buf.getChannelData(k)), d = new Float32Array(buf.length);
+  for (const ch of chans) for (let i = 0; i < d.length; i++) d[i] += ch[i] / chans.length;
+  await delay(0);
+  return splitBands(d, buf.sampleRate, buf.sampleRate / pics.perSec, pics.mn.length);
 }
 export function trackViews(c) {
   if (!viewsCache || viewsCache.id !== c.id) {

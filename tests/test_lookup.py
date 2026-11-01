@@ -232,6 +232,7 @@ def test_api_lookup_and_card_body(db_path, tmp_path, monkeypatch, fake):
     assert client.post(f"/api/tracks/{tid}/lookup").status_code == 400
 
 
+@pytest.mark.rust
 def test_analysis_runs_enabled_lookups(db_path, synth_wav, fake, monkeypatch):
     from tastr import service
     from tastr.engine.card import Source
@@ -240,7 +241,7 @@ def test_analysis_runs_enabled_lookups(db_path, synth_wav, fake, monkeypatch):
     src = Source(kind="file", uri=str(path), local_path=str(path), title="t", artist="Daft Punk",
                  file_tags={"artist": "Daft Punk", "title": "One More Time"})
     conn = db.connect(db_path)
-    res = service.analyze_source(conn, src, stages=["core"])
+    res = service.analyze_source(conn, src)
     assert res.error is None and fake.calls == 1
     assert db.get_lookups(conn, res.track_id)[0]["status"] == "found"
 

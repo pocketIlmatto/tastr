@@ -55,7 +55,7 @@ engine-rs/
   .cargo/config.toml WebAssembly SIMD on (same bits, faster)
 tests/test_rust_engine.py   native vs WebAssembly bit for bit; every signal, beats, chroma and Ward vs librosa;
                             cards vs the Python engine; the copied constants
-tastr/engine/rust.py        the native library through ctypes (tastr_card, tastr_card_f32), TASTR_ENGINE, and
+tastr/engine/rust.py        the native library through ctypes (tastr_card, tastr_card_f32), STAGES, TASTR_ENGINE, and
                             where the WebAssembly build is and its id
 tastr/engine/browser_card.py  checks a card the browser made (TASTR_BROWSER_ENGINE)
 tastr/web/static/engine.js  the worker that runs the WebAssembly card in the page
@@ -276,12 +276,14 @@ machine, the Fly server and Modal alike.
 - **Formats Rust can't decode** (Opus): Python decodes the file (librosa, else ffmpeg) and Rust makes the card
   from those samples (`tastr_card_f32`). The card says `extras["decoded_by"] = "python"`.
 - **The Python engine** (`tastr/engine/stages/`, `run_pipeline`) stays as the reference: the benchmarks score
-  it with `--engine python`, the spectrogram benches (downbeats, Harmonix sections) and the fitting scripts
-  call its stage code directly, and tests that swap or check a Python stage ask for it (the `truth_core`
-  fixture sets `TASTR_ENGINE=python`). The rest of the test suite runs on Rust, like the app, whenever the library
-  is built (`tests/conftest.py`), and on Python when it isn't. It still makes the card for `tastr analyze --stages` (a
-  subset) and when the Rust library isn't built, which
-  `extras["engine_fallback"]` notes. A change to a stage now goes in both, and `tests/test_rust_engine.py`
+  it with `--engine python`, and the spectrogram benches (downbeats, Harmonix sections), the fitting scripts and
+  the stage tests call its stage code directly. Since TAS-47 (2026-11-01) it never makes an app card:
+  `analyze_file` has no fallback and no stage subset (`tastr analyze --stages` is gone), `TASTR_ENGINE` only
+  picks the benchmarks' engine, and without the library analysis fails with "the Rust engine library isn't
+  built (cd engine-rs && cargo build --release)". `rust.STAGES` lists the stages and versions every Rust card
+  runs, for servers without the native library (browser cards are checked against it) and `tastr stages`.
+  Tests that analyze through the app are marked `rust` and skip without the library (`tests/conftest.py`).
+  A change to a stage still goes in both engines while the benchmarks use Python, and `tests/test_rust_engine.py`
   checks that their cards agree.
 - **Browser signals are gone** (`TASTR_BROWSER_SIGNALS`, `signals.js`, `browser_signals.py`): they fed HPSS into
   the Python engine; the browser card (`TASTR_BROWSER_ENGINE`) replaces them. The upload's form field for the
@@ -298,5 +300,5 @@ machine, the Fly server and Modal alike.
   minutes. On the deployed function, 12 to 30-minute MP3s all analyzed (24 to 54 s), so `TASTR_MAX_MINUTES` is now
   25.
 - **Local installs** need the library built once (`cd engine-rs && cargo build --release --lib`); without it
-  the Python engine makes the cards, as before.
+  analysis fails and says how to build it.
 

@@ -25,7 +25,7 @@ tastr pack library.tar --owner you@example.com  # your library, audio and stems 
 tastr unpack library.tar        # on the hosted server, into its empty library
 tastr retag                      # re-read file tags for analyzed tracks (`tastr serve` does this once after the tag reader changes)
 tastr query "SELECT title, bpm, camelot FROM tracks ORDER BY bpm"
-tastr stages                     # pipeline stages in run order
+tastr stages                     # the engine's stages and their versions
 tastr serve --host 127.0.0.1 --port 8000   # web UI (defaults shown)
 tastr serve --log-level debug    # also print stage tracebacks and request details
 tastr bench synth                # score the engine on labeled tracks (bench.md)

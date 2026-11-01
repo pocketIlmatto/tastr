@@ -5,8 +5,7 @@ nothing from the rest of Tastr (storage, links, web), so it can later be
 published as its own library. The rest of the app uses it through:
 
     from tastr.engine import analyze_file
-    card = analyze_file("track.mp3")          # all stages
-    card = analyze_file("track.mp3", ["core"])
+    card = analyze_file("track.mp3")
 
 `tastr.engine.bench` scores the engine against labeled datasets.
 """
@@ -26,69 +25,42 @@ from . import rust  # noqa: E402
 log = logging.getLogger(__name__)
 
 
-def analyze_file(path: str | os.PathLike, stages: list[str] | None = None, source: Source | None = None,
-                 options: dict | None = None, on_stage=None) -> TrackCard:
-    """Analyze one audio file. A file that can't be decoded raises DecodeError.
+def analyze_file(path: str | os.PathLike, source: Source | None = None, options: dict | None = None,
+                 on_stage=None) -> TrackCard:
+    """Analyze one audio file with the Rust engine (rust.py), which makes every stage of the card. A file that
+    can't be decoded raises DecodeError; without the engine library built it raises RustEngineError.
     `options` reach the engine (e.g. {"beats_per_bar": 3} sets the meter instead of detecting it).
-    `on_stage(name, i, n)` hears "decode" first, then each stage as it starts, for progress bars.
+    `on_stage(name, i, n)` hears "decode" first, then the engine's stages, for progress bars.
 
-    The Rust engine (rust.py) makes the card: it decodes the file itself, or, for formats it can't read (Opus),
-    takes the audio decoded here. With the optional drum model (options["drum_model"], adt.py), the model runs
-    here and Rust puts its hits into the drum lanes. extras["engine"] names the engine. The Python engine
-    (run_pipeline over the stages in stages/) stays as the reference the benchmarks compare against, and makes the
-    card only when asked for (TASTR_ENGINE=python or options["engine"]), for a subset of stages, or when the Rust
-    library isn't built; extras["engine_fallback"] then says why."""
+    Rust decodes the file itself, or, for formats it can't read (Opus), takes the audio decoded here. With the
+    optional drum model (options["drum_model"], adt.py), the model runs here and Rust puts its hits into the
+    drum lanes. extras["engine"] names the engine build. The Python engine (run_pipeline over the stages in
+    stages/) stays only as the reference the benchmarks compare against."""
+    from dataclasses import asdict
     from pathlib import Path
 
     p = Path(path)
     source = source or Source(kind="file", uri=str(p), local_path=str(p), title=p.stem)
+    meter = (options or {}).get("beats_per_bar")
+    n = len(rust.STAGES)
     if on_stage:
         on_stage("decode", 0, 1)
-    card = TrackCard(source=source)
-    if rust.chosen(options) == "rust":
-        last = ["decode"]
-
-        def heard(name, *rest):
-            last[0] = name
-            on_stage(name, *rest)
-
-        made, why = _rust_card(p, stages, options, heard if on_stage else None, source)
-        if made is not None:
-            return made
-        log.info("Python engine for %s: %s", p.name, why)
-        card.extras["engine_fallback"] = why
-        if on_stage and last[0] != "decode":  # back to decoding, so a file nothing reads fails at "decode", not "core"
-            on_stage("decode", 0, 1)
-    y = load_audio(p, SR)
-    return run_pipeline(y, SR, card, stages=stages, options=options, on_stage=on_stage)
-
-
-def _rust_card(path, stages, options, on_stage, source):
-    """(card, None) from the Rust engine, or (None, why not)."""
-    from dataclasses import asdict
-
-    if stages is not None and set(stages) != set(registered_stages()):
-        return None, "only some stages were asked for"
-    meter = (options or {}).get("beats_per_bar")
+    version = rust.version()  # fails here, before any work, when the library isn't built
+    hits, model_error = _drum_model_hits(p, options)
+    if on_stage:
+        on_stage("core", 0, n)
     decoded_here = False
     try:
+        d = rust.card_from_file(p, meter, hits)
+    except rust.RustDecodeError:
+        # A format the Rust decoder doesn't read (Opus): decode here (librosa, else ffmpeg) and hand Rust the
+        # audio. Raises DecodeError when nothing can read the file, which progress then shows at "decode".
         if on_stage:
-            on_stage("core", 0, len(registered_stages()))
-        hits, model_error = _drum_model_hits(path, options)
-        try:
-            d = rust.card_from_file(path, meter, hits)
-        except rust.RustDecodeError:
-            # A format the Rust decoder doesn't read (Opus): decode here (librosa, else ffmpeg) and hand Rust the
-            # audio. Raises DecodeError when nothing can read the file, which progress then shows at "decode".
-            if on_stage:
-                on_stage("decode", 0, 1)
-            y = load_audio(path, SR)
-            if on_stage:
-                on_stage("core", 0, len(registered_stages()))
-            d, decoded_here = rust.card_from_samples(y, meter, hits), True
-        version = rust.version()
-    except rust.RustEngineError as e:
-        return None, str(e)
+            on_stage("decode", 0, 1)
+        y = load_audio(p, SR)
+        if on_stage:
+            on_stage("core", 0, n)
+        d, decoded_here = rust.card_from_samples(y, meter, hits), True
     d["source"] = asdict(source)
     card = TrackCard.from_dict(d)
     card.extras["engine"] = f"rust {version}"
@@ -96,7 +68,7 @@ def _rust_card(path, stages, options, on_stage, source):
         card.extras["decoded_by"] = "python"
     if model_error:
         card.extras["drum_model_error"] = model_error
-    return card, None
+    return card
 
 
 def _drum_model_hits(path, options) -> tuple[dict | None, str | None]:

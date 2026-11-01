@@ -140,7 +140,8 @@ def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = No
 
 
 def run_analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
-    """Analyze one file's bytes; returns the card as a dict (its source names a temporary file)."""
+    """Analyze one file's bytes; returns the card as a dict (its source names a temporary file). `stages` is
+    still in the call so servers and Modal apps deployed at different times agree; the engine makes every stage."""
     import tempfile
 
     from ..engine import analyze_file
@@ -148,7 +149,7 @@ def run_analyze(audio: bytes, suffix: str, stages: list[str] | None = None, opti
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / f"track{suffix}"
         src.write_bytes(audio)
-        return analyze_file(src, stages, options=options).to_dict()
+        return analyze_file(src, options=options).to_dict()
 
 
 def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None):
@@ -166,7 +167,7 @@ def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = Non
 
         def work():
             try:
-                card = analyze_file(src, stages, options=options,
+                card = analyze_file(src, options=options,
                                     on_stage=lambda s, i, n: events.put({"stage": s, "i": i, "n": n}))
                 events.put({"card": card.to_dict()})
             except BaseException as e:  # noqa: BLE001 - raised again below, in the caller's thread

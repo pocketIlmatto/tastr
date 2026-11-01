@@ -1,5 +1,5 @@
 """P4 and P5 of the Rust engine (docs/rust-engine.md): the Rust engine making every card (tastr/engine/rust.py),
-the Python engine only when asked for or when Rust can't, and whole cards made in the browser (TASTR_BROWSER_ENGINE, tastr/engine/browser_card.py). The parts that need the Rust
+and whole cards made in the browser (TASTR_BROWSER_ENGINE, tastr/engine/browser_card.py). The parts that need the Rust
 library or its WebAssembly build skip without them:
 
     cd engine-rs && cargo build --release && cargo build --release --lib --target wasm32-unknown-unknown
@@ -43,8 +43,7 @@ def test_engine_choice(monkeypatch):
 
 
 @needs_lib
-def test_rust_engine_makes_the_card_the_binary_makes(song, tmp_path, monkeypatch):
-    monkeypatch.setenv("TASTR_ENGINE", "rust")
+def test_rust_engine_makes_the_card_the_binary_makes(song, tmp_path):
     card = analyze_file(song)
     assert card.extras["engine"] == f"rust {rust.version()}" and not card.errors
     assert card.source.local_path == str(song) and card.source.title == "song"
@@ -70,17 +69,27 @@ def test_samples_in_gives_the_same_card_as_the_binary(tmp_path):
 
 
 @needs_lib
-def test_python_engine_steps_in_when_rust_cant(song, tmp_path, monkeypatch):
-    monkeypatch.setenv("TASTR_ENGINE", "rust")
-    part = analyze_file(song, ["core"])
-    assert "engine" not in part.extras and part.extras["engine_fallback"] == "only some stages were asked for"
+def test_every_card_comes_from_rust(song, tmp_path, monkeypatch):
+    """TASTR_ENGINE only picks the benchmarks' engine: analyze_file always uses Rust, and a file nothing can
+    decode fails at the decode step."""
+    monkeypatch.setenv("TASTR_ENGINE", "python")
+    card = analyze_file(song)
+    assert card.extras["engine"] == f"rust {rust.version()}" and card.stages_run == rust.STAGES
     bad = tmp_path / "bad.wav"
     bad.write_bytes(b"RIFF....not audio")
+    seen = []
     with pytest.raises(DecodeError):
-        analyze_file(bad)  # neither Rust nor Python can decode it
-    monkeypatch.setenv("TASTR_ENGINE", "python")
-    ref = analyze_file(song, ["core"])
-    assert "engine" not in ref.extras and "engine_fallback" not in ref.extras
+        analyze_file(bad, on_stage=lambda s, i, n: seen.append(s))
+    assert seen[-1] == "decode"
+
+
+def test_no_library_is_a_clear_error(song, monkeypatch):
+    """Without the library there is no other engine to fall back to: the error says how to build it."""
+    monkeypatch.setattr(rust, "_lib", None)
+    monkeypatch.setattr(rust, "_lib_error", None)
+    monkeypatch.setenv("TASTR_ENGINE_LIB", str(song.parent / "missing.so"))
+    with pytest.raises(rust.RustEngineError, match="cargo build --release"):
+        analyze_file(song)
 
 
 @needs_lib
@@ -89,7 +98,6 @@ def test_drum_model_cards_come_from_rust(song, monkeypatch):
     keeps the built-in lanes and says why."""
     from tastr.engine import adt
 
-    monkeypatch.setenv("TASTR_ENGINE", "rust")
     monkeypatch.setattr(adt, "wanted", lambda options: bool((options or {}).get("drum_model")))
     seen = []
 
@@ -101,7 +109,7 @@ def test_drum_model_cards_come_from_rust(song, monkeypatch):
     monkeypatch.setattr(adt, "onsets", onsets)
     card = analyze_file(song, options={"drum_model": True})
     assert seen == [adt.SR]  # the original file at the model's own rate
-    assert card.extras["engine"].startswith("rust") and "engine_fallback" not in card.extras
+    assert card.extras["engine"].startswith("rust")
     assert card.extras["drum_model"] == "adtof" and "cymbal" in card.extras["suggestions.drum_grid"]
 
     def broken(y, sr):
@@ -125,31 +133,12 @@ def test_rust_is_the_default(song, monkeypatch):
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
 def test_formats_rust_cant_decode_are_decoded_here(song, tmp_path, monkeypatch):
     """Opus: Python decodes it and Rust still makes the card from the audio."""
-    monkeypatch.setenv("TASTR_ENGINE", "rust")
     opus = tmp_path / "song.opus"
     subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(song), "-c:a", "libopus", str(opus)],
                    check=True)
     card = analyze_file(opus)
     assert card.extras["engine"] == f"rust {rust.version()}" and card.extras["decoded_by"] == "python"
     assert abs(card.core.bpm - 124) < 1
-
-
-def test_server_sends_the_engine_setting_to_modal(song, monkeypatch):
-    """TASTR_ENGINE is set on the Fly server; it reaches Modal in the options."""
-    from tastr import service
-    from tastr.cloud import remote
-
-    seen = {}
-
-    def fake(path, stages, options, on_stage=None):
-        seen["options"] = options
-        return analyze_file(song, ["core"])
-
-    monkeypatch.setenv("TASTR_ANALYSIS_BACKEND", "modal")
-    monkeypatch.setenv("TASTR_ENGINE", "rust")
-    monkeypatch.setattr(remote, "analyze", fake)
-    service._analyze(Source(kind="file", uri=str(song), local_path=str(song)), None, None)
-    assert seen["options"] == {"engine": "rust"}
 
 
 # --- Browser cards ---
@@ -202,6 +191,7 @@ def wait_job(client, job_id):
 
 
 @needs_wasm
+@pytest.mark.rust
 def test_upload_with_a_browser_card_skips_the_analysis(song, db_path, tmp_path, monkeypatch):
     from tastr import service
     from tastr.web.server import create_app

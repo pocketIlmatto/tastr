@@ -3,8 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import tastr.engine
-from tastr.engine import analyze_file
+from tastr.engine import analyze_file, rust
 
 ENGINE = Path(tastr.engine.__file__).parent
 
@@ -31,11 +33,12 @@ def test_engine_import_does_not_load_app_modules():
     assert out.strip() == "['tastr']"
 
 
+@pytest.mark.skipif(not rust.available(), reason="needs the Rust engine built")
 def test_analyze_file(synth_wav):
-    card = analyze_file(synth_wav[0], ["core"])
+    card = analyze_file(synth_wav[0])
     assert card.source.title == "synth_124_Am"
     assert abs(card.core.bpm - 124) < 1
-    assert card.stages_run.keys() == {"core"}
+    assert card.stages_run == rust.STAGES
 
 
 def test_hpss_matches_librosa_sample_for_sample():

@@ -108,7 +108,7 @@ def test_resolve_inputs(tmp_path, synth_wav):
         resolve_inputs([str(tmp_path / "missing.wav")])
 
 
-@pytest.mark.audio
+@pytest.mark.rust
 def test_cli_end_to_end(db_path, synth_wav, capsys):
     path, _ = synth_wav
     assert main(["--db", str(db_path), "analyze", str(path)]) == 0
@@ -121,15 +121,15 @@ def test_cli_end_to_end(db_path, synth_wav, capsys):
     assert json.loads(capsys.readouterr().out.strip()) == {"title": "synth_124_Am"}
 
 
-def test_truth_core_fixture(synth_wav, truth_core, db_path):
-    from tastr.service import analyze_inputs
+def test_truth_core_fixture(synth_wav, truth_core):
+    from tastr.engine import SR, load_audio, run_pipeline
 
     path, truth = synth_wav
-    [res] = analyze_inputs(db.connect(db_path), [str(path)])
-    assert res.error is None
-    assert res.card.core.bpm == truth["bpm"]
-    assert res.card.core.key.camelot == "8A"
-    assert res.card.suggestions[0].category == "setup"
+    card = run_pipeline(load_audio(path, SR), SR, TrackCard(source=Source(kind="file", uri=str(path))))
+    assert not card.errors
+    assert card.core.bpm == truth["bpm"]
+    assert card.core.key.camelot == "8A"
+    assert card.suggestions[0].category == "setup"
 
 
 def test_web_read_api(db_path):

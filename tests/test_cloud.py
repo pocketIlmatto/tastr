@@ -370,9 +370,9 @@ def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):
     song = tmp_path / "song.mp3"
     song.write_bytes(b"mp3 bytes")
     src = Source(kind="file", uri=str(song), local_path=str(song), title="song")
-    r = service.analyze_source(db.connect(db_path), src, ["core"], {"beats_per_bar": 3}, owner="a@b.c")
+    r = service.analyze_source(db.connect(db_path), src, {"beats_per_bar": 3}, owner="a@b.c")
     assert r.error is None and apps == ["tastr-web"]
-    assert calls == [("analyze", (b"mp3 bytes", ".mp3", ["core"], {"beats_per_bar": 3}), {})]
+    assert calls == [("analyze", (b"mp3 bytes", ".mp3", None, {"beats_per_bar": 3}), {})]
     assert r.card.source is src and r.card.core.bpm == 124.0
     assert db.load_card(db.connect(db_path), r.track_id).source.local_path == str(song)
 
@@ -416,20 +416,20 @@ def test_remote_analyze_reports_stages_from_analyze_stream(monkeypatch, tmp_path
     assert remote.analyze(song, on_stage=seen.append).core.bpm == 124.0 and calls == ["analyze"]
 
 
-@pytest.mark.audio
+@pytest.mark.rust
 def test_run_analyze_stream_yields_stages_then_the_card(synth_wav):
     from tastr.engine.card import TrackCard
 
     path, _ = synth_wav
-    events = list(jobs.run_analyze_stream(path.read_bytes(), ".wav", ["core"]))
-    assert [e["stage"] for e in events[:-1]] == ["decode", "core"]
+    events = list(jobs.run_analyze_stream(path.read_bytes(), ".wav"))
+    assert [e["stage"] for e in events[:-1]] == ["decode", "core"]  # Rust reports one step for all its stages
     assert TrackCard.from_dict(events[-1]["card"]).core.bpm
 
 
-@pytest.mark.audio
+@pytest.mark.rust
 def test_run_analyze_returns_a_card(synth_wav):
     from tastr.engine.card import TrackCard
 
     path, _ = synth_wav
-    card = TrackCard.from_dict(jobs.run_analyze(path.read_bytes(), ".wav", ["core"]))
+    card = TrackCard.from_dict(jobs.run_analyze(path.read_bytes(), ".wav", ["core"]))  # older servers still send stages
     assert card.duration and card.core.bpm

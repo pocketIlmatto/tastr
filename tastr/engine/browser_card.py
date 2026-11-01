@@ -1,7 +1,7 @@
 """Whole cards made in the browser (TASTR_BROWSER_ENGINE): the page runs the Rust engine's WebAssembly build
 on an upload (tastr/web/static/engine.js) and sends the finished card with the audio, so the server needs no
 analysis at all. Because the browser and the server run the same Rust code, the card is the one the server's
-Rust engine (TASTR_ENGINE=rust) would make from the same file.
+Rust engine would make from the same file.
 
 The server takes a card only when it checks out, and otherwise analyzes the file itself as usual:
 
@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import rust
 from .card import Source, TrackCard
-from .pipeline import SR, registered_stages
+from .pipeline import SR
 
 log = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ def load(data: bytes, source: Source) -> TrackCard:
     d = msg.get("card")
     if not isinstance(d, dict):
         raise BrowserCardError("no card")
-    want = {name: stage.version for name, stage in registered_stages().items()}
+    want = rust.STAGES
     if d.get("stages_run") != want:
         raise BrowserCardError(f"stages {d.get('stages_run')} don't match the engine's {want}")
     if d.get("sample_rate") != SR:

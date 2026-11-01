@@ -12,15 +12,26 @@ if os.environ.get("PYTEST_XDIST_WORKER"):
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Analyses in the tests run on the Rust engine, as they do in the app, whenever its library is built
-# (cd engine-rs && cargo build --release --lib); CI always builds it. Without it they run on the Python engine
-# and the Rust tests skip. Tests of the Python reference engine's stage logic call its stages directly, and
-# fixtures that swap a Python stage (truth_core) switch TASTR_ENGINE to python themselves.
+# Analyses in the tests run on the Rust engine, as they do in the app; they need its library built
+# (cd engine-rs && cargo build --release --lib), which CI does whenever the audio tests run. Benchmark tests use
+# the Rust engine too when it is built, else the Python reference engine. Tests of the Python reference engine's
+# stage logic call its stages directly (run_pipeline).
 from tastr.engine import rust as _rust  # noqa: E402
 
 os.environ.setdefault("TASTR_ENGINE", "rust" if _rust.lib_path() else "python")
 
 from synth import make_track, write_wav  # noqa: E402
+
+
+@pytest.hookimpl(tryfirst=True)  # before -m "not audio" deselects
+def pytest_collection_modifyitems(config, items):
+    """A `rust` test analyzes audio through the app: it is an audio test, and skips without the library."""
+    missing = pytest.mark.skip(reason="needs the Rust engine built (cd engine-rs && cargo build --release --lib)")
+    for item in items:
+        if item.get_closest_marker("rust"):
+            item.add_marker(pytest.mark.audio)
+            if not _rust.available():
+                item.add_marker(missing)
 
 
 @pytest.fixture(scope="session")
@@ -39,9 +50,8 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def truth_core(synth_wav, monkeypatch):
-    """Swap the core stage for one that reports the synth track's ground truth. The swap is a Python stage, so
-    analyses in the test run on the Python engine."""
-    monkeypatch.setenv("TASTR_ENGINE", "python")
+    """Swap the Python reference engine's core stage for one that reports the synth track's ground truth, for
+    tests that run its stages (run_pipeline)."""
     from synth import TruthCoreStage
 
     from tastr.engine.pipeline import register_stage, registered_stages

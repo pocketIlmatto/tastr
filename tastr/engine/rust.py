@@ -1,9 +1,9 @@
-"""The Rust engine (engine-rs/, docs/rust-engine.md) as a drop-in for the whole pipeline.
+"""The Rust engine (engine-rs/, docs/rust-engine.md), which makes every card.
 
 analyze_file hands every analysis to the Rust library, which decodes the file and makes the card itself; for
-formats it can't decode (Opus), Python decodes and passes it the audio. The Python engine makes the card only
-with TASTR_ENGINE=python (or options {"engine": "python"}), for a subset of stages, with the drum model, or
-when the library isn't there. The card says which engine made it in extras["engine"].
+formats it can't decode (Opus), Python decodes and passes it the audio. The card says which build made it in
+extras["engine"]. The Python engine (tastr/engine/stages/) is only the benchmarks' reference: they pick it with
+TASTR_ENGINE=python (`chosen`).
 
 The library is engine-rs's cdylib, loaded with ctypes through its small C interface (the same one the
 WebAssembly build exports). It is found at TASTR_ENGINE_LIB, else next to this file, else in engine-rs's
@@ -22,6 +22,10 @@ from pathlib import Path
 import numpy as np
 
 ENGINES = ("python", "rust")
+# The stages every Rust card runs, with their versions (engine-rs/src/stages/mod.rs), as card.stages_run lists
+# them. Kept here so a server without the native library (the hosted web server checks browser cards against
+# it) knows them; tests/test_rust_switch.py checks them against the library.
+STAGES = {"core": "0.3.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.1.0"}
 _LIB_NAMES = {"darwin": "libtastr_engine.dylib", "win32": "tastr_engine.dll"}
 _lock = threading.Lock()
 _lib: ctypes.CDLL | None = None
@@ -94,8 +98,9 @@ def version() -> str:
 
 
 def chosen(options: dict | None = None) -> str:
-    """Which engine this analysis asks for: options["engine"], else TASTR_ENGINE, else rust. "python" picks
-    the reference engine (tastr/engine/stages/), which the benchmarks compare against."""
+    """Which engine a benchmark run asks for: options["engine"], else TASTR_ENGINE, else rust. "python" picks
+    the reference engine (tastr/engine/stages/), which the benchmarks compare against. Cards for the app always
+    come from Rust (analyze_file)."""
     name = str((options or {}).get("engine") or os.environ.get("TASTR_ENGINE") or "rust").strip().lower()
     return name if name in ENGINES else "rust"
 

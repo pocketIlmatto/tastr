@@ -57,7 +57,7 @@ def fetch(dataset: str, path: str, archives: list[int] | None = None) -> dict:
     return _call("fetch", dataset, path, archives)
 
 
-def analyze(audio_path: str | Path, stages: list[str] | None = None, options: dict | None = None, on_stage=None):
+def analyze(audio_path: str | Path, options: dict | None = None, on_stage=None):
     """Analyze one file on Modal; returns its TrackCard (whose source the caller sets). With the drum model
     asked for ({"drum_model": True}), it runs in `analyze_drums`, whose image has PyTorch and the weights.
 
@@ -66,7 +66,7 @@ def analyze(audio_path: str | Path, stages: list[str] | None = None, options: di
     from ..engine.card import TrackCard
 
     audio_path = Path(audio_path)
-    args = (audio_path.read_bytes(), audio_path.suffix, stages, options)
+    args = (audio_path.read_bytes(), audio_path.suffix, None, options)  # None: the stages, which the engine no longer takes
     if (options or {}).get("drum_model"):
         return TrackCard.from_dict(_call("analyze_drums", *args))
     if on_stage:

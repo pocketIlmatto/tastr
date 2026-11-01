@@ -1,5 +1,6 @@
 """The Rust engine (engine-rs/, docs/rust-engine.md): its native and WebAssembly builds give identical output,
-its HPSS, shared signals, beats, chroma and section clustering match the Python engine's, and so do its cards. Skips unless both builds exist:
+its HPSS, shared signals, beats, chroma and section clustering match the Python engine's, and so do its core,
+sections and drum grid; the whole card is checked against stored ones (tests/golden/). Skips unless both builds exist:
 
     cd engine-rs && cargo build --release && cargo build --release --lib --target wasm32-unknown-unknown
 """
@@ -295,52 +296,105 @@ def rust_card(path: Path, out: Path, *extra: str) -> dict:
     return json.loads(out.read_text())
 
 
-def test_cards_match_the_python_engine(tmp_path):
-    """The same audio through both engines gives the same card. The spectrogram PNG is deflated differently, so
-    its pixels are compared, and an FFT rounding difference may move a pixel or two by one level."""
-    from tastr.engine.pipeline import run_pipeline
-
-    y = make_track(bpm=128, bars_per_section=(8, 16, 8))[0].astype(np.float32)
-    raw = tmp_path / "y.f32"
-    y.tofile(raw)
-    py = json.loads(json.dumps(run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x"))).to_dict()))
-    rs = rust_card(raw, tmp_path / "card.json")
-    assert rs["stages_run"] == py["stages_run"] and rs["errors"] == py["errors"] == {}
-    pa = png_pixels(py["extras"]["views"]["spectrogram"].pop("png"))
-    pb = png_pixels(rs["extras"]["views"]["spectrogram"].pop("png"))
-    assert pa.size == pb.size and np.count_nonzero(pa != pb) <= pa.size // 10000
-    py.pop("source"), rs.pop("source")
-    assert rs == py
+GOLDEN = Path(__file__).parent / "golden"
 
 
-def test_drum_model_cards_match_the_python_engine(tmp_path, monkeypatch):
-    """With the drum model's hits handed in (the server runs the model), the Rust card is the Python engine's:
-    the model's kick, tom and hi-hats replace those lanes, a cymbal lane joins, and its pad and help come too."""
-    from tastr.engine import adt, rust
-    from tastr.engine.pipeline import run_pipeline
+def golden_track() -> np.ndarray:
+    return make_track(bpm=128, bars_per_section=(8, 16, 8))[0].astype(np.float32)
 
-    y, _ = make_track(bpm=128, bars_per_section=(8, 16, 8))
-    y = y.astype(np.float32)
+
+def golden_hits() -> dict:
+    """Drum-model hits on golden_track's grid, as the server would hand them in (engine/adt.py)."""
     step, rng = 60 / 128 / 4, np.random.default_rng(3)
     at = lambda steps: np.array([(b * 16 + s) * step for b in range(32) for s in steps])  # noqa: E731
     times = {"kick": at([0, 8]), "snare": at([4, 12]), "tom": at([14]), "hat": at(range(0, 16, 2)),
              "cymbal": at([0]) + 0.004}
-    hits = {k: (t, rng.uniform(0.5, 1.0, t.size).astype(np.float32)) for k, t in times.items()}
-    monkeypatch.setattr(adt, "wanted", lambda options: True)
-    monkeypatch.setattr(adt, "onsets", lambda y, sr: hits)
-    py = json.loads(json.dumps(run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x"))).to_dict()))
-    rs = rust.card_from_samples(y, None, hits)
-    assert py["extras"]["drum_model"] == rs["extras"]["drum_model"] == "adtof"
-    assert "cymbal" in rs["extras"]["suggestions.drum_grid"]
-    groove = next(s for s in rs["suggestions"] if s["title"] == "Detected groove")
+    return {k: (t, rng.uniform(0.5, 1.0, t.size).astype(np.float32)) for k, t in times.items()}
+
+
+def check_golden(name: str, card: dict) -> None:
+    """The card equals the stored one in tests/golden/ (its spectrogram PNG by hash). After a deliberate engine
+    change, TASTR_UPDATE_GOLDEN=1 rewrites the file; review its diff like any other change."""
+    import hashlib
+    import os
+
+    card = json.loads(json.dumps(card))
+    spec = card["extras"]["views"]["spectrogram"]
+    png_pixels(spec["png"])  # decodes
+    spec["png"] = "sha256:" + hashlib.sha256(spec["png"].encode()).hexdigest()
+    path = GOLDEN / f"{name}.json"
+    if os.environ.get("TASTR_UPDATE_GOLDEN"):
+        path.write_text(json.dumps(card, indent=1, sort_keys=True) + "\n")
+    assert card == json.loads(path.read_text()), f"the card differs from {path}; see check_golden"
+
+
+def test_card_matches_the_golden_card():
+    """Every stage of the Rust card, checked against a stored card, since the Python engine no longer has the
+    tags, suggestions and views stages to compare against."""
+    from tastr.engine import rust
+
+    card = rust.card_from_samples(golden_track())
+    assert card["errors"] == {} and card["stages_run"] == rust.STAGES
+    check_golden("card-128bpm", card)
+
+
+def test_drum_model_card_matches_the_golden_card(monkeypatch):
+    """With the drum model's hits handed in, the model's kick, tom and hi-hats replace those lanes, a cymbal
+    lane joins, and its pad and help come too."""
+    from tastr.engine import rust
+
+    card = rust.card_from_samples(golden_track(), None, golden_hits())
+    assert card["extras"]["drum_model"] == "adtof" and "cymbal" in card["extras"]["suggestions.drum_grid"]
+    groove = next(s for s in card["suggestions"] if s["title"] == "Detected groove")
     assert groove["data"]["pads"]["cymbal"] == "C#2" and "ADTOF" in groove["data"]["lane_help"]["kick"]
-    # What the drum model changes: the drum grid and the suggestions built on it. (Section confidences are
-    # rounded from a vector norm numpy takes from BLAS, so on some CPUs one can land a 0.001 step away; the
-    # whole-card comparison above, test_cards_match_the_python_engine, already covers sections.)
-    assert rs["extras"]["suggestions.drum_grid"] == py["extras"]["suggestions.drum_grid"]
-    assert rs["suggestions"] == py["suggestions"]
-    no_model = rust.card_from_samples(y)
+    check_golden("card-128bpm-drum-model", card)
+    no_model = rust.card_from_samples(golden_track())
     assert "drum_model" not in no_model["extras"] and "cymbal" not in no_model["extras"]["suggestions.drum_grid"]
+
+
+def test_core_and_sections_match_the_python_engine(tmp_path):
+    """The benchmarks still score the Python core and sections stages, so they must stay the Rust ones. (Section
+    confidences are rounded from a vector norm numpy takes from BLAS, so on some CPUs one can land a 0.001 step
+    away.)"""
+    from tastr.engine.pipeline import run_pipeline
+
+    y = golden_track()
+    py = json.loads(json.dumps(run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x"))).to_dict()))
+    rs = rust_card_of(y, tmp_path)
+    assert py["errors"] == {} and set(py["stages_run"]) == {"core", "sections"}
+    assert {k: rs["stages_run"][k] for k in py["stages_run"]} == py["stages_run"]
+    for key in ("duration", "sample_rate", "core"):
+        assert rs[key] == py[key], key
+    for key in ("features", "series", "extras"):
+        assert {k: rs[key][k] for k in py[key]} == py[key], key
+    assert len(rs["sections"]) == len(py["sections"])
+    for a, b in zip(rs["sections"], py["sections"]):
+        assert abs(a.pop("confidence") - b.pop("confidence")) <= 0.0011 and a == b
+
+
+def rust_card_of(y: np.ndarray, tmp_path: Path) -> dict:
+    raw = tmp_path / "y.f32"
+    y.tofile(raw)
+    return rust_card(raw, tmp_path / "card.json")
+
+
+@pytest.mark.parametrize("model", [False, True])
+def test_drum_grid_matches_the_python_engine(model, monkeypatch):
+    """The drum benchmarks score the Python drum grid (drums.drum_grid), so it must stay the Rust card's, with and
+    without the drum model's hits."""
+    from tastr.engine import adt, drums, rust
+    from tastr.engine.pipeline import AnalysisContext, run_pipeline
+
+    y = golden_track()
+    hits = golden_hits() if model else None
+    monkeypatch.setattr(adt, "wanted", lambda options: model)
+    monkeypatch.setattr(adt, "onsets", lambda y, sr: hits)
+    card = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x")))
+    ctx = AnalysisContext(y=y, sr=SR, card=card)
+    grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + y.size // ctx.hop))
+    py = {lane: {k: v for k, v in g.items() if not k.startswith("_")} for lane, g in grid.items()}
+    assert ("cymbal" in py) == model
+    assert rust.card_from_samples(y, None, hits)["extras"]["suggestions.drum_grid"] == py
 
 
 def test_card_meter_option_and_wasm_card(stereo_44k, tmp_path):

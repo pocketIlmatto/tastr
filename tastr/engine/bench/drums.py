@@ -4,7 +4,7 @@ Four suites:
 
 - `synth`: generated loops with known 16-step patterns for every lane (kick,
   snare, clap, hat, open hat, tom, perc), scored step by step on the detected
-  groove the suggestions stage builds. Exact labels, but a synthetic kit.
+  groove the card shows (drums.drum_grid). Exact labels, but a synthetic kit.
 - `idmt`: IDMT-SMT-Drums (real, sampled and techno kits; kick, snare and hi-hat
   onsets only). Fetch it from https://zenodo.org/records/7544164 and unzip;
   pass the folder that holds `audio/` and `annotation_xml/`.
@@ -100,15 +100,13 @@ def _synth_ctx(y: np.ndarray, bpm: float) -> AnalysisContext:
 
 def run_synth(bpms=(100, 128, 174)) -> dict:
     """Step-level precision/recall per lane over every pattern and tempo ("x" and "o" both count as a hit)."""
-    from ..stages.suggestions import _drum_grid, _step_grid
-
     counts = {lane: [0, 0, 0] for lane in drums.LANES}
     rows = []
     for name, pats in DRUM_PATTERNS.items():
         for bpm in bpms:
             y, _ = make_drum_track(pats, bpm=bpm)
             ctx = _synth_ctx(y, bpm)
-            grid = _drum_grid(ctx, _step_grid(ctx, 1 + len(y) // ctx.hop))
+            grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
             got_all = {}
             for lane in drums.LANES:
                 want = pats.get(lane, "." * 16)

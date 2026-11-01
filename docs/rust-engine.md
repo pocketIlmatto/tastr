@@ -283,8 +283,11 @@ machine, the Fly server and Modal alike.
   built (cd engine-rs && cargo build --release)". `rust.STAGES` lists the stages and versions every Rust card
   runs, for servers without the native library (browser cards are checked against it) and `tastr stages`.
   Tests that analyze through the app are marked `rust` and skip without the library (`tests/conftest.py`).
-  A change to a stage still goes in both engines while the benchmarks use Python, and `tests/test_rust_engine.py`
-  checks that their cards agree.
+  The Python tags, suggestions and views stages are gone too (TAS-47, part 2): the Rust card is checked
+  against stored cards in `tests/golden/` (rewrite them with `TASTR_UPDATE_GOLDEN=1` after a deliberate
+  change and review the diff), the vibe rules have Rust unit tests (`cargo test --lib`, run in CI), and the
+  vibe bench always runs on Rust. A change to core, sections or the drum lanes still goes in both engines,
+  and `tests/test_rust_engine.py` checks that they agree.
 - **Browser signals are gone** (`TASTR_BROWSER_SIGNALS`, `signals.js`, `browser_signals.py`): they fed HPSS into
   the Python engine; the browser card (`TASTR_BROWSER_ENGINE`) replaces them. The upload's form field for the
   card is now `card`.

@@ -9,8 +9,6 @@ import pytest
 from tastr.engine import adt, drums
 from tastr.engine.bench.drums import _synth_ctx
 from tastr.engine.bench.synth import make_drum_track
-from tastr.engine.stages import suggestions
-from tastr.engine.stages.suggestions import _drum_grid, _step_grid
 
 
 def no_torch(monkeypatch):
@@ -59,7 +57,7 @@ def test_fallback_keeps_the_built_in_lanes(monkeypatch):
     assert drums.model_lanes(ctx) is None
     acts = drums.lane_activations(ctx, np.arange(10))
     assert tuple(acts) == drums.LANES  # no cymbal lane
-    grid = _drum_grid(ctx, _step_grid(ctx, 1 + len(y) // ctx.hop))
+    grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
     assert set(grid) == set(drums.LANES)
 
 
@@ -76,7 +74,7 @@ def test_model_onsets_map_onto_the_groove(monkeypatch):
     lanes = drums.model_lanes(ctx)
     f = int(round(14 * step * ctx.sr / ctx.hop))
     assert lanes["tom"][f] > 0 and lanes["tom"][f - 3:f].max() == 0
-    grid = _drum_grid(ctx, _step_grid(ctx, 1 + len(y) // ctx.hop))
+    grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
     assert "cymbal" in grid
     hits = lambda g: g["pattern"].replace("o", "x") if g["detected"] else "." * 16  # noqa: E731
     assert hits(grid["tom"]) == "..............x."
@@ -84,19 +82,6 @@ def test_model_onsets_map_onto_the_groove(monkeypatch):
     assert hits(grid["kick"]) == "x.......x......."
     assert hits(grid["hat"]) == "x.x.x.x.x.x.x.x."
     assert hits(grid["snare"]) == "....x.......x..."  # still ours
-
-
-@pytest.mark.audio
-def test_suggestions_pad_and_help_for_the_cymbal(monkeypatch):
-    y, _ = make_drum_track({"kick": "x...x...x...x...", "snare": "....x.......x..."}, bpm=120)
-    at = lambda steps: [(b * 16 + s) * 0.125 for b in range(8) for s in steps]  # noqa: E731
-    fake_model(monkeypatch, {"kick": at([0, 4, 8, 12]), "snare": [], "tom": [], "hat": [], "cymbal": at([0, 8])})
-    ctx = _synth_ctx(y, 120)
-    grid = _drum_grid(ctx, _step_grid(ctx, 1 + len(y) // ctx.hop))
-    sugs = suggestions._suggest(ctx, grid, {}, {})
-    groove = next(s for s in sugs if s.title == "Detected groove")
-    assert groove.data["pads"]["cymbal"] == "C#2"
-    assert "ADTOF" in groove.data["lane_help"]["cymbal"] and "ADTOF" in groove.data["lane_help"]["kick"]
 
 
 def test_filterbank_and_spectrogram_shape():

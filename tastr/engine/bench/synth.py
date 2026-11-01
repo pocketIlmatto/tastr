@@ -26,7 +26,7 @@ def _kick(sr=SR):
     return 0.9 * np.exp(-t * 12) * np.sin(2 * np.pi * np.cumsum(f) / sr)
 
 
-def _hat(sr=SR, rng=np.random.default_rng(0)):
+def _hat(rng: np.random.Generator, sr=SR):
     n = int(0.05 * sr)
     noise = rng.standard_normal(n)
     noise = np.diff(noise, prepend=0)  # crude high-pass
@@ -49,6 +49,7 @@ def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per
     """
     beat = 60.0 / bpm
     bar = 4 * beat
+    rng = np.random.default_rng(0)  # the hats' noise: the same track on every call
     total_bars = sum(bars_per_section)
     y = np.zeros(int((total_bars * bar + 1.0) * sr))
     third = 3 if mode == "minor" else 4
@@ -85,7 +86,7 @@ def make_track(bpm: float = 120.0, tonic: int = 9, mode: str = "minor", bars_per
             if s == 1:
                 for k in range(4):
                     add(_kick(), t_bar + k * beat, kick_gain)
-                    add(_hat(), t_bar + k * beat + beat / 2)
+                    add(_hat(rng), t_bar + k * beat + beat / 2)
         bar_idx += n
     y = (y / (np.abs(y).max() + 1e-9) * 0.9).astype(np.float32)
     truth = {"bpm": bpm, "tonic": tonic, "mode": mode, "bar_seconds": bar, "sections": sections}

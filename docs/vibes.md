@@ -8,9 +8,9 @@ said about real tracks, and refits the weights where the labels allow it.
 | --- | --- | --- |
 | danceability = 0.75 percussiveness (/0.5) + 0.25 tempo fit (bell around 135 BPM, width 45); until 2026-10-30 it was 0.55 pulse clarity + 0.25 tempo fit (122 BPM, width 30) + 0.20 percussiveness | `stages/core.py` | MTG-Jamendo danceable, party (fitted, see Results) |
 | energy = 0.35 loudness ((dB+30)/22) + 0.25 onset rate (/6 per s) + 0.20 brightness + 0.20 percussiveness (/0.5) | `stages/core.py` | DEAM arousal; MTG-Jamendo aggressive, energetic, relaxed |
-| mood-like tags: high energy, chill, melancholic, dark, bright, euphoric, danceable, atmospheric | `stages/tags.py` | MTG-Jamendo yes/no moods and mood/theme tags, DEAM valence |
-| descriptive tags: bass-heavy, percussive, swung, dynamic, driving, hypnotic | `stages/tags.py` | no public labels; meant to be set from the spread of your own library |
-| show cut-off 0.20 | `stages/tags.py` | the share of tracks showing a tag that listeners labeled the same way |
+| mood-like tags: high energy, chill, melancholic, dark, bright, euphoric, danceable, atmospheric | `engine-rs/src/stages/tags.rs` | MTG-Jamendo yes/no moods and mood/theme tags, DEAM valence |
+| descriptive tags: bass-heavy, percussive, swung, dynamic, driving, hypnotic | `engine-rs/src/stages/tags.rs` | no public labels; meant to be set from the spread of your own library |
+| show cut-off 0.20 | `engine-rs/src/stages/tags.rs` (`MIN_SCORE`) | the share of tracks showing a tag that listeners labeled the same way |
 
 The section length target (one section per 28 s) is handled separately, against Harmonix.
 

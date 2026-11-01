@@ -8,7 +8,7 @@ smaller models.
 |---|---|---|---|
 | [core.md](core.md) | `tastr/engine/stages/core.py`, `tastr/engine/signals.py` (append) | nothing | Sonnet, medium (DSP judgment) |
 | [sections.md](sections.md) | `tastr/engine/stages/sections.py` | core's `downbeat_times` (fake it in tests) | Sonnet, medium |
-| [tags-suggestions.md](tags-suggestions.md) | `tastr/engine/stages/tags.py`, `tastr/engine/stages/suggestions.py` | core, sections (fake in tests) | Sonnet, low-medium; tags part alone is fine for Haiku |
+| [tags-suggestions.md](tags-suggestions.md) | `tastr/engine/stages/tags.py`, `tastr/engine/stages/suggestions.py` (since TAS-47 only in Rust: `engine-rs/src/stages/tags.rs`, `suggestions.rs`) | core, sections (fake in tests) | Sonnet, low-medium; tags part alone is fine for Haiku |
 | [links.md](links.md) | `tastr/resolvers/` | nothing | Haiku or Sonnet, low |
 | [ui.md](ui.md) | `tastr/web/` | the card + DB as they are now | Sonnet, medium |
 

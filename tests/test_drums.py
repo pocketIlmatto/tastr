@@ -1,4 +1,4 @@
-"""Drum lanes on synthetic loops with known patterns (tastr.engine.drums via the suggestions stage's grid)."""
+"""Drum lanes on synthetic loops with known patterns (tastr.engine.drums and its step grid)."""
 
 import json
 
@@ -7,7 +7,6 @@ import pytest
 from tastr.engine import drums
 from tastr.engine.bench.drums import _synth_ctx, run_synth
 from tastr.engine.bench.synth import make_drum_track
-from tastr.engine.stages.suggestions import _drum_grid, _step_grid
 
 pytestmark = pytest.mark.audio
 
@@ -21,7 +20,7 @@ def built_in_lanes(monkeypatch):
 def grid_for(patterns, bpm=120):
     y, _ = make_drum_track(patterns, bpm=bpm)
     ctx = _synth_ctx(y, bpm)
-    return _drum_grid(ctx, _step_grid(ctx, 1 + len(y) // ctx.hop))
+    return drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
 
 
 def hits(g):

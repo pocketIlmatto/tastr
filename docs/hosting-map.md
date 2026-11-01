@@ -36,7 +36,7 @@ flowchart TB
     BYP[Access app on /pub: Bypass]
   end
   subgraph FLY[Fly.io app tastr-frienz]
-    WEB[Tastr web server, 512 MB, no DSP libraries, serves the Rust engine's WebAssembly build]
+    WEB[Tastr web server, 512 MB, no DSP libraries, serves the Rust engine's and sql.js's WebAssembly builds]
     VOL[(Volume tastr_data at /data: tastr.db with unfinished jobs, optional AcousticBrainz index, and uploads and stems, only a cache once the audio bucket is on)]
     LS[Litestream]
   end
@@ -52,6 +52,7 @@ flowchart TB
   CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, MusicBrainz])
 
   F -->|your hostname| DNS --> ACC -->|request + signed token| WEB
+  WEB -.->|a copy of your own library, for searches in the browser| F
   S -->|signed /pub link| DNS --> BYP --> WEB
   WEB --- VOL
   VOL -.- LS
@@ -170,6 +171,7 @@ database and deletes them.
 | Login | Cloudflare Access | Emails a one-time PIN, checks the Allow policy, adds a signed token to each request. |
 | Checking the login | Tastr on Fly | `AccessVerifier` in `tastr/web/hosted.py` checks the token on every request and takes the email from it. |
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
+| Searches (Simple and SQL) | The visitor's browser | `GET /api/query/library` sends a SQLite copy of the person's own library (admins: every library), once per page; sql.js (MIT, in the image at `TASTR_SQLJS_DIR`, served from `/sqljs/`) runs each search in a worker (`static/sql-worker.js`, `app/query-lib.js`). The server has no SQL endpoint in hosted mode. |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
 | Audio and stems (optional) | R2 bucket `tastr-audio` | With `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT` and the bucket's own token (`TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY`), `tastr/blobs.py` copies each upload up before analysis, plays audio and stems from signed links (`TASTR_AUDIO_REGION` defaults to `auto`), and the page's Content-Security-Policy allows that host. The bucket's CORS rule lets any origin GET, since strudel.cc follows the redirect. Each card's waveform and spectrogram data goes there too (`views/<track id>.json`, gzipped), so the database keeps a marker instead of about a megabyte per card; `/api/tracks/{id}/views` redirects to it. `tastr db-size` shows how big the database is and what's still inline. |
 | Whole analysis (optional) | The visitor's browser | With `TASTR_BROWSER_ENGINE` on, `tastr/web/static/engine.js` runs the Rust engine's WebAssembly build in a worker and the upload carries the card. The Docker image builds the `.wasm` in a Rust stage and the server serves it from `TASTR_ENGINE_WASM`. |
@@ -190,8 +192,8 @@ Four layers, each assuming the one before it might be bypassed.
    token means 401, except `/api/health` and signed `/pub/` links. Without both settings the server won't
    start.
 3. **Per-person libraries and limits.** Each track belongs to the email that uploaded it; anyone else gets
-   404. Uploads (size and length), stems, drum model runs, storage and concurrent analyses are capped; link downloads and API docs are off; the SQL box
-   reads a copy of the person's own library (admins: the whole database), only SELECTs, for at most 2 s; errors don't name server paths; responses carry CSP and HSTS headers.
+   404. Uploads (size and length), stems, drum model runs, storage and concurrent analyses are capped; link downloads and API docs are off; searches
+   run in the browser on a copy of the person's own library (admins: every library), with no owner or path columns, so the server runs no one's SQL; errors don't name server paths; responses carry CSP (`'wasm-unsafe-eval'` lets workers compile WebAssembly, nothing else) and HSTS headers.
 4. **Signed Strudel links.** strudel.cc can't sign in, so the `/pub` Bypass application lets it through
    Cloudflare. Tastr checks each link itself: an HMAC with `TASTR_LINK_SECRET` over one track id and an expiry
    7 days out. Changing the secret ends every outstanding link.
@@ -207,7 +209,7 @@ Modal environment keeps the app's spending apart from benchmarks.
 | File | What it sets |
 | --- | --- |
 | `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT`, `TASTR_GITHUB_REPO` and `TASTR_GITHUB_WORKFLOWS` (whose GitHub Actions runs the Admin log shows, and which workflows) |
-| `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image (`.[hosted,cloud]`: no librosa, scipy or numba, since the server analyzes nothing itself), the restore-then-replicate start, and the backup target |
+| `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image (`.[hosted,cloud]`: no librosa, scipy or numba, since the server analyzes nothing itself; sql.js from npm, checksum-pinned, in `/app/sqljs`), the restore-then-replicate start, and the backup target |
 | `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
 | `.github/workflows/deploy.yml` | When it deploys (after `tests` on main, which files count), the deploy order, which repository secrets it uses, and the commit and run link it builds into the Fly image |
 

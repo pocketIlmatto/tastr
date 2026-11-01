@@ -107,7 +107,7 @@ Tastr can also run as a small shared web app. Hosted mode (`TASTR_HOSTED=1`, the
 
 - every request needs their login (a one-time code sent to their email);
 - each person has their own library and sees only the tracks they uploaded;
-- link analysis is off, the SQL box reads only your own library, and uploads
+- link analysis is off, searches run in your browser on a copy of your own library, and uploads
   and stem jobs have daily limits;
 - uploaded audio and stems are deleted after a while (30 days by default), but
   the track cards stay;

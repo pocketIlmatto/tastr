@@ -121,7 +121,8 @@ export async function api(path, opts) {
 
 export const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]; // note values as the bass and chord parts store them
 
-export function setTracks(v) { return (tracks = v); }
+export const trackHooks = new Set();  // told after each new track list (query-lib.js notices a stale library copy)
+export function setTracks(v) { tracks = v; for (const f of trackHooks) f(); return tracks; }
 export function setTagsByTrack(v) { return (tagsByTrack = v); }
 export function setCurrentId(v) { return (currentId = v); }
 export function setLabels(v) { return (labels = v); }

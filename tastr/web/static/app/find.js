@@ -5,8 +5,10 @@ import { refresh } from "./library.js";
 import { openTrack, switchTo } from "./card.js";
 import { setServerCfg } from "./daw.js";
 import { setStatus } from "./upload.js";
+import * as qlib from "./query-lib.js";
 
-// Simple builds the SQL itself and runs it through /api/query (read-only, and only your own library when hosted);
+// Simple builds the SQL itself and runs it through sql(): /api/query on your own machine, or on a hosted server a copy
+// of your own library in the browser (query-lib.js), so every search goes through its gate, qlib.withLib;
 // "Edit as SQL" carries a Simple search over, so people can learn from it.
 const Q_CAM = { "1A": "A♭m", "2A": "E♭m", "3A": "B♭m", "4A": "Fm", "5A": "Cm", "6A": "Gm", "7A": "Dm", "8A": "Am", "9A": "Em", "10A": "Bm", "11A": "F♯m", "12A": "C♯m",
   "1B": "B", "2B": "F♯", "3B": "D♭", "4B": "A♭", "5B": "E♭", "6B": "B♭", "7B": "F", "8B": "C", "9B": "G", "10B": "D", "11B": "A", "12B": "E" };
@@ -50,19 +52,22 @@ const qSql = () => {
   const order = Q_SORTS[qSort[0]][1].map((c) => `${c} ${qSort[1].toUpperCase()}`).join(", ");
   return `SELECT ${Q_COLS}\nFROM tracks${where ? "\nWHERE " + where : ""}\nORDER BY ${order}`;
 };
-const sql = (text, mine = false) => api("/api/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: text, mine }) });
+let myEmail = null, adminCopy = false;  // hosted admins' copy holds everyone's tracks; Simple keeps to their own
+const sql = (text, mine = false) => {
+  if (!qlib.inBrowser()) return api("/api/query", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sql: text, mine }) });
+  if (mine && adminCopy) text = text.replace(/\nFROM tracks\b/, `\nFROM (SELECT * FROM tracks WHERE owner = '${qEsc(myEmail || "")}') AS tracks`);
+  return qlib.query(text);
+};
 let qTimer = 0, qSeq = 0;
 function qRun() {  // results follow the builder as you type, a moment after the last change
   clearTimeout(qTimer);
-  qTimer = setTimeout(qFetch, 200);
+  qTimer = setTimeout(() => qlib.withLib(qFetch), 200);
 }
-async function qFetch(retry = true) {
+async function qFetch() {
   const seq = ++qSeq, text = qSql();
   let r;
   try { r = await sql(text, true); } catch (e) {
     if (seq !== qSeq) return;
-    // A hosted server runs one query at a time; try once more before saying so
-    if (retry && /Another SQL query/.test(e.message)) { setTimeout(() => { if (seq === qSeq) qFetch(false); }, 800); return; }
     $("sql-error").textContent = e.message; return;
   }
   if (seq !== qSeq || qMode !== "simple") return;
@@ -253,7 +258,11 @@ export function setQMode(mode) {
   renderExamples();
   if (mode === "simple") renderSimple();
 }
-export async function runSql() {
+export function runSql() {
+  if (qlib.stopRequested()) { qlib.stop(); return; }  // Run reads "Running… Stop" while a slow query runs in the browser
+  qlib.withLib(runSqlNow);
+}
+async function runSqlNow() {
   ++qSeq;  // a Simple search still in flight must not overwrite these results
   $("sql-error").textContent = ""; $("q-count").textContent = "";
   const table = $("sql-result");
@@ -313,9 +322,11 @@ export function init() {
     if (!cfg.query) { for (const id of ["q-mode", "help-sql"]) $(id).hidden = true; if (qMode === "sql") setQMode("simple"); }
     renderSchema(cfg.query_scope === "mine");
     if (cfg.hosted) loadHist(cfg.user || "");
-    $("sql-scope").textContent = cfg.query_scope === "mine"
-      ? "Runs on a copy of your own library: tracks, tags, sections, features, series, suggestions, lookups. One SELECT, stopped after 2 seconds."
-      : `One read-only SELECT, stopped after ${cfg.hosted ? 2 : 5} seconds.${cfg.hosted ? " As an admin you query the whole database, everyone's tracks included." : ""}`;
+    myEmail = cfg.user; adminCopy = !!cfg.query_browser && cfg.query_scope === "all";
+    qlib.setup(cfg.query_browser, () => (qMode === "sql" ? runSqlNow() : qFetch()));
+    $("sql-scope").textContent = !cfg.query_browser ? "One read-only SELECT, stopped after 5 seconds."
+      : adminCopy ? "One read-only SELECT over everyone's tracks (you're an admin), run in your browser."
+        : "One read-only SELECT over your own tracks, run in your browser.";
     if (cfg.admin) {
       document.querySelector("nav button[data-view=admin]").hidden = false;
       if (startView === "admin") switchTo("admin");

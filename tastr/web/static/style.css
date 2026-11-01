@@ -996,3 +996,13 @@ h1 { white-space: nowrap; }
 .lk-mark { font-weight: 600; margin-left: 3px; }
 .lk-agrees { color: var(--accent); }
 .lk-differs { color: var(--warn); }
+
+/* Searches in the browser on a hosted server (TAS-49, query-lib.js): the library copy's status line under the query */
+.q-lib { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; margin: 8px 0 0; min-height: 0; }
+.q-lib:empty { display: none; }
+.q-lib .linklike { font-size: 12px; border: 0; background: none; box-shadow: none; padding: 0; text-transform: none; letter-spacing: normal; font-family: inherit; }
+.q-lib-bar { display: inline-block; width: 120px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.q-lib-bar i { display: block; height: 100%; background: var(--accent); transition: width .15s; }
+.q-lib.bad { padding: 8px 10px; border: 1px solid var(--warn); border-radius: 6px; background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.q-lib.bad button { font-size: 12px; padding: 2px 10px; }
+.q-lib.stale { padding: 6px 10px; border-radius: 6px; background: var(--accent-soft); }

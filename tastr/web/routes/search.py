@@ -2,26 +2,31 @@
 
 from __future__ import annotations
 
+import gzip
 import json
+import os
 import sqlite3
-import threading
 from contextlib import closing
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ... import db
 from ..context import AppContext
 
 MAX_QUERY_ROWS = 5000
-QUERY_SECONDS = 2.0  # hosted: a query that runs longer is stopped
+QUERY_SECONDS = 5.0  # on your own machine a query that runs longer is stopped; hosted, searches run in the browser
+SQLJS_VERSION = "1.10.3"  # keep in step with the Dockerfile
+SQLJS_FILES = {"sql-wasm.js": "text/javascript", "sql-wasm.wasm": "application/wasm"}
 MAX_SEARCHES, MAX_SEARCH_BYTES = 100, 20_000  # saved searches per person, and the size of one
 
 
 class QueryBody(BaseModel):
     sql: str
-    mine: bool = False  # hosted admins: only your own library, like everyone else (the Simple search, whose rows open cards)
+    mine: bool = False  # ignored on your own machine (every track is yours); kept so older pages still work
 
 
 class SearchBody(BaseModel):
@@ -34,24 +39,41 @@ class SearchBody(BaseModel):
 def router(ctx: AppContext) -> APIRouter:
     api = APIRouter()
 
-    query_slot = threading.Semaphore(1)  # hosted: one SQL query at a time, so nobody's query slows everyone else
-
     @api.post("/api/query")
-    def run_query(body: QueryBody, request: Request):
-        # Hosted: admins query the whole database; everyone else a copy of their own library (db.LIBRARY_TABLES).
-        owner = request.state.user if ctx.hosted and (body.mine or request.state.user not in ctx.settings.admins) else None
-        if ctx.hosted and not query_slot.acquire(blocking=False):
-            raise HTTPException(429, "Another SQL query is running. Try again in a few seconds.")
+    def run_query(body: QueryBody):
+        """One read-only SELECT on your own machine. A hosted server runs searches in the browser instead, on a copy
+        of the person's library (/api/query/library), so it has no SQL endpoint."""
+        if ctx.hosted:
+            raise HTTPException(404, "Searches run in your browser now. Reload the page.")
         try:
-            columns, rows = db.run_query(ctx.db_path or db.default_db_path(), body.sql, MAX_QUERY_ROWS,
-                                         QUERY_SECONDS if ctx.hosted else 5.0, owner=owner)
+            columns, rows = db.run_query(ctx.db_path or db.default_db_path(), body.sql, MAX_QUERY_ROWS, QUERY_SECONDS)
         except sqlite3.Error as e:
             msg = "The query took too long and was stopped." if str(e) == "interrupted" else str(e)
             raise HTTPException(400, msg) from e
-        finally:
-            if ctx.hosted:
-                query_slot.release()
         return {"columns": columns, "rows": rows}
+
+    @api.get("/sqljs/{name}", include_in_schema=False)
+    def sqljs(name: str):
+        """sql.js (SQLite as WebAssembly, MIT) for the browser's searches on a hosted server. The image puts it in
+        TASTR_SQLJS_DIR (Dockerfile); the URL carries its version, so it caches."""
+        folder = os.environ.get("TASTR_SQLJS_DIR")
+        if name not in SQLJS_FILES or not folder or not (Path(folder) / name).is_file():
+            raise HTTPException(404, "Not Found")
+        return FileResponse(Path(folder) / name, media_type=SQLJS_FILES[name],
+                            headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+    @api.get("/api/query/library")
+    def query_library(request: Request, mine: bool = False):
+        """Your library as a SQLite file, for the page to run SQL on in the browser with sql.js (TAS-49): on a
+        hosted server your own tracks without the columns that name people or server paths, admins everyone's
+        (`?mine=1`: only their own); on your own machine every track."""
+        owner = request.state.user if ctx.hosted and (mine or request.state.user not in ctx.settings.admins) else None
+        data = db.library_snapshot(ctx.db_path or db.default_db_path(), owner)
+        headers = {"Cache-Control": "private, no-store", "X-Library-Bytes": str(len(data)),
+                   "Access-Control-Expose-Headers": "X-Library-Bytes"}
+        if "gzip" in request.headers.get("accept-encoding", ""):  # SQLite pages compress well (3 to 5 times)
+            data, headers["Content-Encoding"] = gzip.compress(data, compresslevel=6, mtime=0), "gzip"
+        return Response(data, media_type="application/vnd.sqlite3", headers=headers)
 
     # Saved searches (Explore > Find tracks), each person's own: the signed-in email when hosted, else everyone's.
     @api.get("/api/searches")

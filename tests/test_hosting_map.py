@@ -51,3 +51,10 @@ def test_map_names_modal_functions():
 def test_map_names_audio_bucket_settings():
     names = re.findall(r'environ\.get\("(TASTR_AUDIO_[A-Z_]+)"', (ROOT / "tastr/blobs.py").read_text())
     assert names and _missing(names) == []
+
+
+def test_map_names_the_images_settings():
+    """The Dockerfile's own settings (TASTR_ENGINE_WASM, TASTR_SQLJS_DIR, ...)."""
+    names = re.findall(r"\b(TASTR_[A-Z_]+)=", (ROOT / "Dockerfile").read_text())
+    names = [n for n in names if not n.startswith(("TASTR_COMMIT", "TASTR_DEPLOY_RUN", "TASTR_HOME"))]
+    assert "TASTR_SQLJS_DIR" in names and _missing(names) == []

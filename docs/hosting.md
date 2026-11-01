@@ -16,7 +16,7 @@ pieces fit together.
 | --- | --- | --- |
 | Login | none | Cloudflare Access token required on every request except `/api/health` and signed `/pub/` links |
 | Link analysis (yt-dlp) | on (with the `links` extra) | off; the link field is hidden |
-| SQL box (`/api/query`) | whole database, 5 s limit | admins: whole database; everyone else: an in-memory copy of their own library (no owner, path or log columns); 2 s limit, one query at a time |
+| Searches (Simple and SQL) | the server runs them (`/api/query`): whole database, 5 s limit | the browser runs them with sql.js on a copy of the person's own library (`/api/query/library`: no owner, path or log columns; admins get every library), so there's no server limit; a slow query can be stopped |
 | Uploads | any size | audio types only, size, count, per-person daily and total storage limits |
 | Library | one, yours | one per person: each sees and changes only the tracks they uploaded |
 | Saved searches (Explore) | one list | one list per person |
@@ -71,6 +71,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | none | a token that can read and write that bucket only. Keep them secret |
 | `TASTR_AUDIO_REGION` | `auto` | the region to sign for; R2 takes `auto` |
 | `TASTR_BROWSER_ENGINE` | off | `1` has each visitor's browser make the whole card with the Rust engine's WebAssembly build; the server checks it and skips analysis ([ARCHITECTURE.md](ARCHITECTURE.md#browser-engine)). Needs the image's `TASTR_ENGINE_WASM` |
+| `TASTR_SQLJS_DIR` | none | where sql.js (`sql-wasm.js`, `sql-wasm.wasm`) is, for searches in the browser; the image sets `/app/sqljs`. Without it a hosted page says search couldn't start |
 
 With `TASTR_HOSTED=1` but no team domain or AUD tag, `tastr serve` refuses to start rather than run
 without a login check.

@@ -335,7 +335,8 @@ def security_headers(script_hashes: list[str], media_origin: str | None = None) 
     extra = f" {media_origin}" if media_origin else ""
     csp = "; ".join([
         "default-src 'self'",
-        "script-src 'self' " + " ".join(script_hashes),
+        # 'wasm-unsafe-eval' lets the page's workers compile WebAssembly (the Rust engine, sql.js); it allows no eval().
+        "script-src 'self' 'wasm-unsafe-eval' " + " ".join(script_hashes),
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",  # the UI sets style attributes
         "font-src 'self' https://fonts.gstatic.com",
         "img-src 'self' data: blob:",

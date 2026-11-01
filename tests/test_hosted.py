@@ -62,7 +62,7 @@ def test_local_mode_stays_open_and_unchanged(db_path, home, monkeypatch):
     c = TestClient(create_app(db_path))
     assert c.get("/api/tracks").status_code == 200
     assert c.get("/api/config").json() == {"hosted": False, "links": True, "query": True, "query_scope": "all", "user": None, "admin": False,
-                                          "limits": None, "browser_engine": None, "bulk_at_once": 4}
+                                          "limits": None, "browser_engine": None, "bulk_at_once": 4, "query_browser": None}
     assert "content-security-policy" not in c.get("/").headers
 
 
@@ -122,26 +122,26 @@ def test_csp_allows_the_pages_own_inline_script():
     assert len(hashes) == 1 and hashes[0].startswith("'sha256-")
 
 
-def test_sql_reads_only_your_own_library(db_path, home):
-    mine, theirs = save(db_path, "friend@example.com", sha="a1"), save(db_path, "other@example.com", sha="b2")
+def test_hosted_searches_run_in_the_browser_not_on_the_server(db_path, home, tmp_path, monkeypatch):
+    """TAS-49: no SQL endpoint on a hosted server; the page gets sql.js and a copy of the library instead."""
+    save(db_path, "friend@example.com", sha="a1")
+    folder = tmp_path / "sqljs"
+    folder.mkdir()
+    (folder / "sql-wasm.js").write_text("var initSqlJs;")
+    (folder / "sql-wasm.wasm").write_bytes(b"\0asm")
+    monkeypatch.setenv("TASTR_SQLJS_DIR", str(folder))
     c = make_client(db_path)
-    q = lambda sql: c.post("/api/query", json={"sql": sql}, headers=GOOD)
-    assert q("SELECT id FROM tracks").json()["rows"] == [[mine]]
-    assert q("SELECT DISTINCT track_id FROM tags").json()["rows"] == [[mine]]
-    assert q("SELECT count(*) FROM sections WHERE track_id = %d" % theirs).json()["rows"] == [[0]]
-    cols = q("SELECT * FROM tracks").json()["columns"]
-    assert "owner" not in cols and "local_path" not in cols and "source_uri" not in cols and "title" in cols
-    for sql in ["SELECT * FROM events", "SELECT * FROM user_usage", "SELECT * FROM track_edits", f"ATTACH '{db_path}' AS d"]:
-        assert q(sql).status_code == 400, sql
-    assert c.get("/api/config", headers=GOOD).json()["query_scope"] == "mine"
-
-
-def test_admins_query_the_whole_database(db_path, home):
-    save(db_path, "friend@example.com", sha="a1"), save(db_path, "other@example.com", sha="b2")
-    c = make_client(db_path, admins=("friend@example.com",))
-    r = c.post("/api/query", json={"sql": "SELECT owner FROM tracks ORDER BY owner"}, headers=GOOD).json()
-    assert r["rows"] == [["friend@example.com"], ["other@example.com"]]
-    assert c.get("/api/config", headers=GOOD).json()["query_scope"] == "all"
+    r = c.post("/api/query", json={"sql": "SELECT id FROM tracks"}, headers=GOOD)
+    assert r.status_code == 404 and "browser" in r.json()["detail"]
+    cfg = c.get("/api/config", headers=GOOD).json()
+    assert cfg["query_scope"] == "mine" and cfg["query_browser"]["base"] == "/sqljs/"
+    wasm = c.get("/sqljs/sql-wasm.wasm", headers=GOOD)
+    assert wasm.status_code == 200 and wasm.headers["content-type"] == "application/wasm" and "immutable" in wasm.headers["cache-control"]
+    assert c.get("/sqljs/sql-wasm.js", headers=GOOD).status_code == 200
+    assert c.get("/sqljs/LICENSE", headers=GOOD).status_code == 404  # only the two files
+    assert c.get("/sqljs/sql-wasm.js").status_code in (401, 403)  # behind the login like the rest
+    csp = c.get("/", headers=GOOD).headers["content-security-policy"]
+    assert "'wasm-unsafe-eval'" in csp.split("script-src")[1].split(";")[0]  # workers may compile WebAssembly
 
 
 def upload(client, *files):
@@ -530,14 +530,6 @@ def test_saved_searches_are_each_persons_own(db_path, home):
     assert c.get("/api/searches").status_code == 401
 
 
-def test_admins_can_query_only_their_own_library(db_path, home):
-    mine = save(db_path, "friend@example.com", sha="a1")
-    save(db_path, "other@example.com", sha="b2")
-    c = make_client(db_path, admins=("friend@example.com",))
-    r = c.post("/api/query", json={"sql": "SELECT id FROM tracks", "mine": True}, headers=GOOD).json()
-    assert r["rows"] == [[mine]]  # the Simple search: its rows open cards, and other people's tracks are 404s
-
-
 def test_background_jobs_are_each_persons_own_and_count_only_successes(db_path, home):
     from test_web import wait_job
 
@@ -835,3 +827,40 @@ def test_backup_goes_stale():
     assert watch.backup_events(old, None, newest, day, now)[0] == []
     assert watch._table("replica  generation  index  size  created\ns3  g  1  5  2026-11-01T00:00:00Z\n") == [
         {"replica": "s3", "generation": "g", "index": "1", "size": "5", "created": "2026-11-01T00:00:00Z"}]
+
+
+def _snapshot(resp):
+    import sqlite3
+    import tempfile
+
+    f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    f.write(resp.content)  # the client undoes the gzip
+    f.close()
+    return sqlite3.connect(f.name)
+
+
+def test_library_snapshot_for_the_browser_is_your_own_library(db_path, home):
+    """TAS-49: the page runs SQL in the browser (sql.js) on this file; it holds only what /api/query would show."""
+    mine = save(db_path, "friend@example.com", sha="a1")
+    theirs = save(db_path, "other@example.com", sha="b2")
+    c = make_client(db_path)
+    r = c.get("/api/query/library", headers={**GOOD, "accept-encoding": "gzip"})
+    assert r.status_code == 200 and r.headers["content-encoding"] == "gzip"
+    assert r.headers["cache-control"] == "private, no-store" and int(r.headers["x-library-bytes"]) == len(r.content)
+    snap = _snapshot(r)
+    assert snap.execute("SELECT id FROM tracks").fetchall() == [(mine,)]
+    assert snap.execute("SELECT DISTINCT track_id FROM tags").fetchall() == [(mine,)]
+    assert snap.execute("SELECT count(*) FROM sections WHERE track_id = ?", (theirs,)).fetchone() == (0,)
+    cols = {r[1] for r in snap.execute("PRAGMA table_info(tracks)")}
+    assert not cols & {"owner", "local_path", "source_uri", "stages_json", "errors_json"} and "title" in cols
+    tables = {r[0] for r in snap.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert tables == set(db.LIBRARY_TABLES)  # no events, usage, edits or cards
+    assert c.get("/api/query/library").status_code in (401, 403)  # needs the login like everything else
+
+
+def test_admins_snapshot_holds_every_library_unless_mine(db_path, home):
+    save(db_path, "friend@example.com", sha="a1"), save(db_path, "other@example.com", sha="b2")
+    c = make_client(db_path, admins=("friend@example.com",))
+    snap = _snapshot(c.get("/api/query/library", headers=GOOD))
+    assert snap.execute("SELECT owner FROM tracks ORDER BY owner").fetchall() == [("friend@example.com",), ("other@example.com",)]
+    assert _snapshot(c.get("/api/query/library?mine=1", headers=GOOD)).execute("SELECT count(*) FROM tracks").fetchone() == (1,)

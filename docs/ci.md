@@ -14,7 +14,7 @@ A typical audio run (about 2.5 minutes, billed 3):
 | Step | Time |
 |---|---|
 | checkout + setup-python (pip cache) | ~5 s |
-| `apt-get install ffmpeg libsndfile1` | ~27 s |
+| `apt-get install ffmpeg libsndfile1` (cached .deb files) | ~15 s |
 | `pip install -e '.[dev]'` | ~20 s |
 | pytest, `-n auto` | 80–100 s |
 | perf budget (main only) | ~28 s |
@@ -63,11 +63,28 @@ well inside the quota.
   perf budget only runs there. Possible middle ground: on `main`, run only the perf budget.
 - **Skip draft PRs** (`if: !github.event.pull_request.draft` plus the `ready_for_review`
   event). Saves runs on work in progress, but drafts get no CI feedback.
-- **Cache the apt packages** (ffmpeg) to save ~20 s per run. Because billing rounds up per
-  job, this only saves a minute when a run drops below a boundary (e.g. 3.1 → 2.8).
 - **New workflows** (for example the Modal/R2 benchmark): never run heavy benchmarks on
   GitHub runners. Trigger them with `workflow_dispatch` or a schedule, add `timeout-minutes`,
   a `concurrency` group, and keep the job a thin client that hands work to Modal.
+
+## Speed pass, 2026-11-01 (TAS-56)
+
+Full runs had been 2–4 minutes, then on 2026-10-31 rose to 5–12. Step timings from the runs API:
+
+- **ffmpeg install:** the ~70 MB download from the Azure Ubuntu mirror took 17 s to 503 s (141 kB/s on the
+  worst run). The `.deb` files are now cached in `~/apt-archives` (key: runner image version, falling back to the
+  previous image's cache), so apt only downloads packages that changed. `apt-get update` still runs (~3 s).
+- **Rust build:** only the engine's own crate recompiles each run (the cargo cache covers the dependencies), but
+  with `lto = true` and one codegen unit it took ~42 s native plus ~19 s WebAssembly. CI now sets
+  `CARGO_PROFILE_RELEASE_LTO=false` and 16 codegen units: about 11 s plus 10 s locally, with the native and
+  WebAssembly cards still bit-identical. The Docker build is unchanged and keeps LTO. The perf budget times the
+  Python engine, so it isn't affected.
+- **numba JIT:** every pytest worker compiled librosa's kernels into a fresh `/tmp/numba-gw*` cache, about
+  10–15 s per worker at start-up. Those folders are now cached between runs (key: `pyproject.toml`). A reinstall
+  of the same librosa keeps file times, so the cached kernels stay valid.
+
+A daily scheduled check (03:17 UTC) reads the last 5 successful full runs on `main` and starts a Claude thread
+to investigate when their median goes over 5 minutes. Docs-only runs (under a minute) don't count.
 
 ## Deploy workflow
 

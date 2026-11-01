@@ -20,6 +20,8 @@ pieces fit together.
 | Uploads | any size | audio types only, size, count, per-person daily and total storage limits |
 | Library | one, yours | one per person: each sees and changes only the tracks they uploaded |
 | Saved searches (Explore) | one list | one list per person |
+| Lists (Explore › Blend) | one set | one set per person |
+| SQL history (Explore) | in the browser | in the browser, kept apart per signed-in person |
 | Deleting a track | removes its stems | also removes its uploaded audio |
 | Uploaded audio and stems | kept | deleted after `TASTR_AUDIO_DAYS` (cards stay; admins' audio is kept) |
 | Try this in Strudel | strudel.cc fetches audio from `tastr serve` | strudel.cc fetches it through a signed link that works for a week |

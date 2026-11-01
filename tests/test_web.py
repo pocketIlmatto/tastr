@@ -568,6 +568,53 @@ def test_saved_searches_save_replace_and_delete(client):
     assert [s["mode"] for s in client.get("/api/searches").json()] == ["sql"]
 
 
+def _cards(db_path, n):
+    conn = db.connect(db_path)
+    ids = []
+    for i in range(n):
+        card = full_card()
+        card.source.sha256, card.source.uri, card.source.local_path = f"sha{i}", f"/x{i}.wav", f"/x{i}.wav"
+        card.extras["tags.vibe_scores"] = {"dark": 0.8, "danceable": 0.1 * i}
+        ids.append(db.save_card(conn, card))
+    conn.close()
+    return ids
+
+
+def test_lists_save_add_rename_and_delete(client, db_path):
+    a, b, c = _cards(db_path, 3)
+    r = client.post("/api/lists", json={"name": "Warm-up", "track_ids": [b, a, b, 999]}).json()
+    assert r["created"] and r["added"] == 2 and r["track_ids"] == [b, a]  # unknown ids and repeats are dropped
+    again = client.post("/api/lists", json={"name": "WARM-UP", "track_ids": [a, c]}).json()
+    assert again["id"] == r["id"] and not again["created"] and again["added"] == 1 and again["track_ids"] == [b, a, c]
+    other = client.post("/api/lists", json={"name": "Peak", "track_ids": [c]}).json()
+    assert client.post(f"/api/lists/{other['id']}/tracks", json={"track_ids": [a]}).json()["track_ids"] == [c, a]
+    assert client.put(f"/api/lists/{other['id']}", json={"name": "warm-up"}).status_code == 409
+    assert client.put(f"/api/lists/{other['id']}", json={"name": "Peak time", "track_ids": [a]}).json()["track_ids"] == [a]
+    assert [x["name"] for x in client.get("/api/lists").json()] == ["Warm-up", "Peak time"]
+    assert client.post("/api/lists", json={"name": "  "}).status_code == 422
+    assert client.delete(f"/api/lists/{other['id']}").status_code == 204
+    assert client.delete(f"/api/lists/{other['id']}").status_code == 404
+    assert len(client.get("/api/tracks").json()) == 3  # deleting a list keeps its tracks
+
+
+def test_deleting_a_track_takes_it_out_of_lists(client, db_path):
+    a, b = _cards(db_path, 2)
+    lid = client.post("/api/lists", json={"name": "L", "track_ids": [a, b]}).json()["id"]
+    assert client.delete(f"/api/tracks/{a}").status_code == 204
+    assert [(x["id"], x["track_ids"]) for x in client.get("/api/lists").json()] == [(lid, [b])]
+
+
+def test_vibe_scores_include_the_ones_under_the_cutoff(client, db_path):
+    a, b = _cards(db_path, 2)
+    got = client.get("/api/vibe-scores").json()
+    assert got[str(b)] == {"dark": 0.8, "danceable": 0.1}
+    conn = db.connect(db_path)  # a card from before vibe_scores: the tags table's scores
+    conn.execute("UPDATE cards SET json = json_remove(json, '$.extras.\"tags.vibe_scores\"') WHERE track_id = ?", (a,))
+    conn.commit()
+    conn.close()
+    assert client.get("/api/vibe-scores").json()[str(a)] == {"dark": 0.8}
+
+
 def wait_job(client, job_id, until=("done", "error"), headers=None):
     import time
     for _ in range(200):

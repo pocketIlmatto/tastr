@@ -153,11 +153,46 @@
     </div>
   </section>
   <section id="view-explore" hidden>
-    <div class="filters">
-      <label>Tag <select id="f-tag"><option value="">any</option></select></label>
-      <label>BPM <input id="f-min" type="number" placeholder="min"> – <input id="f-max" type="number" placeholder="max"></label>
+    <div class="ex-tabs" role="tablist" aria-label="Explore">
+      <button type="button" role="tab" id="ex-tab-find" aria-controls="ex-find" aria-selected="true" data-ex="find">Find tracks</button>
+      <button type="button" role="tab" id="ex-tab-blend" aria-controls="ex-blend" aria-selected="false" data-ex="blend" tabindex="-1">Blend</button>
     </div>
-    <div id="scatter-wrap"></div>
+    <div class="ex-pane" id="ex-blend" role="tabpanel" aria-labelledby="ex-tab-blend" hidden>
+    <div class="bl" id="blend">
+      <div class="bl-head"><h2>Blend</h2><p class="muted">Every track is a point in a space made of the measurements you pick. Tracks that sound alike in those ways sit close together. Group them, or find the tracks between two songs.</p></div>
+      <div class="bl-what">
+        <div class="bl-what-head"><b id="bl-dims-h">Weights</b><span class="muted">How much each measurement counts when grouping and finding tracks. 0 leaves it out.</span></div>
+        <div class="bl-presets" role="group" aria-label="Starting points"><span class="muted">Start from:</span></div>
+        <div class="bl-dims" id="bl-dims" role="group" aria-labelledby="bl-dims-h"></div>
+      </div>
+      <div class="bl-grid">
+        <div class="bl-map"><div class="bl-maphead"><b>Map</b><span class="muted">all your picked dimensions, flattened to 2D</span>
+          <label class="bl-k">Groups <select id="bl-k"><option>2</option><option>3</option><option>4</option><option selected>5</option><option>6</option><option>7</option><option>8</option></select></label></div>
+          <div id="bl-svg"></div><ul class="bl-legend" id="bl-legend"></ul></div>
+        <div class="bl-ab">
+          <b>Between two songs</b>
+          <label>From <input id="bl-a" list="bl-titles" placeholder="Pick a track…" autocomplete="off"></label>
+          <label>To <input id="bl-b" list="bl-titles" placeholder="Pick a track…" autocomplete="off"></label>
+          <datalist id="bl-titles"></datalist>
+          <label class="bl-t">How far <input id="bl-tv" type="range" min="0" max="100" value="50" step="5"> <output id="bl-tout">50%</output></label>
+          <div class="bl-btns"><button type="button" id="bl-swap" title="Swap From and To">⇄ Swap</button><button type="button" id="bl-path" title="5 steps from one song to the other, each the nearest unused track">Make a 5-step path</button></div>
+          <p class="muted bl-hint" id="bl-why"></p>
+          <ol class="bl-near" id="bl-near"></ol>
+        </div>
+      </div>
+      <div class="bl-cmp" id="bl-cmpbox">
+        <div class="bl-cmphead"><b>Lists</b><span class="muted">Save tracks as a list from Library › Actions, a group above, or a path. Then compare two lists in the same space.</span></div>
+        <div class="bl-lists" id="bl-lists"></div>
+        <div class="bl-pick2">
+          <label>List A <select id="bl-la"></select></label>
+          <label>List B <select id="bl-lb"></select></label>
+          <label class="bl-showl"><input type="checkbox" id="bl-showl"> Show on the map</label>
+        </div>
+        <div id="bl-cmp"></div>
+      </div>
+    </div>
+    </div>
+    <div class="ex-pane" id="ex-find" role="tabpanel" aria-labelledby="ex-tab-find">
     <div class="q-head">
       <h2>Find tracks</h2>
       <div class="q-mode" id="q-mode" role="tablist" aria-label="Query style">
@@ -170,11 +205,13 @@
     <div id="q-sql" hidden>
       <textarea id="sql" rows="4" spellcheck="false" aria-label="SQL query">SELECT title, bpm, camelot, energy FROM tracks ORDER BY bpm</textarea>
       <div class="q-sql-bar"><button id="run-sql">Run</button><span id="q-save-sql"></span><span id="sql-scope" class="muted"></span></div>
+      <details class="q-hist" id="q-hist"><summary>History <span id="q-hist-n" class="muted"></span></summary><div id="q-hist-body"></div></details>
       <details class="q-schema"><summary>Tables and columns</summary><div id="q-schema-body"></div></details>
     </div>
     <p id="sql-error" class="error"></p>
     <p id="q-count" class="muted"></p>
     <div class="table-wrap"><table id="sql-result"></table></div>
+    </div>
   </section>
   <section id="view-glossary" hidden>
     <div class="gl">

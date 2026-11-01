@@ -20,7 +20,8 @@ Heavy jobs (stem separation, benchmarks) can optionally run on a cloud GPU.
 - **Try this in Ableton or Strudel:** setup and programming notes for Ableton Live, and a
   live-code [Strudel](https://strudel.cc) sketch of the track.
 - **Listen and explore:** waveform, spectrogram and a live 3D view with playback, stem
-  separation, a filterable library, and **Find tracks** to search it without code or in SQL.
+  separation, a filterable library, **Find tracks** to search it without code or in SQL, and **Blend** to
+  group tracks by sound, find the ones between two songs, and compare saved lists.
 - **Glossary:** what every label and number on a card means and how Tastr works it out.
 
 [docs/features.md](docs/features.md) describes every feature in detail.

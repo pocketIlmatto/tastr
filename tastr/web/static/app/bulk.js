@@ -7,6 +7,7 @@ import { renderCard } from "./card.js";
 import { serverCfg } from "./daw.js";
 import { dropEdits, flushEdits } from "./groove-edits.js";
 import { runDrumModel, setStems, stemsBusy, stemsEta, stemsLabel } from "./menu.js";
+import { addToList, lists, loadLists, saveList } from "./lists.js";
 
 // Selection is by track id, so it survives filtering and sorting.
 export const sel = new Set();
@@ -118,9 +119,29 @@ function bulkMenu() {
   const showMain = () => pop.replaceChildren(
     ...Object.entries(BULK).filter(([, v]) => !v.when || v.when()).map(([k, v]) => item(v.label, () => { close(false); runBulk(k, [...sel]); }, { note: v.note })),
     item("Add to review", () => { close(false); const ids = [...sel]; setInReview(ids, true).then(() => { sayBulk(`Added ${ids.length} to review.`, 4000); renderList(); }); }),
+    item("Save as a list…", () => showSaveList()),
     item("Remove from review", () => { close(false); const ids = [...sel]; setInReview(ids, false).then(() => { sayBulk(`Took ${ids.length} out of review.`, 4000); renderList(); }); }),
     h("hr", { class: "menu-sep" }),
     item(`Delete ${plural(n)}…`, showConfirm, { danger: true }));
+  // Lists: a new name, or add to one you have. Compare them in Explore › Blend.
+  const showSaveList = async () => {
+    const ids = [...sel];
+    const done = (p) => p.then((m) => { close(true); sayBulk(m, 4000); renderList(); }, (e) => { err.textContent = e.message; });
+    const inp = h("input", { type: "text", maxlength: "80", placeholder: "New list name", "aria-label": "New list name", style: "width:100%;margin-bottom:8px" });
+    const err = h("p", { class: "error", role: "status" });
+    const go = () => done(saveList(inp.value, ids));
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); go(); }
+      if (e.key === "Tab") e.stopPropagation();  // to the Save button, without closing the menu
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); showMain(); items()[0].focus(); }
+    });
+    const paint = () => pop.replaceChildren(h("div", { class: "menu-confirm", role: "group", "aria-label": "Save as a list" },
+      h("p", {}, h("b", {}, `Save ${plural(n)} as a list`), h("br"), h("span", { class: "muted" }, "Compare lists in Explore › Blend.")), inp,
+      h("div", { class: "menu-confirm-btns" }, h("button", { type: "button", onclick: go }, "Save"), h("button", { type: "button", onclick: () => { showMain(); items()[0].focus(); } }, "Cancel")), err),
+    ...lists.map((l) => item(`Add to “${l.name}” (${l.track_ids.length})`, () => done(addToList(l.id, ids)))));
+    paint(); inp.focus();
+    try { await loadLists(); if (!pop.hidden && pop.contains(inp)) { paint(); inp.focus(); } } catch (_) { /* saving still works */ }
+  };
   const showConfirm = () => {
     pop.replaceChildren(h("div", { class: "menu-confirm", role: "group", "aria-label": "Confirm delete" },
       h("p", {}, h("b", {}, `Delete ${plural(n)}?`), h("br"), h("span", { class: "muted" }, "This removes them and their analysis from your library.")),

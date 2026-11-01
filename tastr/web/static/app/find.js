@@ -258,11 +258,40 @@ export async function runSql() {
   $("sql-error").textContent = ""; $("q-count").textContent = "";
   const table = $("sql-result");
   table.replaceChildren();
+  const text = $("sql").value;
   try {
-    const r = await sql($("sql").value);
+    const r = await sql(text);
     table.append(h("tr", {}, r.columns.map((c) => h("th", {}, c))));
     for (const row of r.rows) table.append(h("tr", {}, row.map((v) => h("td", {}, v == null ? "" : String(v)))));
-  } catch (e) { $("sql-error").textContent = e.message; }
+    addHist(text, r.rows.length);
+  } catch (e) { $("sql-error").textContent = e.message; addHist(text, null, e.message); }
+}
+
+// SQL history: every query you run in SQL mode, newest first, deduplicated; click one to run it again. Simple isn't
+// recorded (it re-runs on every change); saved searches keep those. Kept in this browser, per signed-in person.
+const HIST_MAX = 30;
+const qNorm = (q) => q.replace(/\s+/g, " ").trim().replace(/;$/, "");
+let qHist = [], histKey = "tastr-sql-hist";
+function loadHist(user) {
+  histKey = user ? `tastr-sql-hist:${user}` : "tastr-sql-hist";  // people sharing a browser on a hosted server don't see each other's
+  try { const v = JSON.parse(localStorage.getItem(histKey) || "[]"); qHist = Array.isArray(v) ? v.filter((x) => x && typeof x.sql === "string") : []; } catch (_) { qHist = []; }
+  renderHist();
+}
+const saveHist = () => { try { localStorage.setItem(histKey, JSON.stringify(qHist)); } catch (_) {} };
+const histAgo = (t) => { const m = Math.round((Date.now() - t) / 60e3); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
+function addHist(text, rows, err) {
+  const q = text.trim(); if (!q) return;
+  qHist = [{ sql: q, t: Date.now(), rows, err: err || null }, ...qHist.filter((x) => qNorm(x.sql) !== qNorm(q))].slice(0, HIST_MAX);
+  saveHist(); renderHist();
+}
+function renderHist() {
+  $("q-hist-n").textContent = qHist.length ? `(${qHist.length})` : "";
+  if (!qHist.length) { $("q-hist-body").replaceChildren(h("p", { class: "muted" }, "Queries you run show up here. Click one to run it again.")); return; }
+  $("q-hist-body").replaceChildren(h("ol", { class: "q-hist-list" }, ...qHist.map((x, i) => h("li", {},
+    h("button", { type: "button", class: "q-hist-run", title: "Run this query again", onclick: () => { $("sql").value = x.sql; runSql(); $("sql").focus(); } }, h("code", {}, x.sql)),
+    h("span", { class: "muted q-hist-meta" }, `${histAgo(x.t)} · `, x.err ? h("span", { class: "q-hist-err", title: x.err }, "error") : `${x.rows} row${x.rows === 1 ? "" : "s"}`),
+    h("button", { type: "button", class: "q-hist-del", "aria-label": "Remove from history", title: "Remove from history", onclick: () => { qHist.splice(i, 1); saveHist(); renderHist(); } }, "×")))),
+  h("button", { type: "button", class: "linklike q-hist-clear", onclick: () => { qHist = []; saveHist(); renderHist(); } }, "Clear history"));
 }
 
 const startView = location.hash.slice(1);  // read before anything can change the hash
@@ -271,6 +300,7 @@ const startView = location.hash.slice(1);  // read before anything can change th
 export function init() {
   try { if (localStorage.getItem("tastr-query-mode") === "sql") qMode = "sql"; } catch (_) {}
   renderSchema(false);
+  loadHist(null);
   document.querySelectorAll("#q-mode button").forEach((b) => b.addEventListener("click", () => setQMode(b.dataset.mode)));
   $("run-sql").addEventListener("click", runSql);
   qGroups = SIMPLE_EXAMPLES[0][1].map((g) => qGroup(g.conds, g.join));
@@ -282,6 +312,7 @@ export function init() {
     if (!cfg.links) $("url-form").hidden = true;
     if (!cfg.query) { for (const id of ["q-mode", "help-sql"]) $(id).hidden = true; if (qMode === "sql") setQMode("simple"); }
     renderSchema(cfg.query_scope === "mine");
+    if (cfg.hosted) loadHist(cfg.user || "");
     $("sql-scope").textContent = cfg.query_scope === "mine"
       ? "Runs on a copy of your own library: tracks, tags, sections, features, series, suggestions, lookups. One SELECT, stopped after 2 seconds."
       : `One read-only SELECT, stopped after ${cfg.hosted ? 2 : 5} seconds.${cfg.hosted ? " As an admin you query the whole database, everyone's tracks included." : ""}`;

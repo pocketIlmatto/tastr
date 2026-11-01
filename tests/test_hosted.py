@@ -530,6 +530,24 @@ def test_saved_searches_are_each_persons_own(db_path, home):
     assert c.get("/api/searches").status_code == 401
 
 
+def test_lists_are_each_persons_own(db_path, home):
+    def verifier(token):
+        return {"good": "friend@example.com", "other": "other@example.com"}[token]
+    c = TestClient(create_app(db_path, Settings(hosted=True, access_team_domain=TEAM, access_aud=AUD), verifier=verifier))
+    OTHER = {"cf-access-jwt-assertion": "other"}
+    mine, theirs = save(db_path, "friend@example.com", sha="a1"), save(db_path, "other@example.com", sha="b2")
+    lst = c.post("/api/lists", json={"name": "Mine", "track_ids": [mine, theirs]}, headers=GOOD).json()
+    assert lst["track_ids"] == [mine]  # someone else's track can't go in your list
+    c.post("/api/lists", json={"name": "Mine", "track_ids": [theirs]}, headers=OTHER)  # same name, separate list
+    assert [x["track_ids"] for x in c.get("/api/lists", headers=GOOD).json()] == [[mine]]
+    assert [x["track_ids"] for x in c.get("/api/lists", headers=OTHER).json()] == [[theirs]]
+    assert c.delete(f"/api/lists/{lst['id']}", headers=OTHER).status_code == 404
+    assert c.put(f"/api/lists/{lst['id']}", json={"name": "x"}, headers=OTHER).status_code == 404
+    assert c.post(f"/api/lists/{lst['id']}/tracks", json={"track_ids": [theirs]}, headers=OTHER).status_code == 404
+    assert list(c.get("/api/vibe-scores", headers=GOOD).json()) == [str(mine)]
+    assert c.get("/api/lists").status_code == 401
+
+
 def test_admins_can_query_only_their_own_library(db_path, home):
     mine = save(db_path, "friend@example.com", sha="a1")
     save(db_path, "other@example.com", sha="b2")

@@ -206,13 +206,17 @@ the server could later run without one:
   storage figures count what the bucket holds.
 - Each card's waveform and spectrogram data (about a megabyte) goes to the bucket as `views/<track id>.json`,
   gzipped, and the card in the database keeps only a marker; `/api/tracks/{id}/views` redirects to a signed link.
-  Cards saved before keep their data inline until they are re-analyzed. If the bucket can't take it, the data
+  Cards saved before keep their data inline until they are re-analyzed or backfilled. If the bucket can't take it, the data
   stays in the card. `tastr db-size` shows the database's size by table and how much waveform data is still inline.
 - `tastr unpack` copies the archive's audio and stems to the bucket as well.
 - The Files view reads sizes from the bucket's listing; single downloads redirect to a signed link that names the
   file, and zips stream each file from the bucket.
 
-Files uploaded before the bucket was turned on stay on the disk only, and keep working from there.
+Files uploaded before the bucket was turned on stay on the disk, and keep working from there, until
+`tastr bucket-backfill` copies them up (`fly ssh console -C "tastr bucket-backfill --dry-run"` first to see what it
+would move). It also moves older cards' inline waveform data to the bucket, so the database shrinks without
+re-analyzing anything. It skips what the bucket already has, so it is safe to run again; the next sweep deletes
+the local copies.
 
 The bucket needs a CORS rule so pages can fetch from it (the app fetches audio to draw and play it, and strudel.cc
 follows the redirect): allow `GET` and `HEAD` from any origin (`*`), with the `Range` header. A signed link is

@@ -28,6 +28,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("track_id", type=int)
     q = sub.add_parser("query", help="run read-only SQL against the database")
     q.add_argument("sql")
+    bf = sub.add_parser("bucket-backfill", help="on a hosted server: copy audio, stems and waveform data from before "
+                        "the audio bucket was on into it (docs/hosting.md)")
+    bf.add_argument("--dry-run", action="store_true", help="only count what would move")
     sub.add_parser("db-size", help="how big the database is, by table, and its largest cards (for the move to D1)")
     sub.add_parser("retag", help="re-read file tags for analyzed tracks without re-analyzing")
     so = sub.add_parser("set-owner", help="give tracks with no owner to EMAIL, to move a library to a hosted server")
@@ -331,6 +334,22 @@ def _unpack(args) -> int:
         return 1
     print(f"unpacked {r['tracks']} track(s) and {r['files']} file(s)")
     return 0
+
+
+def _bucket_backfill(args) -> int:
+    try:
+        from .backfill import backfill
+
+        r = backfill(args.db, dry_run=args.dry_run, log_each=print)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    verb = "would move" if args.dry_run else "moved"
+    print(f"{verb} {r['files']} file(s) ({r['file_bytes'] / 1e6:,.1f} MB) and {r['views']} card(s)' waveform data "
+          f"({r['view_bytes'] / 1e6:,.1f} MB)" + (f"; {r['failed']} failed, run it again" if r["failed"] else ""))
+    if not args.dry_run and r["files"]:
+        print("The local copies go in the next sweep (every 6 hours, once they're an hour old).")
+    return 1 if r["failed"] else 0
 
 
 def _db_size(args) -> int:
@@ -724,7 +743,7 @@ def _fmt_row(t: dict) -> str:
 
 # Each subcommand's handler; main() checks that every subcommand has one.
 COMMANDS = {
-    "analyze": _analyze, "list": _list, "show": _show, "query": _query, "db-size": _db_size, "retag": _retag,
+    "analyze": _analyze, "list": _list, "show": _show, "query": _query, "db-size": _db_size, "bucket-backfill": _bucket_backfill, "retag": _retag,
     "set-owner": _set_owner, "pack": _pack, "unpack": _unpack, "lookup": _lookup, "labels": _labels,
     "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
     "key-profiles": _key_profiles, "drum-model": _drum_model, "drum-bench": _drum_bench,

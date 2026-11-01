@@ -328,3 +328,4 @@ def evict(older_than: float = 3600, now: float | None = None) -> int:
             except OSError as e:
                 log.debug("can't remove %s: %s", d, e)
     return gone
+

@@ -61,6 +61,9 @@ in R2 and the volume only caches them ([hosting.md](hosting.md#audio-in-a-bucket
    Deploy Modal first if it is older than this setting: the server then sends Modal signed links instead of
    audio bytes. The deploy workflow always deploys Modal first.
 
+5. Move what the volume already holds into the bucket: `fly ssh console -C "tastr bucket-backfill --dry-run"` shows
+   what would move, then run it without `--dry-run`. `tastr db-size` should then show no waveform data inline.
+
 ## 3. Modal environment
 
 ```

@@ -1,11 +1,24 @@
-//! Drum lane activations (tastr/engine/drums.py), built-in lanes only (the optional ADTOF drum model stays on
-//! the server): semi-adaptive NMF of the percussive mel spectrogram into low, mid and high parts, leakage
-//! removed, and each hit sorted into a lane by a closer look at its spectrum and envelope.
+//! Drum lane activations (tastr/engine/drums.py): semi-adaptive NMF of the percussive mel spectrogram into low,
+//! mid and high parts, leakage removed, and each hit sorted into a lane by a closer look at its spectrum and
+//! envelope. With the optional ADTOF drum model, the server runs the model and hands its hits in
+//! (`Drums::set_model`); they replace the kick, tom and closed-hat lanes and add a cymbal lane.
 
 use crate::features::Matrix;
-use crate::np::{clip, pairwise_sum, percentile_f32};
+use crate::np::{clip, pairwise_sum, percentile_f32, round_half_even};
 
 pub const LANES: [&str; 7] = ["kick", "snare", "clap", "hat", "open_hat", "tom", "perc"];
+/// The lanes the drum model's hits come in for (drums.MODEL_LANES).
+pub const MODEL_LANES: [&str; 4] = ["kick", "hat", "tom", "cymbal"];
+/// The drum model's hits per MODEL_LANES lane: (onset seconds, confidence 0.5 to 1 as float32).
+pub type ModelHits = [(Vec<f64>, Vec<f32>); 4];
+
+/// drums.MODEL_LANE_HELP: tooltips for the lanes the drum model finds.
+pub const MODEL_LANE_HELP: [(&str, &str); 4] = [
+    ("kick", "Kick drum hits, found by the ADTOF drum model."),
+    ("hat", "Hi-hat hits, found by the ADTOF drum model."),
+    ("tom", "Tom hits (high, mid and floor toms), found by the ADTOF drum model."),
+    ("cymbal", "Crash and ride cymbal hits, found by the ADTOF drum model."),
+];
 
 pub const LANE_HELP: [(&str, &str); 7] = [
     ("kick", "Low hits whose energy sits below about 120 Hz."),
@@ -198,6 +211,8 @@ pub struct Drums {
     rise: Matrix,
     freqs: Vec<f64>,
     snare_ref: f64,
+    /// The drum model's lanes per analysis frame (MODEL_LANES order), when it ran.
+    model: Option<[Vec<f64>; 4]>,
 }
 
 impl Drums {
@@ -214,7 +229,47 @@ impl Drums {
             rise.data.extend(rise2(v.row(r)));
         }
         let snare_ref = percentile_f32(&nov[1], 99.0) as f64 + 1e-12;
-        Drums { nov, parts, rise, freqs: freqs.to_vec(), snare_ref }
+        Drums { nov, parts, rise, freqs: freqs.to_vec(), snare_ref, model: None }
+    }
+
+    /// drums.model_lanes: the drum model's hits on the analysis frames. Each hit is its confidence times the
+    /// level of that drum family's own part (the kick part for kick and tom, the hat part for hat and cymbal),
+    /// so the model's lanes sit on the same scale as the built-in ones.
+    pub fn set_model(&mut self, hits: &ModelHits, sr: f64, hop: usize) {
+        let n = self.nov[0].len();
+        let level = |part: usize| {
+            let l = percentile_f32(&self.nov[part], 99.5);
+            if l == 0.0 {
+                1.0f32
+            } else {
+                l
+            } // `or 1.0`
+        };
+        let (low, high) = (level(0), level(2));
+        let mut lanes: [Vec<f64>; 4] = Default::default();
+        for (li, (times, conf)) in hits.iter().enumerate() {
+            let lv = if MODEL_LANES[li] == "kick" || MODEL_LANES[li] == "tom" { low } else { high };
+            let mut x = vec![0.0f64; n];
+            for (&t, &c) in times.iter().zip(conf) {
+                let f = round_half_even(t * sr / hop as f64).clamp(0.0, n.saturating_sub(1) as f64) as usize;
+                x[f] = x[f].max((c * lv) as f64); // float32 product, as numpy does for conf * level
+            }
+            lanes[li] = x;
+        }
+        self.model = Some(lanes);
+    }
+
+    pub fn has_model(&self) -> bool {
+        self.model.is_some()
+    }
+
+    /// The lanes lane_activations returns: LANES, plus cymbal with the drum model.
+    pub fn lanes(&self) -> Vec<&'static str> {
+        let mut v = LANES.to_vec();
+        if self.model.is_some() {
+            v.push("cymbal");
+        }
+        v
     }
 
     /// drums.lane_activations: per lane (LANES order), the strength at each frame in `frames`.
@@ -229,7 +284,7 @@ impl Drums {
         step_seconds: Option<f64>,
         slop: i64,
     ) -> Result<Vec<Vec<f64>>, String> {
-        let mut out = vec![vec![0.0f64; frames.len()]; LANES.len()];
+        let mut out = vec![vec![0.0f64; frames.len()]; self.lanes().len()];
         let n = self.nov[0].len() as i64;
         if n < 3 || frames.is_empty() {
             return Ok(out);
@@ -301,6 +356,15 @@ impl Drums {
                 let ring = ringing(env_air, i, sr, gap);
                 out[3][k] = sh * (1.0 - ring);
                 out[4][k] = sh * ring;
+            }
+            if let Some(m) = &self.model {
+                let mx = |v: &[f64]| v[a..b].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let (mk, mh, mt, mc) = (mx(&m[0]), mx(&m[1]), mx(&m[2]), mx(&m[3]));
+                out[0][k] = mk;
+                out[5][k] = mt;
+                out[7][k] = mc;
+                // Our open-hat lane stays; the model's hi-hats replace the closed ones.
+                out[3][k] = if sh > 0.0 { mh * (1.0 - ramp(out[4][k] / (sh + 1e-12), 0.5, 0.9)) } else { mh };
             }
         }
         Ok(out)
@@ -404,8 +468,10 @@ fn ringing(env: &[f32], i: i64, sr: f64, gap: f64) -> f64 {
     1.0 - ramp(drop, 9.0, 16.0)
 }
 
-pub fn lane_help(lane: &str) -> Option<&'static str> {
-    LANE_HELP.iter().find(|(k, _)| *k == lane).map(|(_, h)| *h)
+/// A lane's tooltip; with the drum model, its own wording for the lanes it finds.
+pub fn lane_help(lane: &str, model: bool) -> Option<&'static str> {
+    let own = if model { MODEL_LANE_HELP.iter().find(|(k, _)| *k == lane) } else { None };
+    own.or_else(|| LANE_HELP.iter().find(|(k, _)| *k == lane)).map(|(_, h)| *h)
 }
 
 pub const PART_NAMES: [&str; 3] = PARTS;

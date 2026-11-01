@@ -84,6 +84,37 @@ def test_python_engine_steps_in_when_rust_cant(song, tmp_path, monkeypatch):
 
 
 @needs_lib
+def test_drum_model_cards_come_from_rust(song, monkeypatch):
+    """The drum model runs here on the file and Rust puts its hits into the card; if the model fails, the card
+    keeps the built-in lanes and says why."""
+    from tastr.engine import adt
+
+    monkeypatch.setenv("TASTR_ENGINE", "rust")
+    monkeypatch.setattr(adt, "wanted", lambda options: bool((options or {}).get("drum_model")))
+    seen = []
+
+    def onsets(y, sr):
+        seen.append(sr)
+        beats = np.arange(0, 30, 60 / 124)
+        return {k: (beats, np.full(beats.size, 0.9, np.float32)) for k in adt.CLASSES}
+
+    monkeypatch.setattr(adt, "onsets", onsets)
+    card = analyze_file(song, options={"drum_model": True})
+    assert seen == [adt.SR]  # the original file at the model's own rate
+    assert card.extras["engine"].startswith("rust") and "engine_fallback" not in card.extras
+    assert card.extras["drum_model"] == "adtof" and "cymbal" in card.extras["suggestions.drum_grid"]
+
+    def broken(y, sr):
+        raise OSError("no network for the first download")
+
+    monkeypatch.setattr(adt, "onsets", broken)
+    card = analyze_file(song, options={"drum_model": True})
+    assert card.extras["engine"].startswith("rust") and "drum_model" not in card.extras
+    assert card.extras["drum_model_error"] == "OSError: no network for the first download"
+    assert "cymbal" not in card.extras["suggestions.drum_grid"]
+
+
+@needs_lib
 def test_rust_is_the_default(song, monkeypatch):
     monkeypatch.delenv("TASTR_ENGINE", raising=False)
     card = analyze_file(song)

@@ -65,7 +65,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
 | `TASTR_BROWSER_ENGINE` | off | `1` has each visitor's browser make the whole card with the Rust engine's WebAssembly build; the server checks it and skips analysis ([ARCHITECTURE.md](ARCHITECTURE.md#browser-engine)). Needs the image's `TASTR_ENGINE_WASM` |
-| `TASTR_ENGINE` | `rust` | which engine makes cards, on the server and on Modal ([rust-engine.md](rust-engine.md)). `python` picks the Python reference engine; the drum model and `tastr analyze --stages` always use it |
+| `TASTR_ENGINE` | `rust` | which engine makes cards, on the server and on Modal ([rust-engine.md](rust-engine.md)). `python` picks the Python reference engine; `tastr analyze --stages` always uses it |
 
 With `TASTR_HOSTED=1` but no team domain or AUD tag, `tastr serve` refuses to start rather than run
 without a login check.

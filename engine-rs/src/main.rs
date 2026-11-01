@@ -72,7 +72,7 @@ fn main() {
             let y = load(arg(2));
             let t1 = Instant::now();
             let meter = args.get(4).map(|m| m.parse().expect("beats per bar"));
-            let json = tastr_engine::card_json(y, meter);
+            let json = tastr_engine::card_json(y, meter, None);
             let t2 = Instant::now();
             std::fs::write(arg(3), json + "\n").expect("write");
             println!("{{\"load\": {:.3}, \"card\": {:.3}}}", (t1 - t0).as_secs_f64(), (t2 - t1).as_secs_f64());

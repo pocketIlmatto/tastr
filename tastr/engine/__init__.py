@@ -33,10 +33,11 @@ def analyze_file(path: str | os.PathLike, stages: list[str] | None = None, sourc
     `on_stage(name, i, n)` hears "decode" first, then each stage as it starts, for progress bars.
 
     The Rust engine (rust.py) makes the card: it decodes the file itself, or, for formats it can't read (Opus),
-    takes the audio decoded here. extras["engine"] names it. The Python engine (run_pipeline over the stages in
-    stages/) stays as the reference the benchmarks compare against, and makes the card only when asked for
-    (TASTR_ENGINE=python or options["engine"]), for a subset of stages, for the drum model (which hooks into the
-    Python drum stage), or when the Rust library isn't built; extras["engine_fallback"] then says why."""
+    takes the audio decoded here. With the optional drum model (options["drum_model"], adt.py), the model runs
+    here and Rust puts its hits into the drum lanes. extras["engine"] names the engine. The Python engine
+    (run_pipeline over the stages in stages/) stays as the reference the benchmarks compare against, and makes the
+    card only when asked for (TASTR_ENGINE=python or options["engine"]), for a subset of stages, or when the Rust
+    library isn't built; extras["engine_fallback"] then says why."""
     from pathlib import Path
 
     p = Path(path)
@@ -68,17 +69,14 @@ def _rust_card(path, stages, options, on_stage, source):
 
     if stages is not None and set(stages) != set(registered_stages()):
         return None, "only some stages were asked for"
-    from . import adt
-
-    if adt.wanted(options):
-        return None, "the drum model was asked for"
     meter = (options or {}).get("beats_per_bar")
     decoded_here = False
     try:
         if on_stage:
             on_stage("core", 0, len(registered_stages()))
+        hits, model_error = _drum_model_hits(path, options)
         try:
-            d = rust.card_from_file(path, meter)
+            d = rust.card_from_file(path, meter, hits)
         except rust.RustDecodeError:
             # A format the Rust decoder doesn't read (Opus): decode here (librosa, else ffmpeg) and hand Rust the
             # audio. Raises DecodeError when nothing can read the file, which progress then shows at "decode".
@@ -87,7 +85,7 @@ def _rust_card(path, stages, options, on_stage, source):
             y = load_audio(path, SR)
             if on_stage:
                 on_stage("core", 0, len(registered_stages()))
-            d, decoded_here = rust.card_from_samples(y, meter), True
+            d, decoded_here = rust.card_from_samples(y, meter, hits), True
         version = rust.version()
     except rust.RustEngineError as e:
         return None, str(e)
@@ -96,4 +94,24 @@ def _rust_card(path, stages, options, on_stage, source):
     card.extras["engine"] = f"rust {version}"
     if decoded_here:
         card.extras["decoded_by"] = "python"
+    if model_error:
+        card.extras["drum_model_error"] = model_error
     return card, None
+
+
+def _drum_model_hits(path, options) -> tuple[dict | None, str | None]:
+    """(hits, None) from the optional drum model (adt.py) on the original file at its own rate, when this
+    analysis asks for it (adt.wanted); (None, None) when it doesn't, (None, why) when it failed. The Rust engine
+    puts the hits into the kick, tom and hi-hat lanes and adds a cymbal lane."""
+    from . import adt
+
+    if not adt.wanted(options):
+        return None, None
+    try:
+        import librosa
+
+        y, _ = librosa.load(str(path), sr=adt.SR, mono=True)
+        return adt.onsets(y, adt.SR), None
+    except Exception as e:  # e.g. no network for the first download: the built-in lanes stay
+        log.warning("drum model unavailable, using the built-in lanes: %s", e)
+        return None, f"{type(e).__name__}: {e}"

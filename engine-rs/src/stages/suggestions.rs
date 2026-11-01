@@ -3,7 +3,7 @@
 
 use super::{Ctx, HOP};
 use crate::card::{Card, Section, Suggestion};
-use crate::drums::{self, Drums, LANES};
+use crate::drums::{self, Drums};
 use crate::features::{power_to_db, Matrix};
 use crate::json::Json;
 use crate::music;
@@ -128,10 +128,10 @@ fn pattern(profile: &[f64]) -> String {
         .collect()
 }
 
-fn lane_help(lanes: &[&str]) -> Json {
+fn lane_help(lanes: &[&str], model: bool) -> Json {
     let mut o = Json::obj();
     for l in lanes {
-        if let Some(h) = drums::lane_help(l) {
+        if let Some(h) = drums::lane_help(l, model) {
             o.set(l, h);
         }
     }
@@ -312,7 +312,7 @@ fn drum_grid(ctx: &Ctx, card: &Card, drums: &Drums, sf: &[Vec<i64>]) -> Result<V
         .collect();
     let floor_acts = drums.lane_activations(&between, &ctx.env_mid, &ctx.env_air, ctx.sr, HOP, step_s, 0)?;
     let mut grid: Vec<Lane> = Vec::new();
-    for (li, &lane) in LANES.iter().enumerate() {
+    for (li, lane) in drums.lanes().into_iter().enumerate() {
         let steps: Vec<Vec<f64>> = acts[li].chunks(width).map(|r| r.iter().map(|v| v.sqrt()).collect()).collect();
         let busy_rows: Vec<&[f64]> = steps.iter().zip(&busy).filter(|(_, b)| **b).map(|(r, _)| r.as_slice()).collect();
         let profile = mean_rows(&busy_rows, width);
@@ -784,14 +784,27 @@ fn section_bass(bass: &Bass, secs: &[SecMeta], tonic: Option<i64>, scale: &str) 
 
 // --- Suggestion rules ------------------------------------------------------------
 
-fn rack_json() -> Json {
-    Json::Obj(DRUM_RACK.iter().map(|(k, v)| (k.to_string(), Json::from(*v))).collect())
+/// Lanes only the optional drum model finds, and their Drum Rack pad (General MIDI crash).
+const MODEL_PADS: [(&str, &str); 1] = [("cymbal", "C#2")];
+
+/// The Drum Rack pads; with the drum model, plus its own lanes that are in the grid.
+fn rack(grid: &[Lane], model: bool) -> Vec<(&'static str, &'static str)> {
+    let mut r = DRUM_RACK.to_vec();
+    if model {
+        r.extend(MODEL_PADS.iter().filter(|(k, _)| grid.iter().any(|g| g.name == *k)));
+    }
+    r
+}
+
+fn rack_json(rack: &[(&str, &str)]) -> Json {
+    Json::Obj(rack.iter().map(|(k, v)| (k.to_string(), Json::from(*v))).collect())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn suggest(
     card: &Card,
     grid: &[Lane],
+    model: bool,
     bass: Option<&Bass>,
     harm: Option<&Harmony>,
     by_section: &[(Json, Vec<(&'static str, String)>)],
@@ -884,10 +897,11 @@ fn suggest(
             })
             .collect::<Vec<_>>()
             .join("; ");
+        let pads_of = rack(grid, model);
         let pads = detected
             .iter()
             .filter_map(|(k, _)| {
-                DRUM_RACK.iter().find(|(r, _)| r == k).map(|(_, n)| format!("{} {n}", k.replace('_', " ")))
+                pads_of.iter().find(|(r, _)| r == k).map(|(_, n)| format!("{} {n}", k.replace('_', " ")))
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -895,10 +909,10 @@ fn suggest(
         let pat = Json::Obj(detected.iter().map(|(k, p)| (k.to_string(), Json::from(*p))).collect());
         let mut data = Json::obj()
             .with("pattern", pat)
-            .with("pads", rack_json())
+            .with("pads", rack_json(&pads_of))
             .with("origin", "detected")
             .with("bpm", bpm.map(round_int))
-            .with("lane_help", lane_help(&names))
+            .with("lane_help", lane_help(&names, model))
             .with(
                 "template",
                 format!(
@@ -941,12 +955,12 @@ fn suggest(
                 format!("A {lower} pattern that sits at this tempo. Lanes map to default Drum Rack pads."),
                 Json::obj()
                     .with("pattern", Json::Obj(pat.iter().map(|(k, v)| (k.to_string(), Json::from(*v))).collect()))
-                    .with("pads", rack_json())
+                    .with("pads", rack_json(&DRUM_RACK))
                     .with("origin", "template")
                     .with("style", style_label(st))
                     .with("style_key", st)
                     .with("bpm", round_int(bpm.unwrap()))
-                    .with("lane_help", lane_help(&lanes))
+                    .with("lane_help", lane_help(&lanes, false))
                     .with(
                         "template",
                         format!(
@@ -1130,8 +1144,14 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     let n_frames = 1 + ctx.y.len() / HOP;
     let sf = step_grid(card, ctx.sr, n_frames);
     let (mut grid, mut bass, mut harm) = (Vec::new(), None, None);
+    let mut model = false;
     if !sf.is_empty() {
-        let drums = Drums::new(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux);
+        let mut drums = Drums::new(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux);
+        if let Some(hits) = &ctx.drum_hits {
+            drums.set_model(hits, ctx.sr, HOP);
+            card.extras.set("drum_model", "adtof"); // re-analysis keeps using it (service.reanalyze_track)
+            model = true;
+        }
         grid = drum_grid(ctx, card, &drums, &sf)?;
         bass = bass_summary(ctx, &sf, tonic, scale);
         if let Some(t) = tonic {
@@ -1203,6 +1223,6 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
                 .with("bar_chords", opt_strs(&h.bar_chords)),
         );
     }
-    card.suggestions = suggest(card, &grid, bass.as_ref(), harm.as_ref(), &by_section, &sec_bass, &sec_harm);
+    card.suggestions = suggest(card, &grid, model, bass.as_ref(), harm.as_ref(), &by_section, &sec_bass, &sec_harm);
     Ok(())
 }

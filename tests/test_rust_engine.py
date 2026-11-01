@@ -313,6 +313,35 @@ def test_cards_match_the_python_engine(tmp_path):
     assert rs == py
 
 
+def test_drum_model_cards_match_the_python_engine(tmp_path, monkeypatch):
+    """With the drum model's hits handed in (the server runs the model), the Rust card is the Python engine's:
+    the model's kick, tom and hi-hats replace those lanes, a cymbal lane joins, and its pad and help come too."""
+    from tastr.engine import adt, rust
+    from tastr.engine.pipeline import run_pipeline
+
+    y, _ = make_track(bpm=128, bars_per_section=(8, 16, 8))
+    y = y.astype(np.float32)
+    step, rng = 60 / 128 / 4, np.random.default_rng(3)
+    at = lambda steps: np.array([(b * 16 + s) * step for b in range(32) for s in steps])  # noqa: E731
+    times = {"kick": at([0, 8]), "snare": at([4, 12]), "tom": at([14]), "hat": at(range(0, 16, 2)),
+             "cymbal": at([0]) + 0.004}
+    hits = {k: (t, rng.uniform(0.5, 1.0, t.size).astype(np.float32)) for k, t in times.items()}
+    monkeypatch.setattr(adt, "wanted", lambda options: True)
+    monkeypatch.setattr(adt, "onsets", lambda y, sr: hits)
+    py = json.loads(json.dumps(run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x"))).to_dict()))
+    rs = rust.card_from_samples(y, None, hits)
+    assert py["extras"]["drum_model"] == rs["extras"]["drum_model"] == "adtof"
+    assert "cymbal" in rs["extras"]["suggestions.drum_grid"]
+    groove = next(s for s in rs["suggestions"] if s["title"] == "Detected groove")
+    assert groove["data"]["pads"]["cymbal"] == "C#2" and "ADTOF" in groove["data"]["lane_help"]["kick"]
+    for card in (py, rs):
+        card["extras"]["views"]["spectrogram"].pop("png")
+        card.pop("source")
+    assert rs == py
+    no_model = rust.card_from_samples(y)
+    assert "drum_model" not in no_model["extras"] and "cymbal" not in no_model["extras"]["suggestions.drum_grid"]
+
+
 def test_card_meter_option_and_wasm_card(stereo_44k, tmp_path):
     """The WebAssembly build's card is byte for byte the native one, and a given meter is used as is."""
     wav = stereo_44k[0]

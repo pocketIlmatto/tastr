@@ -148,7 +148,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         admin = hosted and user in settings.admins
         out = {"hosted": hosted, "links": not hosted, "query": True, "query_scope": "all" if not hosted or user in settings.admins else "mine", "user": user,
                "admin": admin, "limits": settings.limits() if hosted else None, "browser_engine": browser_engine_cfg(),
-               "bulk_at_once": settings.bulk_lanes()}
+               "bulk_at_once": settings.bulk_lanes(),
+               # Hosted, searches run in the browser on a copy of the library, with sql.js from here (TAS-49).
+               "query_browser": {"base": "/sqljs/", "version": search.SQLJS_VERSION} if hosted else None}
         if hosted:
             with closing(ctx.conn()) as c:  # this person's own caps, with any change an admin made for them
                 out["limits"] |= {"daily_tracks": ctx.cap(c, user, "tracks"), "daily_stems": ctx.cap(c, user, "stems")}

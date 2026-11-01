@@ -31,16 +31,38 @@ pub fn load(bytes: Vec<u8>) -> Result<Vec<f32>, String> {
     Ok(resample::resample(&d.samples, d.sr, SR))
 }
 
-/// The whole card for the audio, as the Python engine's run_pipeline makes it (built-in drum lanes only).
-/// `beats_per_bar` (3 or 4) sets the meter instead of detecting it.
-pub fn analyze(y: Vec<f32>, beats_per_bar: Option<i64>) -> card::Card {
+/// The whole card for the audio, as the Python engine's run_pipeline makes it. `beats_per_bar` (3 or 4) sets
+/// the meter instead of detecting it. `drum_hits` are the optional drum model's hits (the server runs it).
+pub fn analyze(y: Vec<f32>, beats_per_bar: Option<i64>, drum_hits: Option<drums::ModelHits>) -> card::Card {
     let mut ctx = stages::Ctx::new(y, beats_per_bar);
+    ctx.drum_hits = drum_hits;
     stages::run(&mut ctx)
 }
 
 /// The card as TrackCard.to_dict() JSON; "source" is null (the caller knows the file).
-pub fn card_json(y: Vec<f32>, beats_per_bar: Option<i64>) -> String {
-    analyze(y, beats_per_bar).to_json(json::Json::Null).to_string()
+pub fn card_json(y: Vec<f32>, beats_per_bar: Option<i64>, drum_hits: Option<drums::ModelHits>) -> String {
+    analyze(y, beats_per_bar, drum_hits).to_json(json::Json::Null).to_string()
+}
+
+/// Drum model hits from a flat buffer: for each MODEL_LANES lane, its count n, then n onset seconds, then n
+/// confidences. None for an empty buffer; an error if it is cut short.
+pub fn parse_drum_hits(buf: &[f64]) -> Result<Option<drums::ModelHits>, String> {
+    if buf.is_empty() {
+        return Ok(None);
+    }
+    let mut hits: drums::ModelHits = Default::default();
+    let mut i = 0;
+    for lane in hits.iter_mut() {
+        let n = *buf.get(i).ok_or("drum hits cut short")? as usize;
+        let end = i + 1 + 2 * n;
+        if end > buf.len() {
+            return Err("drum hits cut short".into());
+        }
+        lane.0 = buf[i + 1..i + 1 + n].to_vec();
+        lane.1 = buf[i + 1 + n..end].iter().map(|&c| c as f32).collect();
+        i = end;
+    }
+    Ok(Some(hits))
 }
 
 /// The audio, its HPSS parts and every shared signal, by name (signals.py's names where it has one).
@@ -133,16 +155,28 @@ pub mod ffi {
     /// `ptr` must come from `tastr_alloc(len)` and hold `len` written bytes; it is freed here.
     #[no_mangle]
     pub unsafe extern "C" fn tastr_card(ptr: *mut u8, len: usize, beats_per_bar: i32) -> i32 {
+        unsafe { tastr_card_hits(ptr, len, beats_per_bar, std::ptr::null(), 0) }
+    }
+
+    /// tastr_card with the optional drum model's hits: `hits_n` float64 values at `hits` (the caller keeps
+    /// them), laid out as `parse_drum_hits` reads them; `hits_n` 0 for none. Malformed hits are an error, like
+    /// audio that can't be decoded.
+    ///
+    /// # Safety
+    /// As tastr_card; `hits` must point at `hits_n` readable float64 values (or `hits_n` be 0).
+    #[no_mangle]
+    pub unsafe extern "C" fn tastr_card_hits(
+        ptr: *mut u8,
+        len: usize,
+        beats_per_bar: i32,
+        hits: *const f64,
+        hits_n: usize,
+    ) -> i32 {
         let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
         CARD.with(|c| c.borrow_mut().clear());
-        match load(bytes) {
-            Ok(y) => {
-                let meter = if beats_per_bar > 0 { Some(beats_per_bar as i64) } else { None };
-                let s = card_json(y, meter);
-                let n = s.len() as i32;
-                CARD.with(|c| *c.borrow_mut() = s);
-                n
-            }
+        let parsed = unsafe { read_hits(hits, hits_n) };
+        match parsed.and_then(|h| load(bytes).map(|y| (y, h))) {
+            Ok((y, h)) => finish(card_json(y, meter(beats_per_bar), h)),
             Err(e) => {
                 let n = e.len() as i32;
                 CARD.with(|c| *c.borrow_mut() = e);
@@ -159,14 +193,55 @@ pub mod ffi {
     /// `ptr` must come from `tastr_alloc(4 * n)` and hold `n` written floats.
     #[no_mangle]
     pub unsafe extern "C" fn tastr_card_f32(ptr: *mut u8, n: usize, beats_per_bar: i32) -> i32 {
+        unsafe { tastr_card_f32_hits(ptr, n, beats_per_bar, std::ptr::null(), 0) }
+    }
+
+    /// tastr_card_f32 with the drum model's hits, as in tastr_card_hits.
+    ///
+    /// # Safety
+    /// As tastr_card_f32 and tastr_card_hits.
+    #[no_mangle]
+    pub unsafe extern "C" fn tastr_card_f32_hits(
+        ptr: *mut u8,
+        n: usize,
+        beats_per_bar: i32,
+        hits: *const f64,
+        hits_n: usize,
+    ) -> i32 {
         let bytes = unsafe { Vec::from_raw_parts(ptr, 4 * n, 4 * n) };
         let y: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
         drop(bytes);
-        let meter = if beats_per_bar > 0 { Some(beats_per_bar as i64) } else { None };
-        let s = card_json(y, meter);
-        let len = s.len() as i32;
+        match unsafe { read_hits(hits, hits_n) } {
+            Ok(h) => finish(card_json(y, meter(beats_per_bar), h)),
+            Err(e) => {
+                let len = e.len() as i32;
+                CARD.with(|c| *c.borrow_mut() = e);
+                -(len + 1)
+            }
+        }
+    }
+
+    fn meter(beats_per_bar: i32) -> Option<i64> {
+        if beats_per_bar > 0 {
+            Some(beats_per_bar as i64)
+        } else {
+            None
+        }
+    }
+
+    fn finish(s: String) -> i32 {
+        let n = s.len() as i32;
         CARD.with(|c| *c.borrow_mut() = s);
-        len
+        n
+    }
+
+    /// # Safety
+    /// `hits` must point at `n` readable float64 values, or `n` be 0.
+    unsafe fn read_hits(hits: *const f64, n: usize) -> Result<Option<drums::ModelHits>, String> {
+        if n == 0 || hits.is_null() {
+            return Ok(None);
+        }
+        parse_drum_hits(unsafe { std::slice::from_raw_parts(hits, n) })
     }
 
     /// The crate version (engine-rs/Cargo.toml), as UTF-8 at the returned pointer; its length from

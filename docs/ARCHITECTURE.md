@@ -64,7 +64,8 @@ Series: `energy` (per bar, 0..1, written by core) is the one the UI draws.
 ## Pipeline (`tastr/engine/pipeline.py`)
 
 This is the Python reference engine: the Rust engine (`engine-rs/`, [rust-engine.md](rust-engine.md)) is a
-step-by-step port of it and makes the cards; the benchmarks and the drum model use the Python one.
+step-by-step port of it and makes the cards, drum-model cards included (the server runs the model and hands
+Rust its hits); the benchmarks use the Python one.
 
 A stage is any object with `name`, `version`, `requires` (tuple of stage
 names) and `run(ctx)`. `register_stage(obj)` at import time of a module in

@@ -37,6 +37,8 @@ pub struct Ctx {
     pub chroma: Matrix,
     pub bass_cqt: Matrix,
     pub tempogram: Option<Vec<f64>>,
+    /// The optional drum model's hits, run by the server (engine/adt.py); None for the built-in lanes only.
+    pub drum_hits: Option<crate::drums::ModelHits>,
     /// Caller's meter (3 or 4) instead of detecting it.
     pub beats_per_bar: Option<i64>,
 }
@@ -89,6 +91,7 @@ impl Ctx {
             chroma,
             bass_cqt,
             tempogram: None,
+            drum_hits: None,
             beats_per_bar,
             y,
         }

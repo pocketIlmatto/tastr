@@ -37,8 +37,8 @@ engine-rs/
   src/segment.rs     librosa.segment.agglomerative: Ward clustering where only neighbouring bars may merge
   src/stages/        the card stages, one file each as in tastr/engine/stages/: core, sections, tags,
                      suggestions, views; mod.rs holds the shared signals (Ctx) and runs them as run_pipeline does
-  src/drums.rs       drums.py's built-in lanes: semi-adaptive NMF, unmixing, kick/tom, snare/clap/perc and
-                     closed/open hat (the optional ADTOF drum model stays on the server)
+  src/drums.rs       drums.py's lanes: semi-adaptive NMF, unmixing, kick/tom, snare/clap/perc and closed/open
+                     hat; with the optional ADTOF drum model, the hits the server hands in (set_model)
   src/music.rs       music.py and calibration.py: key model, modes, chord matching, roman numerals
   src/card.rs        the card, written as the same JSON as TrackCard.to_dict(); src/json.rs is its writer
   src/consts.rs      the key model's weights and the calibration tables, copied from Python (a test checks)
@@ -220,7 +220,10 @@ Same machine and the same 30 Beatport previews as P2, plus the synthetic tracks.
 - **Speed and memory, 3-minute MP3, whole card:** native 6.3 s single-threaded (decode 1.2 s, analysis
   5.1 s) against 7.3 s for the Python engine; WebAssembly under Node 10.0 s, with 207 MB of memory at the end
   (77 MB for a 1-minute track). The NMF behind the drum lanes is about 1 s of the native time.
-- **Not ported:** the ADTOF drum model (optional, server only); with it on, the server keeps analyzing.
+- **The ADTOF drum model** (optional, server only, needs PyTorch) isn't ported: the server runs it on the file
+  (`engine/__init__.py` `_drum_model_hits`) and passes its hits to `tastr_card_hits` / `tastr_card_f32_hits`.
+  Rust then puts them into the kick, tom and closed-hat lanes and adds the cymbal lane, as `drums.model_lanes`
+  does (`tests/test_rust_engine.py` checks the two cards match). The browser never runs it.
   `TASTR_METER` isn't read: the caller passes the meter (`beats_per_bar`), as the browser will.
 
 How it was matched: the same precision choices as in P2, carried through the stages (numpy's float32 means
@@ -276,8 +279,8 @@ machine, the Fly server and Modal alike.
   it with `--engine python`, the spectrogram benches (downbeats, Harmonix sections) and the fitting scripts
   call its stage code directly, and tests that swap or check a Python stage ask for it (the `truth_core`
   fixture sets `TASTR_ENGINE=python`). The rest of the test suite runs on Rust, like the app, whenever the library
-  is built (`tests/conftest.py`), and on Python when it isn't. It still makes the card for the drum model, which hooks
-  into its drum stage; for `tastr analyze --stages` (a subset); and when the Rust library isn't built, which
+  is built (`tests/conftest.py`), and on Python when it isn't. It still makes the card for `tastr analyze --stages` (a
+  subset) and when the Rust library isn't built, which
   `extras["engine_fallback"]` notes. A change to a stage now goes in both, and `tests/test_rust_engine.py`
   checks that their cards agree.
 - **Browser signals are gone** (`TASTR_BROWSER_SIGNALS`, `signals.js`, `browser_signals.py`): they fed HPSS into

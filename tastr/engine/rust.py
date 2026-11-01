@@ -69,9 +69,9 @@ def _load() -> ctypes.CDLL:
             raise RustEngineError(_lib_error) from e
         lib.tastr_alloc.restype = ctypes.c_void_p
         lib.tastr_alloc.argtypes = [ctypes.c_size_t]
-        for fn in (lib.tastr_card, lib.tastr_card_f32):
+        for fn in (lib.tastr_card_hits, lib.tastr_card_f32_hits):
             fn.restype = ctypes.c_int32
-            fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int32]
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int32, ctypes.c_void_p, ctypes.c_size_t]
         lib.tastr_card_ptr.restype = ctypes.c_void_p
         lib.tastr_card_ptr.argtypes = []
         lib.tastr_version.restype = ctypes.c_void_p
@@ -112,22 +112,42 @@ def _result(lib: ctypes.CDLL, n: int, what: str) -> dict:
     return json.loads(ctypes.string_at(lib.tastr_card_ptr(), n).decode())
 
 
-def card_from_file(path: str | os.PathLike, beats_per_bar=None) -> dict:
-    """The card (TrackCard.to_dict() shape, "source" None) for an audio file, decoded by the Rust engine."""
+MODEL_LANES = ("kick", "hat", "tom", "cymbal")  # engine-rs drums::MODEL_LANES, the order drum hits go in
+
+
+def _hits(drum_hits: dict | None) -> np.ndarray:
+    """adt.onsets output as the flat float64 buffer tastr_card_hits reads: per MODEL_LANES lane its count, onset
+    seconds, then confidences (float32, as the model gives them). Empty for no drum model."""
+    if not drum_hits:
+        return np.zeros(0)
+    parts = []
+    for lane in MODEL_LANES:
+        t, conf = drum_hits[lane]
+        t = np.asarray(t, dtype=float).ravel()
+        parts += [[t.size], t, np.asarray(conf, dtype=np.float32).astype(float).ravel()]
+    return np.ascontiguousarray(np.concatenate(parts), dtype="<f8")
+
+
+def card_from_file(path: str | os.PathLike, beats_per_bar=None, drum_hits: dict | None = None) -> dict:
+    """The card (TrackCard.to_dict() shape, "source" None) for an audio file, decoded by the Rust engine.
+    `drum_hits` (adt.onsets) are the optional drum model's hits, which replace those drum lanes."""
     lib = _load()
     data = Path(path).read_bytes()
-    ptr = lib.tastr_alloc(len(data))  # handed over: tastr_card frees it
+    ptr = lib.tastr_alloc(len(data))  # handed over: tastr_card_hits frees it
     ctypes.memmove(ptr, data, len(data))
-    return _result(lib, lib.tastr_card(ptr, len(data), _meter(beats_per_bar)), str(path))
+    h = _hits(drum_hits)
+    return _result(lib, lib.tastr_card_hits(ptr, len(data), _meter(beats_per_bar), h.ctypes.data, h.size), str(path))
 
 
-def card_from_samples(y: np.ndarray, beats_per_bar=None) -> dict:
+def card_from_samples(y: np.ndarray, beats_per_bar=None, drum_hits: dict | None = None) -> dict:
     """The same for mono audio already decoded at 22,050 Hz (any float array)."""
     lib = _load()
     y = np.ascontiguousarray(y, dtype="<f4")
     ptr = lib.tastr_alloc(y.nbytes)
     ctypes.memmove(ptr, y.ctypes.data, y.nbytes)
-    return _result(lib, lib.tastr_card_f32(ptr, y.size, _meter(beats_per_bar)), "the samples")
+    h = _hits(drum_hits)
+    return _result(lib, lib.tastr_card_f32_hits(ptr, y.size, _meter(beats_per_bar), h.ctypes.data, h.size),
+                   "the samples")
 
 
 # --- The WebAssembly build, for the browser (TASTR_BROWSER_ENGINE) ---

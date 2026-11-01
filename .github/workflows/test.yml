@@ -48,8 +48,24 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
+      # The ~70 MB ffmpeg download from the Ubuntu mirror has taken anywhere from 17 s to 8 min, so keep the
+      # .deb files between runs; apt then only downloads what changed. A new runner image starts from the last cache.
+      # ImageVersion is a shell variable on GitHub's runners, not in the `env` context, so read it in a step.
+      - id: image
+        if: steps.scope.outputs.code == 'true'
+        run: echo "version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        if: steps.scope.outputs.code == 'true'
+        with:
+          path: ~/apt-archives
+          key: apt-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.version }}
+          restore-keys: apt-${{ runner.os }}-${{ runner.arch }}-
       - if: steps.scope.outputs.code == 'true'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
+        run: |
+          mkdir -p ~/apt-archives/partial
+          sudo apt-get update
+          sudo apt-get install -y -o Dir::Cache::Archives="$HOME/apt-archives" ffmpeg libsndfile1
+          sudo chown -R "$USER" ~/apt-archives
       - if: steps.scope.outputs.code == 'true'
         run: pip install -e '.[dev]'
       # Lint before the tests so a lint failure shows up in seconds. Config: [tool.ruff] in pyproject.toml.
@@ -79,15 +95,28 @@ jobs:
           path: |
             ~/.cargo/registry
             engine-rs/target
-          key: rust-${{ hashFiles('engine-rs/Cargo.lock') }}
+          key: rust-nolto-${{ hashFiles('engine-rs/Cargo.lock') }}
+      # CI builds without LTO: the engine's own crate compiles in ~20 s instead of ~60 s, and the cards come out
+      # bit-identical (tests/test_rust_engine.py). The perf budget times the Python engine, and the shipped build
+      # (Dockerfile) keeps the full [profile.release] from Cargo.toml.
       - name: Build the Rust engine
         if: steps.scope.outputs.rust == 'true' || steps.scope.outputs.audio == 'true'
         working-directory: engine-rs
+        env:
+          CARGO_PROFILE_RELEASE_LTO: "false"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
         run: |
           rustup target add wasm32-unknown-unknown
           cargo build --release --locked
           cargo build --release --locked --lib --target wasm32-unknown-unknown
           cargo clippy --release --locked --all-targets -- -D warnings
+      # librosa's numba kernels, JIT-compiled by each test worker into its own cache (tests/conftest.py). Kept between
+      # runs, they load instead of compiling, which saves ~10 s of start-up per worker.
+      - uses: actions/cache@v4
+        if: steps.scope.outputs.code == 'true'
+        with:
+          path: /tmp/numba-gw*
+          key: numba-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
       - name: Tests
         if: steps.scope.outputs.audio == 'true'
         run: python -m pytest -q -n auto -m "not perf"

@@ -267,6 +267,7 @@ Admin tab's deploy line names the commit and links to its GitHub Actions run.
 | See usage | The Admin tab (today by hour, 7 or 30 days, or all time); Modal's usage page for actual cost. |
 | Let someone upload more today | Admin tab > ✎ on their row > Today only. |
 | Recover a lost volume | Create a volume named `tastr_data` and deploy. The database comes back from R2; audio and stems come back too when the audio bucket is on, and are lost otherwise. |
+| Move old files into the audio bucket | `fly ssh console -C "tastr bucket-backfill --dry-run"`, then without `--dry-run`. Copies uploads and stems from before the bucket was on, and moves older cards' waveform data out of the database. Safe to run again. |
 | Rotate a key | Make a new one at its source, `fly secrets set` it (or update the GitHub secret), then revoke the old one. |
 
 ## Why it's sometimes slow

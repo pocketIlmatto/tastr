@@ -315,3 +315,49 @@ def test_files_view_reads_sizes_zips_and_downloads_from_the_bucket(bucket, home,
     gone = c.delete(f"/api/tracks/{tid}/stems")
     assert gone.status_code == 200 and gone.json()["freed_bytes"] == sum(len(b"fLaC" + n.encode()) for n in stems.STEM_NAMES)
     assert objects("stems/") == {}
+
+
+def test_backfill_moves_what_was_there_before_the_bucket(home, db_path, monkeypatch, capsys):
+    from tastr import cli
+
+    # Before the bucket: an upload, its stems and a card with its waveform data inline
+    audio = write(home / "uploads" / "ab" / "old.wav", b"RIFF" + b"x" * 20)
+    stem = write(home / "stems" / "abcd" / "drums.flac", b"fLaC")
+    write(home / "uploads" / "ab" / "half.wav.part", b"partial")  # a download in progress: never copied
+    monkeypatch.delenv("TASTR_AUDIO_BUCKET", raising=False)
+    card = full_card()
+    card.extras["views"] = VIEWS
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, card)
+    conn.close()
+    assert db.size_report(db_path)["inline_views"] == 1
+
+    for k, v in {"TASTR_AUDIO_BUCKET": BUCKET, "TASTR_AUDIO_REGION": "us-east-1",
+                 "TASTR_AUDIO_ACCESS_KEY_ID": "test", "TASTR_AUDIO_SECRET_ACCESS_KEY": "test"}.items():
+        monkeypatch.setenv(k, v)
+    with moto.mock_aws():
+        blobs.reset()
+        blobs.client().create_bucket(Bucket=BUCKET)
+        assert cli.main(["--db", str(db_path), "bucket-backfill", "--dry-run"]) == 0
+        assert "would move 2 file(s)" in capsys.readouterr().out and objects() == {}
+        assert db.size_report(db_path)["inline_views"] == 1  # a dry run changes nothing
+
+        assert cli.main(["--db", str(db_path), "bucket-backfill"]) == 0
+        assert set(objects()) == {"uploads/ab/old.wav", "stems/abcd/drums.flac", f"views/{tid}.json"}
+        assert db.size_report(db_path)["inline_views"] == 0
+        conn = db.connect(db_path)
+        assert db.load_card(conn, tid).extras["views"] == blobs.IN_BUCKET and blobs.get_views(tid) == VIEWS
+        conn.close()
+        capsys.readouterr()
+        assert cli.main(["--db", str(db_path), "bucket-backfill"]) == 0  # again: nothing left to move
+        assert "moved 0 file(s)" in capsys.readouterr().out
+        assert audio.exists() and stem.exists()  # the sweep deletes them later, once they're an hour old
+    blobs.reset()
+
+
+def test_backfill_refuses_without_a_bucket(db_path, monkeypatch, capsys):
+    from tastr import cli
+
+    monkeypatch.delenv("TASTR_AUDIO_BUCKET", raising=False)
+    assert cli.main(["--db", str(db_path), "bucket-backfill"]) == 1
+    assert "bucket is off" in capsys.readouterr().err

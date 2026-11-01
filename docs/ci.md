@@ -14,7 +14,7 @@ A typical audio run (about 2.5 minutes, billed 3):
 | Step | Time |
 |---|---|
 | checkout + setup-python (pip cache) | ~5 s |
-| `apt-get install ffmpeg libsndfile1` (cached .deb files) | ~15 s |
+| `apt-get install ffmpeg libsndfile1` (cached .deb files) | ~20 s |
 | `pip install -e '.[dev]'` | ~20 s |
 | pytest, `-n auto` | 80–100 s |
 | perf budget (main only) | ~28 s |
@@ -82,6 +82,9 @@ Full runs had been 2–4 minutes, then on 2026-10-31 rose to 5–12. Step timing
 - **numba JIT:** every pytest worker compiled librosa's kernels into a fresh `/tmp/numba-gw*` cache, about
   10–15 s per worker at start-up. Those folders are now cached between runs (key: `pyproject.toml`). A reinstall
   of the same librosa keeps file times, so the cached kernels stay valid.
+
+First warm run on PR #73: 2.9 min in all, with apt 20 s (nothing downloaded), Rust 33 s and pytest 73 s, against
+up to 503 s, 78 s and 90 s on the slow runs.
 
 A daily scheduled check (03:17 UTC) reads the last 5 successful full runs on `main` and starts a Claude thread
 to investigate when their median goes over 5 minutes. Docs-only runs (under a minute) don't count.

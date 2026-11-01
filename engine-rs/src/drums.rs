@@ -84,6 +84,82 @@ pub struct Parts {
     pub v: Matrix,
 }
 
+const NMF_EPS: f64 = 1e-12;
+const NMF_ITER: usize = 60;
+
+/// V / (W H + eps), bins x frames.
+fn fill_ratio(v: &Matrix, w: &[[f64; 3]], h: &[Vec<f32>; 3], ratio: &mut [f64]) {
+    let t = v.cols;
+    for r in 0..v.rows {
+        let vr = v.row(r);
+        let wr = w[r];
+        let out = &mut ratio[r * t..(r + 1) * t];
+        for c in 0..t {
+            let wh = wr[0] * h[0][c] as f64 + wr[1] * h[1][c] as f64 + wr[2] * h[2][c] as f64 + NMF_EPS;
+            out[c] = vr[c] as f64 / wh;
+        }
+    }
+}
+
+/// The multiplicative update of the activations H.
+fn update_h(w: &[[f64; 3]], h: &mut [Vec<f32>; 3], ratio: &[f64], t: usize) {
+    let wsum = col_sums(w);
+    let mut num = [vec![0.0f64; t], vec![0.0f64; t], vec![0.0f64; t]];
+    for (r, wr) in w.iter().enumerate() {
+        let rr = &ratio[r * t..(r + 1) * t];
+        for j in 0..3 {
+            let wj = wr[j];
+            for (n, x) in num[j].iter_mut().zip(rr) {
+                *n += wj * x;
+            }
+        }
+    }
+    for j in 0..3 {
+        let den = wsum[j] + NMF_EPS;
+        for (hv, n) in h[j].iter_mut().zip(&num[j]) {
+            *hv = (*hv as f64 * (n / den)) as f32;
+        }
+    }
+}
+
+/// The multiplicative update of the templates W, each column normalized to sum 1.
+fn updated_w(w: &[[f64; 3]], h: &[Vec<f32>; 3], ratio: &[f64], t: usize) -> Vec<[f64; 3]> {
+    let hsum: [f32; 3] = [pairwise_sum(&h[0]) + 1e-12, pairwise_sum(&h[1]) + 1e-12, pairwise_sum(&h[2]) + 1e-12];
+    let mut wn = vec![[0.0f64; 3]; w.len()];
+    for (r, row) in wn.iter_mut().enumerate() {
+        let rr = &ratio[r * t..(r + 1) * t];
+        for j in 0..3 {
+            let mut acc = 0.0f64;
+            for (x, hv) in rr.iter().zip(&h[j]) {
+                acc += x * *hv as f64;
+            }
+            row[j] = w[r][j] * acc / hsum[j] as f64;
+        }
+    }
+    let s = col_sums(&wn);
+    for row in wn.iter_mut() {
+        for j in 0..3 {
+            row[j] /= s[j] + NMF_EPS;
+        }
+    }
+    wn
+}
+
+/// The templates for the next iteration: the fixed ones blended with the learned ones by `alpha`, normalized.
+fn blend_templates(w: &mut [[f64; 3]], w0: &[[f64; 3]], wn: &[[f64; 3]], alpha: f64) {
+    for r in 0..w.len() {
+        for j in 0..3 {
+            w[r][j] = (1.0 - alpha) * w0[r][j] + alpha * wn[r][j];
+        }
+    }
+    let s = col_sums(w);
+    for row in w.iter_mut() {
+        for j in 0..3 {
+            row[j] /= s[j];
+        }
+    }
+}
+
 /// drums.decompose: KL-divergence NMF whose templates adapt only late and partly.
 pub fn decompose(mel: &Matrix, freqs: &[f64]) -> Parts {
     let (bins, t) = (mel.rows, mel.cols);
@@ -92,70 +168,14 @@ pub fn decompose(mel: &Matrix, freqs: &[f64]) -> Parts {
     let mut w = w0.clone();
     let init = crate::np::mean_f32(&v.data) + 1e-9f32;
     let mut h: [Vec<f32>; 3] = [vec![init; t], vec![init; t], vec![init; t]];
-    let eps = 1e-12f64;
-    let n_iter = 60;
     let mut ratio = vec![0.0f64; bins * t];
-    let fill_ratio = |w: &[[f64; 3]], h: &[Vec<f32>; 3], ratio: &mut [f64]| {
-        for r in 0..bins {
-            let vr = v.row(r);
-            let wr = w[r];
-            let out = &mut ratio[r * t..(r + 1) * t];
-            for c in 0..t {
-                let wh = wr[0] * h[0][c] as f64 + wr[1] * h[1][c] as f64 + wr[2] * h[2][c] as f64 + eps;
-                out[c] = vr[c] as f64 / wh;
-            }
-        }
-    };
-    for it in 0..n_iter {
-        fill_ratio(&w, &h, &mut ratio);
-        let wsum = col_sums(&w);
-        let mut num = [vec![0.0f64; t], vec![0.0f64; t], vec![0.0f64; t]];
-        for r in 0..bins {
-            let rr = &ratio[r * t..(r + 1) * t];
-            for j in 0..3 {
-                let wj = w[r][j];
-                for (n, x) in num[j].iter_mut().zip(rr) {
-                    *n += wj * x;
-                }
-            }
-        }
-        for j in 0..3 {
-            let den = wsum[j] + eps;
-            for (hv, n) in h[j].iter_mut().zip(&num[j]) {
-                *hv = (*hv as f64 * (n / den)) as f32;
-            }
-        }
-        fill_ratio(&w, &h, &mut ratio);
-        let hsum: [f32; 3] = [pairwise_sum(&h[0]) + 1e-12, pairwise_sum(&h[1]) + 1e-12, pairwise_sum(&h[2]) + 1e-12];
-        let mut wn = vec![[0.0f64; 3]; bins];
-        for r in 0..bins {
-            let rr = &ratio[r * t..(r + 1) * t];
-            for j in 0..3 {
-                let mut acc = 0.0f64;
-                for (x, hv) in rr.iter().zip(&h[j]) {
-                    acc += x * *hv as f64;
-                }
-                wn[r][j] = w[r][j] * acc / hsum[j] as f64;
-            }
-        }
-        let s = col_sums(&wn);
-        for row in wn.iter_mut() {
-            for j in 0..3 {
-                row[j] /= s[j] + eps;
-            }
-        }
-        let alpha = libm::pow(it as f64 / n_iter as f64, 4.0) * 0.5;
-        for r in 0..bins {
-            for j in 0..3 {
-                w[r][j] = (1.0 - alpha) * w0[r][j] + alpha * wn[r][j];
-            }
-        }
-        let s = col_sums(&w);
-        for row in w.iter_mut() {
-            for j in 0..3 {
-                row[j] /= s[j];
-            }
-        }
+    for it in 0..NMF_ITER {
+        fill_ratio(&v, &w, &h, &mut ratio);
+        update_h(&w, &mut h, &ratio, t);
+        fill_ratio(&v, &w, &h, &mut ratio);
+        let wn = updated_w(&w, &h, &ratio, t);
+        let alpha = libm::pow(it as f64 / NMF_ITER as f64, 4.0) * 0.5;
+        blend_templates(&mut w, &w0, &wn, alpha);
     }
     Parts { h, w, v }
 }
@@ -290,11 +310,7 @@ impl Drums {
             return Ok(out);
         }
         let gap = step_seconds.filter(|&g| g != 0.0).unwrap_or(0.125);
-        let freqs = &self.freqs;
-        let low: Vec<usize> = (0..freqs.len()).filter(|&r| freqs[r] >= 30.0 && freqs[r] < 400.0).collect();
-        let body: Vec<usize> = (0..freqs.len()).filter(|&r| freqs[r] >= 100.0 && freqs[r] < 400.0).collect();
-        let mid: Vec<usize> = (0..freqs.len()).filter(|&r| freqs[r] >= 400.0 && freqs[r] < 5000.0).collect();
-        let tonal: Vec<usize> = (0..freqs.len()).filter(|&r| freqs[r] >= 400.0 && freqs[r] < 3000.0).collect();
+        let bands = Bands::new(&self.freqs);
         let [kick, snare, hat] = &self.nov;
         for (k, &f) in frames.iter().enumerate() {
             let a = (f - slop).max(0);
@@ -304,50 +320,15 @@ impl Drums {
             }
             let (a, b) = (a as usize, b as usize);
             let smax = |v: &[f32]| v[a..b].iter().cloned().fold(f32::NEG_INFINITY, f32::max) as f64;
-            let argmax = |v: &[f32]| {
-                let mut best = a;
-                for i in a..b {
-                    if v[i] > v[best] {
-                        best = i;
-                    }
-                }
-                best
-            };
             let (sk, ss, sh) = (smax(kick), smax(snare), smax(hat));
             let i = f * hop as i64;
             if sk > 0.0 {
-                let t = argmax(kick);
-                let col = (n as usize - 1).min(t + 1);
-                let mut best = 0;
-                for (j, &r) in low.iter().enumerate() {
-                    if self.parts.v.row(r)[col] > self.parts.v.row(low[best])[col] {
-                        best = j;
-                    }
-                }
-                let pitch = freqs[low[best]];
-                let tom = ramp(pitch, TOM_PITCH.0, TOM_PITCH.1) * (1.0 - ramp(ss / self.snare_ref, 0.15, 0.4));
+                let tom = self.tom_share(&bands, argmax(kick, a, b), ss);
                 out[0][k] = sk * (1.0 - tom);
                 out[5][k] += sk * tom;
             }
             if ss > 0.0 {
-                let t = argmax(snare);
-                let kt = kick[t] as f64;
-                let spec: Vec<f64> =
-                    (0..freqs.len()).map(|r| (self.rise.row(r)[t] as f64 - self.parts.w[r][0] * kt).max(0.0)).collect();
-                let pick = |idx: &[usize]| idx.iter().map(|&r| spec[r]).collect::<Vec<f64>>();
-                let sb = pairwise_sum(&pick(&body));
-                let body_share = sb / (sb + pairwise_sum(&pick(&mid)) + 1e-12);
-                let tm = pick(&tonal);
-                let tmax = tm.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                let peaky = if !tm.is_empty() && tmax > 0.0 {
-                    tmax / (pairwise_sum(&tm) / tm.len() as f64 + 1e-12)
-                } else {
-                    0.0
-                };
-                let n_bursts = bursts(env_mid, i, sr);
-                let perc = ramp(peaky, 4.0, 7.0) * (1.0 - ramp(body_share, 0.25, 0.45));
-                let clap = ramp(n_bursts as f64, 2.0, 3.0) * (1.0 - ramp(body_share, 0.35, 0.55)) * (1.0 - perc);
-                let sn = (1.0 - perc - clap).max(0.0);
+                let (perc, clap, sn) = self.mid_shares(&bands, argmax(snare, a, b), bursts(env_mid, i, sr));
                 out[6][k] += ss * perc;
                 out[2][k] += ss * clap;
                 out[1][k] += ss * sn;
@@ -358,17 +339,82 @@ impl Drums {
                 out[4][k] = sh * ring;
             }
             if let Some(m) = &self.model {
-                let mx = |v: &[f64]| v[a..b].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                let (mk, mh, mt, mc) = (mx(&m[0]), mx(&m[1]), mx(&m[2]), mx(&m[3]));
-                out[0][k] = mk;
-                out[5][k] = mt;
-                out[7][k] = mc;
-                // Our open-hat lane stays; the model's hi-hats replace the closed ones.
-                out[3][k] = if sh > 0.0 { mh * (1.0 - ramp(out[4][k] / (sh + 1e-12), 0.5, 0.9)) } else { mh };
+                model_hit(m, &mut out, k, a, b, sh);
             }
         }
         Ok(out)
     }
+
+    /// How much of a low hit at frame t is a tom: a kick's energy sits under ~90 Hz, a tom's higher up (its
+    /// pitch), unless a mid hit (snare strength `ss`) lands at the same time.
+    fn tom_share(&self, bands: &Bands, t: usize, ss: f64) -> f64 {
+        let n = self.nov[0].len();
+        let col = (n - 1).min(t + 1);
+        let low = &bands.low;
+        let mut best = 0;
+        for (j, &r) in low.iter().enumerate() {
+            if self.parts.v.row(r)[col] > self.parts.v.row(low[best])[col] {
+                best = j;
+            }
+        }
+        let pitch = self.freqs[low[best]];
+        ramp(pitch, TOM_PITCH.0, TOM_PITCH.1) * (1.0 - ramp(ss / self.snare_ref, 0.15, 0.4))
+    }
+
+    /// A mid hit at frame t split into (perc, clap, snare) shares from its own spectrum (what rose there, less
+    /// what the kick part explains) and its `n_bursts`.
+    fn mid_shares(&self, bands: &Bands, t: usize, n_bursts: usize) -> (f64, f64, f64) {
+        let kt = self.nov[0][t] as f64;
+        let spec: Vec<f64> =
+            (0..self.freqs.len()).map(|r| (self.rise.row(r)[t] as f64 - self.parts.w[r][0] * kt).max(0.0)).collect();
+        let pick = |idx: &[usize]| idx.iter().map(|&r| spec[r]).collect::<Vec<f64>>();
+        let sb = pairwise_sum(&pick(&bands.body));
+        let body_share = sb / (sb + pairwise_sum(&pick(&bands.mid)) + 1e-12);
+        let tm = pick(&bands.tonal);
+        let tmax = tm.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let peaky =
+            if !tm.is_empty() && tmax > 0.0 { tmax / (pairwise_sum(&tm) / tm.len() as f64 + 1e-12) } else { 0.0 };
+        let perc = ramp(peaky, 4.0, 7.0) * (1.0 - ramp(body_share, 0.25, 0.45));
+        let clap = ramp(n_bursts as f64, 2.0, 3.0) * (1.0 - ramp(body_share, 0.35, 0.55)) * (1.0 - perc);
+        (perc, clap, (1.0 - perc - clap).max(0.0))
+    }
+}
+
+/// The mel bins of each band lane_activations reads.
+struct Bands {
+    low: Vec<usize>,
+    body: Vec<usize>,
+    mid: Vec<usize>,
+    tonal: Vec<usize>,
+}
+
+impl Bands {
+    fn new(freqs: &[f64]) -> Bands {
+        let band = |lo: f64, hi: f64| (0..freqs.len()).filter(|&r| freqs[r] >= lo && freqs[r] < hi).collect();
+        Bands { low: band(30.0, 400.0), body: band(100.0, 400.0), mid: band(400.0, 5000.0), tonal: band(400.0, 3000.0) }
+    }
+}
+
+/// The first index of the largest value in v[a..b].
+fn argmax(v: &[f32], a: usize, b: usize) -> usize {
+    let mut best = a;
+    for i in a..b {
+        if v[i] > v[best] {
+            best = i;
+        }
+    }
+    best
+}
+
+/// Put the drum model's hits (kick, hat, tom, cymbal) at frame index k in place of the built-in kick, tom and
+/// closed hat lanes. Our open-hat lane stays; the model's hi-hats replace the closed ones.
+fn model_hit(m: &[Vec<f64>], out: &mut [Vec<f64>], k: usize, a: usize, b: usize, sh: f64) {
+    let mx = |v: &[f64]| v[a..b].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let (mk, mh, mt, mc) = (mx(&m[0]), mx(&m[1]), mx(&m[2]), mx(&m[3]));
+    out[0][k] = mk;
+    out[5][k] = mt;
+    out[7][k] = mc;
+    out[3][k] = if sh > 0.0 { mh * (1.0 - ramp(out[4][k] / (sh + 1e-12), 0.5, 0.9)) } else { mh };
 }
 
 fn window(len: usize, i: i64, back: f64, ahead: f64, sr: f64) -> (usize, usize) {
@@ -391,6 +437,14 @@ fn bursts(env: &[f32], i: i64, sr: f64) -> usize {
 /// scipy.signal.find_peaks(x, prominence, distance, height): local maxima (plateau midpoints), then the
 /// height, distance and prominence filters in scipy's order.
 pub fn find_peaks(x: &[f64], prominence: f64, distance: usize, height: f64) -> Vec<usize> {
+    let mut peaks = local_maxima(x);
+    peaks.retain(|&p| x[p] >= height);
+    let peaks = select_by_distance(x, peaks, distance);
+    peaks.into_iter().filter(|&p| peak_prominence(x, p) >= prominence).collect()
+}
+
+/// scipy's _local_maxima_1d: every peak, a flat top counted once at its middle.
+fn local_maxima(x: &[f64]) -> Vec<usize> {
     let n = x.len();
     let mut peaks = Vec::new();
     let mut i = 1;
@@ -407,8 +461,12 @@ pub fn find_peaks(x: &[f64], prominence: f64, distance: usize, height: f64) -> V
         }
         i += 1;
     }
-    peaks.retain(|&p| x[p] >= height);
-    // distance: keep the highest peaks first (np.argsort's order for ties: stable enough for audio)
+    peaks
+}
+
+/// scipy's _select_by_peak_distance: keep the highest peaks first (np.argsort's order for ties: stable enough
+/// for audio), dropping those closer than `distance` to one kept.
+fn select_by_distance(x: &[f64], peaks: Vec<usize>, distance: usize) -> Vec<usize> {
     let m = peaks.len();
     let mut keep = vec![true; m];
     let mut order: Vec<usize> = (0..m).collect();
@@ -417,37 +475,22 @@ pub fn find_peaks(x: &[f64], prominence: f64, distance: usize, height: f64) -> V
         if !keep[j] {
             continue;
         }
-        let mut k = j as isize - 1;
-        while k >= 0 && peaks[j] - peaks[k as usize] < distance {
-            keep[k as usize] = false;
-            k -= 1;
-        }
-        let mut k = j + 1;
-        while k < m && peaks[k] - peaks[j] < distance {
+        for k in (0..j).rev().take_while(|&k| peaks[j] - peaks[k] < distance) {
             keep[k] = false;
-            k += 1;
+        }
+        for k in (j + 1..m).take_while(|&k| peaks[k] - peaks[j] < distance) {
+            keep[k] = false;
         }
     }
-    let peaks: Vec<usize> = peaks.into_iter().zip(keep).filter(|(_, k)| *k).map(|(p, _)| p).collect();
-    peaks
-        .into_iter()
-        .filter(|&p| {
-            let v = x[p];
-            let mut left = v;
-            let mut i = p as isize;
-            while i >= 0 && x[i as usize] <= v {
-                left = left.min(x[i as usize]);
-                i -= 1;
-            }
-            let mut right = v;
-            let mut i = p;
-            while i < n && x[i] <= v {
-                right = right.min(x[i]);
-                i += 1;
-            }
-            v - left.max(right) >= prominence
-        })
-        .collect()
+    peaks.into_iter().zip(keep).filter(|(_, k)| *k).map(|(p, _)| p).collect()
+}
+
+/// A peak's prominence: its height over the higher of the lowest points on each side before higher ground.
+fn peak_prominence(x: &[f64], p: usize) -> f64 {
+    let v = x[p];
+    let left = x[..=p].iter().rev().take_while(|&&y| y <= v).fold(v, |m, &y| m.min(y));
+    let right = x[p..].iter().take_while(|&&y| y <= v).fold(v, |m, &y| m.min(y));
+    v - left.max(right)
 }
 
 /// drums._ringing: how much the air band still rings after a hit at sample i (1 = open hat).

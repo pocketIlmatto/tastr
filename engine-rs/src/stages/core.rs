@@ -38,46 +38,60 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     let n_frames = ctx.onset.len();
 
     let (bpm, beat_frames, bpm_conf, stability, pulse_clarity) = tempo_and_beats(ctx, n_frames);
-    let beat_times: Vec<f64> = beat_frames.iter().map(|f| f * HOP as f64 / sr).collect();
     let beat_idx: Vec<usize> =
         beat_frames.iter().map(|&f| clip(round_half_even(f), 0.0, n_frames.max(1) as f64 - 1.0) as usize).collect();
     if let Some(bpm) = bpm {
-        let core = &mut card.core;
-        core.bpm = Some(round_dec(bpm, 2));
-        core.bpm_confidence = Some(round_dec(bpm_conf, 3));
-        core.bpm_likely_correct = Some(music::likely_correct("bpm", bpm_conf));
-        core.beat_times = beat_times.iter().filter(|&&t| t <= duration).map(|&t| round_dec(t, 3)).collect();
-        let cues = if beat_idx.len() >= MIN_BEATS && ctx.log_mel.cols >= 2 {
-            Some(beat_cues(&beat_idx, &ctx.log_mel, &ctx.log_mel_freqs))
-        } else {
-            None
-        };
-        let meter = meter_score(&beat_idx, &ctx.log_mel, &ctx.log_mel_freqs, cues.as_ref());
-        let guess = if meter > METER_THRESHOLD { 3 } else { 4 };
-        card.extras
-            .set("core.meter_guess", Json::obj().with("beats_per_bar", guess).with("score", round_dec(meter, 2)));
-        let (bpb, set) = match ctx.beats_per_bar {
-            Some(m @ (3 | 4)) => (m, true),
-            _ => (guess, false),
-        };
-        core.beats_per_bar = bpb;
-        core.meter_set = set;
-        let phase = downbeat_phase(&beat_idx, &ctx.log_mel, &ctx.log_mel_freqs, bpb as usize, cues.as_ref());
-        core.downbeat_times = beat_times
-            .iter()
-            .skip(phase)
-            .step_by(bpb as usize)
-            .filter(|&&t| t <= duration)
-            .map(|&t| round_dec(t, 3))
-            .collect();
-        card.extras.set("core.bpm_alternatives", vec![round_dec(bpm / 2.0, 2), round_dec(bpm * 2.0, 2)]);
-        card.extras.set("core.downbeat_phase", phase);
+        let beat_times: Vec<f64> = beat_frames.iter().map(|f| f * HOP as f64 / sr).collect();
+        set_tempo(ctx, card, bpm, bpm_conf, &beat_times, &beat_idx, duration);
     }
+    set_features(ctx, card, bpm, &beat_idx, &rms_db, duration, (stability, pulse_clarity));
+    set_key(ctx, card);
+    if !card.core.downbeat_times.is_empty() {
+        let (t, v) = bar_energy_series(&card.core.downbeat_times, &rms_db, sr, duration);
+        card.series.push(("energy".into(), t, v));
+    }
+    Ok(())
+}
 
-    // --- Spectral / loudness features ---
+/// BPM, beats, meter and downbeats on the card.
+fn set_tempo(ctx: &Ctx, card: &mut Card, bpm: f64, conf: f64, beat_times: &[f64], beat_idx: &[usize], duration: f64) {
+    let core = &mut card.core;
+    core.bpm = Some(round_dec(bpm, 2));
+    core.bpm_confidence = Some(round_dec(conf, 3));
+    core.bpm_likely_correct = Some(music::likely_correct("bpm", conf));
+    core.beat_times = beat_times.iter().filter(|&&t| t <= duration).map(|&t| round_dec(t, 3)).collect();
+    let cues = if beat_idx.len() >= MIN_BEATS && ctx.log_mel.cols >= 2 {
+        Some(beat_cues(beat_idx, &ctx.log_mel, &ctx.log_mel_freqs))
+    } else {
+        None
+    };
+    let meter = meter_score(beat_idx, &ctx.log_mel, &ctx.log_mel_freqs, cues.as_ref());
+    let guess = if meter > METER_THRESHOLD { 3 } else { 4 };
+    card.extras.set("core.meter_guess", Json::obj().with("beats_per_bar", guess).with("score", round_dec(meter, 2)));
+    let (bpb, set) = match ctx.beats_per_bar {
+        Some(m @ (3 | 4)) => (m, true),
+        _ => (guess, false),
+    };
+    let core = &mut card.core;
+    core.beats_per_bar = bpb;
+    core.meter_set = set;
+    let phase = downbeat_phase(beat_idx, &ctx.log_mel, &ctx.log_mel_freqs, bpb as usize, cues.as_ref());
+    core.downbeat_times = beat_times
+        .iter()
+        .skip(phase)
+        .step_by(bpb as usize)
+        .filter(|&&t| t <= duration)
+        .map(|&t| round_dec(t, 3))
+        .collect();
+    card.extras.set("core.bpm_alternatives", vec![round_dec(bpm / 2.0, 2), round_dec(bpm * 2.0, 2)]);
+    card.extras.set("core.downbeat_phase", phase);
+}
+
+/// The share of spectral power below 150 Hz.
+fn low_end(ctx: &Ctx) -> f64 {
     let bins = crate::spectral::BINS;
     let frames = ctx.frames;
-    let freqs = crate::features::fft_frequencies(sr, crate::spectral::N_FFT);
+    let freqs = crate::features::fft_frequencies(ctx.sr, crate::spectral::N_FFT);
     let mut low = Vec::new();
     let mut all = Vec::with_capacity(bins * frames);
     for (b, &fb) in freqs.iter().enumerate().take(bins) {
@@ -89,13 +103,25 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
             }
         }
     }
-    let low_end = (pairwise_sum(&low) / (pairwise_sum(&all) + 1e-9)) as f64;
-    drop(all);
+    (pairwise_sum(&low) / (pairwise_sum(&all) + 1e-9)) as f64
+}
+
+/// Energy and the scalar features (brightness, percussiveness, danceability, swing...).
+fn set_features(
+    ctx: &Ctx,
+    card: &mut Card,
+    bpm: Option<f64>,
+    beat_idx: &[usize],
+    rms_db: &[f32],
+    duration: f64,
+    (stability, pulse_clarity): (f64, f64),
+) {
+    let low_end = low_end(ctx);
     let brightness = clip((mean_f32(&ctx.centroid) / 3500.0f32) as f64, 0.0, 1.0);
     let sum_sq = |x: &[f32]| pairwise_sum(&x.iter().map(|v| v * v).collect::<Vec<f32>>());
     let (hp, pp) = (sum_sq(&ctx.harmonic), sum_sq(&ctx.percussive));
     let perc_ratio = (pp / (hp + pp + 1e-9)) as f64;
-    let onsets = rhythm::onset_detect(&ctx.onset, sr, HOP);
+    let onsets = rhythm::onset_detect(&ctx.onset, ctx.sr, HOP);
     let onset_rate = if duration > 0.0 { onsets.len() as f64 / duration } else { 0.0 };
     let perc_score = clip(perc_ratio / 0.5, 0.0, 1.0);
     let loud_score = clip((card.core.loudness_db.unwrap() + 30.0) / 22.0, 0.0, 1.0);
@@ -104,7 +130,7 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
 
     let tempo_fit = bpm.map_or(0.0, |b| libm::exp(-((b - 135.0) / 45.0).powi(2)));
     let danceability = 0.25 * tempo_fit + 0.75 * perc_score;
-    let (swing_pct, swing_conf) = if bpm.is_some() { swing(&ctx.onset, &beat_idx) } else { (50.0, 0.0) };
+    let (swing_pct, swing_conf) = if bpm.is_some() { swing(&ctx.onset, beat_idx) } else { (50.0, 0.0) };
     let rdb: Vec<f64> = rms_db.iter().map(|&v| v as f64).collect();
     for (k, v) in [
         ("brightness", round_dec(brightness, 3)),
@@ -120,34 +146,34 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     ] {
         card.set_feature(k, v);
     }
+}
 
-    // --- Key ---
+/// The key and its alternatives, when the track has any pitch content.
+fn set_key(ctx: &Ctx, card: &mut Card) {
     let profile = music::key_profile(&ctx.chroma);
-    if profile.iter().any(|&v| v > 0.0) {
-        let est = music::estimate_key(&profile);
-        card.core.key = Some(Key {
-            tonic: est.tonic,
-            mode: est.mode,
-            scale: music::refine_mode(&profile, est.tonic, est.mode),
-            camelot: music::camelot(est.tonic, est.mode),
-            confidence: est.confidence,
-            likely_correct: music::likely_correct("key", est.confidence),
-        });
-        let alts: Vec<Json> =
-            est.alternatives.iter().map(|(k, p)| Json::obj().with("key", k.clone()).with("probability", *p)).collect();
-        card.extras.set("core.key_alternatives", Json::Arr(alts));
+    if !profile.iter().any(|&v| v > 0.0) {
+        return;
     }
-
-    // --- Energy per bar ---
-    if !card.core.downbeat_times.is_empty() {
-        let (t, v) = bar_energy_series(&card.core.downbeat_times, &rms_db, sr, duration);
-        card.series.push(("energy".into(), t, v));
-    }
-    Ok(())
+    let est = music::estimate_key(&profile);
+    card.core.key = Some(Key {
+        tonic: est.tonic,
+        mode: est.mode,
+        scale: music::refine_mode(&profile, est.tonic, est.mode),
+        camelot: music::camelot(est.tonic, est.mode),
+        confidence: est.confidence,
+        likely_correct: music::likely_correct("key", est.confidence),
+    });
+    let alts: Vec<Json> =
+        est.alternatives.iter().map(|(k, p)| Json::obj().with("key", k.clone()).with("probability", *p)).collect();
+    card.extras.set("core.key_alternatives", Json::Arr(alts));
 }
 
 fn diffs(x: &[f64]) -> Vec<f64> {
     x.windows(2).map(|w| w[1] - w[0]).collect()
+}
+
+fn beat_index(frames: &[f64], n_frames: usize) -> Vec<usize> {
+    frames.iter().map(|&f| clip(round_half_even(f), 0.0, n_frames as f64 - 1.0) as usize).collect()
 }
 
 /// _tempo_and_beats: (bpm, beat frames, confidence, stability, pulse clarity).
@@ -158,30 +184,55 @@ fn tempo_and_beats(ctx: &mut Ctx, n_frames: usize) -> (Option<f64>, Vec<f64>, f6
     if n_frames < 2 || max <= 1e-6 || std_f32(&onset) < 1e-6 {
         return (None, Vec::new(), 0.0, 0.0, 0.0);
     }
-    let (mut tempo, beats) = rhythm::beat_track(&onset, sr, HOP, None);
-    let mut frames: Vec<f64> = beats.iter().map(|&b| b as f64).collect();
-    if frames.len() < MIN_BEATS || tempo <= 0.0 {
-        if tempo <= 0.0 {
-            tempo = 120.0;
-        }
-        let step = 60.0 / tempo * sr / hop;
-        let count = libm::ceil(n_frames as f64 / step) as usize;
-        frames = (0..count).map(|i| i as f64 * step).collect();
+    let frames = tracked_beats(&onset, sr, n_frames);
+    let bpm = 60.0 / (median(&diffs(&frames)) * hop / sr);
+    let (bpm, frames) = three_over_two(ctx, &onset, bpm, frames, n_frames);
+    let (mut bpm, frames) = fold_into_range(bpm, frames);
+    let ibis: Vec<f64> = diffs(&frames).iter().map(|d| d * hop / sr).collect();
+    let stability = if ibis.is_empty() { 0.0 } else { clip(1.0 - std(&ibis) / (mean(&ibis) + 1e-9) * 4.0, 0.0, 1.0) };
+    let frames = regularize(&frames, n_frames);
+    let picked: Vec<f32> = beat_index(&frames, n_frames).into_iter().map(|i| onset[i]).collect();
+    let ratio = mean_f32(&picked) / (mean_f32(&onset) + 1e-9);
+    let pulse = clip(((ratio - 1.0) as f64) / PULSE_SCALE, 0.0, 1.0);
+    let frames = align_to_kick(&frames, &ctx.low_flux);
+    if frames.len() > 1 {
+        bpm = 60.0 * sr / (hop * median(&diffs(&frames)));
     }
-    let spb = median(&diffs(&frames)) * hop / sr;
-    let mut bpm = 60.0 / spb;
-    if bpm * 1.5 < MAX_BPM && periodicity(ctx, bpm * 1.5) >= THREE_TWO_RATIO * periodicity(ctx, bpm) {
-        let faster: Vec<f64> =
-            rhythm::beat_track(&onset, sr, HOP, Some(bpm * 1.5)).1.iter().map(|&b| b as f64).collect();
-        if faster.len() >= MIN_BEATS {
-            let idx: Vec<usize> =
-                faster.iter().map(|&f| clip(round_half_even(f), 0.0, n_frames as f64 - 1.0) as usize).collect();
-            if meter_score(&idx, &ctx.log_mel, &ctx.log_mel_freqs, None) <= THREE_TWO_MAX_METER {
-                bpm = 60.0 / (median(&diffs(&faster)) * hop / sr);
-                frames = faster;
-            }
-        }
+    (Some(bpm), frames, 0.5 * stability + 0.5 * pulse, stability, pulse)
+}
+
+/// The beat tracker's beats, or an even grid at its tempo (120 BPM when it has none) when it finds too few.
+fn tracked_beats(onset: &[f32], sr: f64, n_frames: usize) -> Vec<f64> {
+    let (mut tempo, beats) = rhythm::beat_track(onset, sr, HOP, None);
+    if beats.len() >= MIN_BEATS && tempo > 0.0 {
+        return beats.iter().map(|&b| b as f64).collect();
     }
+    if tempo <= 0.0 {
+        tempo = 120.0;
+    }
+    let step = 60.0 / tempo * sr / HOP as f64;
+    let count = libm::ceil(n_frames as f64 / step) as usize;
+    (0..count).map(|i| i as f64 * step).collect()
+}
+
+/// Try 1.5x the tempo (a 3:2 error): taken when its periodicity is nearly as strong and its beats don't read as
+/// triple meter.
+fn three_over_two(ctx: &mut Ctx, onset: &[f32], bpm: f64, frames: Vec<f64>, n_frames: usize) -> (f64, Vec<f64>) {
+    if !(bpm * 1.5 < MAX_BPM && periodicity(ctx, bpm * 1.5) >= THREE_TWO_RATIO * periodicity(ctx, bpm)) {
+        return (bpm, frames);
+    }
+    let faster: Vec<f64> =
+        rhythm::beat_track(onset, ctx.sr, HOP, Some(bpm * 1.5)).1.iter().map(|&b| b as f64).collect();
+    if faster.len() >= MIN_BEATS
+        && meter_score(&beat_index(&faster, n_frames), &ctx.log_mel, &ctx.log_mel_freqs, None) <= THREE_TWO_MAX_METER
+    {
+        return (60.0 / (median(&diffs(&faster)) * HOP as f64 / ctx.sr), faster);
+    }
+    (bpm, frames)
+}
+
+/// Double or halve the beats until the tempo is in MIN_BPM..MAX_BPM (halving only while enough beats remain).
+fn fold_into_range(mut bpm: f64, mut frames: Vec<f64>) -> (f64, Vec<f64>) {
     while bpm < MIN_BPM {
         let mut all = frames.clone();
         all.extend(frames.windows(2).map(|w| (w[0] + w[1]) / 2.0));
@@ -193,18 +244,7 @@ fn tempo_and_beats(ctx: &mut Ctx, n_frames: usize) -> (Option<f64>, Vec<f64>, f6
         frames = frames.iter().step_by(2).cloned().collect();
         bpm /= 2.0;
     }
-    let ibis: Vec<f64> = diffs(&frames).iter().map(|d| d * hop / sr).collect();
-    let stability = if ibis.is_empty() { 0.0 } else { clip(1.0 - std(&ibis) / (mean(&ibis) + 1e-9) * 4.0, 0.0, 1.0) };
-    frames = regularize(&frames, n_frames);
-    let picked: Vec<f32> =
-        frames.iter().map(|&f| onset[clip(round_half_even(f), 0.0, n_frames as f64 - 1.0) as usize]).collect();
-    let ratio = mean_f32(&picked) / (mean_f32(&onset) + 1e-9);
-    let pulse = clip(((ratio - 1.0) as f64) / PULSE_SCALE, 0.0, 1.0);
-    frames = align_to_kick(&frames, &ctx.low_flux);
-    if frames.len() > 1 {
-        bpm = 60.0 * sr / (hop * median(&diffs(&frames)));
-    }
-    (Some(bpm), frames, 0.5 * stability + 0.5 * pulse, stability, pulse)
+    (bpm, frames)
 }
 
 /// _periodicity: the 384-lag tempogram's mean strength at `bpm`, best of the nearest three lags.

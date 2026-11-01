@@ -10,7 +10,7 @@ many others).
 - New: `tests/test_links.py`.
 - Edit `pyproject.toml` only to adjust the `links` extra if needed.
 
-## Interface (`tastr/ingest.py`)
+## Interface (`tastr/resolvers/base.py`, re-exported by `tastr/ingest.py`)
 ```python
 class UrlResolver(Protocol):
     name: str

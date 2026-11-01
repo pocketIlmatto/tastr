@@ -100,17 +100,8 @@ def _call_gen(name: str, *args):
     yield from fn.remote_gen(*args)
 
 
-def stems(audio_path: str | Path, out_dir: Path, progress=None) -> None:
-    """Upload one file to the Modal `stems` function and write the FLAC stems it returns into `out_dir`."""
-    from .. import stems as local
-
+def stems(audio_path: str | Path) -> dict[str, bytes]:
+    """Upload one file to the Modal `stems` function; returns {stem name: FLAC bytes} (tastr/stems.py writes
+    them)."""
     audio_path = Path(audio_path)
-    if progress:
-        progress(0.05)  # Modal reports no progress; show that the job has started
-    result = _call("stems", audio_path.read_bytes(), audio_path.suffix)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for name, data in result.items():
-        if name in local.STEM_NAMES:
-            local.stem_path(out_dir, name).write_bytes(data)
-    if progress:
-        progress(1.0)
+    return _call("stems", audio_path.read_bytes(), audio_path.suffix)

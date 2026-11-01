@@ -1,7 +1,7 @@
 """The provider interface: what a metadata source gets asked and what it answers.
 
 A provider turns a track's artist and title into the BPM and key a catalog lists for it. Providers are
-looked up by name in the registry (`tastr.lookup.register`), so adding a source is one module with a
+looked up by name in the registry (`register`, here, so provider modules don't import the package), so adding a source is one module with a
 `Provider` subclass and a `register(...)` call. See docs/lookup.md.
 """
 
@@ -197,3 +197,12 @@ def same_artists(a: str | None, b: str | None) -> bool:
         return False
     short, long = sorted((xs, ys), key=len)
     return all(any(same_text(s, t) for t in long) for s in short)
+
+
+# The providers by name. Each provider module registers itself; tastr.lookup imports them all.
+PROVIDERS: dict[str, Provider] = {}
+
+
+def register(provider: Provider) -> Provider:
+    PROVIDERS[provider.name] = provider
+    return provider

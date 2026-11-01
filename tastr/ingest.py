@@ -1,8 +1,6 @@
 """Turning user input (files, folders, links) into local audio files.
 
-Plug-in point for links: register a UrlResolver. Each resolver says which
-URLs it handles and returns one or more Sources whose `local_path` points at
-downloaded audio (a playlist link returns one Source per track).
+Plug-in point for links: register a UrlResolver (tastr/resolvers/base.py).
 """
 
 from __future__ import annotations
@@ -10,31 +8,11 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-from typing import Protocol
 
 from .engine.audio import AUDIO_EXTENSIONS, load_audio  # noqa: F401  (re-exported)
 from .engine.card import Source
 from .filemeta import read_file_meta
-
-
-class IngestError(Exception):
-    pass
-
-
-class UrlResolver(Protocol):
-    name: str
-
-    def handles(self, url: str) -> bool: ...
-
-    def resolve(self, url: str, cache_dir: Path) -> list[Source]: ...
-
-
-_URL_RESOLVERS: list[UrlResolver] = []
-
-
-def register_url_resolver(resolver: UrlResolver) -> UrlResolver:
-    _URL_RESOLVERS.append(resolver)
-    return resolver
+from .resolvers.base import URL_RESOLVERS, IngestError, UrlResolver, register_url_resolver  # noqa: F401  (re-exported)
 
 
 def is_url(s: str) -> bool:
@@ -70,9 +48,7 @@ def _file_source(p: Path) -> Source:
 
 
 def _resolve_url(url: str, cache_dir: Path) -> list[Source]:
-    from . import resolvers  # noqa: F401  (importing registers them)
-
-    for r in _URL_RESOLVERS:
+    for r in URL_RESOLVERS:  # importing resolvers.base above ran tastr/resolvers/__init__, which registers them
         if r.handles(url):
             return r.resolve(url, cache_dir)
     raise IngestError(f"No resolver for links like {url} yet (track/playlist links are not supported yet).")

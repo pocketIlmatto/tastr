@@ -155,7 +155,7 @@ column layout comes from AcousticBrainz's own dump code (`db/dump.py` in metabra
    `lookup_track` parses it into tonic / mode / Camelot. Override `may_store()` if the provider's terms
    forbid keeping results, and set `min_interval` / `daily_limit` / `monthly_limit` to fit its quota. `Provider.get_json` does the HTTP with a timeout
    and a Tastr user agent; `base.num` and `base.same_text` help with loose fields and fuzzy matches.
-2. Call `register(MyProvider())` at the bottom and import the module at the end of
-   `tastr/lookup/__init__.py`.
+2. Call `register(MyProvider())` (from `.base`) at the bottom of the module, and add the module to the
+   provider import at the top of `tastr/lookup/__init__.py`.
 3. Add tests on canned responses in `tests/test_lookup.py`, a row in the table above, and the
    provider's attribution or usage terms to the README's Licenses section.

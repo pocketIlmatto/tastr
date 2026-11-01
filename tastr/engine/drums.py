@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 
 from . import signals
-from .pipeline import AnalysisContext
+from .context import AnalysisContext
 
 LANES = ("kick", "snare", "clap", "hat", "open_hat", "tom", "perc")
 # With the optional drum model (tastr[drums], adt.py): which lanes it supplies, and the lane it adds.

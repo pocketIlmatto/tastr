@@ -42,8 +42,7 @@ import uuid
 from pathlib import Path
 from typing import Iterable, Iterator
 
-from . import register
-from .base import LookupResult, Provider, ProviderError, TrackQuery, artist_names, num, same_artists, same_text
+from .base import LookupResult, Provider, ProviderError, TrackQuery, register, artist_names, num, same_artists, same_text
 
 MUSICBRAINZ_BASE = "https://musicbrainz.org/ws/2"
 DUMP_BASE = "https://data.metabrainz.org/pub/musicbrainz/acousticbrainz/dumps/acousticbrainz-lowlevel-features-20220623"

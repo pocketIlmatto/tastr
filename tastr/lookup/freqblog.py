@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import os
 
-from . import register
-from .base import LookupResult, Provider, ProviderError, TrackQuery, num, same_artists, same_text
+from .base import LookupResult, Provider, ProviderError, TrackQuery, register, num, same_artists, same_text
 
 DEFAULT_BASE = "https://api.freqblog.com"
 

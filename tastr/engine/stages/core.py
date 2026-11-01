@@ -14,7 +14,7 @@ import numpy as np
 
 from .. import calibration, music, signals
 from ..card import Key
-from ..pipeline import AnalysisContext, register_stage
+from ..context import AnalysisContext, register_stage
 
 MIN_BPM = 70.0
 MAX_BPM = 180.0

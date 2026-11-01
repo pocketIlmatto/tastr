@@ -18,80 +18,121 @@ const TEMPO_STYLES: [(&str, f64, f64); 8] = [
     ("drum & bass tempo", 160.0, 180.0),
 ];
 
+/// Tag scores in the order the rules ran; a tag scored twice keeps its higher score.
+#[derive(Default)]
+struct Scores(Vec<(String, f64)>);
+
+impl Scores {
+    fn add(&mut self, tag: &str, score: f64) {
+        if score > 0.0 {
+            let s = round_dec(score.min(1.0), 3);
+            if let Some(slot) = self.0.iter_mut().find(|(t, _)| t == tag) {
+                slot.1 = slot.1.max(s);
+            } else {
+                self.0.push((tag.to_string(), s));
+            }
+        }
+    }
+}
+
+/// The inputs the rules read.
+struct Vibe {
+    bpm: Option<f64>,
+    minor: Option<bool>,
+    energy: Option<f64>,
+    bright: Option<f64>,
+    perc: Option<f64>,
+    pulse: Option<f64>,
+    dance: Option<f64>,
+    low: Option<f64>,
+    contrast: Option<f64>,
+    swing: Option<(f64, f64)>, // (confidence, percent)
+}
+
+fn energy_rules(v: &Vibe, out: &mut Scores) {
+    let Some(e) = v.energy else { return };
+    out.add("high energy", (e - 0.6) / 0.3);
+    if let Some(b) = v.bpm {
+        out.add("chill", if b < 115.0 { (0.45 - e) / 0.25 } else { (0.35 - e) / 0.25 });
+    }
+    if v.minor == Some(true) && e < 0.5 {
+        out.add("melancholic", 0.5 + (0.4 - e));
+    }
+}
+
+fn brightness_rules(v: &Vibe, out: &mut Scores) {
+    let (Some(br), Some(mi)) = (v.bright, v.minor) else { return };
+    out.add("dark", (0.45 - br) / 0.3 + if mi { 0.25 } else { -0.2 });
+    out.add("bright", (br - 0.5) / 0.3 + if mi { -0.15 } else { 0.15 });
+    if let (Some(e), false) = (v.energy, mi) {
+        out.add("euphoric", (e - 0.55) / 0.25 + (br - 0.45));
+    }
+}
+
+fn groove_rules(v: &Vibe, out: &mut Scores) {
+    if let (Some(p), Some(b)) = (v.pulse, v.bpm) {
+        if (115.0..=150.0).contains(&b) {
+            out.add("driving", (p - 0.73) / 0.35);
+        }
+    }
+    if let Some(d) = v.dance {
+        out.add("danceable", (d - 0.55) / 0.3);
+    }
+    if let (Some(p), Some(c)) = (v.pulse, v.contrast) {
+        out.add("hypnotic", (p - 0.4) / 0.4 - 3.0 * c - 0.3);
+    }
+}
+
+fn texture_rules(v: &Vibe, out: &mut Scores) {
+    if let Some(l) = v.low {
+        out.add("bass-heavy", (l - 0.25) / 0.25);
+    }
+    if let Some(pc) = v.perc {
+        out.add("percussive", (pc - 0.35) / 0.25);
+        if let Some(p) = v.pulse {
+            out.add("atmospheric", (0.2 - pc) / 0.15 + (0.4 - p) - 0.6);
+        }
+    }
+    if let Some(c) = v.contrast {
+        out.add("dynamic", (c - 0.2) / 0.15);
+    }
+    if let Some((sc, sp)) = v.swing {
+        if sc > 0.3 {
+            out.add("swung", (sp - 54.0) / 8.0);
+        }
+    }
+}
+
+fn tempo_rules(v: &Vibe, out: &mut Scores) {
+    let Some(b) = v.bpm else { return };
+    for (name, lo, hi) in TEMPO_STYLES {
+        if lo <= b && b <= hi {
+            out.add(name, 0.5);
+        }
+    }
+}
+
 /// Every positive tag score, high to low (ties keep the order the rules ran in).
 pub fn vibe_scores(bpm: Option<f64>, mode: Option<&str>, energy: Option<f64>, card: &Card) -> Vec<(String, f64)> {
     let f = |k: &str| card.feature(k);
-    let minor = mode.map(|m| m == "minor");
-    let bright = f("brightness");
-    let perc = f("percussiveness");
-    let pulse = f("pulse_clarity");
-    let dance = f("danceability");
-    let low = f("low_end");
-    let contrast = f("section_contrast");
-    let mut scores: Vec<(String, f64)> = Vec::new();
-    let mut add = |tag: &str, score: f64| {
-        if score > 0.0 {
-            let s = round_dec(score.min(1.0), 3);
-            if let Some(slot) = scores.iter_mut().find(|(t, _)| t == tag) {
-                slot.1 = slot.1.max(s);
-            } else {
-                scores.push((tag.to_string(), s));
-            }
-        }
+    let v = Vibe {
+        bpm,
+        minor: mode.map(|m| m == "minor"),
+        energy,
+        bright: f("brightness"),
+        perc: f("percussiveness"),
+        pulse: f("pulse_clarity"),
+        dance: f("danceability"),
+        low: f("low_end"),
+        contrast: f("section_contrast"),
+        swing: f("swing_confidence").zip(f("swing_percent")),
     };
-    if let Some(e) = energy {
-        add("high energy", (e - 0.6) / 0.3);
-        if let Some(b) = bpm {
-            add("chill", if b < 115.0 { (0.45 - e) / 0.25 } else { (0.35 - e) / 0.25 });
-        }
-        if minor == Some(true) && e < 0.5 {
-            add("melancholic", 0.5 + (0.4 - e));
-        }
+    let mut out = Scores::default();
+    for rules in [energy_rules, brightness_rules, groove_rules, texture_rules, tempo_rules] {
+        rules(&v, &mut out);
     }
-    if let (Some(br), Some(mi)) = (bright, minor) {
-        add("dark", (0.45 - br) / 0.3 + if mi { 0.25 } else { -0.2 });
-        add("bright", (br - 0.5) / 0.3 + if mi { -0.15 } else { 0.15 });
-        if let (Some(e), false) = (energy, mi) {
-            add("euphoric", (e - 0.55) / 0.25 + (br - 0.45));
-        }
-    }
-    if let (Some(p), Some(b)) = (pulse, bpm) {
-        if (115.0..=150.0).contains(&b) {
-            add("driving", (p - 0.73) / 0.35);
-        }
-    }
-    if let Some(d) = dance {
-        add("danceable", (d - 0.55) / 0.3);
-    }
-    if let (Some(p), Some(c)) = (pulse, contrast) {
-        add("hypnotic", (p - 0.4) / 0.4 - 3.0 * c - 0.3);
-    }
-    if let Some(l) = low {
-        add("bass-heavy", (l - 0.25) / 0.25);
-    }
-    if let Some(pc) = perc {
-        add("percussive", (pc - 0.35) / 0.25);
-        if let Some(p) = pulse {
-            add("atmospheric", (0.2 - pc) / 0.15 + (0.4 - p) - 0.6);
-        }
-    }
-    if let Some(c) = contrast {
-        add("dynamic", (c - 0.2) / 0.15);
-    }
-    if let (Some(sc), Some(sp)) = (f("swing_confidence"), f("swing_percent")) {
-        if sc > 0.3 {
-            add("swung", (sp - 54.0) / 8.0);
-        }
-    }
-    if let Some(b) = bpm {
-        for (name, lo, hi) in TEMPO_STYLES {
-            if lo <= b && b <= hi {
-                add(name, 0.5);
-            }
-        }
-    }
-    scores.sort_by(|a, b| b.1.total_cmp(&a.1));
-    scores
+    out.0.sort_by(|a, b| b.1.total_cmp(&a.1));
+    out.0
 }
 
 pub fn run(_ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {

@@ -5,7 +5,7 @@
 use rustfft::num_complex::Complex;
 use rustfft::FftPlannerScalar;
 
-use crate::np::{pairwise_sum, round_half_even};
+use crate::np::{median, pairwise_sum, round_half_even};
 
 /// Frames per second of the onset envelope.
 fn frame_rate(sr: f64, hop: usize) -> f64 {
@@ -120,16 +120,32 @@ pub fn beat_track(onset: &[f32], sr: f64, hop: usize, bpm: Option<f64>) -> (f64,
     let bpm = bpm.unwrap_or_else(|| tempo(onset, sr, hop));
     let fpb = round_half_even(frame_rate(sr, hop) * 60.0 / bpm);
     let n = onset.len();
+    let local = beat_local_score(&normalize_onsets(onset), fpb);
+    let (cum, backlink) = beat_track_dp(&local, fpb);
+    let mut beats = vec![false; n];
+    let mut k = last_beat(&cum);
+    while k >= 0 {
+        beats[k as usize] = true;
+        k = backlink[k as usize];
+    }
+    trim_beats(&local, &mut beats);
+    (bpm, (0..n).filter(|&i| beats[i]).collect())
+}
 
-    // __normalize_onsets: divide by the sample standard deviation, which numpy computes in float32 with its
-    // pairwise sums.
+/// __normalize_onsets: divide by the sample standard deviation, which numpy computes in float32 with its
+/// pairwise sums.
+fn normalize_onsets(onset: &[f32]) -> Vec<f32> {
+    let n = onset.len();
     let mean = pairwise_sum(onset) / n as f32;
     let sq: Vec<f32> = onset.iter().map(|&v| (v - mean) * (v - mean)).collect();
     let norm = (pairwise_sum(&sq) / (n - 1) as f32).sqrt() + f32::MIN_POSITIVE;
-    let normed: Vec<f32> = onset.iter().map(|&v| v / norm).collect();
+    onset.iter().map(|&v| v / norm).collect()
+}
 
-    // __beat_local_score: a Gaussian-windowed "same" convolution, summed into a float32 slot step by step. Like
-    // librosa, the k range stops one short, so the envelope's first frame never contributes.
+/// __beat_local_score: a Gaussian-windowed "same" convolution, summed into a float32 slot step by step. Like
+/// librosa, the k range stops one short, so the envelope's first frame never contributes.
+fn beat_local_score(normed: &[f32], fpb: f64) -> Vec<f32> {
+    let n = normed.len();
     let f = fpb as i64;
     let window: Vec<f64> = (-f..=f).map(|j| libm::exp(-0.5 * (j as f64 * 32.0 / fpb).powi(2))).collect();
     let kk = window.len() as i64;
@@ -142,8 +158,13 @@ pub fn beat_track(onset: &[f32], sr: f64, hop: usize, bpm: Option<f64>) -> (f64,
         }
         *slot = acc;
     }
+    local
+}
 
-    // __beat_track_dp, in float64 (numba picks its float64 signature for a float64 tempo).
+/// __beat_track_dp, in float64 (numba picks its float64 signature for a float64 tempo): (cumulative score,
+/// backlinks).
+fn beat_track_dp(local: &[f32], fpb: f64) -> (Vec<f64>, Vec<i64>) {
+    let n = local.len();
     let tightness = 100.0f64;
     let max_local = local.iter().cloned().fold(f32::NEG_INFINITY, f32::max) as f64;
     let thresh = 0.01 * max_local;
@@ -153,21 +174,9 @@ pub fn beat_track(onset: &[f32], sr: f64, hop: usize, bpm: Option<f64>) -> (f64,
     let log_fpb = libm::log(fpb);
     for i in 0..n {
         let score_i = local[i] as f64;
-        let (mut best, mut at) = (f64::NEG_INFINITY, -1i64);
         let from = i as i64 - round_half_even(fpb / 2.0) as i64;
         let to = (i as f64 - 2.0 * fpb - 1.0) as i64; // int() truncates toward zero
-        let mut loc = from;
-        while loc > to {
-            if loc < 0 {
-                break;
-            }
-            let s = cum[loc as usize] - tightness * (libm::log((i as i64 - loc) as f64) - log_fpb).powi(2);
-            if s > best {
-                best = s;
-                at = loc;
-            }
-            loc -= 1;
-        }
+        let (best, at) = best_predecessor(&cum, i as i64, from, to, |d| tightness * (libm::log(d) - log_fpb).powi(2));
         cum[i] = if at >= 0 { score_i + best } else { score_i };
         if first_beat && score_i < thresh {
             backlink[i] = -1;
@@ -176,8 +185,29 @@ pub fn beat_track(onset: &[f32], sr: f64, hop: usize, bpm: Option<f64>) -> (f64,
             first_beat = false;
         }
     }
+    (cum, backlink)
+}
 
-    // __last_beat: the last local maximum of the cumulative score above half their median.
+/// The best earlier beat for frame i among frames `from` down to (not including) `to`: (score, frame), or
+/// (-inf, -1) when there is none. `penalty(distance)` is the tempo deviation cost.
+fn best_predecessor(cum: &[f64], i: i64, from: i64, to: i64, penalty: impl Fn(f64) -> f64) -> (f64, i64) {
+    let (mut best, mut at) = (f64::NEG_INFINITY, -1i64);
+    let mut loc = from;
+    while loc > to && loc >= 0 {
+        let s = cum[loc as usize] - penalty((i - loc) as f64);
+        if s > best {
+            best = s;
+            at = loc;
+        }
+        loc -= 1;
+    }
+    (best, at)
+}
+
+/// __last_beat: the last local maximum of the cumulative score above half their median (the last frame when
+/// there is none).
+fn last_beat(cum: &[f64]) -> i64 {
+    let n = cum.len();
     let mut is_max = vec![false; n];
     for i in 1..n.saturating_sub(1) {
         is_max[i] = cum[i] > cum[i - 1] && cum[i] >= cum[i + 1];
@@ -185,37 +215,15 @@ pub fn beat_track(onset: &[f32], sr: f64, hop: usize, bpm: Option<f64>) -> (f64,
     if n >= 2 {
         is_max[n - 1] = cum[n - 1] > cum[n - 2];
     }
-    let mut maxima: Vec<f64> = (0..n).filter(|&i| is_max[i]).map(|i| cum[i]).collect();
-    let median = if maxima.is_empty() {
-        0.0
-    } else {
-        maxima.sort_by(|a, b| a.total_cmp(b));
-        let m = maxima.len();
-        if m % 2 == 1 {
-            maxima[m / 2]
-        } else {
-            0.5 * (maxima[m / 2 - 1] + maxima[m / 2])
-        }
-    };
-    let threshold = 0.5 * median;
-    let mut tail = n as i64 - 1;
-    let mut j = n as i64 - 1;
-    while j >= 0 {
-        if is_max[j as usize] && cum[j as usize] >= threshold {
-            tail = j;
-            break;
-        }
-        j -= 1;
-    }
-    let mut beats = vec![false; n];
-    let mut k = tail;
-    while k >= 0 {
-        beats[k as usize] = true;
-        k = backlink[k as usize];
-    }
+    let maxima: Vec<f64> = (0..n).filter(|&i| is_max[i]).map(|i| cum[i]).collect();
+    let threshold = if maxima.is_empty() { 0.0 } else { 0.5 * median(&maxima) };
+    (0..n).rev().find(|&j| is_max[j] && cum[j] >= threshold).map_or(n as i64 - 1, |j| j as i64)
+}
 
-    // __trim_beats: drop leading and trailing frames whose local score is under half the RMS of the smoothed
-    // beat strengths.
+/// __trim_beats: drop leading and trailing frames whose local score is under half the RMS of the smoothed
+/// beat strengths.
+fn trim_beats(local: &[f32], beats: &mut [bool]) {
+    let n = local.len();
     let on: Vec<f32> = (0..n).filter(|&i| beats[i]).map(|i| local[i]).collect();
     let w = [0.0f64, 0.5, 1.0, 0.5, 0.0]; // np.hanning(5)
     let full_len = on.len() + 4;
@@ -233,17 +241,18 @@ pub fn beat_track(onset: &[f32], sr: f64, hop: usize, bpm: Option<f64>) -> (f64,
     let kept = &smooth[2..full_len.min(n + 2)];
     let rms = (kept.iter().map(|v| v * v).sum::<f64>() / kept.len() as f64).sqrt();
     let threshold = 0.5 * rms;
-    let mut a = 0;
-    while a < n && (local[a] as f64) <= threshold {
-        beats[a] = false;
-        a += 1;
+    for i in 0..n {
+        if (local[i] as f64) > threshold {
+            break;
+        }
+        beats[i] = false;
     }
-    let mut b = n as i64 - 1;
-    while b >= 0 && (local[b as usize] as f64) <= threshold {
-        beats[b as usize] = false;
-        b -= 1;
+    for i in (0..n).rev() {
+        if (local[i] as f64) > threshold {
+            break;
+        }
+        beats[i] = false;
     }
-    (bpm, (0..n).filter(|&i| beats[i]).collect())
 }
 
 /// librosa.onset.onset_detect(onset_envelope, sr, hop): the envelope scaled to 0..1, then greedy peak picking

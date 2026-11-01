@@ -284,19 +284,19 @@ struct Lane {
     peak: f64,
 }
 
-fn drum_grid(ctx: &Ctx, card: &Card, drums: &Drums, sf: &[Vec<i64>]) -> Result<Vec<Lane>, String> {
-    let energies = bar_energy(ctx, card, sf);
-    let med = np::median(&energies);
-    let mut busy: Vec<bool> = energies.iter().map(|&e| e >= med).collect();
+/// The bars at or above the median energy (every bar when fewer than two are).
+fn busy_bars(energies: &[f64]) -> Vec<bool> {
+    let med = np::median(energies);
+    let busy: Vec<bool> = energies.iter().map(|&e| e >= med).collect();
     if busy.iter().filter(|b| **b).count() < 2 {
-        busy = vec![true; energies.len()];
+        return vec![true; energies.len()];
     }
-    let step_s = card.core.bpm.filter(|&b| b != 0.0).map(|b| 15.0 / b);
-    let width = sf[0].len();
-    let flat: Vec<i64> = sf.iter().flatten().cloned().collect();
-    let acts = drums.lane_activations(&flat, &ctx.env_mid, &ctx.env_air, ctx.sr, HOP, step_s, 2)?;
-    let between: Vec<i64> = sf
-        .iter()
+    busy
+}
+
+/// The frames halfway between each step and the next (past the last, half a step on): where the floor is read.
+fn between_steps(sf: &[Vec<i64>]) -> Vec<i64> {
+    sf.iter()
         .flat_map(|row| {
             let w = row.len();
             (0..w)
@@ -309,37 +309,41 @@ fn drum_grid(ctx: &Ctx, card: &Card, drums: &Drums, sf: &[Vec<i64>]) -> Result<V
                 })
                 .collect::<Vec<_>>()
         })
-        .collect();
-    let floor_acts = drums.lane_activations(&between, &ctx.env_mid, &ctx.env_air, ctx.sr, HOP, step_s, 0)?;
-    let mut grid: Vec<Lane> = Vec::new();
-    for (li, lane) in drums.lanes().into_iter().enumerate() {
-        let steps: Vec<Vec<f64>> = acts[li].chunks(width).map(|r| r.iter().map(|v| v.sqrt()).collect()).collect();
-        let busy_rows: Vec<&[f64]> = steps.iter().zip(&busy).filter(|(_, b)| **b).map(|(r, _)| r.as_slice()).collect();
-        let profile = mean_rows(&busy_rows, width);
-        let floor_flat: Vec<f64> = floor_acts[li]
-            .chunks(width)
-            .zip(&busy)
-            .filter(|(_, b)| **b)
-            .flat_map(|(r, _)| r.iter().map(|v| v.sqrt()))
-            .collect();
-        let floor = pairwise_sum(&floor_flat) / floor_flat.len() as f64;
-        let peak = fmax(&profile);
-        let norm: Vec<f64> = if peak > 0.0 { profile.iter().map(|v| v / peak).collect() } else { profile.clone() };
-        grid.push(Lane {
-            name: lane,
-            pattern: pattern(&norm),
-            velocity: norm.iter().map(|&v| round_dec(v, 3)).collect(),
-            detected: peak > 0.0 && peak >= 3.0 * floor,
-            steps,
-            peak,
-        });
+        .collect()
+}
+
+/// One lane's grid from its activations on the steps and between them, over the busy bars.
+fn lane_grid(name: &'static str, acts: &[f64], floor_acts: &[f64], busy: &[bool], width: usize) -> Lane {
+    let steps: Vec<Vec<f64>> = acts.chunks(width).map(|r| r.iter().map(|v| v.sqrt()).collect()).collect();
+    let busy_rows: Vec<&[f64]> = steps.iter().zip(busy).filter(|(_, b)| **b).map(|(r, _)| r.as_slice()).collect();
+    let profile = mean_rows(&busy_rows, width);
+    let floor_flat: Vec<f64> =
+        floor_acts.chunks(width).zip(busy).filter(|(_, b)| **b).flat_map(|(r, _)| r.iter().map(|v| v.sqrt())).collect();
+    let floor = pairwise_sum(&floor_flat) / floor_flat.len() as f64;
+    let peak = fmax(&profile);
+    let norm: Vec<f64> = if peak > 0.0 { profile.iter().map(|v| v / peak).collect() } else { profile.clone() };
+    Lane {
+        name,
+        pattern: pattern(&norm),
+        velocity: norm.iter().map(|&v| round_dec(v, 3)).collect(),
+        detected: peak > 0.0 && peak >= 3.0 * floor,
+        steps,
+        peak,
     }
+}
+
+/// Lanes beyond the core ones that are much quieter than the loudest lane aren't detected.
+fn drop_quiet_extras(grid: &mut [Lane]) {
     let top = grid.iter().map(|g| g.peak).fold(f64::NEG_INFINITY, f64::max);
     for g in grid.iter_mut() {
         if !CORE_LANES.contains(&g.name) && g.peak < 0.2 * top {
             g.detected = false;
         }
     }
+}
+
+/// A quiet snare, clap or perc lane that just follows the kick is the kick bleeding in.
+fn drop_kick_echoes(grid: &mut [Lane]) {
     let (kick_peak, kick_vel) = (grid[0].peak, grid[0].velocity.clone());
     for g in grid.iter_mut() {
         if !["snare", "clap", "perc"].contains(&g.name) {
@@ -352,6 +356,20 @@ fn drum_grid(ctx: &Ctx, card: &Card, drums: &Drums, sf: &[Vec<i64>]) -> Result<V
             }
         }
     }
+}
+
+fn drum_grid(ctx: &Ctx, card: &Card, drums: &Drums, sf: &[Vec<i64>]) -> Result<Vec<Lane>, String> {
+    let busy = busy_bars(&bar_energy(ctx, card, sf));
+    let step_s = card.core.bpm.filter(|&b| b != 0.0).map(|b| 15.0 / b);
+    let width = sf[0].len();
+    let flat: Vec<i64> = sf.iter().flatten().cloned().collect();
+    let acts = drums.lane_activations(&flat, &ctx.env_mid, &ctx.env_air, ctx.sr, HOP, step_s, 2)?;
+    let floor_acts = drums.lane_activations(&between_steps(sf), &ctx.env_mid, &ctx.env_air, ctx.sr, HOP, step_s, 0)?;
+    let mut grid: Vec<Lane> = (drums.lanes().into_iter().enumerate())
+        .map(|(li, lane)| lane_grid(lane, &acts[li], &floor_acts[li], &busy, width))
+        .collect();
+    drop_quiet_extras(&mut grid);
+    drop_kick_echoes(&mut grid);
     Ok(grid)
 }
 
@@ -493,57 +511,65 @@ fn degrees(notes: &[Option<String>], tonic: Option<i64>, scale: &str) -> Vec<Opt
         .collect()
 }
 
-fn bass_summary(ctx: &Ctx, sf: &[Vec<i64>], tonic: Option<i64>, scale: &str) -> Option<Bass> {
-    let cqt = &ctx.bass_cqt;
+/// The bass CQT folded to 12 pitch classes: the octaves added in order (reshape(3, 12, -1).sum(axis=0)).
+fn bass_chroma(cqt: &Matrix) -> Matrix {
     let t = cqt.cols;
-    // chroma: the octaves added in order (reshape(3, 12, -1).sum(axis=0))
-    let octaves = cqt.rows / 12;
     let mut chroma = Matrix { rows: 12, cols: t, data: cqt.data[..12 * t].to_vec() };
-    for o in 1..octaves {
+    for o in 1..cqt.rows / 12 {
         for (c, v) in chroma.data.iter_mut().zip(&cqt.data[o * 12 * t..(o + 1) * 12 * t]) {
             *c += v;
         }
     }
-    let mut low_power = vec![0.0f32; t];
+    chroma
+}
+
+/// Power in the lowest BASS_LOW_BINS bins, per frame.
+fn low_power(cqt: &Matrix) -> Vec<f32> {
+    let mut low_power = vec![0.0f32; cqt.cols];
     for r in 0..BASS_LOW_BINS {
         for (p, v) in low_power.iter_mut().zip(cqt.row(r)) {
             *p += v * v;
         }
     }
+    low_power
+}
+
+/// Per bar: its pitch class, its mean low power (NaN for an empty bar) and each beat's pitch class.
+#[allow(clippy::type_complexity)]
+fn bar_pitches(
+    chroma: &Matrix,
+    low_power: &[f32],
+    sf: &[Vec<i64>],
+) -> (Vec<Option<i64>>, Vec<f64>, Vec<Vec<Option<i64>>>) {
+    let t = chroma.cols;
     let beats = sf[0].len() / STEPS_PER_BEAT;
-    let mut all_pcs = Vec::new();
-    let mut low = Vec::new();
-    let mut beat_pcs = Vec::new();
+    let (mut all_pcs, mut low, mut beat_pcs) = (Vec::new(), Vec::new(), Vec::new());
     for (i, (a, b)) in bar_slices(sf, t).into_iter().enumerate() {
-        all_pcs.push(pc_of(&chroma, a, b));
+        all_pcs.push(pc_of(chroma, a, b));
         let bb = b.min(t);
         low.push(if a < bb { np::mean_f32(&low_power[a..bb]) as f64 } else { f64::NAN });
         let row: Vec<Option<i64>> = (0..beats)
             .map(|k| {
                 let fa = sf[i][k * STEPS_PER_BEAT + 1] as usize;
                 let fb = if k + 1 < beats { sf[i][(k + 1) * STEPS_PER_BEAT] as usize } else { b };
-                pc_of(&chroma, fa, fb.max(fa + 1))
+                pc_of(chroma, fa, fb.max(fa + 1))
             })
             .collect();
         beat_pcs.push(row);
     }
-    let reference = if low.is_empty() { 0.0 } else { np::percentile(&low, 90.0) };
-    let bar_pcs: Vec<Option<i64>> =
-        all_pcs.iter().zip(&low).map(|(p, &v)| p.filter(|_| reference > 0.0 && v >= NO_BASS * reference)).collect();
-    let pcs: Vec<i64> = all_pcs.iter().flatten().cloned().collect();
-    if pcs.is_empty() {
-        return None;
-    }
-    let notes: Vec<String> = pcs.iter().map(|&p| music::note_name(p).to_string()).collect();
-    let lp = common_loop(&notes, 4).unwrap_or_else(|| notes[..notes.len().min(4)].to_vec());
-    let (_, most_count) = most_common(&pcs).unwrap();
+    (all_pcs, low, beat_pcs)
+}
+
+/// How the bass line moves: "pedal", "static", "stepwise", "fourths/fifths" or "leaps".
+fn movement(pcs: &[i64]) -> &'static str {
+    let (_, most_count) = most_common(pcs).unwrap();
     let intervals: Vec<i64> = pcs
         .windows(2)
         .filter(|w| w[0] != w[1])
         .map(|w| (w[1] - w[0]).rem_euclid(12).min((w[0] - w[1]).rem_euclid(12)))
         .collect();
     let share = |f: &dyn Fn(i64) -> bool| intervals.iter().filter(|&&iv| f(iv)).count() as f64 / intervals.len() as f64;
-    let movement = if most_count as f64 / pcs.len() as f64 > 0.7 {
+    if most_count as f64 / pcs.len() as f64 > 0.7 {
         "pedal"
     } else if intervals.is_empty() {
         "static"
@@ -553,7 +579,12 @@ fn bass_summary(ctx: &Ctx, sf: &[Vec<i64>], tonic: Option<i64>, scale: &str) -> 
         "fourths/fifths"
     } else {
         "leaps"
-    };
+    }
+}
+
+/// Spectral flux of the bass CQT in dB, averaged over its bins, per frame.
+fn bass_flux(cqt: &Matrix) -> Vec<f32> {
+    let t = cqt.cols;
     let power: Vec<f32> = cqt.data.iter().map(|v| v * v + 1e-10f32).collect();
     let log_s = power_to_db(&power, 1.0, Some(80.0));
     let mut flux = vec![0.0f32; t];
@@ -567,7 +598,23 @@ fn bass_summary(ctx: &Ctx, sf: &[Vec<i64>], tonic: Option<i64>, scale: &str) -> 
     for v in flux.iter_mut() {
         *v /= cqt.rows as f32;
     }
-    let bar_flux = sample(&flux, sf, 2);
+    flux
+}
+
+fn bass_summary(ctx: &Ctx, sf: &[Vec<i64>], tonic: Option<i64>, scale: &str) -> Option<Bass> {
+    let cqt = &ctx.bass_cqt;
+    let (all_pcs, low, beat_pcs) = bar_pitches(&bass_chroma(cqt), &low_power(cqt), sf);
+    let reference = if low.is_empty() { 0.0 } else { np::percentile(&low, 90.0) };
+    let bar_pcs: Vec<Option<i64>> =
+        all_pcs.iter().zip(&low).map(|(p, &v)| p.filter(|_| reference > 0.0 && v >= NO_BASS * reference)).collect();
+    let pcs: Vec<i64> = all_pcs.iter().flatten().cloned().collect();
+    if pcs.is_empty() {
+        return None;
+    }
+    let notes: Vec<String> = pcs.iter().map(|&p| music::note_name(p).to_string()).collect();
+    let lp = common_loop(&notes, 4).unwrap_or_else(|| notes[..notes.len().min(4)].to_vec());
+    let movement = movement(&pcs);
+    let bar_flux = sample(&bass_flux(cqt), sf, 2);
     let rows: Vec<&[f64]> = bar_flux.iter().map(|r| r.as_slice()).collect();
     let prof = mean_rows(&rows, sf[0].len());
     let pm = fmax(&prof);

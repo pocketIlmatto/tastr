@@ -5,8 +5,8 @@ Opt-in: nothing leaves the machine unless TASTR_LOOKUP names providers (comma-se
 the track's artist and title from its tags, never audio. Results are stored per provider in the `lookups` table and shown next to the
 engine's values; they never replace them. See docs/lookup.md.
 
-Adding a provider: a module with a `base.Provider` subclass that calls `register(...)`, imported at the
-bottom of this file.
+Adding a provider: a module with a `base.Provider` subclass that calls `base.register(...)`, imported
+below.
 """
 
 from __future__ import annotations
@@ -19,18 +19,13 @@ import time
 from datetime import datetime
 from typing import Any
 
-from .base import LookupResult, Provider, ProviderError, TrackQuery, parse_listed_key
+from . import acousticbrainz, freqblog, getsongbpm  # noqa: F401  registers the built-in providers
+from .base import PROVIDERS, LookupResult, Provider, ProviderError, TrackQuery, parse_listed_key, register  # noqa: F401
 from .guard import Limited, usage_conn
 
 log = logging.getLogger(__name__)
 
-PROVIDERS: dict[str, Provider] = {}
 BPM_TOLERANCE = 0.04  # the benchmark's Acc1 window
-
-
-def register(provider: Provider) -> Provider:
-    PROVIDERS[provider.name] = provider
-    return provider
 
 
 def enabled() -> list[Provider]:
@@ -192,5 +187,3 @@ def compare(card, res: dict[str, Any]) -> dict[str, Any]:
         out["key"] = {"correct": "agrees", "other": "differs"}.get(cat, cat)
     return out
 
-
-from . import acousticbrainz, freqblog, getsongbpm  # noqa: E402,F401  registers the built-in providers

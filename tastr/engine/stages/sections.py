@@ -12,7 +12,7 @@ import numpy as np
 
 from .. import signals
 from ..card import Section
-from ..pipeline import AnalysisContext, register_stage
+from ..context import AnalysisContext, register_stage
 
 FALLBACK_BAR_SECONDS = 8.0  # stand-in "bar" length when core gave no downbeats
 PHRASE_BARS = 2  # boundaries snap to multiples of this, sections are at least this long (Harmonix: docs/bench.md#sections)

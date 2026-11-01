@@ -67,7 +67,9 @@ ported from, keeps only what the benchmarks score: core and sections (`run_pipel
 
 A stage is any object with `name`, `version`, `requires` (tuple of stage
 names) and `run(ctx)`. `register_stage(obj)` at import time of a module in
-`tastr/engine/stages/` makes it part of the default pipeline. `ctx` gives the audio
+`tastr/engine/stages/` makes it part of the default pipeline. The registry, `AnalysisContext`, `SR` and
+`HOP` live in the leaf module `tastr/engine/context.py` (re-exported by `pipeline.py`), so stages and
+`signals.py` import them without importing the pipeline. `ctx` gives the audio
 (`ctx.y`, `ctx.sr`, `ctx.hop`), the card (`ctx.card`) and a per-track cache
 (`ctx.get(name, fn)`). Shared intermediates (HPSS, onset envelope, chroma,
 RMS) live in `tastr/engine/signals.py`; use them so they are computed once.

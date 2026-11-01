@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlparse
 
-from ..ingest import IngestError, register_url_resolver
+from .base import IngestError, register_url_resolver
 
 STREAMING_SERVICES = {"open.spotify.com": "Spotify", "music.apple.com": "Apple Music"}
 

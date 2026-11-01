@@ -71,7 +71,15 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
     if backend() == "modal":
         from .cloud import remote
 
-        remote.stems(audio_path, out_dir, progress)
+        if progress:
+            progress(0.05)  # Modal reports no progress; show that the job has started
+        result = remote.stems(audio_path)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for name, data in result.items():
+            if name in STEM_NAMES:
+                stem_path(out_dir, name).write_bytes(data)
+        if progress:
+            progress(1.0)
         return
     import numpy as np
     import soundfile as sf

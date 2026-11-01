@@ -56,7 +56,8 @@ def _warm_drums() -> None:
     _warm()
 
 
-# The Rust engine's library goes in too (tastr/cloud/rust_image.py), for servers set to TASTR_ENGINE=rust.
+# Both analysis images build in the Rust engine's library (tastr/cloud/rust_image.py), which makes every card;
+# the warm-up at build time fails the deploy if it can't.
 image = (
     with_rust_engine(modal.Image.debian_slim(python_version="3.12").apt_install("ffmpeg", "libsndfile1"))
     .pip_install(*ENGINE_DEPS, *PINS)
@@ -66,8 +67,7 @@ image = (
 )
 # The drum model's weights are CC BY-NC-SA 4.0 (docs/drums.md); they live in this private image only.
 drums_image = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("ffmpeg", "libsndfile1")
+    with_rust_engine(modal.Image.debian_slim(python_version="3.12").apt_install("ffmpeg", "libsndfile1"))
     .pip_install(*ENGINE_DEPS, *PINS)
     .pip_install(TORCH_CPU[0], index_url=TORCH_CPU[1])
     .env({"NUMBA_CACHE_DIR": NUMBA_CACHE, "TASTR_HOME": "/root/tastr-home"})

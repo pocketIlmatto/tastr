@@ -1,5 +1,6 @@
 import ast
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -33,6 +34,14 @@ def test_modal_image_deps_match_pyproject(name):
     if "TORCH_CPU" in (ROOT / "tastr/cloud" / name).read_text():
         assert f'TORCH_CPU = ("{project["optional-dependencies"]["drums"][0]}"' in (ROOT / "tastr/cloud" / name).read_text()
     assert consts["PINS"] == _consts("modal_app.py")["PINS"]
+
+
+def test_every_analysis_image_has_the_rust_engine():
+    """The Rust engine makes every card (there is no Python fallback), so each Modal image that analyzes builds
+    its library in; the build-time warm-up fails the deploy otherwise."""
+    src = (ROOT / "tastr/cloud/modal_web.py").read_text()
+    for name in ("image", "drums_image"):
+        assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), name
 
 
 def test_docker_image_has_no_dsp_libraries():

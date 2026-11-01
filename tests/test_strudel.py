@@ -385,3 +385,95 @@ def test_start_bar_plays_from_a_chosen_section():
     assert "all(x => x.early(start - 1)._punchcard())" in code
     # out of range: from the top
     assert "const start = 1 // the bar to play from: 1 is the top\n" in run_js(card(), start=999)["code"]
+
+
+# ---- Templates (TAS-67): fill-ins, the mash-up fit, the diff ----
+
+def run_tpl(expr: str, **data) -> object:
+    """Evaluate `expr` with strudel.js's exports in scope and `data` as JSON globals."""
+    script = f"""
+const S = require({json.dumps(str(STRUDEL_JS))});
+Object.assign(globalThis, S, {json.dumps(data)});
+console.log(JSON.stringify({expr}));
+"""
+    return json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+
+
+def tpl_card(**kw):
+    c = with_grid(card(["Am", "F", "C", "G"]))
+    c["core"]["key"]["camelot"] = "8A"
+    c["sections"][1]["energy"] = 0.9
+    return {**c, **kw}
+
+
+def test_fill_ins_fill_and_report_unknown_names():
+    out = run_tpl("strudelFill('setcpm({cpm}) // {title}{by}, {key} {{bpm}} {nope} {drums.nope}', strudelFillins(c))", c=tpl_card())
+    assert out["code"] == "setcpm(124/4) // Night Shift by Okra Lane, A minor {bpm} {nope} {drums.nope}"
+    assert out["unknown"] == ["nope", "drums.nope"]
+
+
+def test_fill_ins_follow_the_track():
+    f = run_tpl("Object.fromEntries(Object.entries(strudelFillins(c, { audioUrl: url })).map(([k, x]) => [k, x.v]))",
+                c=tpl_card(), url=AUDIO)
+    assert f["chords"] == "<Am F C G>" and f["bass"] == "<a1 f1 c2 g1>" and f["scale"] == "a:minor"
+    assert (f["drop"], f["drop.end"]) == ("17", "20")
+    assert f["drums.drop"] == f["drums"] and f["drums.drop"].startswith('stack(\n  s("bd*4"),') and f["drums.intro"] != f["drums"]
+    assert f["drums.song"].startswith("arrange(\n  [16, stack(") and "// Drop B, bars 17-48" in f["drums.song"]
+    assert f["loop"] == 'orig("orig", 17, 20)' and f"samples({{ orig: '{AUDIO}' }})" in f["audio"]
+    assert f["stems.vocals"] == "'http://127.0.0.1:8000/api/tracks/7/stems/vocals'"
+    assert f["song"].startswith("// --- Parts") and "setcpm" not in f["song"]
+    assert "b.title" not in f  # no second track
+
+
+def test_fill_ins_use_the_meter_and_stems():
+    c = tpl_card()
+    c["core"]["beats_per_bar"] = 3
+    c["suggestions"][0]["data"]["by_section"][1]["pattern"] = {"kick": "x...x...x..."}
+    f = run_tpl("Object.fromEntries(Object.entries(strudelFillins(c, { audioUrl: url, stems: ['vocals', 'bass'] })).map(([k, x]) => [k, x.v]))",
+                c=c, url=AUDIO)
+    assert f["cpm"].endswith("/3") and 's("bd*3")' in f["drums.drop"]
+    assert f["loop"] == 'stack(orig("vocals", 17, 20), orig("bass", 17, 20))' and "  vocals: '" in f["audio"]
+
+
+def test_built_in_templates_fill_without_unknowns():
+    b = with_grid(card(["Dm", "Bb"]), first=0.2, bar=240 / 128)
+    b["id"], b["source"]["title"], b["core"]["bpm"], b["core"]["key"] = 8, "Second", 128, {"tonic": 2, "mode": "minor", "camelot": "7A"}
+    out = run_tpl("STRUDEL_TEMPLATES.map((t) => strudelFill(t.text, strudelFillins(c, { audioUrl: url, b: { card: b, audioUrl: url.replace('/7/', '/8/') } })))",
+                  c=tpl_card(), b=b, url=AUDIO)
+    assert all(not r["unknown"] for r in out)
+    mash = out[4]["code"]
+    assert "samples({ b: 'http://127.0.0.1:8000/api/tracks/8/audio' })" in mash and "const origB = (a, b) => {" in mash
+    assert "origB(17, 20).speed(0.969)" in mash and "B: 128 BPM, D minor (7A)" in mash
+    assert run_tpl("STRUDEL_TEMPLATES.filter((t) => strudelUsesMash(t.text)).map((t) => t.id)") == ["mash"]
+    assert run_tpl("STRUDEL_TEMPLATES.filter((t) => strudelUsesAudio(t.text)).map((t) => t.id)") == ["loop", "half", "mash"]
+
+
+def test_unfill_turns_values_back_into_fill_ins():
+    out = run_tpl("strudelUnfill('// Night Shift {x}\\nsetcpm(124/4) // A minor, 8A', strudelFillins(c))", c=tpl_card())
+    assert out == "// {title} {{x}}\nsetcpm({cpm}) // {key}, {camelot}"
+
+
+@pytest.mark.parametrize("a, b, speed, fit", [
+    (124, 124, 1, "same key"),
+    (124, 62, 1, "same key"),          # folded by an octave: plays at normal speed
+    (128, 120, 1.067, "keys clash"),   # 8A up 1.1 semitones -> 3A
+    (120, 127, 0.945, "mixes well"),   # 4A (F minor) down 1 semitone -> E minor, 9A: next to 8A
+])
+def test_mash_up_speed_and_key_fit(a, b, speed, fit):
+    cam_b = {"same key": "8A", "keys clash": "8A", "mixes well": "4A"}[fit]
+    out = run_tpl("strudelMashFit({ bpm: a, camelot: '8A' }, { bpm: b, camelot: cb })", a=a, b=b, cb=cam_b)
+    assert out["r"] == speed and out["fit"] == fit
+    assert run_tpl("strudelCamelot(9, 'minor') + strudelCamelot(0, 'major') + strudelCamelot(8, 'minor')") == "8A8B1A"
+
+
+def test_diff_and_hunks():
+    d = run_tpl("strudelDiff('a\\nb\\nc\\nd\\ne\\nf', 'a\\nB\\nc\\nd\\ne\\nf\\ng')")
+    assert d == [[" ", "a"], ["-", "b"], ["+", "B"], [" ", "c"], [" ", "d"], [" ", "e"], [" ", "f"], ["+", "g"]]
+    h = run_tpl("strudelHunks(strudelDiff('a\\nb\\nc\\nd\\ne\\nf', 'a\\nB\\nc\\nd\\ne\\nf\\ng'))")
+    assert h == [[" ", "a"], ["-", "b"], ["+", "B"], [" ", "c"], None, [" ", "f"], ["+", "g"]]
+
+
+def test_summary_for_claude():
+    out = run_tpl("strudelSummary(c)", c=tpl_card())
+    assert out.splitlines()[:2] == ["Night Shift by Okra Lane", "124 BPM, 4/4, A minor (8A)"]
+    assert "Drop B bars 17-48" in out

@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS usage_hours (
     PRIMARY KEY (user, hour, kind)
 );
 
--- An admin's change to one person's daily limits (hosted only). NULL limit = the server default;
+-- An admin's change to one person's daily limits (hosted only; daily_asks = "Ask Claude" in Strudel). NULL limit = the server default;
 -- until_day = the UTC day a "today only" change ends after, NULL = until an admin changes it.
 CREATE TABLE IF NOT EXISTS limit_overrides (
     email        TEXT PRIMARY KEY,
@@ -277,6 +277,18 @@ CREATE TABLE IF NOT EXISTS list_tracks (
 );
 CREATE INDEX IF NOT EXISTS idx_list_tracks_track ON list_tracks(track_id);
 
+-- Strudel templates people write in "Try this in > Strudel" (TAS-67), per person (owner as in saved_searches).
+-- text is Strudel code with {fill-ins} the page fills from the open track; Tastr never runs it.
+CREATE TABLE IF NOT EXISTS strudel_templates (
+    id         INTEGER PRIMARY KEY,
+    owner      TEXT,
+    name       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_strudel_templates_owner ON strudel_templates(owner);
+
 -- Requests a hosted server refused for a missing or invalid Cloudflare Access token, per UTC day.
 CREATE TABLE IF NOT EXISTS blocked_requests (
     day     TEXT PRIMARY KEY,
@@ -337,6 +349,8 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
             conn.execute("ALTER TABLE tracks ADD COLUMN created_at TEXT")
         # tracks from before upload times were kept: their last analysis is the best guess there is
         conn.execute("UPDATE tracks SET created_at = analyzed_at WHERE created_at IS NULL")
+        if "daily_asks" not in {r[1] for r in conn.execute("PRAGMA table_info(limit_overrides)")}:
+            conn.execute("ALTER TABLE limit_overrides ADD COLUMN daily_asks INTEGER")  # from before Ask Claude (TAS-67)
         label_cols = {r[1] for r in conn.execute("PRAGMA table_info(track_labels)")}
         for col, ddl in (("kept", "INTEGER NOT NULL DEFAULT 0"), ("tastr_bpm", "REAL"), ("tastr_key", "TEXT")):
             if col not in label_cols:
@@ -732,6 +746,33 @@ def delete_search(conn: sqlite3.Connection, owner: str | None, search_id: int) -
         return conn.execute("DELETE FROM saved_searches WHERE id = ? AND owner IS ?", (search_id, owner)).rowcount > 0
 
 
+def list_templates(conn: sqlite3.Connection, owner: str | None) -> list[dict[str, Any]]:
+    """One person's Strudel templates, oldest first (the order they show as chips)."""
+    rows = conn.execute("SELECT id, name, text, updated_at FROM strudel_templates WHERE owner IS ? ORDER BY id", (owner,))
+    return [{"id": r["id"], "name": r["name"], "text": r["text"], "updated_at": r["updated_at"]} for r in rows]
+
+
+def add_template(conn: sqlite3.Connection, owner: str | None, name: str, text: str) -> dict[str, Any]:
+    now = _now()
+    with conn:
+        tid = conn.execute("INSERT INTO strudel_templates (owner, name, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                           (owner, name, text, now, now)).lastrowid
+    return {"id": tid, "name": name, "text": text, "updated_at": now}
+
+
+def update_template(conn: sqlite3.Connection, owner: str | None, template_id: int, name: str, text: str) -> dict[str, Any] | None:
+    now = _now()
+    with conn:
+        n = conn.execute("UPDATE strudel_templates SET name = ?, text = ?, updated_at = ? WHERE id = ? AND owner IS ?",
+                         (name, text, now, template_id, owner)).rowcount
+    return {"id": template_id, "name": name, "text": text, "updated_at": now} if n else None
+
+
+def delete_template(conn: sqlite3.Connection, owner: str | None, template_id: int) -> bool:
+    with conn:
+        return conn.execute("DELETE FROM strudel_templates WHERE id = ? AND owner IS ?", (template_id, owner)).rowcount > 0
+
+
 def list_lists(conn: sqlite3.Connection, owner: str | None) -> list[dict[str, Any]]:
     """One person's lists, oldest first, each with its track ids in the order they were added."""
     rows = conn.execute("SELECT id, name, created_at FROM lists WHERE owner IS ? ORDER BY id", (owner,)).fetchall()
@@ -986,36 +1027,38 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str | None) -> None:
 
 def get_override(conn: sqlite3.Connection, email: str, day: str) -> dict[str, Any] | None:
     """`email`'s limit change that still applies on `day`, or None. A "today only" change ends after its day."""
-    row = conn.execute("SELECT daily_tracks, daily_stems, until_day, set_by, set_at FROM limit_overrides "
+    row = conn.execute(f"SELECT {_OVERRIDE_COLS} FROM limit_overrides "
                        "WHERE email = ? AND (until_day IS NULL OR until_day >= ?)", (email, day)).fetchone()
     return _override(row) if row else None
 
 
+_OVERRIDE_COLS = "daily_tracks, daily_stems, daily_asks, until_day, set_by, set_at"
+
+
 def _override(row) -> dict[str, Any]:
-    tracks, stems_, until, by, at = row
-    return {"daily_tracks": tracks, "daily_stems": stems_, "until_day": until, "set_by": by, "set_at": at}
+    tracks, stems_, asks, until, by, at = row
+    return {"daily_tracks": tracks, "daily_stems": stems_, "daily_asks": asks, "until_day": until, "set_by": by, "set_at": at}
 
 
 def overrides(conn: sqlite3.Connection, day: str) -> dict[str, dict[str, Any]]:
     """Every limit change that still applies on `day`, by email."""
     return {r[0]: _override(r[1:]) for r in conn.execute(
-        "SELECT email, daily_tracks, daily_stems, until_day, set_by, set_at FROM limit_overrides "
-        "WHERE until_day IS NULL OR until_day >= ?", (day,))}
+        f"SELECT email, {_OVERRIDE_COLS} FROM limit_overrides WHERE until_day IS NULL OR until_day >= ?", (day,))}
 
 
 def set_override(conn: sqlite3.Connection, email: str, daily_tracks: int | None, daily_stems: int | None,
-                 until_day: str | None, set_by: str | None) -> None:
-    """Change `email`'s daily limits (None = the server default for that one); both None goes back to the defaults."""
+                 until_day: str | None, set_by: str | None, daily_asks: int | None = None) -> None:
+    """Change `email`'s daily limits (None = the server default for that one); all None goes back to the defaults."""
     with conn:
-        if daily_tracks is None and daily_stems is None:
+        if daily_tracks is None and daily_stems is None and daily_asks is None:
             conn.execute("DELETE FROM limit_overrides WHERE email = ?", (email,))
             return
-        conn.execute("INSERT OR REPLACE INTO limit_overrides VALUES (?, ?, ?, ?, ?, ?)",
-                     (email, daily_tracks, daily_stems, until_day, set_by, _now()))
+        conn.execute(f"INSERT OR REPLACE INTO limit_overrides (email, {_OVERRIDE_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (email, daily_tracks, daily_stems, daily_asks, until_day, set_by, _now()))
 
 
 def daily_cap(conn: sqlite3.Connection, email: str, kind: str, day: str, default: int) -> int:
-    """The daily cap on `kind` ("tracks" or "stems") for `email` on `day`: their override if one applies, else `default`."""
+    """The daily cap on `kind` ("tracks", "stems" or "asks") for `email` on `day`: their override if one applies, else `default`."""
     o = get_override(conn, email, day)
     v = o and o.get(f"daily_{kind}")
     return default if v is None else v

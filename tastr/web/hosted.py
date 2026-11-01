@@ -65,6 +65,7 @@ class Settings:
     bulk_at_once: int = 0
     daily_stems: int = 10
     daily_drums: int = 10  # "Detect drums with the model" runs per person per UTC day
+    daily_asks: int = 20  # "Ask Claude to change it" in Try this in > Strudel, per person per UTC day (tastr/web/claude.py)
     admins: tuple[str, ...] = ()  # emails that may open the admin view
     audio_days: float = 30  # uploaded audio and stems are deleted after this; 0 keeps them
     link_secret: str = ""  # signs the /pub/ links; without it they stop working when the server restarts
@@ -106,6 +107,7 @@ class Settings:
             bulk_at_once=int(env.get("TASTR_BULK_AT_ONCE", cls.bulk_at_once)),
             daily_stems=int(env.get("TASTR_DAILY_STEMS", cls.daily_stems)),
             daily_drums=int(env.get("TASTR_DAILY_DRUMS", cls.daily_drums)),
+            daily_asks=int(env.get("TASTR_DAILY_ASKS", cls.daily_asks)),
             admins=tuple(e.strip().lower() for e in env.get("TASTR_ADMIN_EMAILS", "").split(",") if e.strip()),
             audio_days=float(env.get("TASTR_AUDIO_DAYS", cls.audio_days)),
             link_secret=env.get("TASTR_LINK_SECRET", "").strip(),
@@ -142,7 +144,7 @@ class Settings:
 
     def limits(self) -> dict:
         return {"max_upload_mb": self.max_upload_mb, "max_minutes": self.max_minutes, "max_files": self.max_files, "daily_tracks": self.daily_tracks,
-                "daily_stems": self.daily_stems, "daily_drums": self.daily_drums, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses,
+                "daily_stems": self.daily_stems, "daily_drums": self.daily_drums, "daily_asks": self.daily_asks, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses,
                 "audio_days": self.audio_days}
 
 

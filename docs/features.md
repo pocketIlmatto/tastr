@@ -56,6 +56,20 @@ Everything a track card shows and what you can do with it. The [README](../READM
   filter sliders and a punchcard under the code. It can use your edits and the
   original audio cut into bars, either the full mix or separated stems, and start
   from any section. "Open in Strudel" opens it in strudel.cc, ready to play and remix.
+- **Strudel templates:** pick a template above the code: Full sketch (the sketch
+  above), Loop the drop (four bars of the drop with a filter slider), Drums only
+  (every section's drums with one line to switch the kit), Half-time remix, or
+  Mash-up (a second track's drop under this one, sped to line the bars up, with
+  the tracks that mix well in key listed first). Make your own: a template is
+  Strudel code with fill-ins like `{cpm}`, `{key}`, `{chords}`, `{drums.drop}` or
+  `{loop}`, filled from the open track. The editor lists every fill-in with its
+  value and previews the result live; templates are saved with your account and
+  move between servers with Export all / Import….
+- **Ask Claude to change it:** type what you want ("make the drums half-time and
+  add a filter sweep into the drop") and Claude rewrites the code; you see what
+  changed, and can undo it or save it as a template. On a shared server each person
+  has a daily number of asks; at home it uses your own `ANTHROPIC_API_KEY`
+  ([usage.md](usage.md#ask-claude-in-strudel-optional)). The code only runs in strudel.cc.
 
 <img src="images/strudel.png" width="560" alt="A generated Strudel sketch with the original audio">
 

@@ -8,7 +8,9 @@ const BROWSER = ["Audio", "Blob", "CustomEvent", "Event", "EventTarget", "FormDa
   "URLSearchParams", "Worker", "XMLHttpRequest", "atob", "cancelAnimationFrame", "clearInterval", "clearTimeout", "console",
   "document", "fetch", "innerWidth", "localStorage", "location", "matchMedia", "navigator", "performance",
   "requestAnimationFrame", "setInterval", "setTimeout", "window"];
-const PLAIN_SCRIPTS = ["STRUDEL_STEMS", "strudelCode", "strudelLink", "hpssHarmonic"]; // strudel.js, hpss.js
+const PLAIN_SCRIPTS = ["STRUDEL_STEMS", "strudelCode", "strudelLink", "hpssHarmonic", // strudel.js, hpss.js
+  "STRUDEL_TEMPLATES", "STRUDEL_NEW_TEXT", "strudelFillins", "strudelFill", "strudelUnfill", "strudelDiff", "strudelHunks",
+  "strudelSummary", "strudelMashFit", "strudelUsesAudio", "strudelUsesMash"];
 
 export default [
   {

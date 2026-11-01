@@ -27,7 +27,7 @@ from ..engine import rust
 from . import background
 from .context import STATIC_DIR, AppContext, _failure_reason, _hosted_error, log  # noqa: F401 - tests import these
 from .hosted import HEALTH_PATH, PUBLIC_PREFIX, TOKEN_HEADER, Settings, today
-from .routes import admin, analyze, edits, files, lists, media, search, tracks
+from .routes import admin, analyze, edits, files, lists, media, search, strudel, tracks
 
 # Every route about one track; on a hosted server only its owner gets past the login middleware.
 TRACK_PATH = re.compile(r"^/api/tracks/(\d+)(?:/|$)")
@@ -153,7 +153,8 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                "query_browser": {"base": "/sqljs/", "version": search.SQLJS_VERSION} if hosted else None}
         if hosted:
             with closing(ctx.conn()) as c:  # this person's own caps, with any change an admin made for them
-                out["limits"] |= {"daily_tracks": ctx.cap(c, user, "tracks"), "daily_stems": ctx.cap(c, user, "stems")}
+                out["limits"] |= {"daily_tracks": ctx.cap(c, user, "tracks"), "daily_stems": ctx.cap(c, user, "stems"),
+                                  "daily_asks": ctx.cap(c, user, "asks")}
         if admin:
             out["cf_links"] = settings.cf_links()  # {} without TASTR_CF_ACCOUNT_ID
         return out
@@ -176,7 +177,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     def health():
         return {"ok": True}
 
-    for area in (admin, tracks, media, files, edits, analyze, search, lists):
+    for area in (admin, tracks, media, files, edits, analyze, search, lists, strudel):
         app.include_router(area.router(ctx))
 
     page = versioned_index()

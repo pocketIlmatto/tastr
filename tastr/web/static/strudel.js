@@ -294,4 +294,199 @@ function strudelLink(code) {
   return `https://strudel.cc/#${encodeURIComponent(btoa(bin))}`;
 }
 
-if (typeof module !== "undefined") module.exports = { strudelCode, strudelLink, strudelLane, compactSteps, compactBars, STRUDEL_STEMS };
+
+// ---------- Templates (TAS-67) ----------
+// A template is Strudel code with {name} fill-ins, filled from the open track (strudelFillins). {{name}} keeps the braces.
+// "Full sketch" is strudelCode itself; the other built-ins are template text, so "Copy this one to edit" gives real text.
+const STRUDEL_TEMPLATES = [
+  { id: "full", name: "Full sketch", tip: "Every section's drums, bass and chords, in song order, with the original audio if you want it.",
+    text: "// {title}{by}: full sketch\n// {bpm} BPM, {key} ({camelot}).\n// Press Ctrl+Enter (Cmd+Enter on a Mac) to play, Ctrl+. to stop.\n\nsetcpm({cpm}) // 1 cycle = 1 bar\n\n{song}\n" },
+  { id: "loop", name: "Loop the drop", tip: "Four bars of the first drop from the original audio (or stems), with a filter slider to ride.",
+    text: "// {title}{by}: loop the drop, bars {drop}-{drop.end}\n// Press Ctrl+Enter to play. Drag the slider in the code to ride the filter.\n\nsetcpm({cpm}) // 1 cycle = 1 bar\n\n{audio}\n\nconst drums = {drums.drop}\n\nstack(\n  {loop}.lpf(slider(6000, 200, 12000)),\n  drums.bank(\"RolandTR909\").gain(.5),\n)\n" },
+  { id: "drums", name: "Drums only", tip: "Each section's drum pattern in song order, with one line to switch the drum machine.",
+    text: "// {title}{by}: the drums, section by section\n// Press Ctrl+Enter to play.\n\nsetcpm({cpm}) // 1 cycle = 1 bar\n\n// The kit: change the name and re-run. Try RolandTR808, RolandTR707, AkaiLinn or RolandCR78.\nconst kit = \"RolandTR909\"\n// Or switch kits every bar: const kit = \"<RolandTR909 RolandTR808>\"\n\n{drums.song}.bank(kit)\n" },
+  { id: "half", name: "Half-time remix", tip: "The drop at the same tempo but half the pace: drums spread over two bars, audio at half speed (an octave down).",
+    text: "// {title}{by}: half-time remix of the drop\n// Same tempo, half the pace. Each drum bar spreads over two, and the audio plays at half speed,\n// which also drops it an octave. Remove .speed(.5) to keep the pitch and hear it stutter instead.\n\nsetcpm({cpm}) // 1 cycle = 1 bar\n\n{audio}\n\nconst drums = {drums.drop}\n\nstack(\n  {loop}.slow(2).speed(.5).gain(.8),\n  drums.slow(2).bank(\"RolandTR808\").gain(.7),\n  note(\"{bass}\").struct(\"x ~ ~ ~\").slow(2).s(\"sawtooth\").lpf(250).gain(.5),\n)\n" },
+  { id: "mash", name: "Mash-up", tip: "Pick a second track: its drop plays under this one, sped to line the bars up.",
+    text: "// Mash-up: {title} with {b.title}\n// A: {bpm} BPM, {key} ({camelot}). B: {b.bpm} BPM, {b.key} ({b.camelot}).\n// B plays at speed {b.speed} so its bars line up with A. That also moves its pitch {b.shift}, to about {b.newkey}.\n\nsetcpm({cpm}) // 1 cycle = 1 bar of A\n\n{audio}\n{b.audio}\n\nstack(\n  {loop},\n  {b.loop}.speed({b.speed}).gain(.8),\n)\n" },
+];
+const STRUDEL_NEW_TEXT = "// {title}: my template\n// Fill-ins in curly braces come from the open track. Click one in the list to add it.\n\nsetcpm({cpm}) // 1 cycle = 1 bar\n\nconst drums = {drums.drop}\n\nstack(\n  drums.bank(\"RolandTR808\"),\n  note(\"{bass}\").struct(\"[~ x]*4\").s(\"sawtooth\").lpf(400).gain(.5),\n  chord(\"{chords}\").voicing().s(\"sawtooth\").lpf(1200).gain(.2),\n)\n";
+const FILL_RE = /\{\{([a-z][\w.]*)\}\}|\{([a-z][\w.]*)\}/gi;
+const strudelUsesAudio = (text) => /\{(audio|loop|track|stems\.\w+|b\.audio|b\.loop)\}/.test(text);
+const strudelUsesMash = (text) => /\{b\.[\w.]+\}/.test(text);
+
+// Camelot codes (8A = A minor, 8B = C major): each step round the wheel is a fifth.
+function strudelCamelot(tonic, mode) { return `${((tonic * 7 + (mode === "minor" ? 4 : 7)) % 12) + 1}${mode === "minor" ? "A" : "B"}`; }
+function camelotKey(code) { // "8A" -> { tonic: 9, mode: "minor" }
+  const m = /^(\d+)([AB])$/.exec(code || "");
+  if (!m) return null;
+  const minor = m[2] === "A", n = +m[1] - 1;
+  return { tonic: ((((n - (minor ? 4 : 7)) * 7) % 12) + 12) % 12, mode: minor ? "minor" : "major" };
+}
+function strudelCamelotNear(k) {
+  const m = /^(\d+)([AB])$/.exec(k || "");
+  if (!m) return [k];
+  const n = +m[1], l = m[2], w = (d) => ((n + d + 11) % 12) + 1;
+  return [k, `${w(-1)}${l}`, `${w(1)}${l}`, `${n}${l === "A" ? "B" : "A"}`];
+}
+// Playback speed that lines B's bars up with A's: A BPM / B BPM, folded by octaves into 0.71 to 1.42.
+function strudelSpeed(aBpm, bBpm) {
+  let r = aBpm / bBpm;
+  while (r > 1.42) r /= 2;
+  while (r < 0.71) r *= 2;
+  return Math.round(r * 1000) / 1000;
+}
+// How well track B ({bpm, camelot}) mixes under A at that speed: the pitch shift, B's key after it, and whether it fits.
+function strudelMashFit(a, b) {
+  const r = strudelSpeed(a.bpm, b.bpm), semis = 12 * Math.log2(r), k = camelotKey(b.camelot);
+  const nk = k ? { tonic: (((k.tonic + Math.round(semis)) % 12) + 12) % 12, mode: k.mode } : null;
+  const cam = nk ? strudelCamelot(nk.tonic, nk.mode) : null;
+  const fit = !cam || !a.camelot ? "key unknown" : cam === a.camelot ? "same key" : strudelCamelotNear(a.camelot).includes(cam) ? "mixes well" : "keys clash";
+  return { r, semis, nk, cam, fit, ok: fit === "same key" || fit === "mixes well", score: (fit === "same key" || fit === "mixes well" ? 0 : 10) + Math.abs(semis) };
+}
+
+const tplSec = (s, label) => s.secs.find((x) => x.label === label)
+  || (label === "drop" ? [...s.secs].sort((a, b) => (b.energy ?? 0) - (a.energy ?? 0))[0] || s.song[0] : null);
+const keyText = (k) => (k && typeof k.tonic === "number" ? `${STRUDEL_NOTES[k.tonic % 12]} ${k.mode || "major"}` : "unknown key");
+const quoteUrl = (u) => u.replace(/'/g, "%27");
+
+// The original audio (or picked stems) as samples, cut into bars, with orig(name, a, b). `v` names the helpers
+// ("" for track A; "B" for a mash-up's second track: samples b, origB(a, b)).
+function tplAudio(s, url, stems, v = "") {
+  if (!url) return { audio: "// (No original audio: this track's file isn't on the server, or the private link is still loading.)", loop: "silence" };
+  const drop = tplSec(s, "drop"), a = drop.start_bar, b = Math.min(a + 3, drop.end_bar != null ? drop.end_bar : a + 3);
+  const stemUrl = (n) => quoteUrl(url.replace(/\/audio$/, `/stems/${n}`)), names = stems && stems.length ? stems : null;
+  const lc = v.toLowerCase();
+  const lines = v ? [`samples({ ${lc}: '${quoteUrl(url)}' })`]
+    : ["// The original audio, cut into bars at the detected downbeats. Single quotes on purpose: double quotes mean a pattern.",
+      names ? `samples({\n${names.map((n) => `  ${n}: '${stemUrl(n)}',`).join("\n")}\n})` : `samples({ orig: '${quoteUrl(url)}' })`];
+  lines.push(`const ${lc}len = ${s.c.duration.toFixed(3)}, ${lc}bar = ${s.bar.toFixed(4)}, ${lc}first = ${s.first.toFixed(3)} // seconds: track, one bar, first downbeat`,
+    v ? `// orig${v}(a, b): bars a to b of the second track, one bar per cycle` : "// orig(name, a, b): bars a to b, one bar per cycle",
+    v ? `const orig${v} = (a, b) => {` : "const orig = (name, a, b) => {",
+    "  const k = run(b - a + 1).slow(b - a + 1).add(a - 1)",
+    `  return s(${v ? `"${lc}"` : "name"}).begin(k.mul(${lc}bar).add(${lc}first).div(${lc}len)).end(k.add(1).mul(${lc}bar).add(${lc}first).div(${lc}len)).clip(1)`,
+    "}");
+  const loop = v ? `orig${v}(${a}, ${b})` : names ? `stack(${names.map((n) => `orig("${n}", ${a}, ${b})`).join(", ")})` : `orig("orig", ${a}, ${b})`;
+  return { audio: lines.join("\n"), loop, a, b };
+}
+
+// Every fill-in for this track: name -> { v: value, d: what it is }.
+// ctx: { audioUrl, stems, edits, startBar, b: { card, audioUrl } for a mash-up's second track }.
+function strudelFillins(c, ctx = {}) {
+  const s = sketchInputs(c, ctx.audioUrl, ctx.edits), key = (c.core || {}).key || {}, src = c.source || {};
+  const ind = (n) => " ".repeat(n);
+  const patOf = (sec) => (sec && (s.mine("drums", sec) || s.pats[sec.idx])) || (s.det && s.det.data.pattern) || {};
+  const stackOf = (pat, pad = 0) => {
+    const lanes = Object.entries(pat || {}).filter(([, p]) => typeof p === "string").map(([lane, p]) => strudelLane(lane, p, s.beats)).filter(Boolean);
+    return lanes.length ? `stack(\n${ind(pad + 2)}${lanes.join(`,\n${ind(pad + 2)}`)}\n${ind(pad)})` : "silence";
+  };
+  const drop = tplSec(s, "drop"), dEnd = Math.min(drop.start_bar + 3, drop.end_bar != null ? drop.end_bar : drop.start_bar + 3);
+  // Harmony: the drop's own chords and bass (your edits when they're in), else the track's loop.
+  const hs = s.harmSecs[drop.idx], bs = s.bassSecs[drop.idx];
+  const chords = hs ? (hs.progression || []).map(okChord) : s.chordsArr;
+  const roots = bs && (bs.loop || []).length ? bs.loop.map(rootNote) : chords.map(rootNote);
+  const loopOf = (xs) => (xs.some((x) => x !== "~") ? `<${xs.join(" ")}>` : "~");
+  const full = strudelCode(c, ctx.audioUrl, ctx.stems, ctx.edits, ctx.startBar || 1).split("\n");
+  const at = full.findIndex((l) => l.startsWith("setcpm("));
+  const audio = tplAudio(s, ctx.audioUrl, ctx.stems);
+  const url = ctx.audioUrl ? quoteUrl(ctx.audioUrl) : "";
+  const labels = [...new Set([...s.secs.map((x) => x.label.replace(/[^\w]/g, "").toLowerCase()).filter(Boolean), "drop"])];
+  const f = {
+    title: { v: src.title || "Untitled", d: "Track title" },
+    by: { v: src.artist ? ` by ${src.artist}` : "", d: "\" by Artist\", or nothing if there's no artist" },
+    artist: { v: src.artist || "", d: "Artist" },
+    bpm: { v: s.hasBpm ? String(s.bpm) : "120", d: "Tempo" },
+    cpm: { v: `${s.cpmBpm}/${s.beats}`, d: "For setcpm(): one cycle per bar, from the bar grid" },
+    key: { v: s.keyStr, d: "Key" },
+    camelot: { v: key.camelot || "", d: "Camelot code" },
+    scale: { v: typeof key.tonic === "number" ? `${STRUDEL_NOTES[key.tonic % 12].toLowerCase()}:${key.mode || "major"}` : "c:major", d: "For .scale(): n(\"0 2 4\").scale(\"{scale}\")" },
+    chords: { v: loopOf(chords), d: "Chord loop, one per bar, for chord(\"…\")" },
+    bass: { v: loopOf(roots), d: "Bass roots, one per bar, for note(\"…\")" },
+    drums: { v: stackOf(patOf(drop)), d: "Drum pattern of the drop (or the loudest section)" },
+    ...Object.fromEntries(labels.map((l) => [`drums.${l}`, {
+      v: stackOf(patOf(l === "drop" ? drop : s.secs.find((x) => x.label.replace(/[^\w]/g, "").toLowerCase() === l))), d: `Drum pattern of the first ${l}` }])),
+    "drums.song": { v: `arrange(\n${s.song.map((sec) => {
+      const end = sec.end_bar != null ? sec.end_bar : sec.start_bar;
+      return `  [${end - sec.start_bar + 1}, ${stackOf(patOf(sec), 2)}], // ${sketchSecName(sec)}, bars ${sec.start_bar}-${end}`;
+    }).join("\n")}\n)`, d: "Every section's drums, in song order" },
+    song: { v: full.slice(at + 1).join("\n").replace(/^\n+/, ""), d: "The whole full sketch after setcpm: parts, song order and layers (follows the audio, stems and edits choices)" },
+    drop: { v: String(drop.start_bar), d: "First bar of the first drop" },
+    "drop.end": { v: String(dEnd), d: "Fourth bar of the first drop" },
+    audio: { v: audio.audio, d: "Loads the original audio (or the picked stems) and defines orig(name, a, b)" },
+    loop: { v: audio.loop, d: "Bars {drop}-{drop.end} of the audio, needs {audio}" },
+    track: { v: url ? `'${url}'` : "''", d: "Address of the original audio" },
+    ...Object.fromEntries(STRUDEL_STEMS.map((n) => [`stems.${n}`, { v: url ? `'${url.replace(/\/audio$/, `/stems/${n}`)}'` : "''", d: `Address of the ${n} stem (separate stems first)` }])),
+  };
+  const B = ctx.b && ctx.b.card;
+  if (B) {
+    const sb = sketchInputs(B, ctx.b.audioUrl, null), bk = (B.core || {}).key || {};
+    const fit = strudelMashFit({ bpm: s.bpm, camelot: key.camelot }, { bpm: sb.bpm, camelot: bk.camelot });
+    const ba = tplAudio(sb, ctx.b.audioUrl, null, "B");
+    Object.assign(f, {
+      "b.title": { v: (B.source && B.source.title) || "Untitled", d: "Second track: title" },
+      "b.bpm": { v: String(sb.bpm), d: "Second track: tempo" },
+      "b.key": { v: sb.keyStr, d: "Second track: key" },
+      "b.camelot": { v: bk.camelot || "", d: "Second track: Camelot code" },
+      "b.speed": { v: String(fit.r), d: "Playback speed that lines B's bars up with this track" },
+      "b.shift": { v: `${fit.semis >= 0 ? "up" : "down"} ${Math.abs(fit.semis).toFixed(1)} semitones`, d: "How far that speed moves B's pitch" },
+      "b.newkey": { v: fit.nk ? `${keyText(fit.nk)} (${fit.cam}, ${fit.fit})` : "an unknown key", d: "B's key after the speed change" },
+      "b.audio": { v: ba.audio, d: "Loads the second track and defines origB(a, b)" },
+      "b.loop": { v: ba.loop, d: "Four bars of the second track's drop, needs {b.audio}" },
+    });
+  }
+  return f;
+}
+
+// Fill a template: {{name}} stays as {name}; an unknown {name} stays as written and is reported.
+function strudelFill(text, f) {
+  const unknown = new Set();
+  const code = text.replace(FILL_RE, (m, lit, name) => {
+    if (lit) return `{${lit}}`;
+    if (Object.prototype.hasOwnProperty.call(f, name)) return f[name].v;
+    unknown.add(name);
+    return m;
+  });
+  return { code, unknown: [...unknown] };
+}
+// Swap this track's values back for fill-ins (title, cpm, Camelot, key, BPM). `escape`: first turn braces that look
+// like fill-ins into {{name}}, for code (Claude's version) saved as a template.
+function strudelUnfill(code, f, escape = true) {
+  let t = escape ? code.replace(/\{([a-z][\w.]*)\}/gi, "{{$1}}") : code;
+  for (const k of ["title", "cpm", "camelot", "key", "bpm"]) {
+    const v = f[k] && f[k].v;
+    if (v && v.length > 1 && v !== "unknown key") t = t.split(v).join(`{${k}}`);
+  }
+  return t;
+}
+// Line diff (LCS): [[" " | "-" | "+", line]]. Fine for a few hundred lines.
+function strudelDiff(a, b) {
+  const A = a.split("\n"), B = b.split("\n"), n = A.length, m = B.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && A[i] === B[j]) { out.push([" ", A[i]]); i++; j++; }
+    else if (i < n && (j >= m || L[i + 1][j] >= L[i][j + 1])) out.push(["-", A[i++]]);
+    else out.push(["+", B[j++]]);
+  }
+  return out;
+}
+// The changed lines with `context` lines around them, and null where lines are skipped (shown as ⋯).
+function strudelHunks(diff, context = 1) {
+  const keep = diff.map((_, i) => diff.slice(Math.max(0, i - context), i + context + 1).some(([m]) => m !== " "));
+  const out = [];
+  diff.forEach((d, i) => { if (keep[i]) { if (out.length && !keep[i - 1]) out.push(null); out.push(d); } });
+  return out;
+}
+// What Claude gets to know about the track along with the code: tempo, meter, key and the sections.
+function strudelSummary(c) {
+  const s = sketchInputs(c, null, null), src = c.source || {};
+  return [`${src.title || "Untitled"}${src.artist ? " by " + src.artist : ""}`,
+    `${s.hasBpm ? s.bpm + " BPM" : "tempo unknown"}, ${s.beats}/4, ${s.keyStr}${((c.core || {}).key || {}).camelot ? ` (${c.core.key.camelot})` : ""}`,
+    `Sections: ${s.secs.length ? s.secs.map((x) => `${sketchSecName(x)} bars ${x.start_bar}-${x.end_bar != null ? x.end_bar : x.start_bar}`).join("; ") : "none detected"}`].join("\n").slice(0, 1900);
+}
+
+if (typeof module !== "undefined") module.exports = { strudelCode, strudelLink, strudelLane, compactSteps, compactBars, STRUDEL_STEMS,
+  STRUDEL_TEMPLATES, STRUDEL_NEW_TEXT, strudelFillins, strudelFill, strudelUnfill, strudelDiff, strudelHunks, strudelSummary,
+  strudelSpeed, strudelMashFit, strudelCamelot, strudelUsesAudio, strudelUsesMash };

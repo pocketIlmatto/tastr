@@ -183,9 +183,10 @@ class AppContext:
             log.exception("Recording storage per person failed")
 
     def cap(self, c: sqlite3.Connection, user: str, kind: str) -> int:
-        """Today's cap on `kind` ("tracks" or "stems") for `user`: an admin's change to it, else the server's."""
+        """Today's cap on `kind` ("tracks", "stems" or "asks") for `user`: an admin's change to it, else the server's."""
         s = self.settings
-        return db.daily_cap(c, user, kind, today(), s.daily_tracks if kind == "tracks" else s.daily_stems)
+        default = {"tracks": s.daily_tracks, "stems": s.daily_stems, "asks": s.daily_asks}[kind]
+        return db.daily_cap(c, user, kind, today(), default)
 
     def require_admin(self, request: Request) -> str:
         if not self.hosted or request.state.user not in self.settings.admins:

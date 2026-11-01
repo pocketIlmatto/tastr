@@ -102,3 +102,20 @@ def test_every_kind_of_sketch_evaluates():
     assert all(results)
     assert any("lpsync" in e[2] for e in results[2])
     assert [e[0] for e in at(results[3], "s", "bd")] == [0, 1, 2, 3]  # one bar of 3/4 per cycle
+
+
+def test_every_built_in_template_plays():
+    """The templates (TAS-67), filled from a track and a mash-up partner, evaluate and play in Strudel."""
+    from test_strudel import run_tpl, tpl_card
+
+    b = with_grid(card(["Dm", "Bb"]), first=0.2, bar=240 / 128)
+    b["id"], b["core"]["bpm"], b["core"]["key"] = 8, 128, {"tonic": 2, "mode": "minor", "camelot": "7A"}
+    codes = run_tpl("STRUDEL_TEMPLATES.map((t) => strudelFill(t.text, strudelFillins(c, { audioUrl: url, b: { card: b, audioUrl: url } })).code)"
+                    " .concat([strudelFill(STRUDEL_NEW_TEXT, strudelFillins(c)).code])", c=tpl_card(), b=b, url=AUDIO)
+    results = play(*[(c, 16, 18) for c in codes])
+    assert all(results), [len(r) for r in results]
+    loop, drums, half, mash = results[1], results[2], results[3], results[4]
+    assert at(loop, "s", "orig") and at(loop, "s", "bd")
+    assert {e[2].get("bank") for e in at(drums, "s", "bd")} == {"RolandTR909"}
+    assert at(half, "speed", 0.5)
+    assert at(mash, "s", "b") and at(mash, "s", "orig")

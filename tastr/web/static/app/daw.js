@@ -2,7 +2,8 @@
 
 import { api, cap, h, isNum, progBar } from "./core.js";
 import { sectionBus } from "./card.js";
-import { allEdits, editedKeys, laneName } from "./groove.js";
+import { allEdits, editedKeys } from "./groove-edits.js";
+import { laneName } from "./groove-lanes.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
 
 // Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.

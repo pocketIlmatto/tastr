@@ -5,7 +5,7 @@ import { libActive, loadTracks, refresh, renderList, visibleTracks } from "./lib
 import { setInReview } from "./labels.js";
 import { renderCard } from "./card.js";
 import { serverCfg } from "./daw.js";
-import { dropEdits, flushEdits } from "./groove.js";
+import { dropEdits, flushEdits } from "./groove-edits.js";
 import { runDrumModel, setStems, stemsBusy, stemsEta, stemsLabel } from "./menu.js";
 
 // Selection is by track id, so it survives filtering and sorting.

@@ -3,11 +3,13 @@
 import { $, VIBE_GROUPS, VIBE_MIN, api, currentId, groupOf, h, isNum, mmss, setCurrentId, tagHelp, vibeHelp } from "./core.js";
 import { bpmFilter, camelotNear, keyFilter, lib, syncCardFilters, vibeFilter, visibleTracks } from "./library.js";
 import { setDrumModelOn, setLookupProviders } from "./bulk.js";
-import { camPc, charts, labelBar, labelOpen, setLabelOpen, setMarkHook } from "./labels.js";
+import { camPc, charts, labelOpen, setLabelOpen, setMarkHook } from "./labels.js";
+import { labelBar } from "./label-bar.js";
 import { DAWS, daw, dawText, keyName, setDaw, strudelView } from "./daw.js";
 import { delay, trackAudio } from "./audio.js";
 import { energyChart } from "./chart.js";
-import { grooveView, loadEdits, savedEdits } from "./groove.js";
+import { grooveView } from "./groove.js";
+import { loadEdits, savedEdits } from "./groove-edits.js";
 import { audioCtx, player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { pollStems, stemStatus, stemsBusy, trackMenu } from "./menu.js";
 import { setStatus } from "./upload.js";
@@ -157,7 +159,8 @@ const METER_TIP = { detected: "Time signature, detected from how the beats group
 
 export let shownCard = null;
 
-export function renderCard(c) {
+// A fresh card: stop what's playing, close an expanded chart, start the card's own section bus, and load its saved edits.
+function resetForCard(c) {
   setLookupProviders(c.lookup_providers || []);
   setDrumModelOn(!!c.drum_model_available);
   shownCard = c;
@@ -167,83 +170,96 @@ export function renderCard(c) {
   if (c.stems_state && !stemsBusy(stemStatus.get(c.id) || {})) { stemStatus.set(c.id, { state: c.stems_state }); pollStems(); } // a fresh card knows best
   sectionBus = new EventTarget();
   setMarkHook(null); charts.clear();
+}
+
+// BPM and key stats; a click filters the library to tracks that mix with this one.
+function bpmStat(core) {
+  if (!isNum(core.bpm)) return stat("–", "BPM");
+  const sure = sureness(core.bpm_likely_correct, core.bpm_confidence);
+  return statBtn("bpm", core.bpm.toFixed(1), sure ? `BPM · ${sure.text}` : "BPM",
+    [sure && sure.title, `Click to show tracks from ${Math.round(core.bpm - 5)} to ${Math.round(core.bpm + 5)} BPM.`].filter(Boolean).join(" "), () => bpmFilter(core.bpm));
+}
+function keyStat(key) {
+  const sure = key && isNum(key.likely_correct) ? sureness(key.likely_correct) : null;
+  if (!key || !key.camelot) return stat(key ? `${keyName(key)}` : "–", key ? [key.scale, sure && sure.text].filter(Boolean).join(" · ") || "key" : "key", sure && sure.title);
+  return statBtn("key", keyName(key), [key.camelot, key.scale, sure && sure.text].filter(Boolean).join(" · "),
+    [sure && sure.title, `Click to show tracks in ${key.camelot} and the keys that mix with it (${camelotNear(key.camelot).slice(1).join(", ")}).`].filter(Boolean).join(" "), () => keyFilter(key.camelot));
+}
+const energyStat = (core) => h("div", { class: "stat" },
+  h("b", {}, isNum(core.energy) ? core.energy.toFixed(2) : "–"),
+  h("span", {}, "energy"),
+  h("div", { class: "meter" }, h("i", { style: `width:${isNum(core.energy) ? Math.max(0, Math.min(1, core.energy)) * 100 : 0}%` })));
+
+// The card head: title and menu, artist, the stats, the catalog line, and the label bar.
+function cardHead(c) {
   const core = c.core || {};
-  const key = core.key;
-  const bpmSure = isNum(core.bpm) ? sureness(core.bpm_likely_correct, core.bpm_confidence) : null;
-  const keySure = key && isNum(key.likely_correct) ? sureness(key.likely_correct) : null;
-  const root = $("card");
-  root.replaceChildren();
-  root.dataset.id = c.id;
   const head = h("div", { class: "card-head" },
     h("div", { class: "title-row" }, h("h2", {}, (c.source && (c.source.title || c.source.uri)) || `Track ${c.id}`), trackMenu(c)),
     h("p", { class: "card-sub" + (c.source.artist ? "" : " muted") }, [c.source.artist, c.source.album].filter(Boolean).join(" · ") || "No artist or album in the file tags"),
     stat(mmss(c.duration), "duration"),
-    isNum(core.bpm)
-      ? statBtn("bpm", core.bpm.toFixed(1), bpmSure ? `BPM · ${bpmSure.text}` : "BPM",
-        [bpmSure && bpmSure.title, `Click to show tracks from ${Math.round(core.bpm - 5)} to ${Math.round(core.bpm + 5)} BPM.`].filter(Boolean).join(" "), () => bpmFilter(core.bpm))
-      : stat("–", "BPM"),
-    key && key.camelot
-      ? statBtn("key", keyName(key), [key.camelot, key.scale, keySure && keySure.text].filter(Boolean).join(" · "),
-        [keySure && keySure.title, `Click to show tracks in ${key.camelot} and the keys that mix with it (${camelotNear(key.camelot).slice(1).join(", ")}).`].filter(Boolean).join(" "), () => keyFilter(key.camelot))
-      : stat(key ? `${keyName(key)}` : "–", key ? [key.scale, keySure && keySure.text].filter(Boolean).join(" · ") || "key" : "key", keySure && keySure.title),
+    bpmStat(core),
+    keyStat(core.key),
     isNum(core.bpm) ? stat(`${beatsPerBar(c)}/4`, core.meter_set ? "time · set by you" : "time", core.meter_set ? METER_TIP.set : METER_TIP.detected) : null
   );
-  const en = h("div", { class: "stat" },
-    h("b", {}, isNum(core.energy) ? core.energy.toFixed(2) : "–"),
-    h("span", {}, "energy"),
-    h("div", { class: "meter" }, h("i", { style: `width:${isNum(core.energy) ? Math.max(0, Math.min(1, core.energy)) * 100 : 0}%` }))
-  );
-  head.append(en);
+  head.append(energyStat(core));
   const listed = lookupLine(c);
   if (listed) head.append(listed);
   head.append(h("div", { class: "card-filter", "data-kind": "head", hidden: "" }));
   if (labelOpen !== null && labelOpen !== c.id) setLabelOpen(null);
   head.append(labelBar(c));
-  root.append(head);
+  return head;
+}
 
-  if (c.metadata) root.append(metadataSection(c.metadata));
-
-  const energy = c.series && c.series.energy;
-  if (energy && energy.times && energy.times.length > 1 || (c.sections || []).length) {
-    root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration, c)]));
-  }
-
-  if ((c.tags || []).length) {
-    root.append(section("vibe", "Vibe", [vibeBody(c)]));
-  }
-
-  // Template drum patterns are tempo-based guesses: they live in the Drums part's Pattern picker, not as grids or in the Try list.
-  const isTemplate = (s) => s.data && s.data.origin === "template";
-  const templates = (c.suggestions || []).filter(isTemplate);
-  const sugs = (c.suggestions || []).filter((s) => !isTemplate(s));
+// Drums, bass & chords, when the card has any of them (or a template drum pattern to start from).
+function grooveSection(c, sugs, templates) {
+  const key = (c.core || {}).key;
   const detGroove = sugs.find((s) => s.data && s.data.origin === "detected" && s.data.pattern && typeof s.data.pattern === "object");
   const bassSug = sugs.find((s) => s.category === "bass" && s.data && Array.isArray(s.data.loop));
   const chordSug = sugs.find((s) => s.category === "harmony" && s.data && Array.isArray(s.data.progression));
   const hasKey = key && isNum(key.tonic);
-  if (detGroove || templates.length || (hasKey && (bassSug || chordSug))) {
-    root.append(section("groove", "Drums, bass & chords", [grooveView(c, detGroove, bassSug, chordSug, templates)]));
-  }
-  if (sugs.length) {
-    const pick = h("select", { class: "daw-pick", "aria-label": "Your DAW", onchange: (e) => {
-      setDaw(e.target.value);
-      try { localStorage.setItem("tastr-daw", daw); } catch (_) {}
-      renderCard(c);
-    } }, Object.entries(DAWS).map(([k, v]) => h("option", { value: k, ...(k === daw ? { selected: "" } : {}), ...(v.soon ? { disabled: "" } : {}) }, v.soon ? `${v.name} (coming soon)` : v.name)));
-    const groups = {};
-    for (const s of sugs) (groups[s.category || "other"] ||= []).push(s);
-    const body = [];
-    if (DAWS[daw].code) body.push(strudelView(c));
-    else for (const [cat, items] of Object.entries(groups)) {
-      body.push(h("h3", {}, cat));
-      for (const s of items) body.push(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, dawText(s))));
-    }
-    root.append(section("try", ["Try this in ", pick], body));
-  }
+  if (!(detGroove || templates.length || (hasKey && (bassSug || chordSug)))) return null;
+  return section("groove", "Drums, bass & chords", [grooveView(c, detGroove, bassSug, chordSug, templates)]);
+}
 
-  const errs = Object.entries(c.errors || {});
-  if (errs.length) {
-    root.append(h("div", { class: "errors" }, "Some stages failed: ", errs.map(([k, v]) => h("div", {}, `${k}: ${v}`))));
+// "Try this in [DAW ▾]": the Strudel view, or the ideas grouped by kind in the picked DAW's terms.
+function trySection(c, sugs) {
+  if (!sugs.length) return null;
+  const pick = h("select", { class: "daw-pick", "aria-label": "Your DAW", onchange: (e) => {
+    setDaw(e.target.value);
+    try { localStorage.setItem("tastr-daw", daw); } catch (_) {}
+    renderCard(c);
+  } }, Object.entries(DAWS).map(([k, v]) => h("option", { value: k, ...(k === daw ? { selected: "" } : {}), ...(v.soon ? { disabled: "" } : {}) }, v.soon ? `${v.name} (coming soon)` : v.name)));
+  const groups = {};
+  for (const s of sugs) (groups[s.category || "other"] ||= []).push(s);
+  const body = [];
+  if (DAWS[daw].code) body.push(strudelView(c));
+  else for (const [cat, items] of Object.entries(groups)) {
+    body.push(h("h3", {}, cat));
+    for (const s of items) body.push(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, dawText(s))));
   }
+  return section("try", ["Try this in ", pick], body);
+}
+
+export function renderCard(c) {
+  resetForCard(c);
+  const root = $("card");
+  root.replaceChildren();
+  root.dataset.id = c.id;
+  root.append(cardHead(c));
+  if (c.metadata) root.append(metadataSection(c.metadata));
+  const energy = c.series && c.series.energy;
+  if (energy && energy.times && energy.times.length > 1 || (c.sections || []).length) {
+    root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration, c)]));
+  }
+  if ((c.tags || []).length) root.append(section("vibe", "Vibe", [vibeBody(c)]));
+  // Template drum patterns are tempo-based guesses: they live in the Drums part's Pattern picker, not as grids or in the Try list.
+  const isTemplate = (s) => s.data && s.data.origin === "template";
+  const templates = (c.suggestions || []).filter(isTemplate), sugs = (c.suggestions || []).filter((s) => !isTemplate(s));
+  const groove = grooveSection(c, sugs, templates), tryIt = trySection(c, sugs);
+  if (groove) root.append(groove);
+  if (tryIt) root.append(tryIt);
+  const errs = Object.entries(c.errors || {});
+  if (errs.length) root.append(h("div", { class: "errors" }, "Some stages failed: ", errs.map(([k, v]) => h("div", {}, `${k}: ${v}`))));
   placeSections();
   syncCardFilters(visibleTracks().length);
 }

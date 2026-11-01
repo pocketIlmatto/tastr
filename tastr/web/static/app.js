@@ -84,7 +84,7 @@ function vibeBody(c) {
 let tracks = [];
 let tagsByTrack = {};
 let currentId = null;
-let labels = new Map(), reviewRows = []; // your labels by track id, and the review list (GET /api/labels, /api/review)
+let labels = new Map(), reviewRows = [], patternMarks = []; // your labels by track id, the review list and your pattern reviews (GET /api/labels, /api/review, /api/pattern-reviews)
 
 // ---------- helpers ----------
 function h(tag, attrs, ...kids) {
@@ -649,8 +649,8 @@ let reviewOn = false, labelOpen = null, reviewDone = 0, reviewTab = "todo";
 const JSON_PUT = (body) => ({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 async function loadReview(paint = true) {
   try {
-    const [q, labs] = await Promise.all([api("/api/review?limit=1000"), api("/api/labels")]);
-    reviewRows = q; labels = new Map(labs.map((l) => [l.track_id, l]));
+    const [q, labs, pats] = await Promise.all([api("/api/review?limit=1000"), api("/api/labels"), api("/api/pattern-reviews").catch(() => [])]);
+    reviewRows = q; labels = new Map(labs.map((l) => [l.track_id, l])); patternMarks = pats;
   } catch (_) { /* an older server, or offline: keep what we had */ }
   if (paint) renderList();
 }
@@ -687,7 +687,7 @@ function renderReview() {
   $("lib-review").setAttribute("aria-selected", String(reviewOn)); $("lib-tracks").setAttribute("aria-selected", String(!reviewOn));
   $("review").hidden = !reviewOn; $("track-list").hidden = reviewOn; $("lib-tools").hidden = reviewOn || !tracks.length;
   if (!reviewOn) return;
-  $("rv-n-todo").textContent = `(${q.length})`; $("rv-n-done").textContent = `(${labels.size})`;
+  $("rv-n-todo").textContent = `(${q.length})`; $("rv-n-done").textContent = `(${reviewedLog().length})`;
   $("rv-tab-todo").setAttribute("aria-selected", String(reviewTab === "todo")); $("rv-tab-done").setAttribute("aria-selected", String(reviewTab === "done"));
   $("review").querySelector(".rv-intro").hidden = reviewTab !== "todo";
   if (reviewTab === "done") { renderReviewLog(); return; }
@@ -719,21 +719,36 @@ function labelDiffs(lab) {
   if (lab.boundaries) out.push(["chg", `${lab.boundaries.split(" ").length} section starts`]);
   return [...out, ...note];
 }
+// One pattern review as a log line: [kind, text], a Right mark "same", anything else "chg" (or "note" once stale).
+function patternDiff(m) {
+  const s = m.section, where = s ? ` in ${cap(s.label || "section")}${s.letter ? " " + s.letter : ""}` : m.end_bar ? ` in bars ${m.start_bar}-${m.end_bar}` : "";
+  const word = { right: "right", close: "close", way_off: "way off" }[m.verdict], name = cap(m.part);
+  const text = [word ? `${name} ${word}${where}` : `${name}${where}`, m.truth ? "right pattern saved" : null].filter(Boolean).join(": ");
+  return [m.stale ? "note" : m.verdict === "right" && !m.truth ? "same" : "chg", m.stale ? `${text} (older analysis)` : text];
+}
+// The log: every track with a label or a pattern review, newest first.
+function reviewedLog() {
+  const byId = new Map();
+  const at = (id, title, when) => { const r = byId.get(id) || { track_id: id, title, updated_at: "", diffs: [] }; if (String(when) > r.updated_at) r.updated_at = String(when); byId.set(id, r); return r; };
+  for (const lab of labels.values()) at(lab.track_id, lab.title, lab.updated_at).diffs.push(...labelDiffs(lab));
+  for (const m of patternMarks) at(m.track_id, m.title, m.updated_at).diffs.push(patternDiff(m));
+  return [...byId.values()].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+}
 function renderReviewLog() {
   const ul = $("review-list"), top = ul.scrollTop;
   ul.replaceChildren(); ul.setAttribute("aria-label", "Tracks you reviewed");
-  const rows = [...labels.values()].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
-  if (!rows.length) { ul.append(h("li", { class: "empty" }, "Nothing reviewed yet. Labels you save show up here.")); return; }
-  const fixed = rows.filter((lab) => labelDiffs(lab).some(([k]) => k === "chg")).length;
+  const rows = reviewedLog();
+  if (!rows.length) { ul.append(h("li", { class: "empty" }, "Nothing reviewed yet. Labels you save and patterns you mark show up here.")); return; }
+  const fixed = rows.filter((r) => r.diffs.some(([k]) => k === "chg")).length;
   ul.append(h("li", { class: "empty rv-logsum" }, `${rows.length} reviewed · Tastr was off on ${fixed}. `,
     h("button", { type: "button", class: "linklike", onclick: () => { Object.assign(lib, LIB_CLEAR(), { lab: "yes" }); syncTools(); setReview(false); } }, "Show them in the library"), " · ",
     h("button", { type: "button", class: "linklike", onclick: exportLabels }, "Download CSV")));
-  for (const lab of rows) {
-    const id = lab.track_id, title = lab.title || `Track ${id}`, at = Date.parse(lab.updated_at);
+  for (const r of rows) {
+    const id = r.track_id, title = r.title || `Track ${id}`, at = Date.parse(r.updated_at);
     ul.append(h("li", { class: currentId === id ? "active" : "", "data-id": id, tabindex: "0", role: "button", onclick: () => openTrack(id),
         onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openTrack(id); } } },
       h("div", { class: "rv-top" }, h("span", { class: "rv-t", title }, title), at ? h("time", { class: "rv-when", title: fmtUpLong(at) }, fmtUp(at)) : null),
-      h("ul", { class: "rv-diff" }, labelDiffs(lab).map(([k, t]) => h("li", { class: k }, t)))));
+      h("ul", { class: "rv-diff" }, r.diffs.map(([k, t]) => h("li", { class: k }, t)))));
   }
   ul.scrollTop = top;
 }
@@ -2713,7 +2728,49 @@ function grooveView(card, drumsSug, bassSug, harmSug, templates = []) {
   const panel = (part, title, kids, foot, nEdits) => h("div", { class: "part" + (nEdits ? " has-edits" : "") + (partOn(part) ? "" : " quiet"), "data-part": part },
     h("div", { class: "part-head" }, h("span", { class: "part-sm" }, smBtns(pSolo, pMute, part, part)), h("b", { class: "tip-title", tabindex: "0", "data-tip": PART_TIPS[part] }, title), foot ? h("span", { class: "muted part-foot" }, foot) : null,
       nEdits ? h("span", { class: "edit-pill" }, nEdits === true ? "Edited" : `${nEdits} edit${nEdits > 1 ? "s" : ""}`, " · ",
-        h("button", { type: "button", class: "linklike", "aria-label": `Revert the ${part} in ${secName() || "this track"}`, onclick: () => revert(part) }, "Revert")) : null), ...kids);
+        h("button", { type: "button", class: "linklike", "aria-label": `Revert the ${part} in ${secName() || "this track"}`, onclick: () => revert(part) }, "Revert")) : null), markRow(part, nEdits), ...kids);
+  // Your verdict on what was detected (pattern reviews, tastr/labels.py): Right, Close or Way off per part and section,
+  // and your edit saved as the right pattern, which a pattern benchmark scores the engine against. The server keys them
+  // by the section's bars, so they outlive a re-analysis; one whose pattern a re-analysis changed comes back "stale".
+  let marks = [];
+  const barsAt = (k) => (secs ? [secs[k].start_bar, secs[k].end_bar] : [0, 0]);
+  const markOf = (part, k = sel) => { const [a, b] = barsAt(k); return marks.find((m) => m.part === part && m.start_bar === a && m.end_bar === b) || null; };
+  const truthShape = (part, m) => (part === "drums" ? Object.fromEntries(Object.entries(m).filter(([, v]) => typeof v === "string"))
+    : part === "bass" ? { notes: m.notes.map((x) => x || null), rhythm: m.rhythm || null } : { chords: m.chords.map((x) => x || null) });
+  const putMark = async (part, change, k = sel) => {
+    const m = markOf(part, k) || {};
+    const body = { part, section: ek(k), verdict: m.verdict || null, truth: m.truth || null, note: m.note || null, ...change };
+    marks = await api(`/api/tracks/${card.id}/pattern-reviews`, JSON_PUT(body));
+  };
+  const mark = async (part, change, said) => {
+    try { await putMark(part, change); paint(true); say(said); loadReview(); } catch (e) { say(e.message); }
+  };
+  const rightEverywhere = async (part) => {
+    try { for (let k = 0; k < secs.length; k++) if (!(markOf(part, k) || {}).verdict) await putMark(part, { verdict: "right" }, k); } catch (e) { say(e.message); return; }
+    paint(true); say(`${cap(part)} marked right in every section you hadn't marked.`); loadReview();
+  };
+  if (card.id != null) api(`/api/tracks/${card.id}/pattern-reviews`).then((r) => { marks = r || []; paint(true); }).catch(() => {}); // an older server: no marks
+  const VERDICTS = [["right", "✓ Right", "right", "What was detected is right"], ["close", "≈ Close", "close", "Close: usable with small changes"], ["way_off", "✗ Way off", "way off", "Way off: what was detected is wrong"]];
+  function markRow(part, nEdits) {
+    if (card.id == null) return null;
+    const m = markOf(part), where = secName() || "this track";
+    const btns = VERDICTS.map(([v, label, word, tip]) => {
+      const on = !!m && m.verdict === v;
+      return h("button", { type: "button", class: `mark-btn ${v}`, "aria-pressed": String(on), title: `${tip} (${where})`,
+        onclick: () => mark(part, { verdict: on ? null : v }, on ? `Mark taken off the ${part} in ${where}.` : `Detected ${part} in ${where} marked ${word}.`) }, label);
+    });
+    const mine = truthShape(part, cur(part)), same = m && m.truth && JSON.stringify(m.truth) === JSON.stringify(mine);
+    const truthEl = nEdits && !same
+      ? h("button", { type: "button", class: "linklike", title: "Keep your edit as the right answer for this section. The pattern benchmark scores the engine against it.",
+        onclick: () => mark(part, { truth: mine }, `Your ${part} edit is saved as the right pattern for ${where}.`) }, m && m.truth ? "Save my edit as the right pattern again" : "Save my edit as the right pattern")
+      : m && m.truth ? h("span", { class: "mark-truth" }, same ? "Your edit is saved as the right pattern · " : "Right pattern saved · ",
+        h("button", { type: "button", class: "linklike", "aria-label": `Remove the right ${part} pattern saved for ${where}`, onclick: () => mark(part, { truth: null }, `Right ${part} pattern removed for ${where}.`) }, "Remove")) : null;
+    return h("div", { class: "mark-row" }, h("span", { class: "muted" }, "Detected:"),
+      h("span", { class: "mark-btns", role: "group", "aria-label": `Is the detected ${part} right in ${where}?` }, btns),
+      m && m.stale ? h("span", { class: "mark-stale", title: "A re-analysis changed this pattern after you marked it. Mark it again." }, "marked on an older analysis") : null,
+      secs && secs.length > 1 ? h("button", { type: "button", class: "linklike mark-all", title: `Mark the detected ${part} right in every section you haven't marked yet`, onclick: () => rightEverywhere(part) }, "Right everywhere else") : null,
+      truthEl);
+  }
   // Picking a template copies it into the section's drum edits, so playback picks it up on the next step.
   const srcStore = () => editsFor(card, "drumsrc"); // a function: restoring a version replaces the edits object
   // What the user's edits are measured against: the picked template, or what was detected.

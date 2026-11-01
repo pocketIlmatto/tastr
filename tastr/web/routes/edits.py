@@ -1,4 +1,4 @@
-"""Your edits to a track (drums, bass, chords) and their named versions, your labels and the review list."""
+"""Your edits to a track (drums, bass, chords) and their named versions, your labels, pattern reviews and the review list."""
 
 from __future__ import annotations
 
@@ -52,6 +52,37 @@ def router(ctx: AppContext) -> APIRouter:
         with closing(ctx.conn()) as c:
             ctx.track_or_404(c, track_id)
             return db.set_labels(c, track_id, clean)
+
+    # Your verdicts on the generated drums, bass and chords, per section (tastr/labels.py, "pattern reviews").
+    @api.get("/api/tracks/{track_id}/pattern-reviews")
+    def track_pattern_reviews(track_id: int):
+        from ... import labels
+
+        with closing(ctx.conn()) as c:
+            ctx.track_or_404(c, track_id)
+            return labels.pattern_reviews(c, track_id)
+
+    @api.put("/api/tracks/{track_id}/pattern-reviews")
+    def save_pattern_review(track_id: int, body: dict[str, Any] = Body(...)):
+        from ... import labels
+
+        with closing(ctx.conn()) as c:
+            ctx.track_or_404(c, track_id)
+            try:
+                return labels.save_pattern_review(c, track_id, body)
+            except labels.LabelError as e:
+                raise HTTPException(400, str(e)) from None
+
+    # Every pattern review, newest first: the Review tab's log shows them beside your labels.
+    @api.get("/api/pattern-reviews")
+    def all_pattern_reviews(request: Request):
+        from ... import labels
+
+        with closing(ctx.conn()) as c:
+            rows = labels.all_pattern_reviews(c, ctx.owner_of(request))
+        for r in rows:
+            r.pop("path", None)
+        return rows[::-1]
 
     @api.get("/api/review")
     def review(request: Request, limit: int = 20):

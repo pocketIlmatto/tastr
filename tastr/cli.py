@@ -52,8 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     lbs.add_parser("list", help="every labeled track")
     lc = lbs.add_parser("clear", help="remove a track's labels")
     lc.add_argument("track_id", type=int)
+    lbs.add_parser("patterns", help="your Right / Close / Way off marks on the generated drums, bass and chords")
     le = lbs.add_parser("export", help="write the labels as a `tastr bench manifest` CSV")
     le.add_argument("out")
+    le.add_argument("--patterns", action="store_true", help="write the pattern reviews as JSON instead")
     rv = sub.add_parser("review", help="tracks whose analysis is most likely wrong, to label first")
     rv.add_argument("--limit", type=int, default=20)
     st = sub.add_parser("stems", help="separate one track into vocals, bass, other and drums (needs tastr[stems])")
@@ -379,6 +381,17 @@ def _labels(args) -> int:
     if args.action == "list":
         for r in db.list_labels(conn):
             print(json.dumps(r, default=str))
+        return 0
+    if args.action == "patterns":
+        for r in labels.all_pattern_reviews(conn):
+            name = " - ".join(x for x in (r["artist"], r["title"]) if x) or f"track {r['track_id']}"
+            what = labels.VERDICT_NAMES.get(r["verdict"], "no verdict") + (", right pattern saved" if r["truth"] else "")
+            where = f"bars {r['start_bar']}-{r['end_bar']}" if r["end_bar"] else "whole track"
+            print(f"{r['track_id']:>5}  {name}  {r['part']} {where}: {what}{' (stale)' if r['stale'] else ''}")
+        return 0
+    if args.action == "export" and args.patterns:
+        n = labels.export_patterns(conn, args.out)
+        print(f"wrote {n} pattern reviews to {args.out}")
         return 0
     if args.action == "export":
         n = labels.export_manifest(conn, args.out)

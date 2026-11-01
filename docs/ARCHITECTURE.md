@@ -111,6 +111,7 @@ SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or
 - `lookups`: `(track_id, provider, status, bpm, key_name, fetched_at, result_json)`, what online catalogs list for the track (opt-in, `tastr/lookup/`, [lookup.md](lookup.md)). Kept across re-analysis.
 - `track_labels`: `(track_id, bpm, key_name, boundaries, note, updated_at, kept, tastr_bpm, tastr_key)`, your own labels for a track (`tastr/labels.py`). `kept` marks a "Keep as is"; `tastr_bpm` / `tastr_key` are Tastr's reading when it was saved. Never touched by analysis; exported as a bench manifest.
 - `review_flags`: `(track_id, state, updated_at)`, tracks you put in the review list (`flagged`) or took out of it (`skipped`). Kept across re-analysis.
+- `pattern_reviews`: `(track_id, part, start_bar, end_bar, verdict, truth_json, judged_json, stage_version, note, updated_at)`, your Right / Close / Way off on a generated drums, bass or chords pattern in one section, and the right pattern when you saved your edit as it (`tastr/labels.py`). Keyed by bars (0, 0 without sections) so it outlives re-analysis; `judged_json` and `stage_version` say what was judged, so a changed pattern shows the mark as stale.
 
 Example queries:
 

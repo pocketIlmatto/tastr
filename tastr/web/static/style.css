@@ -500,6 +500,17 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .mine-tag { color: var(--edit); font-weight: 600; }
 .edit-pill { font-size: 12px; color: var(--edit); border: 1px solid color-mix(in srgb, var(--edit) 50%, transparent); border-radius: 999px; padding: 0 8px; margin-left: auto; }
 .edit-pill .linklike { color: var(--edit); font-size: 12px; }
+/* Pattern reviews: your Right / Close / Way off on what was detected, per part and section */
+.mark-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: -2px 0 8px; font-size: 12px; }
+.mark-btns { display: inline-flex; gap: 4px; }
+.mark-btn { font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; }
+.mark-btn:hover { color: var(--fg); border-color: var(--muted); }
+.mark-btn.right[aria-pressed="true"] { color: var(--ok, #2f8f4e); border-color: currentColor; background: color-mix(in srgb, var(--ok, #2f8f4e) 12%, transparent); }
+.mark-btn.close[aria-pressed="true"] { color: var(--accent); border-color: currentColor; background: var(--accent-soft); }
+.mark-btn.way_off[aria-pressed="true"] { color: var(--warn); border-color: currentColor; background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.mark-stale { color: var(--muted); font-style: italic; }
+.mark-row .linklike { font-size: 12px; }
+.mark-truth { color: var(--edit); }
 .part.has-edits { border-top-color: color-mix(in srgb, var(--edit) 60%, var(--line)); }
 /* Versions popover */
 .ver-wrap { position: relative; display: inline-block; }

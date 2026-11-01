@@ -25,7 +25,7 @@ ENGINES = ("python", "rust")
 # The stages every Rust card runs, with their versions (engine-rs/src/stages/mod.rs), as card.stages_run lists
 # them. Kept here so a server without the native library (the hosted web server checks browser cards against
 # it) knows them; tests/test_rust_switch.py checks them against the library.
-STAGES = {"core": "0.3.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.1.0"}
+STAGES = {"core": "0.4.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.1.0"}
 _LIB_NAMES = {"darwin": "libtastr_engine.dylib", "win32": "tastr_engine.dll"}
 _lock = threading.Lock()
 _lib: ctypes.CDLL | None = None

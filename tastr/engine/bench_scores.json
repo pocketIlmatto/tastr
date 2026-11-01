@@ -1,10 +1,10 @@
 {
   "scores": {
     "beatport-key": {
-      "exact": 0.491,
+      "exact": 0.501,
       "tracks": 1275,
       "what": "tracks, exact key",
-      "run": "2026-10-31"
+      "run": "2026-11-01"
     },
     "beatport-tempo": {
       "exact": 0.897,
@@ -19,10 +19,10 @@
       "run": "2026-10-31"
     },
     "giantsteps-key": {
-      "exact": 0.606,
+      "exact": 0.591,
       "tracks": 599,
       "what": "tracks, exact key",
-      "run": "2026-10-31"
+      "run": "2026-11-01"
     },
     "giantsteps-tempo": {
       "exact": 0.744,

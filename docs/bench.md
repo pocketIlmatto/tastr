@@ -257,6 +257,40 @@ minor refs (340) 0.711; 199 of 355 major songs read as minor. Of the 8 newly dec
 are major songs read as their parallel minor and 1 is other, so they match the rest. The confidence split
 holds (top half 0.678, bottom half 0.421). The minor lean (TAS-30) is still the thing to fix.
 
+### Minor lean (2026-11-01, TAS-30)
+
+GiantSteps and Beatport labels are 85% and 70% minor, so the fitted bias leans minor. On EDM that costs
+little; on FMA Keys it reads 56% of major songs as minor. `train_key` now adds `MAJOR_BONUS` to the 12 major
+keys' bias after fitting. Swept on the cached key profiles (`tastr key-profiles`): GiantSteps and Beatport
+on the alternating held-out halves, FMA Keys (never trained on) with the model fitted on both. Weighted
+score, and major songs read as minor out of 355:
+
+| Major bonus | FMA all | FMA major | FMA minor | Major read as minor | GiantSteps held out | Beatport held out |
+|---|---|---|---|---|---|---|
+| 0 (before) | 0.549 | 0.393 | 0.711 | 200 | 0.682 | 0.606 |
+| 0.25 | 0.566 | 0.436 | 0.702 | 174 | 0.677 | 0.608 |
+| **0.35 (shipped)** | **0.571** | **0.445** | **0.702** | **170** | **0.673** | **0.614** |
+| 0.45 | 0.580 | 0.468 | 0.696 | 155 | 0.670 | 0.624 |
+| 0.5 | 0.585 | 0.478 | 0.696 | 151 | 0.663 | 0.625 |
+| 0.75 | 0.583 | 0.504 | 0.665 | 130 | 0.651 | 0.605 |
+| 1.0 | 0.570 | 0.524 | 0.618 | 110 | 0.631 | 0.589 |
+| 1.5 | 0.553 | 0.599 | 0.504 | 54 | 0.538 | 0.525 |
+| class-balanced refit, +0 | 0.567 | 0.525 | 0.611 | 109 | 0.627 | 0.582 |
+| class-balanced refit, +0.25 | 0.572 | 0.571 | 0.574 | 73 | 0.578 | 0.561 |
+
+0.35 is the largest bonus that keeps GiantSteps within 0.01 of before; Beatport gains. 0.45 does better on
+FMA and on both EDM sets together, but GiantSteps drops 0.012 (within its half-to-half noise, which is why
+0.45 scores above 0.40 there). Refitting with major and minor tracks weighted equally evens out FMA's two
+modes but costs GiantSteps 0.055 and Beatport 0.024, so it was dropped.
+
+Full benches with the shipped model (core 0.4.0, Rust engine; GiantSteps and Beatport are in-sample): GiantSteps
+**0.669**, exact 59.1% (was 0.682 / 60.6%); Beatport **0.596**, exact 50.1% (was 0.587 / 49.1%); FMA Keys
+**0.572**, exact 49.8% (was 0.550 / 47.5%), major songs 0.447 (was 0.395), minor 0.702 (was 0.711). The key
+calibration was refit from the new held-out rows (1,721 tracks; held-out Brier raw 0.302, flat 0.248,
+calibrated 0.225). It is a modest fix: 168 of 355 FMA major songs are still read as minor, mostly as their
+parallel minor or a minor chord of their own key. The real fix is non-EDM major songs in the training set,
+for example from the other FMA Keys zips, with zip 0 kept for checking.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:

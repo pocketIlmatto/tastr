@@ -260,6 +260,23 @@ CREATE TABLE IF NOT EXISTS saved_searches (
 );
 CREATE INDEX IF NOT EXISTS idx_saved_searches_owner ON saved_searches(owner);
 
+-- Lists of tracks people save from Library > Actions or Explore > Blend, per person (owner as in saved_searches).
+-- A name is unique per owner, ignoring case. Deleting a track takes it out of every list.
+CREATE TABLE IF NOT EXISTS lists (
+    id         INTEGER PRIMARY KEY,
+    owner      TEXT,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lists_owner ON lists(owner);
+CREATE TABLE IF NOT EXISTS list_tracks (
+    list_id  INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    pos      INTEGER NOT NULL,
+    PRIMARY KEY (list_id, track_id)
+);
+CREATE INDEX IF NOT EXISTS idx_list_tracks_track ON list_tracks(track_id);
+
 -- Requests a hosted server refused for a missing or invalid Cloudflare Access token, per UTC day.
 CREATE TABLE IF NOT EXISTS blocked_requests (
     day     TEXT PRIMARY KEY,
@@ -713,6 +730,78 @@ def save_search(conn: sqlite3.Connection, owner: str | None, mode: str, name: st
 def delete_search(conn: sqlite3.Connection, owner: str | None, search_id: int) -> bool:
     with conn:
         return conn.execute("DELETE FROM saved_searches WHERE id = ? AND owner IS ?", (search_id, owner)).rowcount > 0
+
+
+def list_lists(conn: sqlite3.Connection, owner: str | None) -> list[dict[str, Any]]:
+    """One person's lists, oldest first, each with its track ids in the order they were added."""
+    rows = conn.execute("SELECT id, name, created_at FROM lists WHERE owner IS ? ORDER BY id", (owner,)).fetchall()
+    ids: dict[int, list[int]] = {r["id"]: [] for r in rows}
+    if ids:
+        marks = ",".join("?" * len(ids))
+        for lid, tid in conn.execute(f"SELECT list_id, track_id FROM list_tracks WHERE list_id IN ({marks}) "
+                                     "ORDER BY list_id, pos", list(ids)):
+            ids[lid].append(tid)
+    return [{"id": r["id"], "name": r["name"], "created_at": r["created_at"], "track_ids": ids[r["id"]]} for r in rows]
+
+
+def get_list(conn: sqlite3.Connection, owner: str | None, list_id: int) -> dict[str, Any] | None:
+    return next((x for x in list_lists(conn, owner) if x["id"] == list_id), None)
+
+
+def find_list(conn: sqlite3.Connection, owner: str | None, name: str) -> int | None:
+    r = conn.execute("SELECT id FROM lists WHERE owner IS ? AND lower(name) = lower(?)", (owner, name)).fetchone()
+    return r[0] if r else None
+
+
+def create_list(conn: sqlite3.Connection, owner: str | None, name: str) -> int:
+    with conn:
+        return conn.execute("INSERT INTO lists (owner, name, created_at) VALUES (?, ?, ?)", (owner, name, _now())).lastrowid
+
+
+def add_to_list(conn: sqlite3.Connection, list_id: int, track_ids: list[int]) -> int:
+    """Append tracks not already in the list, in the given order; returns how many were added."""
+    with conn:
+        pos = conn.execute("SELECT coalesce(max(pos), -1) FROM list_tracks WHERE list_id = ?", (list_id,)).fetchone()[0]
+        added = 0
+        for tid in dict.fromkeys(track_ids):
+            if conn.execute("INSERT OR IGNORE INTO list_tracks VALUES (?, ?, ?)", (list_id, tid, pos + 1)).rowcount:
+                pos += 1
+                added += 1
+    return added
+
+
+def set_list(conn: sqlite3.Connection, list_id: int, name: str | None, track_ids: list[int] | None) -> None:
+    """Rename a list and/or replace its tracks."""
+    with conn:
+        if name is not None:
+            conn.execute("UPDATE lists SET name = ? WHERE id = ?", (name, list_id))
+        if track_ids is not None:
+            conn.execute("DELETE FROM list_tracks WHERE list_id = ?", (list_id,))
+            conn.executemany("INSERT INTO list_tracks VALUES (?, ?, ?)",
+                             [(list_id, tid, i) for i, tid in enumerate(dict.fromkeys(track_ids))])
+
+
+def delete_list(conn: sqlite3.Connection, owner: str | None, list_id: int) -> bool:
+    with conn:
+        return conn.execute("DELETE FROM lists WHERE id = ? AND owner IS ?", (list_id, owner)).rowcount > 0
+
+
+def vibe_scores(conn: sqlite3.Connection, owner: str | None = None) -> dict[int, dict[str, float]]:
+    """Every vibe's 0-1 score per track, including the ones under the card's cut-off (Explore > Blend).
+
+    The card keeps them all in extras["tags.vibe_scores"]; cards from before that fall back to the tags table."""
+    where, args = ("WHERE t.owner = ?", (owner,)) if owner else ("", ())
+    out: dict[int, dict[str, float]] = {}
+    for tid, raw in conn.execute(
+            "SELECT c.track_id, json_extract(c.json, '$.extras.\"tags.vibe_scores\"') FROM cards c "
+            f"JOIN tracks t ON t.id = c.track_id {where}", args):
+        if raw:
+            out[tid] = {k: float(v) for k, v in json.loads(raw).items() if isinstance(v, (int, float))}
+    for tid, tag, score in conn.execute(
+            f"SELECT g.track_id, g.tag, g.score FROM tags g JOIN tracks t ON t.id = g.track_id {where}", args):
+        if score is not None:
+            out.setdefault(tid, {}).setdefault(tag, float(score))
+    return out
 
 
 def remap_edits(conn: sqlite3.Connection, track_id: int, old_bars: dict[int, tuple], new_bars: dict[int, tuple],

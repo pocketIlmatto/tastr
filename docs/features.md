@@ -78,11 +78,24 @@ Everything a track card shows and what you can do with it. The [README](../READM
   separate stems or delete, for one track or a whole selection. Bulk reload, re-analyze and look up run a few
   tracks at a time (`TASTR_BULK_AT_ONCE`; on a hosted server it follows `TASTR_MAX_ANALYSES`, at home about
   half the CPU cores); stems and the drum model run one at a time.
-- **Explore tab:** a BPM-energy chart, and **Find tracks** to search your library
-  without code (BPM, key and the keys that mix with it, energy, vibe, length,
-  sections, text, with AND/OR groups), or in read-only SQL with a table and column
-  reference. Save the searches you use as one-click chips, or start from the
-  examples. "Edit as SQL" shows the SQL behind a search.
+- **Explore tab**, in two tabs:
+  - **Find tracks** searches your library without code (BPM, key and the keys that mix with it, energy, vibe,
+    length, sections, text, with AND/OR groups), or in read-only SQL with a table and column reference. Save
+    the searches you use as one-click chips, or start from the examples. "Edit as SQL" shows the SQL behind a
+    search. In SQL mode, **History** under Run lists the last 30 queries you ran, newest first, with their row
+    count or error; click one to run it again. History is kept in your browser (per person on a shared
+    server); `Ctrl`/`⌘` `Enter` runs the query.
+  - **Blend** makes every track a point in a space of measurements you weight from 0 to 2: tempo (on a log
+    scale, so 70 sits next to 140), key (on the Camelot wheel, so 12A sits next to 1A), energy, and the
+    danceable, percussive, bass-heavy, dark and atmospheric scores. "Start from" sets the weights to Balanced,
+    Mixes well (tempo and key) or Same feel (energy and vibes). Tracks are sorted into 2 to 8 groups on a map,
+    each described by what sets it apart ("percussive, higher energy · 18 tracks · around 133 BPM"); click
+    one to pick it out. **Between two songs** lists the tracks nearest to a spot some share of the way from
+    one song to the other, or makes a 5-step path between them.
+  - **Lists**: save tracks as a list from Library › Select › Actions › "Save as a list…", from a group, a path
+    or a comparison. Blend compares two lists: how easy they are to tell apart, how they differ in each
+    measurement, the tracks in one that are most like the other, and tracks in neither that sit between them.
+    Lists are kept on the server, per person; deleting a track takes it out of every list.
 - **Two looks:** 808 (a drum-machine panel) and Technics (70s hi-fi), picked
   in the header.
 - **Keyboard shortcuts** for most things; press `?` for the list.

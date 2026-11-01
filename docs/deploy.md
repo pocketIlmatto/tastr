@@ -158,8 +158,10 @@ tracks stay until you delete them.
 
 ## Updating
 
-Run the **deploy** workflow (GitHub: **Actions > deploy > Run workflow**). It deploys Modal and then Fly from
-main, so both run the same engine. It needs three repository secrets (**Settings > Secrets and variables >
+Merge to main. When the **tests** workflow passes on main, the **deploy** workflow runs on its own and deploys
+Modal and then Fly, so both run the same engine. It skips the deploy when nothing that ships changed since the
+last one (a merge of only docs, tests or Markdown; the list of paths is in `.github/workflows/deploy.yml`). To
+deploy by hand, run it from **Actions > deploy > Run workflow**. It needs three repository secrets (**Settings > Secrets and variables >
 Actions**):
 
 | Secret | Where it comes from |

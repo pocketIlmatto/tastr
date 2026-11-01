@@ -69,6 +69,26 @@ well inside the quota.
   GitHub runners. Trigger them with `workflow_dispatch` or a schedule, add `timeout-minutes`,
   a `concurrency` group, and keep the job a thin client that hands work to Modal.
 
+## Deploy workflow
+
+`.github/workflows/deploy.yml` ships the hosted app (Modal, then Fly; [deploy.md](deploy.md#updating)). It
+doesn't watch pushes itself: it runs on `workflow_run` when the `tests` workflow completes on `main`, and only
+deploys when that run passed on a push (not a PR). So a merge that breaks the tests never reaches the app.
+
+- **What counts as a change that ships:** files under `tastr/`, `engine-rs/` or `deploy/`, `Dockerfile`,
+  `.dockerignore`, `fly.toml`, `pyproject.toml` and `deploy.yml` itself, compared with the commit of the last run
+  whose Fly step succeeded. A merge of only docs, tests, Markdown or other workflows is tested and not deployed.
+  An allowlist rather than `paths-ignore`, because `workflow_run` has no path filter and the Docker and Modal
+  images are built from exactly these paths.
+- **Out-of-order runs:** if `main` moved on by the time the run starts, it skips; the newer commit's run deploys,
+  so an older run can't roll the app back.
+- **Cost:** a skipped run is one short job (checkout and two API calls, under a minute). A deploy is about 3
+  minutes; the image builds on Fly's remote builder and Modal builds its own images, not the runner.
+- **Concurrency:** group `deploy`, never cancelled mid-deploy; a run waits for the one in progress.
+- **By hand:** **Actions > deploy > Run workflow** always deploys the chosen branch, with no scope check.
+- **Known gap:** the scope covers every commit since the last deploy, but the tests only ran on the newest. If an
+  earlier merge failed its tests and a later docs-only merge passes, the later run deploys the earlier code.
+
 ## README screenshots workflow
 
 The README screenshots are generated, not taken by hand, so they follow the UI.

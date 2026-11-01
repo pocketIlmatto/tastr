@@ -7,7 +7,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from ... import db, lookup, service, stems
+from ... import blobs, db, lookup, service, stems
 from ..context import AppContext, _failure_reason, _unprefixed, log, upload_dir
 
 
@@ -153,8 +153,8 @@ def router(ctx: AppContext) -> APIRouter:
         with closing(ctx.conn()) as c:
             if c.execute("SELECT 1 FROM tracks WHERE local_path = ?", (path,)).fetchone():
                 return
-        p.unlink(missing_ok=True)
-        if p.parent != root and not any(p.parent.iterdir()):
+        blobs.remove(p)  # here and in the audio bucket
+        if p.parent != root and p.parent.is_dir() and not any(p.parent.iterdir()):
             p.parent.rmdir()
 
     return api

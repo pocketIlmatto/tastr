@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import blobs
 from .engine.card import TrackCard
 
 DB_SCHEMA_VERSION = 1
@@ -730,7 +731,7 @@ def retag_track(conn: sqlite3.Connection, track_id: int) -> str:
     kind, local_path = row
     if kind != "file":
         return "not_file"
-    if not local_path or not Path(local_path).is_file():
+    if blobs.ensure(local_path) is None:  # brought back from the audio bucket if only it has the file
         return "no_file"
     card = load_card(conn, track_id)
     tags, info = read_file_meta(local_path)

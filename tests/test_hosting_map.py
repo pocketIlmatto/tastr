@@ -46,3 +46,8 @@ def test_map_names_modal_functions():
     app = next(ast.literal_eval(n.value) for n in tree.body
                if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "APP_NAME")
     assert fns and _missing([*fns, app]) == []
+
+
+def test_map_names_audio_bucket_settings():
+    names = re.findall(r'environ\.get\("(TASTR_AUDIO_[A-Z_]+)"', (ROOT / "tastr/blobs.py").read_text())
+    assert names and _missing(names) == []

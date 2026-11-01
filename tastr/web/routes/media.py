@@ -2,20 +2,16 @@
 
 from __future__ import annotations
 
-import mimetypes
 from contextlib import closing
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
-from ... import db, drum_jobs, stems
+from ... import blobs, db, drum_jobs, stems
 from ..context import AppContext, analysis_source, runs_on
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
 
-# Types the stdlib doesn't know everywhere; browsers need them to decode the stream.
-AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
-               ".ogg": "audio/ogg", ".aif": "audio/aiff", ".aiff": "audio/aiff", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
 # The Strudel sketch ("Try this in Strudel") loads the original audio and its stems from strudel.cc, so only
 # those endpoints answer CORS, and only for that origin.
 STRUDEL_ORIGINS = ("https://strudel.cc",)
@@ -33,6 +29,16 @@ def _strudel_cors(origin: str | None, preflight: bool = False) -> dict[str, str]
     return headers
 
 
+def _serve(path, origin: str | None, media: str | None = None):
+    """A file for playback: a redirect to a short-lived signed link when the audio bucket has it (the bytes then
+    never pass through this server; tastr/blobs.py), else the file here, with Range support either way."""
+    headers = _strudel_cors(origin)
+    if blobs.in_bucket(path):
+        return RedirectResponse(blobs.signed_url(path), status_code=302,
+                                headers={**headers, "Cache-Control": "private, no-store"})
+    return FileResponse(path, media_type=media or blobs.content_type(path), headers=headers)
+
+
 def router(ctx: AppContext) -> APIRouter:
     api = APIRouter()
 
@@ -46,8 +52,7 @@ def router(ctx: AppContext) -> APIRouter:
         path = ctx.audio_path(card)
         if path is None:
             raise HTTPException(404, "The original audio file is not on disk.")
-        media = AUDIO_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        return FileResponse(path, media_type=media, headers=_strudel_cors(origin))
+        return _serve(path, origin)
 
     def _preflight(origin: str | None) -> Response:
         if origin not in STRUDEL_ORIGINS:
@@ -127,9 +132,9 @@ def router(ctx: AppContext) -> APIRouter:
         if name not in stems.STEM_NAMES:
             raise HTTPException(404, f"Stems are {', '.join(stems.STEM_NAMES)}.")
         path = stems.stem_path(ctx.stems_dir(ctx.card_or_404(track_id), track_id), name)
-        if not path.is_file():
+        if not blobs.exists(path):
             raise HTTPException(404, "This track has not been separated into stems.")
-        return FileResponse(path, media_type="audio/flac", headers=_strudel_cors(origin))
+        return _serve(path, origin, "audio/flac")
 
     def _drum_model_status(track_id: int) -> dict[str, Any]:
         return {**ctx.drum_runs.status(track_id), "available": drum_jobs.available()}

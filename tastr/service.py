@@ -11,7 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import db
+from . import blobs, db
 from .engine import analyze_file, browser_card
 from .engine.card import Source, TrackCard
 from .ingest import file_sha256, resolve_inputs
@@ -74,7 +74,8 @@ def _analyze_audio(source: Source, options: dict | None, on_stage):
         card = remote.analyze(source.local_path, options, on_stage)
         card.source = source
         return card
-    return analyze_file(source.local_path, source=source, options=options, on_stage=on_stage)
+    local = blobs.ensure(source.local_path) or source.local_path  # brought back from the audio bucket if needed
+    return analyze_file(local, source=source, options=options, on_stage=on_stage)
 
 
 def _lookup(conn: sqlite3.Connection, track_id: int, card: TrackCard) -> None:
@@ -120,7 +121,7 @@ def reanalyze_track(conn: sqlite3.Connection, track_id: int, beats_per_bar: int 
     if card is None:
         return None
     source = card.source
-    if not source.local_path or not Path(source.local_path).is_file():
+    if not blobs.exists(source.local_path):  # here, or in the audio bucket
         raise FileNotFoundError(source.local_path or source.uri)
     old_bars = _section_bars(card)
     if beats_per_bar == KEEP:

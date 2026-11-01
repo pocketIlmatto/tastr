@@ -124,10 +124,10 @@ def fetch(dataset: str, path: str, archives: str = "") -> dict:
 
 
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)
-def stems(audio: bytes, suffix: str) -> dict[str, bytes]:
+def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:
     from tastr.cloud.jobs import run_stems
 
-    return run_stems(audio, suffix)
+    return run_stems(audio, suffix, put_urls)
 
 
 @app.local_entrypoint()

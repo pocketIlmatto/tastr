@@ -24,6 +24,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
+from . import blobs
+
 STEM_NAMES = ("vocals", "bass", "other", "drums")
 MODEL = "htdemucs"
 HF_REPO = "adefossez/HTDemucs"  # where Demucs 4.1 keeps MODEL on the Hugging Face Hub
@@ -59,11 +61,14 @@ def stem_path(folder: Path, name: str) -> Path:
 
 
 def is_ready(folder: Path) -> bool:
-    return all(stem_path(folder, n).is_file() for n in STEM_NAMES)
+    """Every stem is here, or in the audio bucket (tastr/blobs.py)."""
+    return all(stem_path(folder, n).is_file() for n in STEM_NAMES) or (
+        blobs.enabled() and all(blobs.in_bucket(stem_path(folder, n)) for n in STEM_NAMES))
 
 
 def remove(folder: Path) -> None:
     shutil.rmtree(folder, ignore_errors=True)
+    blobs.remove_tree(folder)
 
 
 def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None) -> None:
@@ -92,7 +97,7 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
     with _hub_offline_if_cached():
         model = get_model(MODEL)  # downloads the weights (about 80 MB) the first time
     model.eval()
-    wav = load_audio(audio_path, model.samplerate, mono=False)  # (channels, n); m4a/aac go through ffmpeg
+    wav = load_audio(blobs.ensure(audio_path) or audio_path, model.samplerate, mono=False)  # (channels, n); m4a/aac go through ffmpeg
     if wav.shape[0] < model.audio_channels:
         wav = np.repeat(wav[:1], model.audio_channels, axis=0)
     mix = torch.from_numpy(np.ascontiguousarray(wav[: model.audio_channels], dtype=np.float32))
@@ -164,7 +169,11 @@ def _default_device(torch) -> str:
 
 
 def separate_track(audio_path: str | Path, folder: Path, progress: Progress | None = None) -> None:
-    """Separate into a scratch folder, then move it into place, so a half-done run never looks ready."""
+    """Separate into a scratch folder, then move it into place, so a half-done run never looks ready. With
+    the audio bucket on, the stems end up there (and Modal writes them there itself)."""
+    if blobs.enabled() and backend() == "modal":
+        _separate_into_bucket(audio_path, folder, progress)
+        return
     tmp = folder.with_name(folder.name + ".partial")
     remove(tmp)
     try:
@@ -175,7 +184,26 @@ def separate_track(audio_path: str | Path, folder: Path, progress: Progress | No
         remove(folder)
         tmp.rename(folder)
     finally:
-        remove(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
+    for n in STEM_NAMES:
+        blobs.push(stem_path(folder, n))
+
+
+def _separate_into_bucket(audio_path: str | Path, folder: Path, progress: Progress | None) -> None:
+    """Modal uploads each stem to a signed link for its place in the bucket, so no stem passes through here.
+    The stems count as ready only once all of them are there."""
+    from .cloud import remote
+
+    if progress:
+        progress(0.05)  # Modal reports no progress; show that the job has started
+    blobs.remove_tree(folder)  # a failed earlier run may have left some
+    remote.stems(audio_path, {n: blobs.put_url(stem_path(folder, n)) for n in STEM_NAMES})
+    blobs.reset_listings()
+    missing = [n for n in STEM_NAMES if not blobs.in_bucket(stem_path(folder, n))]
+    if missing:
+        raise RuntimeError(f"Separation produced no {', '.join(missing)} stem")
+    if progress:
+        progress(1.0)
 
 
 class Jobs:
@@ -224,7 +252,7 @@ class Jobs:
         n = 0
         for marker in sorted(stems_root().glob("*.job")):
             folder, audio = marker.with_suffix(""), Path(marker.read_text().strip())
-            if is_ready(folder) or not audio.is_file():
+            if is_ready(folder) or not blobs.exists(audio):
                 marker.unlink(missing_ok=True)
                 continue
             log.info("Resuming stem separation for %s", audio)

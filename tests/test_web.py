@@ -483,7 +483,7 @@ def test_bench_scores_are_served(client, monkeypatch, tmp_path):
     from tastr.engine.bench import scores
 
     data = client.get("/api/bench").json()
-    for key in ("giantsteps-key", "beatport-key", "beatport-tempo", "giantsteps-tempo", "downbeat"):
+    for key in ("giantsteps-key", "beatport-key", "fma-keys", "beatport-tempo", "giantsteps-tempo", "downbeat"):
         r = data["scores"][key]
         assert 0 < r["exact"] <= 1 and r["tracks"] > 0 and r["run"]
     # A missing file serves no scores, so the Glossary keeps the numbers in its HTML.
@@ -505,7 +505,7 @@ def test_ui_has_the_glossary():
     static = Path(__file__).parents[1] / "tastr/web/static"
     html, js = (static / "index.html").read_text(), app_js()
     assert 'data-view="glossary"' in html and 'id="view-glossary"' in html
-    for key in ("giantsteps-key", "beatport-key", "beatport-tempo", "giantsteps-tempo", "downbeat"):
+    for key in ("giantsteps-key", "beatport-key", "fma-keys", "beatport-tempo", "giantsteps-tempo", "downbeat"):
         assert f'data-bench="{key}"' in html
     for needle in ("openGlossary", "camelotWheel", "glPlay", "/api/bench", "/api/patterns", '"What the vibes mean"'):
         assert needle in js

@@ -19,6 +19,7 @@ SCORES_PATH = Path(__file__).resolve().parent.parent / "bench_scores.json"
 BENCH_METRICS = {
     "giantsteps-key": ("key_correct", "tracks, exact key"),
     "beatport-key": ("key_correct", "tracks, exact key"),
+    "fma-keys": ("key_correct", "songs, exact key"),
     "giantsteps-tempo": ("acc1", "tracks, BPM within 4%"),
     "beatport-tempo": ("acc1", "tracks, BPM within 4%"),
 }

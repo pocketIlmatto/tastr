@@ -18,6 +18,12 @@
       "what": "songs, bar 1 right",
       "run": "2026-10-31"
     },
+    "fma-keys": {
+      "exact": 0.519,
+      "tracks": 1752,
+      "what": "songs, exact key",
+      "run": "2026-11-01"
+    },
     "giantsteps-key": {
       "exact": 0.591,
       "tracks": 599,

@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ... import blobs, db, service
 from ...engine import browser_card
 from ...ingest import AUDIO_EXTENSIONS, IngestError, is_url, resolve_inputs
+from ...markers import Markers
 from ..analysis_jobs import JobError, new_id, ref
 from ..context import AppContext, _failure_reason, _results, log, tastr_home, upload_dir
 from ..hosted import audio_minutes, names, stored_bytes, today
@@ -28,8 +30,52 @@ class UrlBody(BaseModel):
     url: str
 
 
+class UploadFileInfo(BaseModel):
+    name: str
+    size: int = Field(ge=0)
+
+
+class UploadsBody(BaseModel):
+    files: list[UploadFileInfo] = Field(min_length=1)
+
+
+class UploadRefused(BaseModel):
+    status: int = Field(0, ge=0, le=999)  # the bucket's HTTP status; 0 when the browser got no answer (CORS)
+
+
+def safe_name(name: str | None) -> str:
+    """A stored upload's file name: the one the user gave, without a path or unusual characters."""
+    return re.sub(r"[^\w.\- ]", "_", Path(name or "upload").name) or "upload"
+
+
+UPLOAD_MARKERS = "upload"  # job_markers kind for direct uploads given a link and not yet finished
+
+
+def prune_uploads(db_path, older_than: float = 2 * blobs.UPLOAD_SECONDS, now: float | None = None) -> int:
+    """Delete direct uploads that got a link but were never finished (the page closed, the file failed), from
+    the bucket and here; returns how many. Run by the expiry loop."""
+    marks = Markers(db_path, UPLOAD_MARKERS)
+    cutoff = (now if now is not None else time.time()) - older_than
+    n = 0
+    for upload_id, data, at in marks.items():
+        if at >= cutoff:
+            continue
+        p = upload_dir() / upload_id / str(data.get("name") or "upload")
+        try:
+            blobs.remove(p)
+        except Exception:  # noqa: BLE001 - the bucket is unreachable: try again next time
+            log.warning("couldn't remove the abandoned upload %s", upload_id)
+            continue
+        if p.parent.is_dir() and not any(p.parent.iterdir()):
+            p.parent.rmdir()
+        marks.remove(upload_id)
+        n += 1
+    return n
+
+
 def router(ctx: AppContext) -> APIRouter:
     api = APIRouter()
+    uploads = Markers(ctx.db_path, UPLOAD_MARKERS)
 
     # Plain `def` endpoints below run in FastAPI's threadpool, so slow analysis
     # doesn't block the event loop.
@@ -41,10 +87,10 @@ def router(ctx: AppContext) -> APIRouter:
         `card`: with TASTR_BROWSER_ENGINE on, the card the page made from a single uploaded file; the server
         stores it when it checks out and analyzes the file itself otherwise (or when it's missing or too big)."""
         if ctx.hosted:
-            check_upload(request.state.user, files)
+            check_upload(request.state.user, [f.filename or "" for f in files])
         paths: list[str] = []
         for f in files:
-            name = re.sub(r"[^\w.\- ]", "_", Path(f.filename or "upload").name) or "upload"
+            name = safe_name(f.filename)
             # The unique part is a folder, so the stored file keeps the name the user gave it (that is what the title falls back to).
             dest = upload_dir() / uuid.uuid4().hex[:8] / name
             dest.parent.mkdir()
@@ -57,18 +103,153 @@ def router(ctx: AppContext) -> APIRouter:
                     out.write(chunk)
             if ctx.hosted and size > ctx.settings.max_upload_bytes:
                 discard([dest, *map(Path, paths)])
-                raise ctx.refuse(request.state.user, 413, f"{name} is larger than {ctx.settings.max_upload_mb:g} MB.",
-                             f"upload size limit ({ctx.settings.max_upload_mb:g} MB)", name)
+                raise too_big(request.state.user, name)
             paths.append(str(dest))
-            minutes = audio_minutes(dest) if ctx.hosted else None
-            if minutes is not None and minutes > ctx.settings.max_minutes:
-                discard(map(Path, paths))
-                raise ctx.refuse(request.state.user, 413,
-                             f"{name} is {minutes:.0f} minutes long. This server analyzes tracks up to "
-                             f"{ctx.settings.max_minutes:g} minutes, so a long mix needs cutting into shorter files first.",
-                             f"track length limit ({ctx.settings.max_minutes:g} min)", f"{name}, {minutes:.0f} min")
+            check_minutes(request, paths, dest)
         sig = save_card(card[0], Path(paths[0])) if ctx.browser_engine and card and len(card) == len(paths) == 1 else {}
         store(paths, sig, request)
+        return begin(request, paths, sig, background)
+
+    # ---- uploads straight to the audio bucket (TASTR_DIRECT_UPLOAD, TAS-66) ----------------------------------
+    # The page asks for a signed link per file (the limits are checked here, before any bytes move), PUTs the file
+    # to the bucket itself, then calls /api/analyze/uploaded, which checks what arrived and analyzes it as above.
+    # Each link leaves a marker until the upload is finished; abandoned ones are deleted by `prune_uploads`.
+
+    def direct() -> bool:
+        return ctx.hosted and ctx.settings.direct_upload and blobs.enabled()
+
+    def upload_path(upload_id: str, user: str) -> Path:
+        """The stored path an upload link was made for, if it's this person's and still open; 404 otherwise."""
+        data = uploads.get(upload_id) if re.fullmatch(r"[0-9a-f]{8}", upload_id) else None
+        if not data or data.get("owner") != user:
+            raise HTTPException(404, "That upload has expired or was already used. Upload the file again.")
+        return upload_dir() / upload_id / data["name"]
+
+    def link(path: Path) -> dict[str, Any]:
+        return {"url": blobs.put_url(path, blobs.UPLOAD_SECONDS), "content_type": blobs.content_type(path),
+                "expires_in": blobs.UPLOAD_SECONDS}
+
+    @api.post("/api/uploads")
+    def new_uploads(body: UploadsBody, request: Request):
+        """Signed links to upload files straight to the audio bucket: {uploads: [{id, name, url, content_type,
+        expires_in}]}, one per file in order. PUT each file to its url with that Content-Type."""
+        if not direct():
+            raise HTTPException(404, "Uploads go through /api/analyze on this server.")
+        user = request.state.user
+        check_upload(user, [f.name for f in body.files])
+        for f in body.files:
+            if f.size > ctx.settings.max_upload_bytes:
+                raise too_big(user, safe_name(f.name))
+        out = []
+        for f in body.files:
+            upload_id, name = uuid.uuid4().hex[:8], safe_name(f.name)
+            uploads.put(upload_id, {"owner": user, "name": name, "size": f.size})
+            out.append({"id": upload_id, "name": name} | link(upload_dir() / upload_id / name))
+        return {"uploads": out}
+
+    @api.post("/api/uploads/{upload_id}/link")
+    def renew_link(upload_id: str, request: Request):
+        """A fresh link for an upload whose link ran out before the file got there."""
+        if not direct():
+            raise HTTPException(404, "Uploads go through /api/analyze on this server.")
+        path = upload_path(upload_id, request.state.user)
+        uploads.put(upload_id, uploads.get(upload_id))  # restarts the clock for `prune_uploads`
+        return {"id": upload_id, "name": path.name} | link(path)
+
+    @api.post("/api/analyze/uploaded")
+    def analyze_uploaded(request: Request, ids: list[str] = Form(...), background: bool = False,
+                         card: list[UploadFile] | None = File(None)):
+        """Analyze files the page uploaded to the bucket with /api/uploads links; the same answer as /api/analyze.
+        `ids`: the uploads' ids. `card`: as for /api/analyze, with a single file."""
+        if not direct():
+            raise HTTPException(404, "Uploads go through /api/analyze on this server.")
+        user = request.state.user
+        paths = [upload_path(i, user) for i in ids]  # all of them are this person's before anything is touched
+        check_upload(user, [p.name for p in paths])
+        kept = check_arrived(request, ids, paths)
+        for upload_id in ids:
+            uploads.remove(upload_id)
+        sig = save_card(card[0], paths[0]) if ctx.browser_engine and card and len(card) == len(paths) == 1 else {}
+        return begin(request, kept, sig, background)
+
+    @api.post("/api/uploads/{upload_id}/check")
+    def check_uploaded(upload_id: str, request: Request):
+        """Check one upload once the page has PUT it (it arrived, its size, it reads back, its length), before
+        it waits its turn for /api/analyze/uploaded. A refusal deletes the stored copy, as there."""
+        if not direct():
+            raise HTTPException(404, "Uploads go through /api/analyze on this server.")
+        path = upload_path(upload_id, request.state.user)
+        check_arrived(request, [upload_id], [path])
+        return {"id": upload_id, "name": path.name}
+
+    @api.post("/api/uploads/{upload_id}/failed")
+    def upload_refused(upload_id: str, body: UploadRefused, request: Request):
+        """The page says the bucket refused a PUT on a fresh link: a setup problem (the bucket's CORS rule, the
+        signing key), logged for the admin. The upload is closed; the page starts a new one to retry."""
+        if not direct():
+            raise HTTPException(404, "Uploads go through /api/analyze on this server.")
+        path = upload_path(upload_id, request.state.user)
+        why = f"HTTP {body.status}" if body.status else "no answer, likely the bucket's CORS rule"
+        ctx.event(request.state.user, "failed", f"The audio bucket refused the upload of {path.name} ({why})",
+                  ok=False, source="r2")
+        give_up([upload_id], [path])
+        return {"ok": True}
+
+    def check_arrived(request: Request, ids: list[str], paths: list[Path]) -> list[str]:
+        """What reached the bucket for each upload, read back into the cache and checked against the size and
+        length limits; refused uploads are deleted (all of them, as one request). Returns the stored paths."""
+        user = request.state.user
+        kept: list[str] = []
+        for upload_id, path in zip(ids, paths):
+            size = blobs.arrived(path)
+            if size is None:
+                raise HTTPException(409, f"{path.name} didn't reach storage. Upload it again.")
+            if size > ctx.settings.max_upload_bytes:
+                give_up(ids, paths)
+                raise too_big(user, path.name)
+            try:
+                blobs.ensure(path)  # tags, length and the file's hash are read from a local copy (the disk is a cache)
+            except Exception:
+                log.exception("couldn't read back the upload %s", upload_id)
+                give_up(ids, paths)
+                raise HTTPException(503, f"Couldn't read {path.name} back from storage. Upload it again.") from None
+            kept.append(str(path))
+            try:
+                check_minutes(request, kept, path)
+            except HTTPException:
+                give_up(ids, paths)
+                raise
+        return kept
+
+    def give_up(ids: list[str], paths: list[Path]) -> None:
+        """A refused direct upload: nothing of it stays, here or in the bucket."""
+        for upload_id, p in zip(ids, paths):
+            uploads.remove(upload_id)
+            try:
+                blobs.remove(p)
+            except Exception:  # noqa: BLE001 - `prune_uploads` can't see it any more; the expiry sweep will
+                log.warning("couldn't remove %s from the audio bucket", p.name)
+            if p.parent.is_dir() and not any(p.parent.iterdir()):
+                p.parent.rmdir()
+
+    # ---- shared by both kinds of upload ---------------------------------------------------------------------
+
+    def too_big(user: str, name: str) -> HTTPException:
+        return ctx.refuse(user, 413, f"{name} is larger than {ctx.settings.max_upload_mb:g} MB.",
+                          f"upload size limit ({ctx.settings.max_upload_mb:g} MB)", name)
+
+    def check_minutes(request: Request, paths: list[str], dest: Path) -> None:
+        """Refuse a track longer than TASTR_MAX_MINUTES (hosted), dropping `paths` (this request's files so far)."""
+        minutes = audio_minutes(dest) if ctx.hosted else None
+        if minutes is not None and minutes > ctx.settings.max_minutes:
+            discard(map(Path, paths))
+            raise ctx.refuse(request.state.user, 413,
+                             f"{dest.name} is {minutes:.0f} minutes long. This server analyzes tracks up to "
+                             f"{ctx.settings.max_minutes:g} minutes, so a long mix needs cutting into shorter files first.",
+                             f"track length limit ({ctx.settings.max_minutes:g} min)", f"{dest.name}, {minutes:.0f} min")
+
+    def begin(request: Request, paths: list[str], sig: dict[str, str], background: bool):
+        """Analyze stored uploads: a background job to poll, or the results at once."""
         given = [Path(p).name for p in paths]
         job_id = new_id()
         if ctx.hosted:
@@ -125,7 +306,7 @@ def router(ctx: AppContext) -> APIRouter:
         """Nothing from a refused upload stays on disk."""
         for p in files:
             p.unlink(missing_ok=True)
-            if p.parent.is_dir():
+            if p.parent.is_dir() and not any(p.parent.iterdir()):
                 p.parent.rmdir()
 
     def save_card(upload: UploadFile, audio: Path) -> dict[str, str]:
@@ -209,13 +390,15 @@ def router(ctx: AppContext) -> APIRouter:
             raise HTTPException(404, "no such job")
         return job
 
-    def check_upload(user: str, files: list[UploadFile]) -> None:
+    def check_upload(user: str, files: list[str]) -> None:
+        """The hosted limits on one upload of `files` (their names): how many, which kinds, the storage cap and
+        the person's daily track limit."""
         if len(files) > ctx.settings.max_files:
             raise ctx.refuse(user, 400, f"Upload at most {ctx.settings.max_files} files at a time.",
                          f"files-per-upload limit ({ctx.settings.max_files})")
         for f in files:
-            if Path(f.filename or "").suffix.lower() not in AUDIO_EXTENSIONS:
-                raise HTTPException(415, f"{Path(f.filename or 'upload').name} isn't an audio file Tastr can read.")
+            if Path(f).suffix.lower() not in AUDIO_EXTENSIONS:
+                raise HTTPException(415, f"{Path(f or 'upload').name} isn't an audio file Tastr can read.")
         if stored_bytes(tastr_home()) >= ctx.settings.storage_gb * 1024 ** 3:
             raise ctx.refuse(user, 507, "This server is out of space for new uploads. Ask whoever invited you.",
                          f"storage cap ({ctx.settings.storage_gb:g} GB)")

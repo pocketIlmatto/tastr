@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 
 FOLDERS = ("uploads", "stems")  # what lives in the bucket, by its folder under TASTR_HOME
 LINK_SECONDS = 3600  # signed links for playback and for Modal; a page asks again for a new one
+UPLOAD_SECONDS = 3600  # signed links a page uploads through (TASTR_DIRECT_UPLOAD); it asks again if one runs out
 LISTING_SECONDS = 60  # how long a bucket listing is reused (the storage cap, the admin view)
 # Types the stdlib doesn't know everywhere; browsers need them to decode the stream.
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
@@ -152,6 +153,21 @@ def _listed(path: str | Path) -> tuple[int, float] | None:
     if not enabled() or k is None:
         return None
     return listing(k.split("/", 1)[0] + "/").get(k)
+
+
+def arrived(path: str | Path) -> int | None:
+    """The size of the bucket's copy, asked of the bucket itself (not a listing), or None when it has none. For
+    an upload the page sent straight to the bucket: the listings are refreshed when it's there."""
+    k = key(path)
+    if not enabled() or k is None:
+        return None
+    try:
+        head = client().head_object(Bucket=bucket(), Key=k)
+    except Exception as e:  # noqa: BLE001 - botocore's ClientError 404 (or 403 without list rights): not there
+        log.info("no %s in the audio bucket: %s", k, e)
+        return None
+    _forget_listings()
+    return int(head["ContentLength"])
 
 
 def size(path: str | Path | None) -> int:

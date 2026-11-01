@@ -89,6 +89,9 @@ class Settings:
     github_token: str = ""
     github_workflows: tuple[str, ...] = ()  # only these workflows' runs are logged (names or file names); none = nothing
     watch_minutes: float = 15
+    # Uploads go from the browser straight to the audio bucket on a signed link (TAS-66), instead of through
+    # this server. Needs the bucket on and its CORS rule to allow PUT from the app's own origin (docs/deploy.md).
+    direct_upload: bool = False
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -123,6 +126,7 @@ class Settings:
             github_token=env.get("TASTR_GITHUB_TOKEN", "").strip(),
             github_workflows=tuple(w.strip() for w in env.get("TASTR_GITHUB_WORKFLOWS", "").split(",") if w.strip()),
             watch_minutes=float(env.get("TASTR_WATCH_MINUTES", cls.watch_minutes)),
+            direct_upload=env.get("TASTR_DIRECT_UPLOAD", "").strip().lower() in ("1", "true", "yes", "on"),
         )
         if hosted and not (s.access_team_domain and s.access_aud):
             # Fail closed: a hosted server that can't check logins must not start.

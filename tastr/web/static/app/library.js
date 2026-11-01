@@ -142,17 +142,22 @@ function shortError(err) {
 }
 // One placeholder row: the step it's on, elapsed time and a bar while it runs; where it stopped if it failed.
 function pendingLi(p) {
+  const drop = () => { pending.splice(pending.indexOf(p), 1); renderList(); };
   if (p.failed) {
     const at = p.stage && A_STEPS.find(([k]) => k === p.stage);
-    return h("li", { class: "pending failed", "aria-label": `${cleanName(p.name)}: could not be analyzed` },
+    // `why`: a hosted upload that stopped before the analysis (TAS-66), said in full, maybe with a Retry.
+    return h("li", { class: "pending failed", "aria-label": `${cleanName(p.name)}: ${p.why ? "not uploaded" : "could not be analyzed"}` },
       h("div", { class: "t" }, cleanName(p.name)),
-      h("div", { class: "s" }, `Couldn't analyze this file${at ? ` (it stopped while ${at[3]})` : ""}. `, h("button", { type: "button", class: "linklike", onclick: () => { pending.splice(pending.indexOf(p), 1); renderList(); } }, "Dismiss")),
+      h("div", { class: "s" }, p.why || `Couldn't analyze this file${at ? ` (it stopped while ${at[3]})` : ""}. `, h("span", { class: "p-acts" },
+        p.retry ? h("button", { type: "button", class: "linklike", onclick: () => { drop(); p.retry(); } }, "Retry") : null,
+        h("button", { type: "button", class: "linklike", onclick: drop }, "Dismiss"))),
       p.error ? h("div", { class: "s why", title: p.error }, shortError(p.error)) : null);
   }
+  const busy = p.active || p.uploading;  // a hosted upload runs before its turn to be analyzed
   return h("li", { class: "pending", "aria-busy": "true" },
-    h("div", { class: "t" }, h("span", { class: "spin" + (p.active ? "" : " idle"), "aria-hidden": "true" }), cleanName(p.name)),
-    h("div", { class: "s" }, h("span", {}, p.say || "Waiting…"), p.active && p.secs != null ? h("span", { class: "p-time", title: "Elapsed" }, mmss(p.secs)) : null),
-    p.active && p.frac != null ? progBar(p.frac, `${cleanName(p.name)} progress`) : null);
+    h("div", { class: "t" }, h("span", { class: "spin" + (busy ? "" : " idle"), "aria-hidden": "true" }), cleanName(p.name)),
+    h("div", { class: "s" }, h("span", { class: p.retrying ? "p-retry" : null }, p.say || "Waiting…"), p.active && p.secs != null ? h("span", { class: "p-time", title: "Elapsed" }, mmss(p.secs)) : null),
+    busy && p.frac != null ? progBar(p.frac, `${cleanName(p.name)} progress`) : null);
 }
 // Repaint just the placeholder rows (every second while analyzing), so the rest of the list keeps focus, hover and scroll.
 export function paintPending() {

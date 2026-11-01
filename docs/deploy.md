@@ -63,6 +63,19 @@ in R2 and the volume only caches them ([hosting.md](hosting.md#audio-in-a-bucket
 
 5. Move what the volume already holds into the bucket: `fly ssh console -C "tastr bucket-backfill --dry-run"` shows
    what would move, then run it without `--dry-run`. `tastr db-size` should then show no waveform data inline.
+6. Optional: uploads straight to the bucket (`TASTR_DIRECT_UPLOAD`). The page then sends each file to the bucket
+   on a signed link instead of through the server, which a server on Cloudflare Workers needs (a Worker takes at
+   most 100 MB in one request). Add a second rule to the bucket's CORS policy, so it reads:
+
+   ```json
+   [{"AllowedOrigins": ["*"], "AllowedMethods": ["GET", "HEAD"], "AllowedHeaders": ["Range"],
+     "ExposeHeaders": ["Content-Length", "Content-Range", "Accept-Ranges"], "MaxAgeSeconds": 3600},
+    {"AllowedOrigins": ["https://<your hostname>"], "AllowedMethods": ["PUT"], "AllowedHeaders": ["Content-Type"],
+     "MaxAgeSeconds": 3600}]
+   ```
+
+   Then `fly secrets set TASTR_DIRECT_UPLOAD=1`. Upload one file to check it; a failure that says storage refused
+   the upload or stopped usually means the PUT rule is missing or names another hostname.
 
 ## 3. Modal environment
 

@@ -14,6 +14,7 @@ from . import watch
 from .analysis_jobs import ref
 from .context import AppContext, log, tastr_home, upload_dir
 from .hosted import expire_audio, names
+from .routes.analyze import prune_uploads
 
 EXPIRY_EVERY = 6 * 3600  # seconds between sweeps for expired audio on a hosted server
 
@@ -25,6 +26,9 @@ def expire_loop(ctx: AppContext, stop: threading.Event) -> None:
             with closing(ctx.conn()) as c:
                 gone = expire_audio(c, upload_dir(), settings.audio_days, settings.admins)
             ctx.snapshot_storage()
+            abandoned = prune_uploads(ctx.db_path)  # direct uploads given a link and never finished
+            if abandoned:
+                log.info("Deleted %d unfinished upload(s)", abandoned)
             evicted = blobs.evict()  # local copies of what the audio bucket holds; the disk is a cache then
             if evicted:
                 log.info("Removed %d local copies of files kept in the audio bucket", evicted)

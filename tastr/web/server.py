@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from .. import db
+from .. import blobs, db
 from ..engine import rust
 from . import background
 from .context import STATIC_DIR, AppContext, _failure_reason, _hosted_error, log  # noqa: F401 - tests import these
@@ -150,7 +150,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                "admin": admin, "limits": settings.limits() if hosted else None, "browser_engine": browser_engine_cfg(),
                "bulk_at_once": settings.bulk_lanes(),
                # Hosted, searches run in the browser on a copy of the library, with sql.js from here (TAS-49).
-               "query_browser": {"base": "/sqljs/", "version": search.SQLJS_VERSION} if hosted else None}
+               "query_browser": {"base": "/sqljs/", "version": search.SQLJS_VERSION} if hosted else None,
+               # Hosted with TASTR_DIRECT_UPLOAD: the page uploads straight to the audio bucket (TAS-66).
+               "direct_upload": hosted and settings.direct_upload and blobs.enabled()}
         if hosted:
             with closing(ctx.conn()) as c:  # this person's own caps, with any change an admin made for them
                 out["limits"] |= {"daily_tracks": ctx.cap(c, user, "tracks"), "daily_stems": ctx.cap(c, user, "stems"),

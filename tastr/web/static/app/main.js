@@ -13,6 +13,7 @@ import { init as findInit } from "./find.js";
 import { init as adminInit } from "./admin.js";
 import { init as helpInit } from "./help.js";
 import { init as glossaryInit } from "./glossary.js";
+import { init as filesInit } from "./files.js";
 
 navInit();
 bulkInit();
@@ -27,3 +28,4 @@ findInit();
 adminInit();
 helpInit();
 glossaryInit();
+filesInit();

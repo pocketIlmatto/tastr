@@ -19,23 +19,24 @@ export const fmtUp = (t) => {
   return d.toLocaleDateString([], { month: "short", day: "numeric", ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) });
 };
 export const fmtUpLong = (t) => new Date(t).toLocaleString([], { weekday: "short", month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
-function upMatch(t) {
+// Filters take a filter state (the sidebar's `lib`, or the Files view's own), so both lists filter the same way.
+function upMatch(t, f) {
   const today = dayStart(Date.now());
-  switch (lib.up) {
+  switch (f.up) {
     case "today": return t >= today;
     case "yesterday": return t >= today - DAY && t < today;
     case "7": return t >= today - 6 * DAY;
     case "30": return t >= today - 29 * DAY;
     case "old": return t < today - 29 * DAY;
     case "range": {
-      const a = lib.upFrom ? dayStart(new Date(lib.upFrom + "T00:00")) : -Infinity, b = lib.upTo ? dayStart(new Date(lib.upTo + "T00:00")) + DAY : Infinity;
+      const a = f.upFrom ? dayStart(new Date(f.upFrom + "T00:00")) : -Infinity, b = f.upTo ? dayStart(new Date(f.upTo + "T00:00")) + DAY : Infinity;
       return t >= a && t < b;
     }
     default: return true;
   }
 }
-const keyRank = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); return m ? +m[1] * 2 + (m[2] === "B" ? 1 : 0) : 999; };
-const SORTS = {
+export const keyRank = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); return m ? +m[1] * 2 + (m[2] === "B" ? 1 : 0) : 999; };
+export const SORTS = {
   new: (a, b) => b.uploaded - a.uploaded || b.id - a.id,
   old: (a, b) => a.uploaded - b.uploaded || a.id - b.id,
   title: (a, b) => (a.title || "").localeCompare(b.title || ""),
@@ -45,20 +46,22 @@ const SORTS = {
   energy: (a, b) => (b.energy ?? -1) - (a.energy ?? -1),
   len: (a, b) => (b.duration ?? 0) - (a.duration ?? 0),
 };
-export const libActive = () => !!(lib.q || lib.vibes.length || lib.key || lib.bmin || lib.bmax || lib.up || lib.lab);
-// Search, sort and filters run in the browser, which is fine for a few hundred tracks.
-export function visibleTracks() {
-  const q = lib.q.trim().toLowerCase(), lo = lib.bmin === "" ? null : +lib.bmin, hi = lib.bmax === "" ? null : +lib.bmax;
-  const need = lib.lab === "need" ? new Set(reviewRows.map((r) => r.track_id)) : null;
-  return tracks.filter((t) =>
+export const filtersOn = (f) => !!(f.q || f.vibes.length || f.key || f.bmin || f.bmax || f.up || f.lab);
+export const libActive = () => filtersOn(lib);
+// Search, sort and filters run in the browser, which is fine for a few hundred tracks. `f` is a filter state like `lib`.
+export function matchTracks(f, list = tracks) {
+  const q = f.q.trim().toLowerCase(), lo = f.bmin === "" ? null : +f.bmin, hi = f.bmax === "" ? null : +f.bmax;
+  const need = f.lab === "need" ? new Set(reviewRows.map((r) => r.track_id)) : null;
+  return list.filter((t) =>
     (!q || `${t.title} ${t.artist || ""}`.toLowerCase().includes(q)) &&
-    lib.vibes.every((v) => (t.tags || []).includes(v)) && (!lib.key || keyMatch(t.camelot)) &&
+    f.vibes.every((v) => (t.tags || []).includes(v)) && (!f.key || keyMatch(t.camelot, f)) &&
     (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi)) &&
-    upMatch(t.uploaded) && (!lib.lab || (need ? need.has(t.id) : (lib.lab === "yes") === labels.has(t.id)))).sort(SORTS[lib.sort]);
+    upMatch(t.uploaded, f) && (!f.lab || (need ? need.has(t.id) : (f.lab === "yes") === labels.has(t.id))));
 }
+export const visibleTracks = () => matchTracks(lib).sort(SORTS[lib.sort]);
 // lib.key is a Camelot code, or "8A~" for that key plus the keys that mix with it (one step round the wheel, or the relative major/minor).
 export const camelotNear = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); if (!m) return [k]; const n = +m[1], l = m[2], o = l === "A" ? "B" : "A", w = (d) => ((n + d + 11) % 12) + 1; return [k, `${w(-1)}${l}`, `${w(1)}${l}`, `${n}${o}`]; };
-const keyMatch = (cam) => (lib.key.endsWith("~") ? camelotNear(lib.key.slice(0, -1)).includes(cam) : cam === lib.key);
+const keyMatch = (cam, f) => (f.key.endsWith("~") ? camelotNear(f.key.slice(0, -1)).includes(cam) : cam === f.key);
 const vibeLabel = () => lib.vibes.join(" + ");
 // The sidebar selects follow the card filters: an extra "dark + driving" or "8A + compatible" option while one is on.
 function syncFilterSelects() {

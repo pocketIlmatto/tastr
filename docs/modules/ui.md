@@ -18,7 +18,12 @@ across the library.
 | GET | `/api/health` | | `{"ok": true}` (exists) |
 | GET | `/api/tracks` | | list of `db.list_tracks` rows (exists) |
 | GET | `/api/tracks/{id}` | | `{"id": ..., **card, "has_audio", "has_views"}`; `extras.views` is left out (exists) |
-| GET | `/api/tracks/{id}/audio` | | the original file, with HTTP Range support; 404 when it isn't on disk |
+| GET | `/api/tracks/{id}/audio` | | the original file, with HTTP Range support; 404 when it isn't on disk. `?download=1` adds `Content-Disposition: attachment` named "Artist - Title.ext" |
+| GET | `/api/tracks/{id}/stems/{name}` | | one stem as FLAC, like `/audio`; `?download=1` names it "Artist - Title (vocals).flac" |
+| GET | `/api/files` | | your tracks' files for the Files view: `{"used": {"audio_bytes", "stem_bytes"}, "cap_bytes", "free_bytes", "stems_available", "tracks": [{"id", "title", "artist", "base", "created_at", "duration", "audio": {"name", "format", "bytes"} \| null, "stems": {"state", "progress"?, "bytes": {"vocals", "bass", "other", "drums"}?} \| null}]}`. Sizes come from `stat`, not reading the files. `cap_bytes` and `free_bytes` are the whole server's (hosted only; null locally). Hosted: only your own tracks |
+| GET | `/api/tracks/{id}/stems.zip` | | the four stems in one zip (stored, not compressed), streamed; `X-Zip-Bytes` is the files' total for progress |
+| POST | `/api/files/zip` | `{"ids": [...], "kind": "audio"\|"stems"}` | one streamed zip of the tracks' original audio, or their stems in a folder per track; tracks without that file are left out. 413 over 200 tracks or 5 GB; 404 if any id isn't yours |
+| DELETE | `/api/tracks/{id}/stems` | | `{"state": "none", "freed_bytes"}`; 409 while a separation is queued or running, or when another track (anyone's) has the same audio and so shares the stems folder; 404 when there are none |
 | GET | `/api/tracks/{id}/strudel-link` | | `{"audio", "days"}`: where strudel.cc can fetch the audio (stems at `.../stems/<name>` next to it). Locally `/api/tracks/{id}/audio`; hosted, a signed `/pub/<token>/tracks/{id}/audio` that works for `days` days without the login (docs/hosting.md) |
 | GET | `/api/tracks/{id}/views` | | `extras["views"]` (waveform + spectrogram data); 404 for cards analyzed before the `views` stage, where the UI computes both from the decoded audio |
 | POST | `/api/analyze` | multipart `files[]` | `{"results": [{"track_id", "title", "error"}]}`; saves each upload as `$TASTR_HOME/uploads/<random id>/<original name>` then calls `service.analyze_inputs` |
@@ -57,6 +62,12 @@ Render from the card JSON, tolerating any field being null/empty:
   - Simple: conditions (BPM, key or the keys that mix with it, energy, vibe, length, section, text) in groups one level deep; AND/OR inside each group and between groups. The page builds the SQL (`qSql()` in app/find.js) and runs it through `/api/query` with `mine: true`; "Edit as SQL" opens that SQL in the SQL box.
   - SQL: the box posting to `/api/query`, and a "Tables and columns" reference (`Q_SCHEMA`; a friend's copy leaves out the private columns).
   - Saved searches as chips (`/api/searches`), and built-in examples in an "Examples ▾" menu, separate for each mode.
+
+## Files view (app/files.js)
+- The Files tab (`#files` opens it) lists `/api/files`, joined with the library's tracks so search, sort and the sidebar's filters work the same (`matchTracks(filterState, list)` in app/library.js, with the Files view's own filter state), plus a With stems / No stems switch and a Largest sort.
+- Downloads go through `fetch` and a Blob URL, so the status line shows progress (zips: from `X-Zip-Bytes`) and says when the file is saved. The browser holds the whole file in memory until then, which is why bulk zips stop at 5 GB.
+- Select mode: a bulk bar with the selection's size, ↓ Audio and ↓ Stems zips, Separate stems (posts each to `/api/tracks/{id}/stems`; the server runs them one at a time and stops at the daily limit) and Delete stems (two clicks).
+- Stem jobs are followed with menu.js's poller (`onStems`); a row repaints in place, and the sizes reload when a job ends.
 
 ## Admin view (hosted mode, admins only)
 - The Admin header button shows only when `/api/config` says `"admin": true`; `#admin` opens it, and falls back to the Library for everyone else.

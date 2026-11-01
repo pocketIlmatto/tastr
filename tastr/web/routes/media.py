@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 
 from ... import blobs, db, drum_jobs, stems
-from ..context import AppContext, analysis_source, runs_on
+from ..context import AppContext, _unprefixed, analysis_source, runs_on
+from ..downloads import base_name, content_disposition, stem_file_name
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
 
 # The Strudel sketch ("Try this in Strudel") loads the original audio and its stems from strudel.cc, so only
@@ -29,22 +31,32 @@ def _strudel_cors(origin: str | None, preflight: bool = False) -> dict[str, str]
     return headers
 
 
-def _serve(path, origin: str | None, media: str | None = None):
+def _serve(path, origin: str | None, media: str | None = None, filename: str | None = None):
     """A file for playback: a redirect to a short-lived signed link when the audio bucket has it (the bytes then
-    never pass through this server; tastr/blobs.py), else the file here, with Range support either way."""
+    never pass through this server; tastr/blobs.py), else the file here, with Range support either way.
+    `filename`: save it under this name instead of playing it (the Files view's downloads)."""
     headers = _strudel_cors(origin)
+    disposition = content_disposition(filename) if filename else None
     if blobs.in_bucket(path):
-        return RedirectResponse(blobs.signed_url(path), status_code=302,
+        return RedirectResponse(blobs.signed_url(path, disposition=disposition), status_code=302,
                                 headers={**headers, "Cache-Control": "private, no-store"})
+    if disposition:
+        headers["Content-Disposition"] = disposition
     return FileResponse(path, media_type=media or blobs.content_type(path), headers=headers)
 
 
 def router(ctx: AppContext) -> APIRouter:
     api = APIRouter()
 
+    def _base(card, track_id: int) -> str:
+        """"Artist - Title", the name a download of this track's files starts with."""
+        title = _unprefixed(card.source.title, card.source.uri) or Path(card.source.uri or "").stem
+        return base_name(title, card.source.artist, track_id)
+
     @api.get("/api/tracks/{track_id}/audio")
-    def track_audio(track_id: int, origin: str | None = Header(None)):
-        """The original audio file, with Range support so the browser can seek. strudel.cc may fetch it too."""
+    def track_audio(track_id: int, origin: str | None = Header(None), download: bool = False):
+        """The original audio file, with Range support so the browser can seek. strudel.cc may fetch it too.
+        `?download=1` saves it as "Artist - Title.ext" instead of playing it."""
         with closing(ctx.conn()) as c:
             card = db.load_card(c, track_id)
         if card is None:
@@ -52,7 +64,8 @@ def router(ctx: AppContext) -> APIRouter:
         path = ctx.audio_path(card)
         if path is None:
             raise HTTPException(404, "The original audio file is not on disk.")
-        return _serve(path, origin)
+        name = _base(card, track_id) + path.suffix.lower() if download else None
+        return _serve(path, origin, filename=name)
 
     def _preflight(origin: str | None) -> Response:
         if origin not in STRUDEL_ORIGINS:
@@ -127,14 +140,16 @@ def router(ctx: AppContext) -> APIRouter:
         return _stems_status(card, track_id)
 
     @api.get("/api/tracks/{track_id}/stems/{name}")
-    def track_stem(track_id: int, name: str, origin: str | None = Header(None)):
-        """One stem as FLAC, like /audio: Range support, and strudel.cc may fetch it."""
+    def track_stem(track_id: int, name: str, origin: str | None = Header(None), download: bool = False):
+        """One stem as FLAC, like /audio: Range support, and strudel.cc may fetch it. `?download=1` saves it as
+        "Artist - Title (vocals).flac"."""
         if name not in stems.STEM_NAMES:
             raise HTTPException(404, f"Stems are {', '.join(stems.STEM_NAMES)}.")
-        path = stems.stem_path(ctx.stems_dir(ctx.card_or_404(track_id), track_id), name)
+        card = ctx.card_or_404(track_id)
+        path = stems.stem_path(ctx.stems_dir(card, track_id), name)
         if not blobs.exists(path):
             raise HTTPException(404, "This track has not been separated into stems.")
-        return _serve(path, origin, "audio/flac")
+        return _serve(path, origin, "audio/flac", filename=stem_file_name(_base(card, track_id), name) if download else None)
 
     def _drum_model_status(track_id: int) -> dict[str, Any]:
         return {**ctx.drum_runs.status(track_id), "available": drum_jobs.available()}

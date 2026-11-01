@@ -1,7 +1,7 @@
 // "Try this in": the DAW glossaries and the Strudel view.
 
 import { api, cap, h, isNum, progBar } from "./core.js";
-import { sectionBus } from "./card.js";
+import { sectionBus, switchTo } from "./card.js";
 import { allEdits, editedKeys } from "./groove-edits.js";
 import { laneName } from "./groove-lanes.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
@@ -61,6 +61,14 @@ function strudelAudioUrl(c, repaint) {
   }
   return strudelLinks.get(c.id);
 }
+// Once a track has stems: a link to download each one, all four as a zip, and the Files view for everything else.
+function stemDownloads(c) {
+  const link = (href, label, title) => h("a", { class: "linklike", href, download: "", title }, label);
+  return h("div", { class: "st-dl" }, h("span", { class: "muted" }, "Download:"),
+    ...STRUDEL_STEMS.map((n) => link(`/api/tracks/${c.id}/stems/${n}?download=1`, cap(n), `The ${n} stem as FLAC`)),
+    link(`/api/tracks/${c.id}/stems.zip`, "All (zip)", "All four stems in one zip"),
+    h("a", { class: "linklike", href: "#files", onclick: (e) => { e.preventDefault(); switchTo("files"); } }, "All your files"));
+}
 export function strudelView(c) {
   const say = h("span", { class: "muted st-say", role: "status", "aria-live": "polite" });
   const pre = h("pre", { class: "st-code", tabindex: "0", "aria-label": "Generated Strudel code" });
@@ -113,6 +121,7 @@ export function strudelView(c) {
         cb.addEventListener("change", () => { if (cb.checked) strudelStems.add(n); else strudelStems.delete(n); paint(); });
         return h("label", { class: "st-chip" }, cb, " " + cap(n));
       })));
+      kids.push(stemDownloads(c));
     } else if (strudelMix === "stems" && !c.stems_available && !busy) {
       kids.push(h("div", { class: "st-stem-go" }, h("span", { class: "muted st-say" }, "Stem separation needs Demucs, an optional install (about 2 GB): ",
         h("code", {}, "pip install 'tastr[stems]'"), ", then restart ", h("code", {}, "tastr serve"), ". The code uses the full mix.")));

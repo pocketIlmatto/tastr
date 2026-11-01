@@ -206,6 +206,8 @@ the server could later run without one:
   Cards saved before keep their data inline until they are re-analyzed. If the bucket can't take it, the data
   stays in the card. `tastr db-size` shows the database's size by table and how much waveform data is still inline.
 - `tastr unpack` copies the archive's audio and stems to the bucket as well.
+- The Files view reads sizes from the bucket's listing; single downloads redirect to a signed link that names the
+  file, and zips stream each file from the bucket.
 
 Files uploaded before the bucket was turned on stay on the disk only, and keep working from there.
 

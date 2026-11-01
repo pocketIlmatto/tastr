@@ -280,3 +280,38 @@ def test_db_size_reports_cards_and_inline_views(db_path, capsys):
     assert r["cards_over_d1_row_limit"] == 0 and r["file_bytes"] > 0
     assert cli.main(["--db", str(db_path), "db-size"]) == 0
     assert "with waveform data inline: 1" in capsys.readouterr().out
+
+
+def test_files_view_reads_sizes_zips_and_downloads_from_the_bucket(bucket, home, db_path):
+    import io
+    import zipfile
+    from urllib.parse import unquote
+
+    audio = write(home / "uploads" / "ab" / "song.wav", b"RIFF" + b"x" * 96)
+    card = full_card()
+    card.source.local_path, card.source.uri, card.source.title, card.source.sha256 = str(audio), str(audio), "Song", "ab" * 32
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, card)
+    conn.close()
+    folder = stems.stems_dir(card.source.sha256, tid)
+    for n in stems.STEM_NAMES:
+        blobs.push(write(stems.stem_path(folder, n), b"fLaC" + n.encode()))
+    blobs.push(audio)
+    blobs.evict(older_than=-10)  # only the bucket has them now
+    assert not audio.exists() and not folder.exists()
+
+    c = TestClient(create_app(db_path))
+    row = c.get("/api/files").json()["tracks"][0]
+    assert row["audio"]["bytes"] == 100 and row["stems"]["state"] == "ready"
+    assert row["stems"]["bytes"]["vocals"] == len(b"fLaCvocals")
+    got = c.get(f"/api/tracks/{tid}/audio?download=1", follow_redirects=False)
+    assert got.status_code == 302 and "Song.wav" in unquote(got.headers["location"])  # the bucket names the download
+    z = c.get(f"/api/tracks/{tid}/stems.zip")
+    assert z.status_code == 200
+    names = zipfile.ZipFile(io.BytesIO(z.content)).namelist()
+    assert sorted(names) == sorted(f"Song ({n}).flac" for n in stems.STEM_NAMES)
+    bulk = c.post("/api/files/zip", json={"ids": [tid], "kind": "audio"})
+    assert zipfile.ZipFile(io.BytesIO(bulk.content)).read("Song.wav") == b"RIFF" + b"x" * 96
+    gone = c.delete(f"/api/tracks/{tid}/stems")
+    assert gone.status_code == 200 and gone.json()["freed_bytes"] == sum(len(b"fLaC" + n.encode()) for n in stems.STEM_NAMES)
+    assert objects("stems/") == {}

@@ -147,6 +147,41 @@ def exists(path: str | Path | None) -> bool:
     return Path(path).is_file() or in_bucket(path)
 
 
+def _listed(path: str | Path) -> tuple[int, float] | None:
+    k = key(path)
+    if not enabled() or k is None:
+        return None
+    return listing(k.split("/", 1)[0] + "/").get(k)
+
+
+def size(path: str | Path | None) -> int:
+    """The file's size here, else in the bucket; 0 if neither has it."""
+    if not path:
+        return 0
+    try:
+        return Path(path).stat().st_size
+    except OSError:
+        hit = _listed(path)
+        return hit[0] if hit else 0
+
+
+def mtime(path: str | Path) -> float:
+    """When the file was written here, else when it reached the bucket; now if neither has it."""
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        hit = _listed(path)
+        return hit[1] if hit else time.time()
+
+
+def open_read(path: str | Path):
+    """A binary file-like object with read(n): the file here, else the bucket's copy streamed (zips of it)."""
+    p = Path(path)
+    if p.is_file():
+        return open(p, "rb")
+    return client().get_object(Bucket=bucket(), Key=key(p))["Body"]
+
+
 def ensure(path: str | Path | None) -> Path | None:
     """The file on local disk, downloaded from the bucket first if only the bucket has it; None if neither does."""
     if not path:
@@ -186,13 +221,14 @@ def remove_tree(folder: str | Path) -> None:
     _forget_listings()
 
 
-def signed_url(path: str | Path, seconds: int = LINK_SECONDS) -> str | None:
-    """A link anyone can GET the file from for `seconds` (Range requests work), or None when off."""
+def signed_url(path: str | Path, seconds: int = LINK_SECONDS, disposition: str | None = None) -> str | None:
+    """A link anyone can GET the file from for `seconds` (Range requests work), or None when off. `disposition`:
+    a Content-Disposition header the bucket answers with (a download's file name)."""
     k = key(path)
     if not enabled() or k is None:
         return None
-    return client().generate_presigned_url("get_object", Params={"Bucket": bucket(), "Key": k},
-                                           ExpiresIn=seconds)
+    params = {"Bucket": bucket(), "Key": k} | ({"ResponseContentDisposition": disposition} if disposition else {})
+    return client().generate_presigned_url("get_object", Params=params, ExpiresIn=seconds)
 
 
 def put_url(path: str | Path, seconds: int = LINK_SECONDS) -> str | None:

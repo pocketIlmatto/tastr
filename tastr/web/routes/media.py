@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import mimetypes
 from contextlib import closing
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
 from ... import db, drum_jobs, stems
-from ..context import AppContext, analysis_source, runs_on
+from ..context import AppContext, _unprefixed, analysis_source, runs_on
+from ..downloads import base_name, content_disposition, stem_file_name
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
 
 # Types the stdlib doesn't know everywhere; browsers need them to decode the stream.
@@ -36,9 +38,15 @@ def _strudel_cors(origin: str | None, preflight: bool = False) -> dict[str, str]
 def router(ctx: AppContext) -> APIRouter:
     api = APIRouter()
 
+    def _base(card, track_id: int) -> str:
+        """"Artist - Title", the name a download of this track's files starts with."""
+        title = _unprefixed(card.source.title, card.source.uri) or Path(card.source.uri or "").stem
+        return base_name(title, card.source.artist, track_id)
+
     @api.get("/api/tracks/{track_id}/audio")
-    def track_audio(track_id: int, origin: str | None = Header(None)):
-        """The original audio file, with Range support so the browser can seek. strudel.cc may fetch it too."""
+    def track_audio(track_id: int, origin: str | None = Header(None), download: bool = False):
+        """The original audio file, with Range support so the browser can seek. strudel.cc may fetch it too.
+        `?download=1` saves it as "Artist - Title.ext" instead of playing it."""
         with closing(ctx.conn()) as c:
             card = db.load_card(c, track_id)
         if card is None:
@@ -47,7 +55,10 @@ def router(ctx: AppContext) -> APIRouter:
         if path is None:
             raise HTTPException(404, "The original audio file is not on disk.")
         media = AUDIO_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        return FileResponse(path, media_type=media, headers=_strudel_cors(origin))
+        headers = _strudel_cors(origin)
+        if download:
+            headers["Content-Disposition"] = content_disposition(_base(card, track_id) + path.suffix.lower())
+        return FileResponse(path, media_type=media, headers=headers)
 
     def _preflight(origin: str | None) -> Response:
         if origin not in STRUDEL_ORIGINS:
@@ -122,14 +133,19 @@ def router(ctx: AppContext) -> APIRouter:
         return _stems_status(card, track_id)
 
     @api.get("/api/tracks/{track_id}/stems/{name}")
-    def track_stem(track_id: int, name: str, origin: str | None = Header(None)):
-        """One stem as FLAC, like /audio: Range support, and strudel.cc may fetch it."""
+    def track_stem(track_id: int, name: str, origin: str | None = Header(None), download: bool = False):
+        """One stem as FLAC, like /audio: Range support, and strudel.cc may fetch it. `?download=1` saves it as
+        "Artist - Title (vocals).flac"."""
         if name not in stems.STEM_NAMES:
             raise HTTPException(404, f"Stems are {', '.join(stems.STEM_NAMES)}.")
-        path = stems.stem_path(ctx.stems_dir(ctx.card_or_404(track_id), track_id), name)
+        card = ctx.card_or_404(track_id)
+        path = stems.stem_path(ctx.stems_dir(card, track_id), name)
         if not path.is_file():
             raise HTTPException(404, "This track has not been separated into stems.")
-        return FileResponse(path, media_type="audio/flac", headers=_strudel_cors(origin))
+        headers = _strudel_cors(origin)
+        if download:
+            headers["Content-Disposition"] = content_disposition(stem_file_name(_base(card, track_id), name))
+        return FileResponse(path, media_type="audio/flac", headers=headers)
 
     def _drum_model_status(track_id: int) -> dict[str, Any]:
         return {**ctx.drum_runs.status(track_id), "available": drum_jobs.available()}

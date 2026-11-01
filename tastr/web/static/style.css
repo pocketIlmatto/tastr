@@ -638,6 +638,61 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .adm-legend .adm-note { flex-basis: 100%; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .adm-seg button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Files: your uploaded audio and stems, with downloads (app/files.js) */
+.fl { display: grid; gap: 12px; max-width: 980px; }
+.fl-head h2 { margin: 0 0 4px; }
+.fl-head p { margin: 0; font-size: 13px; }
+.fl-store { border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; background: var(--panel); display: grid; gap: 8px; }
+.fl-store-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.fl-store-top b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.fl-bar { display: flex; height: 10px; border-radius: 5px; background: var(--line); overflow: hidden; }
+.fl-bar i { display: block; height: 100%; }
+.fl-bar .a { background: var(--accent); }
+.fl-bar .s { background: color-mix(in srgb, var(--accent) 45%, var(--panel)); }
+.fl-key { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); }
+.fl-key span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--accent); }
+.fl-key .s::before { background: color-mix(in srgb, var(--accent) 45%, var(--panel)); }
+.fl-key .f::before { background: var(--line); }
+.fl-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.fl-tools input[type=search] { flex: 1 1 200px; max-width: 320px; }
+.fl-sort { font-size: 13px; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.fl-filters { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.fl-filters[hidden], .fl-filters label[hidden], .fl-bulk[hidden] { display: none; }
+.fl-filters label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.fl-filters input[type=number] { width: 64px; }
+.fl-count { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.fl-count #fl-sel { margin-left: auto; }
+.fl-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); font-size: 13px; }
+.fl-selsz { color: var(--muted); font-variant-numeric: tabular-nums; }
+.fl-selsz b { color: var(--fg); font-weight: 600; }
+.fl-bulk .fl-acts { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.fl-bulk .fl-acts button { font-size: 12px; }
+.fl-list > li.picked { background: var(--accent-soft); }
+/* the sidebar's own .pick box, over a hidden real checkbox (keyboard and screen readers still get a checkbox) */
+.fl-pick { display: inline-grid; place-items: center; cursor: pointer; align-self: center; position: relative; }
+.fl-pick input:focus-visible + .pick { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fl-say { margin: 0; min-height: 1.2em; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+.fl-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.fl-list > li { padding: 10px 14px; border-top: 1px solid var(--line); display: grid; gap: 6px; }
+.fl-list > li:first-child { border-top: 0; }
+.fl-list > li.empty { color: var(--muted); font-size: 13px; }
+.fl-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
+.fl-t .linklike { font-weight: 600; font-size: 14px; text-align: left; }
+.fl-t .muted { font-size: 12px; }
+.fl-t .fl-tot { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.fl-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 13px; }
+.fl-row > .fl-lab { width: 64px; flex: none; color: var(--muted); font-size: 12px; }
+.fl-file { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 4px 1px 10px; font-size: 12px; background: var(--bg); }
+.fl-file .sz { color: var(--muted); font-variant-numeric: tabular-nums; }
+.fl-dl { font-size: 12px; padding: 0 7px; line-height: 1.6; border-radius: 999px; }
+.fl-row .linklike { font-size: 12px; }
+.fl-row .danger-link { color: var(--warn); }
+.st-dl { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; margin-top: 6px; }
+.st-dl .linklike { font-size: 12px; }
+.fl-row .fl-job { display: inline-flex; align-items: center; font-size: 12px; }
+.fl-row .pbar { flex: 1 1 120px; max-width: 220px; }
+.fl-say.error { color: var(--warn); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .adm-chart svg { width: 100%; height: auto; display: block; }
 .adm-chart .bar { transition: opacity .12s; }
 .adm-chart.focus .bar:not(.on) { opacity: .2; }

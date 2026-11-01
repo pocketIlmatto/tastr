@@ -18,6 +18,7 @@
       <button data-view="library" class="active">Library</button>
       <button data-view="explore">Explore</button>
       <button data-view="glossary">Glossary</button>
+      <button data-view="files">Files</button>
       <button data-view="admin" hidden title="Only admins see this, and only when Tastr is hosted">Admin</button>
     </nav>
   </div>
@@ -392,6 +393,30 @@
           <dt>Waveform and spectrogram</dt><dd>The waveform shows loudness over time. The spectrogram shows which frequencies sound when: low at the bottom, bright at the top. The Live tab draws the spectrogram as the track plays, either scrolling (2D) or as a 3D landscape of ridges, one per moment of sound. ⤢ Expand shows any chart bigger, or full screen.</dd>
         </dl>
       </div>
+    </div>
+  </section>
+  <section id="view-files" hidden>
+    <div class="fl">
+      <div class="fl-head"><h2>Your files</h2><p class="muted">Everything Tastr stores for you: the audio you uploaded and the stems made from it. Stems are made only when you ask, and you can delete them to free space and make them again later.</p></div>
+      <div class="fl-store" id="fl-store"></div>
+      <div class="fl-tools">
+        <input type="search" id="fl-q" placeholder="Search title or artist" aria-label="Search your files">
+        <span class="adm-seg" id="fl-show" role="group" aria-label="Stems"><button type="button" data-v="" aria-pressed="true">All</button><button type="button" data-v="stems" aria-pressed="false">With stems</button><button type="button" data-v="nostems" aria-pressed="false">No stems</button></span>
+        <label class="fl-sort">Sort <select id="fl-sort"><option value="new">Newest</option><option value="old">Oldest</option><option value="title">Title A–Z</option><option value="big">Largest</option><option value="bpm">BPM, slow to fast</option><option value="key">Key</option><option value="len">Length, long to short</option></select></label>
+        <button type="button" id="fl-fbtn" aria-expanded="false" aria-controls="fl-filters">Filters</button>
+      </div>
+      <div id="fl-filters" class="fl-filters" hidden>
+        <label>Vibe <select id="fl-vibe"></select></label>
+        <label>Key <select id="fl-key"></select></label>
+        <label>BPM <input id="fl-bmin" type="number" min="0" max="300" placeholder="min" aria-label="Minimum BPM"> – <input id="fl-bmax" type="number" min="0" max="300" placeholder="max" aria-label="Maximum BPM"></label>
+        <label>Uploaded <select id="fl-up"><option value="">Any time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="old">More than 30 days ago</option><option value="range">Between dates…</option></select></label>
+        <label id="fl-up-range" hidden>From <input id="fl-up-from" type="date" aria-label="Uploaded from"> to <input id="fl-up-to" type="date" aria-label="Uploaded until"></label>
+        <label>Review <select id="fl-lab"><option value="">Any</option><option value="need">Needs review</option><option value="yes">Reviewed (labeled)</option><option value="no">Not reviewed yet</option></select></label>
+      </div>
+      <div class="fl-count muted"><span id="fl-n" role="status" aria-live="polite"></span> <button type="button" id="fl-clear" class="linklike" hidden>Clear filters</button><button type="button" id="fl-sel" aria-pressed="false" title="Select several tracks for bulk downloads and stem actions">Select</button></div>
+      <div id="fl-bulk" class="fl-bulk" hidden></div>
+      <p class="fl-say muted" id="fl-say" role="status" aria-live="polite"></p>
+      <ul class="fl-list" id="fl-list" aria-label="Your tracks and their files"></ul>
     </div>
   </section>
   <section id="view-admin" hidden>

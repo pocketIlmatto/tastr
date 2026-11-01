@@ -110,6 +110,7 @@ jobs:
           cargo build --release --locked
           cargo build --release --locked --lib --target wasm32-unknown-unknown
           cargo clippy --release --locked --all-targets -- -D warnings
+          cargo test --release --locked --lib
       # librosa's numba kernels, JIT-compiled by each test worker into its own cache (tests/conftest.py). Kept between
       # runs, they load instead of compiling, which saves ~10 s of start-up per worker.
       - uses: actions/cache@v4

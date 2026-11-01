@@ -36,8 +36,8 @@ def test_card_roundtrip():
 
 def test_stage_order_and_requirements():
     names = [s.name for s in resolve_order()]
-    assert names == ["core", "sections", "tags", "suggestions", "views"]
-    assert [s.name for s in resolve_order(["tags"])] == ["core", "sections", "tags"]
+    assert names == ["core", "sections"]
+    assert [s.name for s in resolve_order(["sections"])] == ["core", "sections"]
     with pytest.raises(KeyError):
         resolve_order(["nope"])
 
@@ -129,7 +129,7 @@ def test_truth_core_fixture(synth_wav, truth_core):
     assert not card.errors
     assert card.core.bpm == truth["bpm"]
     assert card.core.key.camelot == "8A"
-    assert card.suggestions[0].category == "setup"
+    assert card.sections
 
 
 def test_web_read_api(db_path):

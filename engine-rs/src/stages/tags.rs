@@ -1,4 +1,4 @@
-//! Vibe tags (tastr/engine/stages/tags.py): rules over core numbers and features.
+//! Vibe tags: rules over core numbers and features (docs/vibes.md).
 
 use super::Ctx;
 use crate::card::Card;
@@ -95,10 +95,120 @@ pub fn vibe_scores(bpm: Option<f64>, mode: Option<&str>, energy: Option<f64>, ca
 }
 
 pub fn run(_ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
+    tag(card);
+    Ok(())
+}
+
+/// The tags from the card's core numbers and features: those scoring at least MIN_SCORE in card.tags, every
+/// positive score in extras["tags.vibe_scores"].
+fn tag(card: &mut Card) {
     let mode = card.core.key.as_ref().map(|k| k.mode);
     let scores = vibe_scores(card.core.bpm, mode, card.core.energy, card);
     card.tags = scores.iter().filter(|(_, s)| *s >= MIN_SCORE).cloned().collect();
     let obj = Json::Obj(scores.into_iter().map(|(t, s)| (t, Json::Num(s))).collect());
     card.extras.set("tags.vibe_scores", obj);
-    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::card::Key;
+
+    /// The tags listed (score at least MIN_SCORE) and every score, for a card with these numbers.
+    fn tags(bpm: Option<f64>, mode: Option<&'static str>, energy: Option<f64>, features: &[(&str, f64)]) -> Card {
+        let mut card = Card::default();
+        card.core.bpm = bpm;
+        card.core.energy = energy;
+        card.core.key = mode.map(|mode| Key {
+            tonic: 0,
+            mode,
+            scale: "",
+            camelot: String::new(),
+            confidence: 1.0,
+            likely_correct: 1.0,
+        });
+        for (k, v) in features {
+            card.set_feature(k, *v);
+        }
+        tag(&mut card);
+        card
+    }
+
+    fn names(card: &Card) -> Vec<&str> {
+        card.tags.iter().map(|(t, _)| t.as_str()).collect()
+    }
+
+    fn tempo(bpm: f64) -> Vec<String> {
+        let mut v: Vec<String> = names(&tags(Some(bpm), None, None, &[])).into_iter().map(String::from).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn bright_major_house() {
+        let card = tags(Some(126.0), Some("major"), Some(0.9), &[("brightness", 0.7)]);
+        let t = names(&card);
+        for want in ["high energy", "bright", "euphoric", "house tempo", "techno tempo"] {
+            assert!(t.contains(&want), "{want} missing from {t:?}");
+        }
+        assert!(!t.contains(&"chill") && !t.contains(&"dark"));
+    }
+
+    #[test]
+    fn dark_minor_downtempo() {
+        let card = tags(Some(85.0), Some("minor"), Some(0.2), &[("brightness", 0.2)]);
+        let t = names(&card);
+        for want in ["chill", "dark", "melancholic", "downtempo"] {
+            assert!(t.contains(&want), "{want} missing from {t:?}");
+        }
+        assert!(!t.contains(&"high energy"));
+    }
+
+    #[test]
+    fn only_bpm_gives_only_tempo_tags() {
+        assert_eq!(tempo(126.0), ["house tempo", "techno tempo"]);
+    }
+
+    #[test]
+    fn sorted_thresholded_unique() {
+        let feats = [("brightness", 0.7), ("pulse_clarity", 0.9), ("percussiveness", 0.6)];
+        let card = tags(Some(126.0), Some("major"), Some(0.9), &feats);
+        let scores: Vec<f64> = card.tags.iter().map(|(_, s)| *s).collect();
+        assert!(scores.windows(2).all(|w| w[0] >= w[1]));
+        assert!(scores.iter().all(|s| (MIN_SCORE..=1.0).contains(s)));
+        let mut t = names(&card);
+        t.sort();
+        t.dedup();
+        assert_eq!(t.len(), card.tags.len());
+    }
+
+    #[test]
+    fn swing_needs_confidence() {
+        let low = tags(Some(100.0), None, None, &[("swing_percent", 62.0), ("swing_confidence", 0.1)]);
+        let high = tags(Some(100.0), None, None, &[("swing_percent", 62.0), ("swing_confidence", 0.6)]);
+        assert!(!names(&low).contains(&"swung") && names(&high).contains(&"swung"));
+    }
+
+    #[test]
+    fn scores_under_the_cutoff_are_kept_but_not_listed() {
+        // energy 0.62 gives "high energy" about 0.07: positive, but under the cut-off
+        let card = tags(None, None, Some(0.62), &[]);
+        let scores = vibe_scores(None, None, Some(0.62), &card);
+        let he = scores.iter().find(|(t, _)| t == "high energy").unwrap().1;
+        assert!(0.0 < he && he < MIN_SCORE);
+        assert!(!names(&card).contains(&"high energy"));
+    }
+
+    #[test]
+    fn trap_tempo_covers_full_and_half_tempo_reads() {
+        // 140 sits in trap, dubstep/halftime and techno ranges at once: tempo tags are hints, not a genre call
+        assert_eq!(tempo(140.0), ["dubstep/halftime tempo", "techno tempo", "trap tempo"]);
+        assert_eq!(tempo(165.0), ["drum & bass tempo", "trap tempo"]);
+        assert_eq!(tempo(132.0), ["techno tempo", "trap tempo"]);
+        assert_eq!(tempo(70.0), ["downtempo", "trap tempo"]); // trap's halftime feel often reads at half tempo
+        assert!(!tempo(110.0).contains(&"trap tempo".to_string()));
+        assert!(!tempo(172.0).contains(&"trap tempo".to_string()));
+        let card = tags(Some(140.0), None, None, &[]);
+        assert_eq!(card.tags.iter().find(|(t, _)| t == "trap tempo").unwrap().1, 0.5);
+    }
 }

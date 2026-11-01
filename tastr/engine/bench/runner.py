@@ -26,25 +26,12 @@ DEFAULT_STAGES = ["core", "sections"]
 
 
 def analyze_item(item: Item, stages: list[str] | None = None) -> TrackCard:
-    """The card for one bench track. With TASTR_ENGINE=rust, the Rust engine makes the whole card (every stage),
-    decoding the file itself, so the score includes its decoder and resampler."""
+    """The card for one bench track. With TASTR_ENGINE=rust (the default), the Rust engine makes the whole card
+    (every stage; rust_card); with python, the reference engine runs `stages` (default core and sections)."""
     from .. import rust
 
     if rust.chosen() == "rust":
-        from dataclasses import asdict
-
-        src = Source(kind="file", uri=item.path or item.id, local_path=item.path, title=item.id)
-        if item.synth is not None:
-            d = rust.card_from_samples(item.synth())
-        else:
-            try:
-                d = rust.card_from_file(item.path)
-            except rust.RustDecodeError:  # as analyze_file does: decode here, Rust analyzes the samples
-                from ..audio import load_audio
-
-                d = rust.card_from_samples(load_audio(item.path, SR))
-                d.setdefault("extras", {})["decoded_by"] = "python"
-        return TrackCard.from_dict({**d, "source": asdict(src)})
+        return rust_card(item)
     if item.synth is not None:
         y = item.synth()
     else:
@@ -53,6 +40,27 @@ def analyze_item(item: Item, stages: list[str] | None = None) -> TrackCard:
         y = load_audio(item.path, SR)
     card = TrackCard(source=Source(kind="file", uri=item.path or item.id, local_path=item.path, title=item.id))
     return run_pipeline(y, SR, card, stages=stages or DEFAULT_STAGES)
+
+
+def rust_card(item: Item) -> TrackCard:
+    """The Rust engine's whole card for one bench track, decoding the file itself, so the score includes its
+    decoder and resampler."""
+    from dataclasses import asdict
+
+    from .. import rust
+
+    src = Source(kind="file", uri=item.path or item.id, local_path=item.path, title=item.id)
+    if item.synth is not None:
+        d = rust.card_from_samples(item.synth())
+    else:
+        try:
+            d = rust.card_from_file(item.path)
+        except rust.RustDecodeError:  # as analyze_file does: decode here, Rust analyzes the samples
+            from ..audio import load_audio
+
+            d = rust.card_from_samples(load_audio(item.path, SR))
+            d.setdefault("extras", {})["decoded_by"] = "python"
+    return TrackCard.from_dict({**d, "source": asdict(src)})
 
 
 def score_item(item: Item, card: TrackCard) -> dict:

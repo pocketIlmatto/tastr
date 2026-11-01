@@ -1,0 +1,1145 @@
+{
+ "core": {
+  "beat_times": [
+   0.0,
+   0.447,
+   0.915,
+   1.384,
+   1.853,
+   2.322,
+   2.79,
+   3.259,
+   3.728,
+   4.197,
+   4.665,
+   5.134,
+   5.603,
+   6.072,
+   6.54,
+   7.009,
+   7.478,
+   7.947,
+   8.415,
+   8.884,
+   9.353,
+   9.822,
+   10.29,
+   10.759,
+   11.228,
+   11.697,
+   12.165,
+   12.634,
+   13.103,
+   13.572,
+   14.04,
+   14.509,
+   14.978,
+   15.447,
+   15.915,
+   16.384,
+   16.853,
+   17.322,
+   17.79,
+   18.259,
+   18.728,
+   19.197,
+   19.665,
+   20.134,
+   20.603,
+   21.072,
+   21.54,
+   22.009,
+   22.478,
+   22.947,
+   23.415,
+   23.884,
+   24.353,
+   24.822,
+   25.291,
+   25.759,
+   26.228,
+   26.697,
+   27.166,
+   27.634,
+   28.103,
+   28.572,
+   29.041,
+   29.509,
+   29.978,
+   30.447,
+   30.916,
+   31.384,
+   31.853,
+   32.322,
+   32.791,
+   33.259,
+   33.728,
+   34.197,
+   34.666,
+   35.134,
+   35.603,
+   36.072,
+   36.541,
+   37.009,
+   37.478,
+   37.947,
+   38.416,
+   38.884,
+   39.353,
+   39.822,
+   40.291,
+   40.759,
+   41.228,
+   41.697,
+   42.166,
+   42.634,
+   43.103,
+   43.572,
+   44.041,
+   44.509,
+   44.978,
+   45.447,
+   45.916,
+   46.384,
+   46.853,
+   47.322,
+   47.791,
+   48.259,
+   48.728,
+   49.197,
+   49.666,
+   50.134,
+   50.603,
+   51.072,
+   51.541,
+   52.01,
+   52.478,
+   52.947,
+   53.416,
+   53.885,
+   54.353,
+   54.822,
+   55.291,
+   55.76,
+   56.228,
+   56.697,
+   57.166,
+   57.635,
+   58.103,
+   58.572,
+   59.041,
+   59.51,
+   59.978,
+   60.447,
+   60.916
+  ],
+  "beats_per_bar": 4,
+  "bpm": 128.0,
+  "bpm_confidence": 0.961,
+  "bpm_likely_correct": 0.964,
+  "downbeat_times": [
+   0.0,
+   1.853,
+   3.728,
+   5.603,
+   7.478,
+   9.353,
+   11.228,
+   13.103,
+   14.978,
+   16.853,
+   18.728,
+   20.603,
+   22.478,
+   24.353,
+   26.228,
+   28.103,
+   29.978,
+   31.853,
+   33.728,
+   35.603,
+   37.478,
+   39.353,
+   41.228,
+   43.103,
+   44.978,
+   46.853,
+   48.728,
+   50.603,
+   52.478,
+   54.353,
+   56.228,
+   58.103,
+   59.978
+  ],
+  "energy": 0.506,
+  "key": {
+   "camelot": "8B",
+   "confidence": 0.235,
+   "likely_correct": 0.526,
+   "mode": "major",
+   "scale": "Major",
+   "tonic": 0
+  },
+  "loudness_db": -17.41,
+  "meter_set": false
+ },
+ "duration": 61.0,
+ "errors": {},
+ "extras": {
+  "core.bpm_alternatives": [
+   64.0,
+   256.0
+  ],
+  "core.downbeat_phase": 0,
+  "core.key_alternatives": [
+   {
+    "key": "A minor",
+    "probability": 0.283
+   },
+   {
+    "key": "F major",
+    "probability": 0.163
+   },
+   {
+    "key": "D minor",
+    "probability": 0.017
+   }
+  ],
+  "core.meter_guess": {
+   "beats_per_bar": 4,
+   "score": -11.96
+  },
+  "suggestions.bass": {
+   "bar_notes": [
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G"
+   ],
+   "degrees": [
+    "6",
+    "4",
+    "1",
+    "5"
+   ],
+   "loop": [
+    "A",
+    "F",
+    "C",
+    "G"
+   ],
+   "movement": "fourths/fifths",
+   "notes": [
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G",
+    "A",
+    "F",
+    "C",
+    "G"
+   ],
+   "rhythm": "x..............o"
+  },
+  "suggestions.drum_grid": {
+   "clap": {
+    "detected": false,
+    "pattern": "................",
+    "velocity": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "hat": {
+    "detected": true,
+    "pattern": "..x...x...x...x.",
+    "velocity": [
+     0.053,
+     0.0,
+     0.999,
+     0.0,
+     0.0,
+     0.0,
+     0.99,
+     0.0,
+     0.0,
+     0.0,
+     0.937,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ]
+   },
+   "kick": {
+    "detected": true,
+    "pattern": "x...x...x...x...",
+    "velocity": [
+     0.957,
+     0.138,
+     0.003,
+     0.017,
+     0.887,
+     0.081,
+     0.039,
+     0.024,
+     0.922,
+     0.091,
+     0.029,
+     0.018,
+     1.0,
+     0.0,
+     0.036,
+     0.0
+    ]
+   },
+   "open_hat": {
+    "detected": false,
+    "pattern": "..........x.....",
+    "velocity": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "perc": {
+    "detected": false,
+    "pattern": "...............x",
+    "velocity": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   "snare": {
+    "detected": true,
+    "pattern": "o.x.x.x.x.x...x.",
+    "velocity": [
+     0.599,
+     0.0,
+     0.79,
+     0.0,
+     1.0,
+     0.0,
+     0.762,
+     0.0,
+     0.807,
+     0.0,
+     0.768,
+     0.0,
+     0.471,
+     0.0,
+     0.752,
+     0.0
+    ]
+   },
+   "tom": {
+    "detected": false,
+    "pattern": ".......x........",
+    "velocity": [
+     0.0,
+     0.0,
+     0.0,
+     0.364,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   }
+  },
+  "suggestions.harmony": {
+   "bar_chords": [
+    "Am",
+    "F",
+    "C",
+    "G",
+    "Am",
+    "F",
+    "C",
+    "G",
+    "Am",
+    "F",
+    "C",
+    "Gm",
+    "Am",
+    "F",
+    "C",
+    "Gm",
+    "Am",
+    "F",
+    "C",
+    "Gm",
+    "Am",
+    "F",
+    "C",
+    "Gm",
+    "Am",
+    "F",
+    "C",
+    "G",
+    "Am",
+    "F",
+    "C",
+    "G"
+   ],
+   "chords": [
+    {
+     "bars": 8,
+     "name": "Am",
+     "roman": "vi",
+     "scale": "A Minor"
+    },
+    {
+     "bars": 8,
+     "name": "F",
+     "roman": "IV",
+     "scale": "F Lydian"
+    },
+    {
+     "bars": 8,
+     "name": "C",
+     "roman": "I",
+     "scale": "C Major"
+    },
+    {
+     "bars": 4,
+     "name": "G",
+     "roman": "V",
+     "scale": "G Mixolydian"
+    },
+    {
+     "bars": 4,
+     "name": "Gm",
+     "roman": "v",
+     "scale": "G Mixolydian"
+    }
+   ],
+   "progression": [
+    "Am",
+    "F",
+    "C",
+    "G"
+   ],
+   "roman": [
+    "vi",
+    "IV",
+    "I",
+    "V"
+   ]
+  },
+  "tags.vibe_scores": {
+   "bass-heavy": 1.0,
+   "danceable": 1.0,
+   "dark": 0.66,
+   "driving": 0.771,
+   "dynamic": 1.0,
+   "house tempo": 0.5,
+   "percussive": 0.292,
+   "techno tempo": 0.5
+  },
+  "views": {
+   "spectrogram": {
+    "fmax": 10000.0,
+    "fmin": 40.0,
+    "frames": 611,
+    "hop": 0.1,
+    "png": "sha256:1b79b25fc04d3ff5938b78c5072ab44f1d17af446ff4fbbf9f9f7980bb68d78d",
+    "rows": 120
+   },
+   "waveform": {
+    "block": 256,
+    "data": "7wniLdEqzTDMN9Ud2SjKNOE01yzYIfEhzjTdD+Ml1inZGdgr2xzuINUs4h7fI98e2hHjKeEd5xveI+Eh4BbmGt0i6CToG+UT7xrjIOUN7RbkHuwW6BnlEfIV5R3qCusV6xfqD+sY6BDzE+oZ7hTqE/AR6wzvF+0Q7w3vFO8T6wnzEO4V8BPzD+4H9A7wEu8H9w3yEfML8w7vCvYN8hHyC/IM9Q30AvkO8Qv2C/UO9QvyBvgL9Q30DfcJ9QT6C/cL8wT6CvcM9gf4CfQH+Qn3CvYF9wf3CfgD+wj1BvoI+Qr4B/cG+wf5BvcI9wb5A/wI+Qb3A/wH+gj5BvwF+QP6BvsG+QP8BfsH+gT8BfkE/AX7BvoE+wT9BfsC/AX6BfwE/AX7BPoC/gT8BPsE/QP8Af0E/AT7Av8E/QT8A/4D/AP9BP0K4AzFNtofxTLaHscu2h/IK9ogyynaIM0m2iDQJdsf0yXbHtUm2BvYJtoU3CbcDuUm3g/qJuAO6SXhDegl4wzqJOYL7iPnCvMj6Aj5IugHAiDoDgMf6Bj/Hegb+hvnGfcZ5xf5FugV+xToFPsR6RP3D+oS9A/rEPIQ7BDvEO0R7Q/tEe0M7hHuCfAR7gnxEu8I8RHwCfIR8QnzEfIK9BDzCvUQ9Ar2D/YH9w/3BfcO+AT3DfcE9wz3BPcL9wT2CvcE9gn3BPYJ9wT3CPcD9wj3AvgH9wH8B/YB/wf2AgAH9gL/CPcC/wj3A/8I9wP/CPgD/wj4A/8I+QX+CPkH/Qf6B/wH+wf7BvsG/AX8BvwF/AX8BfwF/AX8BfsF+wT7BfwE/AT8BPwE/AT8BPwE/AP8A/wD/QP7Av0D+wH9A/wB/QP8AQATzw3KNe0w0A3NMeUi0SwHMNQM1CnsLtcK2CziH9oi8SneEd0m6iHgA/Ii4R/jHOkf4BfnHOkb4AUGGeEX4xjsF+EW8BjjFOMR+RjlEuMY8xfjB/AY6g7kF/cY5QzrGPcY5/3xGPMK6Rj9F+sI8Bj4Fu4FAxfxBvAW+xTyBfEU8wzxEwET8gPyEfsS8gHzEfMJ8w78D/ME9A76DvMA/w3yCfQL+gzyB/cL+AnyBQMK8gf1CfoJ8wf7CfMH9Af9CfQG9Qn7B/UC/Qn2BPUJ/An1BPcJ/Aj2//4J+gP3Cf4J+AL8CfwI+QMACfoC+ggACPoB/Aj6BPoH/wj6AfwH/wf6AP0H+gL8Bf8G+gH8Bv8G+gH/BfoD/AT+BfoC/QX8A/oCAAT7AvwD/wT7Av8E+wL7A/8D+wL8A/8D+wAAA/wB/AMACuQLxzfFF/Uzxi/dIsgs2SHKKswb8SfPJd0m0SfaH9Qn1hnqJ9gb3ijaKN4b3CfeE+gn4B7iJ+Im5BrkJuYO5iXmHeok5iPsGeYh7QvmIOUX8x7lHO0V5RrtDOUY5g39FuYV6xHnFOsN6RLqBf0S6hDqE+wT6wvtFOsH+hTsE+0U7hTuCvAU7wj2FPAT8RPzE/IM9BL0BvUR9RD2EPUP9g31DvUE9Q31DPsM9Av1C/QL9QX1CvUI/gn1CfQI9gj0BfYJ9AT/CfQJ9An3CvUD+Ar1BP8K9gr2CvkK9wX5CvgE/gn4CfkJ+gj6BvsI+wP8B/oH+wf6BvoG/Ab6AvsG+gX8BvoF+gX7BfoB+wX6A/4E+gT6BPsE+gH8BPoC/gX6BfoE/AX6AvwF+wL/BfsF+wP9BfwC/gT8Av8E/QT9A/0E/QPvCeIt0SrNMMw31R3ZKMo04TTXLNgh8CHONN0P4yXWKdkY2CvbHO4g1SziH98j3x7aEeQp4R3nG94j4SHgFuYa3SPoJOgb5RPxGuMg5Q3tFuQe7BXoGeUR8hXlHeoK6xXrF+oO6xjoEPMT6hnuFOoT8BHrDe4X7RDvDe8U7xPrCfMQ7hXwE/MP7gf0DvAS7wf3DfIR8wvzDu8K9g3yEfIL8gz2DfQC+A7xC/YL9Q71C/IF+Av1DfQN9wn1BPoL9wvzBPoK9wz2B/gJ9Af5CfcK9gX3B/cJ+AP7CPUG+gj5CvgH9wb7B/kG9wj3BvkD/Aj5BvcD/Af6CPkG/AX5A/oG+wb5A/wF+wf6BPwF+QT8BfsG+gT7BP0F+wL8BfoF/AT9BfsE+gL+BPwE+wT9A/wB/QT8BPsC/wT9BPwD/gP8A/0E/QvgDMU22h/FMtoexy7aH8gr2iDLKdogzSbaINAl2x/TJdse1SbYG9gm2hTdJtwO5SbeD+om4A7pJeEN6CXjDOok5gvvI+cK9CPoCPsi6AcCIOgPAx/oGf8d6Bv5G+cZ9xnnF/kW6BX7FOgU+hDpE/cP6hLzD+sQ8RDsEO8Q7RHtD+0R7QzuEe4J8BHuCfES7wjxEfAJ8hHxCfMR8gr0EPMK9RD0CvYP9gf3D/cF9w74BPcN9wT3DPcE9wv3BPYK9wT2CfcE9gn3BPcI9wP3CPcB+Qf3AfwH9gH/B/YCAAf2Av8I9wL/CPcD/wj3A/8I+AP/CPgE/wj5Bf4I+Qf9B/oH/Af7B/sG+wb8BfwG/AX8BfwF/AX8BfwF+wX8BPsF/AT8BPwE/AT8BPwE/AT8A/wD/AP9A/sC/QP7Af0D/AH9A/wBABPPDco17TDQDc0x5SHRLAcw1AvUKewu1wrYLOIf2iLxKd4R3SbqIeAD8yLhH+Mc6R/gF+cc6RvgBggZ4RfjGOwX4RbwGOMU4xH5GOUS4xjzF+MH8BjqDuQX9xjlDOsY9hjn/fIY8wrpGP0X6wjwGPgW7gYDF/EG8Bb7FPIF8RTzDPETARPyA/IR+xLyAfMR8wnzDvsP8wT0DvoO8wAADfIJ9Av6DPIH9wv4CfIFAwryB/UJ+gnzB/sJ8wf0B/0J9Ab1CfsH9QH9CfYE9Qn8CfUE+An8CPb//gn6A/cJ/gn4AvwJ/Aj5AwAJ+gL6CAAI+gH8CPoE+gf/CPoB/Af/B/oA/Qf6AvwF/wb6AfwG/wb6Av8F+gP8BP4F+gL9BfwD+gIABPsC/AP/BPsC/wT7AvsD/wP7AvwD/wP7AAAD/AH8AwAK5AvHN8UW9TPGL90iyCzZIcoqzBrzJ88l3CbRJ9of1CfWGOsn2BzeKNoo3hvcJ94T6CfgHuIn4ibkGuQm5g7mJeYe6iTmI+wZ5iHtCuYg5RjzHuUc7RXlGu0M5RjmDv0W5hXrEecU6w3pEuoE/RLqEeoT7BPrC+0U6wf7FOwT7RTvFO4K8BTvCPYU8BPxE/MT8gz0EvQG9RH1EPYQ9Q/2DfUO9QT1DfUM+wz0C/UL9Av1BfUK9Qj+CfUJ9Aj2CPQF9gn0BP8J9An0CfcK9QP4CvUE/wr2CvYJ+Qr3BfkK+AT+CfgJ+Qj6CPoG+wj7A/wH+gf7B/oG+gb8BvoC+wb6BfwG+gX6BfsF+gH7BfoD/QT6BPoE+wT6AfwE+gL+BfoF+gT8BfoC/QX7Av8F+wX7A/0F/AL+BPwC/wT9BP0D/QT9CKxilFajRbBs2DzeHM8dthryLtEnzif5FM4n6BToIN8n4RHhMNkj6CC2Tc8k3S7eH9oR5inhHecb3iPhIeAV5hrdI+gk6BvlE/Ia4yDlDe0WuUqwZbJOsSvbKcIkzDLkMNAp0SjUId0O5x7aEOgX8xHrCuwK9BLzD9Ur1C3kGOkN8xHuFfAT8w/uCPQO8BLvB/YN8hHzC/MO7wr2DfIR8gsBUaFatE7AUcstzDXTM84u1CfyJeAj4CPlGeYN8xfrD/AO8A7wBvgM1SfSJ/IW8w/0CPcI9wn4A/wI9Qb6CPkK+Af3BvsH+Qb3CPcG+QP8CPkGo1+xU7ZBxj7FNc4r2CjhH+Aa5xf4E+oN8RTwEfEO+xHwCvQM9gv2Btky5w73C/oH+gT6Av4E/AT7BP0D/AH8BPwE+wL/BP0E/AP+A/wD/QSvYqFggWPCRJJQwk/xQ+oZsiTIPLg4xyvUONgW3izjE9oe2hrUINMe0krFONUt2hLlJt4P6ibgDukl4Q3oJeMM6yTmC/Aj5wr1I+gI/CLoBwJimGK8XK050E3JJe0xyjrfOuAf7BXhDfcX2Ar5GuEW7RrkGu0X6RbyEc4s6BrnE+0P7RHtC+8R7gnwEe4J8RLvCPER8AnyEfEJ8xHyCvQQ8wqyXrNeslPDNMM51SLcJOUk1yPfHewg5gbwG/AL9Qv5BvQG8grvC/EL3zbiHu0R9AX5CPcB/Qf2Af8H9gIAB/YC/wj3Av8I9wP/CPcD/wj4A7lcpFS5VL1DykDOLdkv0yTgH/Aa6RXrEfgU7QvxE+8Q8w70DfgG/AfOKtso8RH3B/sG/AT8BPwE/AT8BPwD/AP8A/0D+wL9A/sB/QP8Af0D/AysZIhJlyu2ZbcZn1rGNboO/TzLF+oy+BzKHMw63xzgHvgk2RjZLOQluxblL94j4h3pIOAX5xzpG+AICRnhF+MY7BfhFvAY4xTjEfgY5RLjGKRroUfJUrw6rkTiPcI2zzrlGtgQ2y7jEvcV9g3fFuse8xzxBPwS6wvgO+gu6Q3tFvMN8RMBE/ID8hH7EvIB8xHzCfMO+w/zBPQO+g7zAAAN9lGcTsBZt0vPM9E61CDfKtMl8hztHOId6RrsD/QI+AvtD+sS8w34BOoz0jfmEPkN9Qb4CfsI9v/+CfoD9wn+CfgC/An8CPkDAAn6AvoIAAj6AalhsE6yQcpDyS7OK9op3x/fIecW+BTuEOwR7RHyEPwJ+An1CvUL+QjBQOQY+Ar4BAAF+wL8A/8E+wL/BPsC+wP/A/sC/AP/A/sAAAP8AfwDsGKjXdlZsDrnPpkntkW0TtEi5UDhDuov3SXnG9sf5RbaHtoS7CDbF8g6xDLZJtgq3hPoJ+Af4ifiJuQa5CbmDuYl5h/qJOYj7BnmIewK5iDldqN5o0S2UtMvwDW9Pcgw4DnlJukN9BbuEfMO7w35C+4K8wztC/EM7g3GNewd5xbsFe8U7grwFO8I9hTwE/ET8xPyDPQS9Ab1EfUQ9hD1D/YNq16qVbZQvzfPNc0x1DTqLOMX5hjyFu0J+RH0C/cM+Ar1BPUK/gn1BtQ24xnzDfQM9QX/CvYK9gn5CvcF+Qr4BP4J+An5CPoI+gb7CPsD/AfAWqxXtErCSs83zzXeLtck4B7wG+cV8BXyDvMI+A33C/gI/An4BPgI2y7XLvQR9Qf5BvwF+gL9BfsC/wX7BfsD/QX8Av4E/AL/BP0E/QP+BP0MrGKUVqNFsWzYPN4czx22GvIu0SfOJ/kUzifoFOgg3yfhEeEw2SPoILZS1iXdK90f2hHnKeEd5xveI+Eh4BTmGt0j6CTpG+UT8xrjIOUN7Ra5SrBlsk6xK9spwiTMMuMw0CnRKNQh3Q7mHtoQ6BfzEesK7Av0EvMPzyrSMOkZ6gvzEe4V8BLzD+4I9A7wEu8H9g3yEfML8w7vCvYN8hHyCwFRoVq0TsBRyy3MNdMzzi7UJvIl4CPgI+YZ5g3yF+sP8A7wDvAG+AzdMNU27RTzD/UH9wj3CfgD/Aj1BvoI+Qr4B/cG+wf5BvcI9wb5A/wI+QajX7FTtkHFPsU1zivYKOEf4BrnF/gT6g3xFPAR8Q77EfAK9Az3C/YG1DDlG/UM+Qj6BPoC/gT8BPsE/QP8AfwE/AT7Av8E/QT8A/4D/AP9BK9ioWCBY8JDklDCTvFD6hmyJMg8uDjHK9Q42BbeLOMT2h7aGtQg0h3STMMy0yvbEuUn3g/qJuAO6SXhDekl4wzsJOYL8SPnCvYj6Aj9IugHAmKYYrxcrTnQTckl7THKOt864B/sFeEN9xfYCvga4RbsGuQa7RfpFvIRzSTqIuQS7BDsEe0L7xHuCfAR7gnxEu8I8RHwCfIR8QnzEfIK9BDzCrJes16yU8M0wznVI9wk5CTXI98d7SDmB/Ab8Av1C/oG9AfyCu8L8QvXMt8p7w/0BvkI9wH9B/YBAAf2AgAH9gL/CPcC/wj3A/8I9wP/CPgDt1ykVLlUvULKQM4t2S/TJOAf8BrpFesR+BTtC/ET7xDzDvQN+AX8B8Um3ijrGPYH+wf8BPwE/AT8BPwE/AP8A/wD/QP7Av0D+wH9A/wB/QP8EKxkiEmZK7ZlthmfWsY0ug79PMsV6jL4HMoczDrfHOAe+CTZGNks5CW6F+s53ibhHekg4BfnHOkb4AkKGeEX4xjsF+EW8BjjFOMR9xjlEuMYpGuhR8lSvDquROI8wjbQOuUa2A/cLuMS9xX2Dt8W6x7zHPEF/BLrC8xD5yrpDewZ8wvxEwET8gPyEfsS8gH0EfMJ8w77D/ME9A76DvMAAA32UZxOwFm3S88z0TrUIN8q0yXyHO0d4h3pGuwP9Qj4C+0P6xLzDfgE4yzPNuMO+Q31BvcJ+wj2//4J+gP3Cf4J+AL8CfwI+QQACfoC+ggACPoBqWGwTrJByUPJLs4r2infH98h5xX4FO4Q7BHtEfIQ/An4CfUK9Qv5CMk05hL1DPYEAAX7AvwD/wT7Av8E+wL7A/8D+wL8A/8D+wAAA/wB/AOwYqNd2VmwN+c+mSe2RbRO0SLlQOEO6i/dJecb2x/lFtoe2hHtINsYyy24MNom2SndEugn4CDiJ+Im5BrkJuYN5iXmIOok5iPsGeYh7ArmIOV3o3mkRLZS0y/ANb09yDHgOeUm6Q30Fu4R8w7vDfkL7grzDO0L8QzuDdUp8R7jFOwW7xTuCvAU7wj3FPAT8RPzE/IM9BL0BvUR9RD2EPUP9g2rXqpVtlC/N881zTHUNOks4xfmGPIW7Qn5EfQL9wz4CvUE9Qr+CfUF1TnkG/EM9Az0Bf8K9gr2CfkK9wX5CvgE/wn4CfkI+gj6BvsI+wP9B71arFe0SsJJzzfPNd4u1yTgHe8b5xXwFfIO8wj4DfcL+Aj8CfgE+AjQKdkh6xD0B/oF/AX6Av0F+wL/BfsF+wP9BfwC/gT8Av8E/QT9A/4E/RCsYpRWo0WybNg83hzPHbYa8i7RJ84n+RTOJ+gU6CDfJ+ER4TDZI+ggmlfLK94r3iDaEOkp4R3mG94j4SHgFOYa3SToJOkb5RP1GuMg5Q3tFrlKsGWyTrEr2ynCJcwy4jDQKdEo1SHdD+Ye2hDoF/MR6wrsDPMS8w/QLtcw5RjqDPIR7hXwEvMP7gj0DvAS7wf2DfIR8wv0Du8K9g3yEfIMAVGhWrROwFHLLcw11DPOLtQm8iXgI+Aj5hnmDfIX6w/wDvAO8Ab4DNcn1kLuGPEN9Af3CPcJ+AP8CPUH+gj5CvgH9wb7B/kG9wj3BvkC/Qj5BqNfsVO2QcU+xTXOK9go4R/gGucX+BPqDfEU8BHxDfsR8Av0DPcL9gbPROYU9gn5B/oE+gL+BPwE+wT9A/wB/AT8BPsC/wT9BPwD/gP8A/0Er2KhYIFjwkGSUMJO8EPqGbIkyDy4OMcr1DjYFt4s4xPaHtka1CDSHNJGySzSK9sR5ifeD+om4A7pJeEN6SXjDOwk5gvyI+cK9yPoCP4i6AgCYphivFytOdBNySXtMco63zrhH+wU4Q33F9gK9xrhFuwa5BrtF+kW8RHOK+oc5RPtD+wR7QvvEe4J8BHuCfES7wjxEfAJ8hHxCfMR8gr0EPMKsl6zXrJTwzTDOdUj3CTkJNcj3x3tIOYH8BvwC/UL+gb0B/IK7wvxC9w93BrrEvUG+Qj3Af0H9gEAB/YCAAf2Av8I9wP/CPcD/wj3A/8I+AO1XKRUuVS9QspAzi3YL9Mk4B/wGukV6xH4FO0L8RPvEPMO9A34BfwHxjHhKO4W9gf6BvwE/AT8BPwE/AT8A/wD/AL9A/sC/QP7Af0D/AH9A/wUrGSISZsrtmW1GZ9axjK6Dv08yxTqMvgcyhzNOt8c4B73JNkY2SzkJLUW4y3eJeEd6SDgF+cc6RvgCgsZ4RfjGOwX4RbwGOMU4xH3GOUS4xika6FHyVK8Oq5E4jvCNtI65RrYD9wu4xL3FfYO3xbrHvMc8Qb8EuoLxkzkOukN7xjzC/ETARPyA/IR+xLyAfQR8wnzDvsP8wT0DvoO8wAADfZRnE7AWbdLzzPROtQg3yrTJPIc7R3iHeka7A71CPgL7A/rEvMN+ATXLdkm4xD7DvQF9wn7CPb//gn6A/cJ/gn4AvwJ/Aj5BAAJ+gL6CAAI+gGpYbBOskHJQ8kuzivaKd8f3yHnFfkU7hDsEe0R8g/8CfgJ9Qr1C/kIxDHeGPcM9wMABfsC/AP/BPsC/wT7AvsD/wP7AvwD/wP7AAAD/AH8A7Bio13ZWbA05z6ZJ7VFtE7RIeVA4Q7qL90l5xvbH+UW2h7aEe0g2xjHMbA22STYK90S6CfgIeIn4ibkGuQm5g3mJeYh6iTmI+wZ5iHrCeYg5XijeaREtlLTL8A1vT3IMuA55SbpDPMW7hHzDu8N+QvuCvMM7QvxDO4NyyXoHOcU7BjvFO4K8BTvCPcU8BPxE/MT8gz0EvQG9RH1EPYQ9Q/2DateqlW2UL83zzXNMtQ06SzjF+YY8xbtCfkR9Av3DPgK9QT1Cv4J9QXgLt4Z8Qr1DfQF/wr2CvYJ+Qr3BfkK+AT/CfgJ+Qj6CPoG+wj7A/0Hu1qsV7RKwknPN8813S7XJOAd7xvnFfAV8w7zCPgN9wv4CPwJ+AT4CNIp4TzzE/UG+gb8BfoC/QX7Av8F+wX7A/0F/AL+BPwC/wT9BP0D/gT9FKxilFajRbNs2DzeHM8dthrxLtEnzib5FM4n6BToIN8n4RDhMNkj6CCyTNMm3CzeHtoQ6ynhHeYb3iPhIeAU5hrdJOgk6RvlE/Ya4yDlDe0WuUqwZbJOsSvbKcImzDLiMNAp0SjVId0P5R7aEegX8xHrCuwN8xLzD7Yu6TnmF+oM8RHuFfAS8w/uCPQO8BLvB/YN8hHzC/QO7wr2DfIR8gwBUaFatE7AUcstzDXUM84u1CbxJeAj4CPmGeYM8RfrD/AO8A7wBvgM1CrUN+8T8w71B/cH9wn4A/0I9Qf6CPkK+Af3BfsH+Qf3CPcG+QL9CPkGo1+xU7ZBxT7FNc4r2CjhH+Aa5xf5E+oO8RTwEfEN+xHwC/QM9wv2BeFE4hP3DPoH+gT6Av4E/AT7BP4D/AH8BPwE+wL/BP0E/AP+A/wD/QSvYqFggWPCP5JQwk3wQ+oZsiTIPLg4xyvUONgW3izjE9oe2BnUINIc00LJK9Mp2hLlJt4P6ibgDukl4Q3pJeMM7STmC/Mj5wr4I+gIACLoCQJimGG8XK050E3JJe0xyjrfOuEf7BPhDfcX2Ar3GuEW6xrkGuwX6RbxEcw16iDnEuwQ7RHtCu8R7gnwEe4J8RLvCPER8AnyEfEJ8xHyCvQQ8wqyXrNeslPDNMM51SPcJOQk1yPfHe0g5gfwG/AL9Qv6BvQH8QrvC/EL2DvcJe4S9AT6CfcB/gf2AQAH9gIAB/YC/wj3A/8I9wP/CPcD/wj4A7NcpFS5VL1BykDOLdgv0yTgHvAa6RXrEfgU7QvxE+8Q8w70DfgF/AfML9kp8BD4B/sH/AT8BPwE/AT8BPwD/AP8Av0D+wH9A/sB/QP8Af0D/BisZIhJnCu2ZbQZn1rGMboO/TzLEuoy+BzKHM063xzgHvck2RjZLOQjxBvqLd0l4R3pIOAX5xzpG+ALCxnhF+MY7BfhFvAY4xTjEfYY5RLjGKRroUfJUrw6rkTiOsI20zrlGtgP3S7jEfgV9g7fFuse8xzxB/wS6gvPQugw6hDtF/MM8RMBE/ID8hH7EvIB9BHzCfMO+w/zBPQO+g3zAAEN9lGcTsBZt0vPM9E61CDfKtMk8hztHeId6hrsDvYI+AvsD+sS8w34BM1C2SfkEvoM9Qb5CfsI9v/+CfoD9wn+CfgC/An7CPkEAAn6AvoIAAj6AalhsE6yQclDyS7OK9op3x/fIecV+RTuEOwR7RHyD/0J+An1CvUL+QjNQ+cf9gr3BAAF+wL8A/8E+wL/BPsC+wP/A/sC/AP/A/sAAAP8AfwDsGKjXdlZsDHnPpkntUW0TtEg5UDhDuov3SXmG9sf5RbaHtoR7iDbGcwxvDLaItoq3RHoJ+Ai4ifiJuQa5CbmDeYl5iHqJOYj7BnmIesJ5iDleaN5pUS2UtMvwDW9Pcgz4DnlJukM8hbuEfMO7w35C+4K8wztC/EM7g3ULusd5xXsFu8U7grwFO8I9xTwE/ET8xPyDPQS9Ab1EfUQ9hD1D/YNq16qVbZQvzfPNc0y1DToLOMX5hjzFu0J+RH0C/cM+Ar1BPUK/gn1BdFJ3xryEvUM9AX/CvYK9gn5CvcF+Qr4BP8J+An5CPoI+gb7CPsD/Qe6WqxXtErCSc83zzXdLtck4BzvG+cV8BXzDvMI+A33C/gI/An4BPgIyjXfMvIS9gf5BfwF+gL9BfsC/gX7BfsD/QX8Av4E/AL/BP0E/QP+BP0D7gniLc4qzTDMN9Ud2SjKNOEz1yzYHu8hzjTdD+Ql1inYGNgr2xzuINUs4iLfI98e2hDtKeEd5hveI+Eh4BTmGt0k6CTpG+UT9hrjIOUN7RbkHusS6BnlEfIV5R3qCusV6xfqDOwY6BDyE+oZ7hTqEvAR6xHtF+0Q7wzwFO8T6wnzEO4V8BHzD+4J9A7wEu8H9Q3yEfML9A7vCvYN8hHyDPIM9g30AvcO8Qv2C/UO9QvyBfgL9Q30DfkJ9QT5C/cL8wT6CvcM9gf4CfQH+Qn3CvYF9wf4CfgD/Qj1B/oI+Qr4B/cF+wf5B/cI+Ab5Av0I+Qb3A/wH+gj5BfwF+QT6BvsG+QP8BfsH+gT9BfkE/AX7BvoE+wT9BfsD+wX6BfwD/QX7BPoC/gT8BPsE/gP8AfwE/AT7Av8E/QT8A/4D/AP9BP0L4AzFNtofxTLaHscu2h/IK9ogyynaIM0m2iDQJdsf0yXYHtUm2BjYJtoQ4CbcDugm3g/qJuAO6SXhDeol4wzuJOYL9CPnCvkj6AgAIugLAiDoFgEf6Bz7Hegb9xvnGfcY5xf5FegV+xLoFPgQ6RP0D+oS8g/rEPAQ7BDuEO0R7Q3tEe0K7xHuCfAR7gnxEu8I8RHwCfIR8QnzEfIK9BDzCvUQ9Aj2D/YF9w/3BfcO+AT3DfcE9wz3BPcL9wT2CvcE9gn3BPYJ9wT3CPcC9wj3AfoH9wH+B/YBAAf2AgAH9gL/CPcD/wj3A/8I9wP/CPgD/wj4Bf8I+Qb9CPkH/Af6B/sH+wf7BvsG/AX8BvwF/AX8BfwF/AX8BfsF/AT7BfwE/AT8BPwE/AT8BPwE/AP8A/wC/QP7Af0D+wH9A/wB/QP8AQATzw3KNe0w0A3NMeUe0SwHMNQJ1CnsLtcK2izgH9oi7SneEd0m6iDg/vYi4R/jHOkf4BfnHOkb4A0LGeEX4xjsF+EW8BjjFOMR9hjlEuMY8xfjA/AY6g7kGPcY5QzwGPQY5/3zGPMK6Rj9F+sI8Bj3Fu4LAhfxBvAW+xTyBfEU8wrxEwET8gPyEfsS8gH0EfMJ8w77D/ME9A76DfMBAQ3yCfQL+gzyB/cL9gjyBwMK8gf1CfoJ8wf8CfMH9Qf8CfQG9Qn7B/UA/Qn2BPUJ/An1BPkJ+wj2//4J+gP3Cf4J+AL8CfsI+QUACfoC+ggACPoB/Aj6A/oH/wj6APwH/wf6//0H+gL8Bf8G+gH8Bv8G+gL/BfoD/AT+BfoC/QX8A/oDAAT7AvwD/wT7Av8E+wL8A/8D+wL8A/8D+wAAA/wB/AMACuELxzfFD/Uzxi/aIsgs2SHKKswT9ifPJdom0SfaH9Qn1hPvJ9gf3SjaKN4b3CfeEegn4CPiJ+Im5BrkJuYN5iXmIuok5iPsGeYh6wnmIOUc8x7lHO0V5RrtDOUY5hL9FuYV6xHnFOsN6RLqB/0S6hLqE+wT6wvtFOsH/BTsFO0U7xTuCvAU7wj4FPAT8RPzE/IM9BL0BvUR9RD2EPUP9g31DvUE9Q31DPsM9Av1C/QL9QX1CvUJ/Qn1CfQI9gj0BfYJ9AX+CfQJ9Aj3CvUD+Ar1BP8K9gr2CPkK9wX5CvgE/wn4CfkI+gj6BvsI+wP9B/oH+wf6BvoG/Ab6AvwG+gX7BvoF+gX7BfoB+wX6BPwE+gT6BPsE+gH8BPoC/gX6BfoD/AX6Av0F+wL+BfsF+wP9BfwC/gT8Av8E/QT9A/4E/QPuCeItzirNMMw31R3ZKMo04TLXLNgd7iHONN0P5SXWKdgY2CvbHO4g1SziIt8j3x7aD+4p4R3lG94j4SHgFOYa3SToJOob5RP1GuMg5Q3tFuQe6hLoGeUR8hXlHeoK6xXrF+oM7BjoEPET6hnuFOoR8BHrEu0X7RDvC/AU7xPrCfMQ7hXwEfMP7gn0DvAS7wf1DfIR8wv0Du8K9g3yEfIM8gz2DfQC9g7xC/YL9Q71C/IF+Av1DfQN+Qn1BPgL9wvzBPoK9wz2B/gJ9Af5CfcK9gX3B/gJ+AP9CPUH+gj5CvgH9wX7B/kH9wj4BvkC/Qj5BvcD/Af6CPkF/AX5BPoG+wb5A/wF+wf6BP0F+QT8BfsG+gT7BP0F+wP7BfoF/AP9BfsE+gL+BPwE+wT+A/wB/AT8BPsC/gT9BPwD/gP8A/0E/QvgDMU22h/FMtoexy7aH8gr2iDLKdogzSbaINAl2x/TJdce1SbYF9gm2g/gJtwO6CbeD+om4A7pJeEN6iXjDO8k5gv1I+cK+iPoCAAi6AwCIOgXAB/oHPod6Bv2G+cZ9xjnF/kV6BX7EugU+BDpE/QP6hLyD+sQ8BDsEO4Q7RHtDe0R7QrvEe4J8BHuCfES7wjxEfAJ8hHxCfMR8gr0EPMK9RD0CPYP9gX3D/cF9w74BPcN9wT3DPcE9wv3BPYK9wT2CfcE9gn3A/cI9wL4CPcB+wf3Af4H9gEAB/YCAAf2Av8I9wP/CPcD/wj3A/8I+AP/CPgF/gj5B/0I+Qf8B/oH+wf7B/sF+wb8BfwG/AX8BfwF/AX8BfwF+wX8BPsF/AT8BPwE/AT8BPwE/AT8A/wD/AL9A/sB/QP7Af0D/AH9A/wBABPPDco17TDQDM0x5R3RLAYw1AnUKuwu1wraLN8f2iLtKd4R3SbqIOD99yLhH+Mc6R/gF+cc6BvgDgoZ4RfjGOwX4RbwGOMU4xH1GOUS4xjzF+MD8BjqDuQY9xjlDPAY9Bjn/fQY8wrpGP0X6wjwGPcW7g0CF/EG8Bb7FPIF8RTzCfETARPyA/IR+xLyAfUR8wnzDvsP8wT0DvoN8wEBDfIJ9Av6DPIH9wv2CPIHAgryB/UJ+gnzB/wJ8wf1B/wJ9Ab1CfsH9QD9CfYE9Qn8CfUE+gn7CPb//gn6A/cJ/gn4AvwJ+wj5BQAJ+gL6CAAI+gH8CPoD+wf/CPoA/Af/B/r//gf6AvwF/wb6AfwG/wb6Av8F+gP8BP4F+gL9BfwD+gMABPsC/AP/BPsC/wT7AvwD/wP7AvwD/wP7AAAD/AH8AwAK4AvHN8US9TPGL9oiyCzZIcoqzBH2J88l2ibRJ9of1CfWEvAn2CDdKNoo3hvcJ94R6CfgI+In4ibkGuQm5g3mJeYj6iTmI+wZ5iHqCeYg5R3zHuUc7RXlGu0M5RjmE/0W5hXrEecU6w3pEuoH/RLqEuoT7BPrC+0U6wf8FOwU7RTvFO4K8BTvCPgU8BPxE/MT8gz0EvQG9RH1EPYQ9Q/2DfUO9QT1DfUM+gz0C/UL9Av1BfUK9Qn8CfUJ9Aj2CPQF9gn0Bf4J9An0CPcK9QP4CvUE/wr2CvYI+Qr3BfkK+AT/CfgJ+Qf6CPoG+wj7A/0H+gf7B/oG+gb8BvoC/Ab6BfsG+gX6BfsF+gH7BfoE/AT6BPoE+wT6AfwE+gL9BfoF+gP8BfoC/QX7Av4F+wX7A/0F/AL+BPwC/wT9BP0D/gT9AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+    "sr": 22050
+   }
+  }
+ },
+ "features": {
+  "brightness": 0.192,
+  "danceability": 0.879,
+  "dynamic_range_db": 23.56,
+  "low_end": 0.874,
+  "onset_rate": 2.361,
+  "percussiveness": 0.423,
+  "pulse_clarity": 1.0,
+  "section_contrast": 0.423,
+  "section_count": 3.0,
+  "swing_confidence": 0.905,
+  "swing_percent": 50.0,
+  "tempo_stability": 0.922
+ },
+ "sample_rate": 22050,
+ "schema_version": 1,
+ "sections": [
+  {
+   "confidence": 0.729,
+   "end": 14.978,
+   "end_bar": 8,
+   "energy": 0.068,
+   "label": "intro",
+   "letter": "A",
+   "start": 0.0,
+   "start_bar": 1
+  },
+  {
+   "confidence": 0.729,
+   "end": 44.978,
+   "end_bar": 24,
+   "energy": 0.933,
+   "label": "drop",
+   "letter": "B",
+   "start": 14.978,
+   "start_bar": 9
+  },
+  {
+   "confidence": 0.654,
+   "end": 61.0,
+   "end_bar": 33,
+   "energy": 0.005,
+   "label": "outro",
+   "letter": "A",
+   "start": 44.978,
+   "start_bar": 25
+  }
+ ],
+ "series": {
+  "energy": {
+   "times": [
+    0.0,
+    1.853,
+    3.728,
+    5.603,
+    7.478,
+    9.353,
+    11.228,
+    13.103,
+    14.978,
+    16.853,
+    18.728,
+    20.603,
+    22.478,
+    24.353,
+    26.228,
+    28.103,
+    29.978,
+    31.853,
+    33.728,
+    35.603,
+    37.478,
+    39.353,
+    41.228,
+    43.103,
+    44.978,
+    46.853,
+    48.728,
+    50.603,
+    52.478,
+    54.353,
+    56.228,
+    58.103,
+    59.978
+   ],
+   "values": [
+    0.023,
+    0.003,
+    0.001,
+    0.0,
+    0.027,
+    0.003,
+    0.001,
+    0.0,
+    0.995,
+    0.998,
+    0.987,
+    0.856,
+    0.999,
+    0.994,
+    0.994,
+    0.857,
+    1.0,
+    0.995,
+    0.986,
+    0.852,
+    0.996,
+    1.0,
+    0.99,
+    0.862,
+    0.026,
+    0.003,
+    0.001,
+    0.0,
+    0.026,
+    0.003,
+    0.001,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "source": null,
+ "stages_run": {
+  "core": "0.3.0",
+  "sections": "0.2.0",
+  "suggestions": "0.5.0",
+  "tags": "0.2.0",
+  "views": "0.1.0"
+ },
+ "suggestions": [
+  {
+   "body": "Set the tempo to 128.0 (half/double: 64/256). Turn on Scale in the Control Bar with root C and scale Major so MIDI devices and the piano roll follow it. Camelot 8B if you are mixing it. If you drop the audio in, warp it in Beats mode.",
+   "category": "setup",
+   "data": {
+    "bpm": 128.0,
+    "camelot": "8B",
+    "root": "C",
+    "scale": "Major",
+    "template": "{setup}",
+    "warp_mode": "Beats"
+   },
+   "title": "Set the project to 128 BPM, C Major"
+  },
+  {
+   "body": "Measured per section, since drums change between sections. Averaged over the busiest bars the whole track reads as kick on steps 1, 5, 9, 13; snare on steps 1, 3, 5, 7, 9, 11, 15; hat on steps 3, 7, 11, 15. Program it on a Drum Rack (kick C1, snare D1, hat F#1) and vary the last bar of every 4.",
+   "category": "drums",
+   "data": {
+    "bpm": 128,
+    "by_section": [
+     {
+      "end_bar": 8,
+      "energy": 0.068,
+      "idx": 0,
+      "label": "intro",
+      "letter": "A",
+      "pattern": {
+       "hat": "................",
+       "kick": "................",
+       "snare": "................"
+      },
+      "start_bar": 1
+     },
+     {
+      "end_bar": 24,
+      "energy": 0.933,
+      "idx": 1,
+      "label": "drop",
+      "letter": "B",
+      "pattern": {
+       "hat": "..x...x...x...x.",
+       "kick": "x...x...x...x...",
+       "snare": "o.x.x.x.x.x.o.x."
+      },
+      "start_bar": 9
+     },
+     {
+      "end_bar": 33,
+      "energy": 0.005,
+      "idx": 2,
+      "label": "outro",
+      "letter": "A",
+      "pattern": {
+       "hat": "................",
+       "kick": "................",
+       "snare": "o..............."
+      },
+      "start_bar": 25
+     }
+    ],
+    "lane_help": {
+     "hat": "Short hits above 6 kHz (closed hi-hat, shaker).",
+     "kick": "Low hits whose energy sits below about 120 Hz.",
+     "snare": "Noisy mid hits (400 Hz to 5 kHz), usually with some body around 200 Hz."
+    },
+    "origin": "detected",
+    "pads": {
+     "clap": "D#1",
+     "hat": "F#1",
+     "kick": "C1",
+     "open_hat": "A#1",
+     "perc": "G#1",
+     "snare": "D1",
+     "tom": "A1"
+    },
+    "pattern": {
+     "hat": "..x...x...x...x.",
+     "kick": "x...x...x...x...",
+     "snare": "o.x.x.x.x.x...x."
+    },
+    "template": "Measured per section, since drums change between sections. Averaged over the busiest bars the whole track reads as kick on steps 1, 5, 9, 13; snare on steps 1, 3, 5, 7, 9, 11, 15; hat on steps 3, 7, 11, 15. Program it on {drumrack}{pads} and vary the last bar of every 4."
+   },
+   "title": "Detected groove"
+  },
+  {
+   "body": "A classic house/techno pattern that sits at this tempo. Lanes map to default Drum Rack pads.",
+   "category": "drums",
+   "data": {
+    "bpm": 128,
+    "lane_help": {
+     "clap": "Noisy mid hits with little body, made of several quick bursts.",
+     "hat": "Short hits above 6 kHz (closed hi-hat, shaker).",
+     "kick": "Low hits whose energy sits below about 120 Hz.",
+     "open_hat": "Hits above 6 kHz that keep ringing (open hi-hat, ride, crash)."
+    },
+    "origin": "template",
+    "pads": {
+     "clap": "D#1",
+     "hat": "F#1",
+     "kick": "C1",
+     "open_hat": "A#1",
+     "perc": "G#1",
+     "snare": "D1",
+     "tom": "A1"
+    },
+    "pattern": {
+     "clap": "....x.......x...",
+     "hat": "..x...x...x...x.",
+     "kick": "x...x...x...x...",
+     "open_hat": "......x.......x."
+    },
+    "style": "four on the floor",
+    "style_key": "four_floor",
+    "template": "A classic house/techno pattern that sits at this tempo. Lanes map to the default {drumrack} pads."
+   },
+   "title": "Pattern idea: Classic house/techno"
+  },
+  {
+   "body": "A rolling 16ths pattern that sits at this tempo. Lanes map to default Drum Rack pads.",
+   "category": "drums",
+   "data": {
+    "bpm": 128,
+    "lane_help": {
+     "clap": "Noisy mid hits with little body, made of several quick bursts.",
+     "hat": "Short hits above 6 kHz (closed hi-hat, shaker).",
+     "kick": "Low hits whose energy sits below about 120 Hz.",
+     "perc": "Pitched mid hits without body (cowbell, rim, conga, wood block)."
+    },
+    "origin": "template",
+    "pads": {
+     "clap": "D#1",
+     "hat": "F#1",
+     "kick": "C1",
+     "open_hat": "A#1",
+     "perc": "G#1",
+     "snare": "D1",
+     "tom": "A1"
+    },
+    "pattern": {
+     "clap": "....x.......x...",
+     "hat": "xoxoxoxoxoxoxoxo",
+     "kick": "x...x...x...x...",
+     "perc": "...x..x....x..x."
+    },
+    "style": "four on the floor",
+    "style_key": "four_floor",
+    "template": "A rolling 16ths pattern that sits at this tempo. Lanes map to the default {drumrack} pads."
+   },
+   "title": "Pattern idea: Rolling 16ths"
+  },
+  {
+   "body": "Per-bar bass notes loop as A - F - C - G (scale degrees 6 - 4 - 1 - 5). It moves in fourths and fifths, classic root motion. Keep the bass on chord roots and add an octave jump on the last 16th of the bar.",
+   "category": "bass",
+   "data": {
+    "by_section": [
+     {
+      "degrees": [
+       "6",
+       "4",
+       "1",
+       "5"
+      ],
+      "end_bar": 8,
+      "idx": 0,
+      "label": "intro",
+      "letter": "A",
+      "loop": [
+       "A",
+       "F",
+       "C",
+       "G"
+      ],
+      "rhythm": "x..............x",
+      "start_bar": 1
+     },
+     {
+      "beats": [
+       null,
+       [
+        "F",
+        "F",
+        "F",
+        "Ab"
+       ],
+       [
+        "C",
+        "C",
+        "C",
+        "Ab"
+       ],
+       [
+        "G",
+        "G",
+        "Ab",
+        "Ab"
+       ]
+      ],
+      "degrees": [
+       "6",
+       "4",
+       "1",
+       "5"
+      ],
+      "end_bar": 24,
+      "idx": 1,
+      "label": "drop",
+      "letter": "B",
+      "loop": [
+       "A",
+       "F",
+       "C",
+       "G"
+      ],
+      "rhythm": "x...o...o...o..o",
+      "start_bar": 9
+     },
+     {
+      "degrees": [
+       "6",
+       "4",
+       "1",
+       "5"
+      ],
+      "end_bar": 33,
+      "idx": 2,
+      "label": "outro",
+      "letter": "A",
+      "loop": [
+       "A",
+       "F",
+       "C",
+       "G"
+      ],
+      "rhythm": "x..............o",
+      "start_bar": 25
+     }
+    ],
+    "degrees": [
+     "6",
+     "4",
+     "1",
+     "5"
+    ],
+    "loop": [
+     "A",
+     "F",
+     "C",
+     "G"
+    ],
+    "movement": "fourths/fifths",
+    "rhythm": "x..............o"
+   },
+   "title": "Bass loop: A - F - C - G (fourths/fifths)"
+  },
+  {
+   "body": "Put a Compressor on the bass, enable Sidechain from the kick, ratio 4:1, attack 0.1 ms, release about 141-234 ms (an 8th note at this tempo is 234 ms). Or use Live 12's Shaper/Envelope Follower for a drawn ducking curve.",
+   "category": "bass",
+   "data": {
+    "release_ms": 234,
+    "template": "{sidechain}"
+   },
+   "title": "Sidechain the bass to the kick"
+  },
+  {
+   "body": "The most common 4-bar loop reads as Am - F - C - G (vi - IV - I - V in C Major). Sketch it with the Chord MIDI effect or Live 12's chord generators, then thin the voicing so it doesn't fight the bass.",
+   "category": "harmony",
+   "data": {
+    "by_section": [
+     {
+      "end_bar": 8,
+      "idx": 0,
+      "label": "intro",
+      "letter": "A",
+      "progression": [
+       "Am",
+       "F",
+       "C",
+       "G"
+      ],
+      "roman": [
+       "vi",
+       "IV",
+       "I",
+       "V"
+      ],
+      "start_bar": 1
+     },
+     {
+      "end_bar": 24,
+      "idx": 1,
+      "label": "drop",
+      "letter": "B",
+      "progression": [
+       "Am",
+       "F",
+       "C",
+       "Gm"
+      ],
+      "roman": [
+       "vi",
+       "IV",
+       "I",
+       "v"
+      ],
+      "start_bar": 9
+     },
+     {
+      "end_bar": 33,
+      "idx": 2,
+      "label": "outro",
+      "letter": "A",
+      "progression": [
+       "Am",
+       "F",
+       "C",
+       "G"
+      ],
+      "roman": [
+       "vi",
+       "IV",
+       "I",
+       "V"
+      ],
+      "start_bar": 25
+     }
+    ],
+    "progression": [
+     "Am",
+     "F",
+     "C",
+     "G"
+    ],
+    "roman": [
+     "vi",
+     "IV",
+     "I",
+     "V"
+    ]
+   },
+   "title": "Chord loop guess: Am - F - C - G"
+  },
+  {
+   "body": "Am shows up in 8 bars. For leads or arps over it, A Minor fits.",
+   "category": "harmony",
+   "data": {
+    "bars": 8,
+    "name": "Am",
+    "roman": "vi",
+    "scale": "A Minor"
+   },
+   "title": "Over Am (vi): play A Minor"
+  },
+  {
+   "body": "F shows up in 8 bars. For leads or arps over it, F Lydian fits.",
+   "category": "harmony",
+   "data": {
+    "bars": 8,
+    "name": "F",
+    "roman": "IV",
+    "scale": "F Lydian"
+   },
+   "title": "Over F (IV): play F Lydian"
+  },
+  {
+   "body": "C shows up in 8 bars. For leads or arps over it, C Major fits.",
+   "category": "harmony",
+   "data": {
+    "bars": 8,
+    "name": "C",
+    "roman": "I",
+    "scale": "C Major"
+   },
+   "title": "Over C (I): play C Major"
+  },
+  {
+   "body": "G shows up in 4 bars. For leads or arps over it, G Mixolydian fits.",
+   "category": "harmony",
+   "data": {
+    "bars": 4,
+    "name": "G",
+    "roman": "V",
+    "scale": "G Mixolydian"
+   },
+   "title": "Over G (V): play G Mixolydian"
+  },
+  {
+   "body": "For hooks that never clash, set Scale to C Major Pentatonic and run an Arpeggiator (Up/Down, 1/16) into a short pluck.",
+   "category": "harmony",
+   "data": {
+    "root": "C",
+    "scale": "Major Pentatonic"
+   },
+   "title": "Safe lead scale: C Major Pentatonic"
+  },
+  {
+   "body": "Rough layout: Intro A (bars 1-8), Drop B (bars 9-24), Outro A (bars 25-33). Drop locators at those bars in Arrangement View to rebuild the structure, then fill in your own parts.",
+   "category": "arrangement",
+   "data": {
+    "locators": [
+     {
+      "bar": 1,
+      "name": "Intro A"
+     },
+     {
+      "bar": 9,
+      "name": "Drop B"
+     },
+     {
+      "bar": 25,
+      "name": "Outro A"
+     }
+    ]
+   },
+   "title": "Arrangement map: 3 sections"
+  },
+  {
+   "body": "Most energy sits low-mid. Roll off highs on pads (EQ Eight shelf around 6 kHz) and let only hats and one lead live up top.",
+   "category": "sound",
+   "data": {},
+   "title": "It's a dark mix"
+  }
+ ],
+ "tags": [
+  {
+   "score": 1.0,
+   "tag": "danceable"
+  },
+  {
+   "score": 1.0,
+   "tag": "bass-heavy"
+  },
+  {
+   "score": 1.0,
+   "tag": "dynamic"
+  },
+  {
+   "score": 0.771,
+   "tag": "driving"
+  },
+  {
+   "score": 0.66,
+   "tag": "dark"
+  },
+  {
+   "score": 0.5,
+   "tag": "house tempo"
+  },
+  {
+   "score": 0.5,
+   "tag": "techno tempo"
+  },
+  {
+   "score": 0.292,
+   "tag": "percussive"
+  }
+ ]
+}

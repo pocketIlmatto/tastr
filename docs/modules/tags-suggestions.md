@@ -1,5 +1,10 @@
 # Module: vibe tags + "Try this in Ableton" suggestions
 
+> The v1 spec, kept for its reasoning. These stages now live only in the Rust engine
+> (`engine-rs/src/stages/tags.rs`, `suggestions.rs`, `views.rs`); their Python copies were removed in TAS-47.
+> The drum step grid the benchmarks score is `drums.step_grid`/`drums.drum_grid`, the pattern templates
+> `tastr/engine/patterns.py`.
+
 Two stages, one spec. Tags is pure rules over numbers (small model friendly);
 suggestions also analyses audio for drum grids, bass notes and chords.
 

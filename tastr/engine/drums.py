@@ -16,6 +16,7 @@ Each hit is then sorted into a lane by a closer look:
 - high hits: open hat when the hat band keeps ringing, otherwise closed hat.
 
     acts = lane_activations(ctx, frames)   # {lane: array shaped like frames}
+    grid = drum_grid(ctx, step_grid(ctx, n_frames))   # one bar's pattern per lane, for the benchmarks
 
 Activations are non-negative and comparable within a lane across a track.
 Design notes, what was tried and dropped, and known weaknesses: docs/drums.md.
@@ -324,3 +325,85 @@ def model_lanes(ctx: AnalysisContext) -> dict[str, np.ndarray] | None:
         np.maximum.at(x, f, conf * level[fam])
         out[lane] = x
     return out
+
+
+# --- The step grid: one bar's drum pattern from the lanes (the card's suggestions.drum_grid) ------------------
+# The Rust engine makes the cards (engine-rs/src/stages/suggestions.rs); this copy is what the drum benchmarks
+# (bench/drums.py) score, and tests/test_rust_engine.py checks the two agree.
+
+STEPS_PER_BEAT = 4  # 16th notes
+CORE_LANES = ("kick", "snare", "hat")  # always kept; a much quieter other lane is likely a misread drum
+
+
+def _pattern(profile: np.ndarray) -> str:
+    return "".join("x" if v >= 0.72 else "o" if v >= 0.5 else "." for v in profile)
+
+
+def step_grid(ctx: AnalysisContext, n_frames: int) -> np.ndarray:
+    """Frame index of each 16th note for every complete bar (consecutive downbeats)."""
+    downbeats = np.asarray(ctx.card.core.downbeat_times, dtype=float)
+    m = ctx.card.core.beats_per_bar or 4
+    if downbeats.size < 2:
+        return np.zeros((0, m * STEPS_PER_BEAT), dtype=int)
+    beats = np.asarray(ctx.card.core.beat_times, dtype=float)
+    rows = []
+    for a, b in zip(downbeats[:-1], downbeats[1:]):
+        in_bar = beats[(beats >= a - 1e-6) & (beats < b - 1e-6)]
+        edges = np.append(in_bar, b) if in_bar.size == m else np.linspace(a, b, m + 1)
+        times = [edges[i] + (edges[i + 1] - edges[i]) * s / STEPS_PER_BEAT for i in range(m) for s in range(STEPS_PER_BEAT)]
+        rows.append(times)
+    frames = np.round(np.asarray(rows) * ctx.sr / ctx.hop).astype(int)
+    return np.clip(frames, 0, max(n_frames - 1, 0))
+
+
+def _bar_energy(ctx: AnalysisContext, step_frames: np.ndarray) -> np.ndarray:
+    n = step_frames.shape[0]
+    series = ctx.card.series.get("energy")
+    if series is not None and len(series.values) >= n:
+        return np.asarray(series.values[:n], dtype=float)
+    rms = ctx.get("rms", signals.rms)
+    ends = np.append(step_frames[1:, 0], rms.size)
+    return np.array([rms[a:max(b, a + 1)].mean() for a, b in zip(step_frames[:, 0], ends)])
+
+
+def drum_grid(ctx: AnalysisContext, step_frames: np.ndarray) -> dict:
+    energies = _bar_energy(ctx, step_frames)
+    busy = energies >= np.median(energies)
+    if busy.sum() < 2:
+        busy = np.ones(len(energies), dtype=bool)
+    bpm = ctx.card.core.bpm
+    step_s = 15.0 / bpm if bpm else None
+    acts = lane_activations(ctx, step_frames, step_seconds=step_s)
+    # Noise floor: the same measure halfway between 16ths, where a played pattern has no hits.
+    between = (step_frames + np.roll(step_frames, -1, axis=1)) // 2
+    between[:, -1] = step_frames[:, -1] + (step_frames[:, -1] - step_frames[:, -2]) // 2
+    floor_acts = lane_activations(ctx, between, step_seconds=step_s, slop=0)
+    grid = {}
+    for lane in acts:  # drums.LANES, plus cymbal with the drum model
+        # sqrt compresses activation toward perceived loudness so a slightly weaker hit still reads as a hit
+        steps = np.sqrt(acts[lane])
+        profile = steps[busy].mean(axis=0)
+        floor = float(np.sqrt(floor_acts[lane])[busy].mean())
+        peak = float(profile.max())
+        norm = profile / peak if peak > 0 else profile
+        grid[lane] = {
+            "pattern": _pattern(norm),
+            "velocity": [round(float(v), 3) for v in norm],
+            "detected": bool(peak > 0 and peak >= 3.0 * floor),
+            "_steps": steps,
+            "_peak": peak,
+        }
+    # A lane far quieter than the loudest one is most likely another drum misread.
+    top = max(g["_peak"] for g in grid.values())
+    for lane, g in grid.items():
+        if lane not in CORE_LANES and g["_peak"] < 0.2 * top:
+            g["detected"] = False
+    # A mid lane that is a faint copy of the kick (same steps, much quieter) is the kick leaking through.
+    kick = grid["kick"]
+    for lane in ("snare", "clap", "perc"):
+        g = grid[lane]
+        if g["detected"] and kick["_peak"] > 0 and g["_peak"] < 0.35 * kick["_peak"]:
+            a, b = np.asarray(g["velocity"]), np.asarray(kick["velocity"])
+            if a.std() > 0 and b.std() > 0 and float(np.corrcoef(a, b)[0, 1]) > 0.9:
+                g["detected"] = False
+    return grid

@@ -204,7 +204,7 @@ def test_fetch_ballroom_checks_md5_and_lays_out_folders(tmp_path):
     assert fetch.fetch_ballroom(tmp_path / "b2", files=files, progress=lambda *_: None)["checksum_mismatch"] == ["master.zip"]
 
 
-@pytest.mark.audio
+@pytest.mark.rust
 def test_vibe_bench_end_to_end_on_a_folder(tmp_path, synth_wav, capsys):
     root = mtg_tsvs(tmp_path / "mtg")
     for p in ("00/1.mp3", "00/2.mp3"):

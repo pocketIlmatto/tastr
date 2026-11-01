@@ -24,7 +24,7 @@ def router(ctx: AppContext) -> APIRouter:
     @api.get("/api/patterns")
     def patterns():
         # The engine's template drum patterns per style, for the Glossary's pattern grids.
-        from ...engine.stages.suggestions import STYLE_LABELS, VARIATIONS
+        from ...engine.patterns import STYLE_LABELS, VARIATIONS
 
         return [{"style": STYLE_LABELS[style], "name": name, "pattern": pat}
                 for style, items in VARIATIONS.items() for name, pat in items]

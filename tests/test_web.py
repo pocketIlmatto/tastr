@@ -188,15 +188,15 @@ def test_every_vibe_the_engine_can_produce_has_a_ui_group():
     import re
     from pathlib import Path
 
-    from tastr.engine.stages import tags
-
-    src = (Path(tags.__file__).parents[2] / "web" / "static" / "app.js").read_text()
+    root = Path(__file__).parents[1]
+    src = (root / "tastr" / "web" / "static" / "app.js").read_text()
     groups = src[src.index("const VIBE_GROUPS"):src.index("const groupOf")]
     mapped = set(re.findall(r'"([^"]+)"', " ".join(re.findall(r"tags: \[([^\]]*)\]", groups))))
     has_tempo_group = "/tempo$/" in groups
 
-    engine = set(re.findall(r'add\("([^"]+)"', Path(tags.__file__).read_text()))
-    engine |= {name for name, _, _ in tags.TEMPO_STYLES}
+    rules = (root / "engine-rs" / "src" / "stages" / "tags.rs").read_text()
+    rules = rules[:rules.index("#[cfg(test)]")]
+    engine = set(re.findall(r'add\("([^"]+)"', rules)) | set(re.findall(r'\("([^"]+)", [\d.]+, [\d.]+\)', rules))
     missing = {t for t in engine if t not in mapped and not (has_tempo_group and t.endswith("tempo"))}
     assert not missing, f"vibes with no group in VIBE_GROUPS: {sorted(missing)}"
     assert len(engine) >= 14
@@ -495,7 +495,7 @@ def test_bench_scores_are_served(client, monkeypatch, tmp_path):
 
 
 def test_pattern_ideas_come_from_the_engine(client):
-    from tastr.engine.stages.suggestions import VARIATIONS
+    from tastr.engine.patterns import VARIATIONS
 
     pats = client.get("/api/patterns").json()
     assert len(pats) == sum(len(v) for v in VARIATIONS.values())

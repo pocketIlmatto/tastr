@@ -1,15 +1,12 @@
-"""Built-in pipeline stages. Importing this package registers them.
-
-Each module owns one part of the track card:
+"""The Python reference engine's stages, which the benchmarks score. Importing this package registers them.
+The app's cards come from the Rust engine (engine-rs/src/stages/), which also has the tags, suggestions and
+views stages; their Python copies were removed in TAS-47.
 
     core         bpm, key, energy, loudness, beats/downbeats    -> card.core
     sections     rough section timestamps and labels             -> card.sections
-    tags         vibe tags                                       -> card.tags
-    suggestions  "Try this in Ableton" ideas                     -> card.suggestions
-    views        waveform + spectrogram picture data for the UI  -> card.extras["views"]
 
 Any stage may also add scalar `card.features`, `card.series` curves and
 structured `card.extras`. Prefix extras keys with the stage name.
 """
 
-from . import core, sections, suggestions, tags, views  # noqa: F401
+from . import core, sections  # noqa: F401

@@ -31,7 +31,6 @@ import numpy as np
 
 from .datasets import Item, Truth, _audio_by_stem
 
-STAGES = ["core", "sections", "tags"]
 
 # The clean annotation file's yes/no taxonomies, and the label each is stored under.
 MTG_BINARY = {"danceability": ("danceable", "danceable"), "mood_party": ("party", "party"),
@@ -150,11 +149,11 @@ def row_from_card(item: Item, card) -> dict:
 
 
 def _work(item: Item) -> dict:
-    from .runner import analyze_item
+    from .runner import rust_card
 
     t0 = time.time()
     try:
-        row = row_from_card(item, analyze_item(item, STAGES))
+        row = row_from_card(item, rust_card(item))  # the vibe tags are only in the Rust engine
     except Exception as e:  # one unreadable file shouldn't sink the run
         row = {"id": item.id, "labels": item.meta.get("labels", {}), "errors": {"bench": f"{type(e).__name__}: {e}"}}
     row["seconds"] = round(time.time() - t0, 2)

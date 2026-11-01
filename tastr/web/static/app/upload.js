@@ -156,12 +156,49 @@ function uploadFiles(files) {
     send: async (onProgress, onMeasure) => {
       await checkUpload(f);
       const fd = new FormData();
-      fd.append("files", f);
       const card = serverCfg.browser_engine ? await cardInBrowser(f, onMeasure) : null;
+      if (serverCfg.direct_upload) {
+        fd.append("ids", await uploadToBucket(f, onProgress));
+        if (card) fd.append("card", card, "card.json");
+        return postWithProgress("/api/analyze/uploaded?background=1", fd);
+      }
+      fd.append("files", f);
       if (card) fd.append("card", card, "card.json");
       return postWithProgress("/api/analyze?background=1", fd, onProgress);
     },
   })));
+}
+// TASTR_DIRECT_UPLOAD (hosted, TAS-66): the file goes straight to the audio bucket on a signed link the server
+// hands out after checking the limits, then /api/analyze/uploaded analyzes it. A link that ran out before the file
+// got there is renewed once. Returns the upload's id.
+async function uploadToBucket(f, onProgress) {
+  const asked = await api("/api/uploads", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ files: [{ name: f.name, size: f.size }] }) });
+  let up = asked.uploads[0];
+  for (let tries = 0; ; tries++) {
+    try { await putWithProgress(up, f, onProgress); return up.id; }
+    catch (e) {
+      if (!e.expired || tries) throw e;
+      up = await api(`/api/uploads/${up.id}/link`, { method: "POST" });
+    }
+  }
+}
+// PUT a file to a signed bucket link, with upload progress. A 403 is how the bucket says the link ran out.
+function putWithProgress(up, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("PUT", up.url);
+    x.setRequestHeader("Content-Type", up.content_type);
+    x.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    x.onload = () => {
+      if (x.status >= 200 && x.status < 300) { if (onProgress) onProgress(1); resolve(); return; }
+      const err = new Error(`Storage refused the upload (${x.status}${x.statusText ? ` ${x.statusText}` : ""}). Try again.`);
+      err.expired = x.status === 403;
+      reject(err);
+    };
+    x.onerror = () => reject(new Error("The upload to storage stopped (network error or a storage setup problem). Try again."));
+    x.send(file);
+  });
 }
 // TASTR_BROWSER_ENGINE: make the whole card here with the Rust engine's WebAssembly build (static/engine.js, a
 // worker per file so its memory goes when it's done) and send it with the file; the server stores it when it checks

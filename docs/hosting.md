@@ -70,6 +70,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_AUDIO_ENDPOINT` | none | the bucket's S3 endpoint, for R2 `https://<account id>.r2.cloudflarestorage.com` |
 | `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | none | a token that can read and write that bucket only. Keep them secret |
 | `TASTR_AUDIO_REGION` | `auto` | the region to sign for; R2 takes `auto` |
+| `TASTR_DIRECT_UPLOAD` | off | `1` has the page upload each file straight to the audio bucket on a signed link instead of through the server; see [Audio in a bucket](#audio-in-a-bucket). Needs `TASTR_AUDIO_BUCKET` and a CORS rule that lets your hostname PUT ([deploy.md](deploy.md#2b-r2-bucket-for-audio-optional)) |
 | `TASTR_BROWSER_ENGINE` | off | `1` has each visitor's browser make the whole card with the Rust engine's WebAssembly build; the server checks it and skips analysis ([ARCHITECTURE.md](ARCHITECTURE.md#browser-engine)). Needs the image's `TASTR_ENGINE_WASM` |
 | `TASTR_SQLJS_DIR` | none | where sql.js (`sql-wasm.js`, `sql-wasm.wasm`) is, for searches in the browser; the image sets `/app/sqljs`. Without it a hosted page says search couldn't start |
 
@@ -197,6 +198,12 @@ the server could later run without one:
 
 - Each upload is copied to the bucket, under the same path it has under `TASTR_HOME` (`uploads/ab12cd34/song.mp3`),
   before it is analyzed. If the copy fails the upload is refused (503) and nothing is kept.
+- With `TASTR_DIRECT_UPLOAD=1` the page uploads straight to the bucket instead. `POST /api/uploads` checks the
+  limits (count, type, size, the daily track limit, the storage cap) before any bytes move and answers with a
+  signed PUT link per file (an hour; `POST /api/uploads/{id}/link` renews one). The page PUTs the file, then
+  `POST /api/analyze/uploaded` checks what arrived (size, and length once read back into the cache) and analyzes
+  it like any upload. A refused upload is deleted from the bucket; one that got a link and was never finished is
+  deleted by the six-hourly sweep after two hours.
 - Modal gets a signed link to the upload instead of its bytes, and uploads stems to signed links of its own.
 - Playback (`/api/tracks/{id}/audio`, `/stems/{name}`, and the signed `/pub` links for strudel.cc) answers with
   a redirect to a signed link that lasts an hour; the browser seeks with Range requests against the bucket.

@@ -6,6 +6,7 @@ Runs against moto's in-memory S3, so no network or credentials are needed.
 import os
 from contextlib import closing
 import time
+from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -361,3 +362,117 @@ def test_backfill_refuses_without_a_bucket(db_path, monkeypatch, capsys):
     monkeypatch.delenv("TASTR_AUDIO_BUCKET", raising=False)
     assert cli.main(["--db", str(db_path), "bucket-backfill"]) == 1
     assert "bucket is off" in capsys.readouterr().err
+
+
+# ---- uploads straight to the bucket (TASTR_DIRECT_UPLOAD, TAS-66) -------------------------------------------
+
+def direct_client(db_path, monkeypatch, **settings):
+    def fake(source, options, on_stage=None, browser=None):
+        assert blobs.in_bucket(source.local_path)  # the analysis reads the bucket's copy, as for a plain upload
+        card = full_card()
+        card.source = source
+        return card
+
+    monkeypatch.setattr(service, "_analyze", fake)
+    return TestClient(create_app(db_path, Settings(hosted=True, access_team_domain=TEAM, access_aud=AUD,
+                                                   direct_upload=True, **settings), verifier=stub_verifier))
+
+
+def browser_put(upload, data):
+    """What the page's PUT to the signed link leaves in the bucket (moto doesn't serve the signed URL itself)."""
+    key = unquote(upload["url"].split(f"{BUCKET}/", 1)[1].split("?", 1)[0])
+    blobs.client().put_object(Bucket=BUCKET, Key=key, Body=data, ContentType=upload["content_type"])
+
+
+def test_direct_upload_goes_to_the_bucket_then_analyzes(bucket, home, db_path, monkeypatch):
+    c = direct_client(db_path, monkeypatch)
+    assert c.get("/api/config", headers=GOOD).json()["direct_upload"] is True
+    r = c.post("/api/uploads", json={"files": [{"name": "my song.wav", "size": 8}]}, headers=GOOD)
+    (up,) = r.json()["uploads"]
+    assert up["name"] == "my song.wav" and up["content_type"] == "audio/wav" and up["expires_in"] == blobs.UPLOAD_SECONDS
+    assert f"uploads/{up['id']}/my%20song.wav" in up["url"] and "Signature" in up["url"]
+    browser_put(up, b"RIFFsong")
+    r = c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD)
+    assert r.status_code == 200, r.text
+    tid = r.json()["results"][0]["track_id"]
+    assert tid is not None
+    assert [p for p in (home / "uploads").rglob("*") if p.is_file()] == []  # the local copy was only a cache
+    assert list(objects("uploads/")) == [f"uploads/{up['id']}/my song.wav"]
+    again = c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD)
+    assert again.status_code == 404  # an upload is analyzed once
+
+
+def test_direct_upload_in_the_background(bucket, home, db_path, monkeypatch):
+    c = direct_client(db_path, monkeypatch)
+    (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+    browser_put(up, b"RIFFsong")
+    r = c.post("/api/analyze/uploaded?background=1", data={"ids": [up["id"]]}, headers=GOOD)
+    assert r.status_code == 202
+    job = r.json()
+    for _ in range(100):
+        job = c.get(f"/api/analyze/jobs/{job['id']}", headers=GOOD).json()
+        if job["state"] in ("done", "error"):
+            break
+        time.sleep(0.05)
+    assert job["state"] == "done" and job["results"][0]["track_id"] is not None
+
+
+def test_direct_upload_refusals(bucket, home, db_path, monkeypatch):
+    c = direct_client(db_path, monkeypatch, max_upload_mb=10 / 1048576)  # 10 bytes
+    ask = lambda files: c.post("/api/uploads", json={"files": files}, headers=GOOD)  # noqa: E731
+    assert ask([{"name": "big.wav", "size": 11}]).status_code == 413  # refused before any bytes move
+    assert ask([{"name": "notes.txt", "size": 5}]).status_code == 415
+    assert ask([]).status_code == 422
+    assert c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 5}]}).status_code == 401
+    (up,) = ask([{"name": "a.wav", "size": 5}]).json()["uploads"]
+    early = c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD)
+    assert early.status_code == 409  # the file never reached the bucket; the link still works
+    assert c.post("/api/analyze/uploaded", data={"ids": ["../../x"]}, headers=GOOD).status_code == 404
+    browser_put(up, b"RIFF-but-too-long")  # the page said 5 bytes, then sent more than the limit
+    r = c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD)
+    assert r.status_code == 413
+    assert objects("uploads/") == {}  # nothing of a refused upload stays
+    assert c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD).status_code == 404
+
+
+def test_direct_upload_is_only_for_the_person_who_asked(bucket, home, db_path, monkeypatch):
+    c = direct_client(db_path, monkeypatch)
+    (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+    browser_put(up, b"RIFFsong")
+    from tastr.web.routes.analyze import UPLOAD_MARKERS
+    from tastr.markers import Markers
+    Markers(db_path, UPLOAD_MARKERS).put(up["id"], {"owner": "someone@else.com", "name": "a.wav", "size": 8})
+    assert c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD).status_code == 404
+    assert c.post(f"/api/uploads/{up['id']}/link", headers=GOOD).status_code == 404
+
+
+def test_an_expired_link_can_be_renewed(bucket, home, db_path, monkeypatch):
+    c = direct_client(db_path, monkeypatch)
+    (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+    fresh = c.post(f"/api/uploads/{up['id']}/link", headers=GOOD).json()
+    assert fresh["id"] == up["id"] and f"uploads/{up['id']}/a.wav" in fresh["url"]
+    assert c.post("/api/uploads/ffffffff/link", headers=GOOD).status_code == 404
+
+
+def test_direct_upload_is_off_unless_turned_on(bucket, home, db_path, monkeypatch):
+    c = TestClient(create_app(db_path, Settings(hosted=True, access_team_domain=TEAM, access_aud=AUD),
+                              verifier=stub_verifier))
+    assert c.get("/api/config", headers=GOOD).json()["direct_upload"] is False
+    assert c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).status_code == 404
+    monkeypatch.setenv("TASTR_HOSTED", "1")
+    monkeypatch.setenv("TASTR_ACCESS_TEAM_DOMAIN", TEAM)
+    monkeypatch.setenv("TASTR_ACCESS_AUD", AUD)
+    monkeypatch.setenv("TASTR_DIRECT_UPLOAD", "1")
+    assert Settings.from_env().direct_upload is True
+
+
+def test_unfinished_direct_uploads_are_pruned(bucket, home, db_path, monkeypatch):
+    from tastr.web.routes.analyze import prune_uploads
+
+    c = direct_client(db_path, monkeypatch)
+    (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+    browser_put(up, b"RIFFsong")
+    assert prune_uploads(db_path) == 0  # still within its time
+    assert prune_uploads(db_path, now=time.time() + 3 * blobs.UPLOAD_SECONDS) == 1
+    assert objects("uploads/") == {}
+    assert c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD).status_code == 404

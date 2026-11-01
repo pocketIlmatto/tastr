@@ -61,6 +61,7 @@ flowchart TB
   WEB -->|audio bytes or a signed link, on request| AD -->|track card| WEB
   WEB -->|audio bytes or a signed link| ST -->|stem files, or a note that they're in the bucket| WEB
   WEB -->|each upload, as it arrives| R2A
+  F -.->|with TASTR_DIRECT_UPLOAD: the upload itself, on a signed link| R2A
   R2A -.->|signed links: audio, stems, waveform data| F
   WEB -->|each card's waveform data| R2A
   R2A -.->|signed links| S
@@ -79,6 +80,9 @@ and R2 backs up only the database (cards, edits, who owns what). With `TASTR_AUD
 (`tastr/blobs.py`), every upload and stem is kept in that bucket under the same path it has under `/data`
 (`uploads/ab12cd34/song.mp3`, `stems/<hash>/drums.flac`), the volume holds only copies that the six-hourly sweep
 deletes once they're an hour old, and expiry deletes the bucket's copy. Modal keeps nothing after a job.
+With `TASTR_DIRECT_UPLOAD` on as well, the page uploads each file straight to the bucket on a signed link, so the
+file's bytes never pass through the server on the way in; the same sweep deletes uploads that got a link and were
+never finished (after two hours).
 
 ## An upload, step by step
 
@@ -103,11 +107,21 @@ sequenceDiagram
     B->>W: GET /engine/tastr_engine.wasm (once, then cached)
     B->>B: decode and analyze the whole track in a worker (engine.js)
   end
-  B->>C: upload a track (+ its card)
-  C->>W: upload + token
-  W->>W: check limits (size, length from the header), save the file on the volume
-  opt TASTR_AUDIO_BUCKET is set
-    W->>A: copy the upload up (refused with 503 if that fails)
+  alt TASTR_DIRECT_UPLOAD is on (needs the audio bucket)
+    B->>W: POST /api/uploads: name and size
+    W->>W: check limits (count, type, size, daily tracks, storage cap)
+    W-->>B: a signed upload link (one hour), with an id
+    B->>A: PUT the file to the link (a run-out link is renewed once)
+    B->>W: POST /api/analyze/uploaded: the id (+ its card)
+    W->>A: is it there, and how big?
+    W->>W: read it back into the cache, check its length from the header
+  else the upload goes through the server
+    B->>C: upload a track (+ its card)
+    C->>W: upload + token
+    W->>W: check limits (size, length from the header), save the file on the volume
+    opt TASTR_AUDIO_BUCKET is set
+      W->>A: copy the upload up (refused with 503 if that fails)
+    end
   end
   W-->>B: a job id (the upload is done)
   opt a card came and checks out
@@ -173,7 +187,7 @@ database and deletes them.
 | UI, API, per-person libraries, limits | Tastr on Fly | `tastr serve` in hosted mode (`TASTR_HOSTED`). |
 | Searches (Simple and SQL) | The visitor's browser | `GET /api/query/library` sends a SQLite copy of the person's own library (admins: every library), once per page; sql.js (MIT, in the image at `TASTR_SQLJS_DIR`, served from `/sqljs/`) runs each search in a worker (`static/sql-worker.js`, `app/query-lib.js`). The server has no SQL endpoint in hosted mode. |
 | Files | Fly volume `tastr_data` | Mounted at `/data` (`TASTR_HOME`): `tastr.db`, `uploads/`, `stems/`, and the optional AcousticBrainz lookup index `acousticbrainz-index.sqlite` (not backed up). |
-| Audio and stems (optional) | R2 bucket `tastr-audio` | With `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT` and the bucket's own token (`TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY`), `tastr/blobs.py` copies each upload up before analysis, plays audio and stems from signed links (`TASTR_AUDIO_REGION` defaults to `auto`), and the page's Content-Security-Policy allows that host. The bucket's CORS rule lets any origin GET, since strudel.cc follows the redirect. Each card's waveform and spectrogram data goes there too (`views/<track id>.json`, gzipped), so the database keeps a marker instead of about a megabyte per card; `/api/tracks/{id}/views` redirects to it. `tastr db-size` shows how big the database is and what's still inline. |
+| Audio and stems (optional) | R2 bucket `tastr-audio` | With `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT` and the bucket's own token (`TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY`), `tastr/blobs.py` copies each upload up before analysis, plays audio and stems from signed links (`TASTR_AUDIO_REGION` defaults to `auto`), and the page's Content-Security-Policy allows that host. The bucket's CORS rule lets any origin GET, since strudel.cc follows the redirect, and (for `TASTR_DIRECT_UPLOAD`) lets your hostname PUT. Each card's waveform and spectrogram data goes there too (`views/<track id>.json`, gzipped), so the database keeps a marker instead of about a megabyte per card; `/api/tracks/{id}/views` redirects to it. `tastr db-size` shows how big the database is and what's still inline. |
 | Whole analysis (optional) | The visitor's browser | With `TASTR_BROWSER_ENGINE` on, `tastr/web/static/engine.js` runs the Rust engine's WebAssembly build in a worker and the upload carries the card. The Docker image builds the `.wasm` in a Rust stage and the server serves it from `TASTR_ENGINE_WASM`. |
 | Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. Cards always come from the Rust engine, whose library the image builds (`tastr/cloud/rust_image.py`). |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. The model runs in Python and the Rust library, built into this image too, makes the card. |
@@ -235,7 +249,8 @@ These have defaults and change only if you set a Fly secret of the same name ([h
 tab's Modal link opens the app) and `TASTR_CF_ACCOUNT_ID` (your Cloudflare account id, so the Admin tab links to
 Access's applications and its log of blocked requests; without it those links are hidden) and `TASTR_WATCH_MINUTES`
 (default 15: how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off). `TASTR_BROWSER_ENGINE=1` (off by default) has the browser make the whole card
-with the Rust engine. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
+with the Rust engine. `TASTR_DIRECT_UPLOAD=1` (off by default; needs the audio bucket and its PUT rule) has the
+page upload straight to the bucket. Fly sets `FLY_APP_NAME` (the Admin tab's Fly logs link) and `FLY_IMAGE_REF`
 (a change since the last start is logged as a deploy) on its own. The deploy workflow builds `TASTR_COMMIT`,
 `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` into the image (Docker build arguments, not secrets), so the
 Admin tab's deploy line names the commit and links to its GitHub Actions run.

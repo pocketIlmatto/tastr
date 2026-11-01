@@ -47,7 +47,7 @@ tastr = "tastr.cli:main"
 include = ["tastr*"]
 
 [tool.setuptools.package-data]
-tastr = ["web/*", "web/static/*", "engine/*.json"]
+tastr = ["web/*", "web/static/*", "web/static/app/*", "engine/*.json"]
 
 # Lint (CI runs `ruff check .`). A small rule set that catches real mistakes: pyflakes (unused imports and
 # names, undefined names), syntax errors, and bugbear. B008 is off because FastAPI's `Depends()`/`File()`

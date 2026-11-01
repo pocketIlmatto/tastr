@@ -8,10 +8,14 @@ read against `X-Zip-Bytes`, the files' total size.
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 import zipfile
+from contextlib import closing
 from pathlib import Path
 from typing import Iterable, Iterator
+
+from .. import blobs
 
 CHUNK = 1024 * 1024
 # A bulk zip holds at most this much, or this many tracks; more answers 413 before anything is sent.
@@ -70,13 +74,15 @@ class _Sink:
 
 
 def stream_zip(entries: Iterable[tuple[str, Path]]) -> Iterator[bytes]:
-    """Yield a stored zip of (name inside the zip, file on disk), a chunk at a time."""
+    """Yield a stored zip of (name inside the zip, file), a chunk at a time. A file not on disk is read from the
+    audio bucket (tastr/blobs.py)."""
     sink = _Sink()
     with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
         for arcname, path in entries:
-            info = zipfile.ZipInfo.from_file(path, arcname)
+            info = zipfile.ZipInfo(arcname, time.localtime(blobs.mtime(path))[:6])
+            info.external_attr = 0o644 << 16
             info.compress_type = zipfile.ZIP_STORED
-            with open(path, "rb") as src, zf.open(info, "w", force_zip64=True) as dest:
+            with closing(blobs.open_read(path)) as src, zf.open(info, "w", force_zip64=True) as dest:
                 while chunk := src.read(CHUNK):
                     dest.write(chunk)
                     if data := sink.take():

@@ -66,7 +66,7 @@ def analyze(audio_path: str | Path, options: dict | None = None, on_stage=None):
     from ..engine.card import TrackCard
 
     audio_path = Path(audio_path)
-    args = (audio_path.read_bytes(), audio_path.suffix, None, options)  # None: the stages, which the engine no longer takes
+    args = (_audio(audio_path), audio_path.suffix, None, options)  # None: the stages, which the engine no longer takes
     if (options or {}).get("drum_model"):
         return TrackCard.from_dict(_call("analyze_drums", *args))
     if on_stage:
@@ -100,8 +100,22 @@ def _call_gen(name: str, *args):
     yield from fn.remote_gen(*args)
 
 
-def stems(audio_path: str | Path) -> dict[str, bytes]:
-    """Upload one file to the Modal `stems` function; returns {stem name: FLAC bytes} (tastr/stems.py writes
-    them)."""
+def _audio(audio_path: Path) -> bytes | str:
+    """What a Modal function gets for the audio: a signed link when the file is in the audio bucket (Modal
+    downloads it from there, tastr/blobs.py), else the file's bytes."""
+    from .. import blobs
+
+    if blobs.in_bucket(audio_path):
+        return blobs.signed_url(audio_path)
+    local = blobs.ensure(audio_path) or audio_path
+    return local.read_bytes()
+
+
+def stems(audio_path: str | Path, put_urls: dict[str, str] | None = None) -> dict:
+    """Separate one file with the Modal `stems` function. Returns {stem name: FLAC bytes} (tastr/stems.py
+    writes them), or with `put_urls` ({stem name: signed upload link}, the audio bucket) Modal uploads each
+    stem itself and returns {stem name: bytes written}."""
     audio_path = Path(audio_path)
-    return _call("stems", audio_path.read_bytes(), audio_path.suffix)
+    if put_urls:
+        return _call("stems", _audio(audio_path), audio_path.suffix, put_urls)
+    return _call("stems", _audio(audio_path), audio_path.suffix)

@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import mimetypes
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
-from ... import db, drum_jobs, stems
+from ... import blobs, db, drum_jobs, stems
 from ..context import AppContext, _unprefixed, analysis_source, runs_on
 from ..downloads import base_name, content_disposition, stem_file_name
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
 
-# Types the stdlib doesn't know everywhere; browsers need them to decode the stream.
-AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
-               ".ogg": "audio/ogg", ".aif": "audio/aiff", ".aiff": "audio/aiff", ".wav": "audio/wav", ".mp3": "audio/mpeg"}
 # The Strudel sketch ("Try this in Strudel") loads the original audio and its stems from strudel.cc, so only
 # those endpoints answer CORS, and only for that origin.
 STRUDEL_ORIGINS = ("https://strudel.cc",)
@@ -33,6 +29,20 @@ def _strudel_cors(origin: str | None, preflight: bool = False) -> dict[str, str]
         headers |= {"Access-Control-Allow-Methods": "GET, HEAD", "Access-Control-Allow-Headers": "Range",
                     "Access-Control-Allow-Private-Network": "true", "Access-Control-Max-Age": "600"}
     return headers
+
+
+def _serve(path, origin: str | None, media: str | None = None, filename: str | None = None):
+    """A file for playback: a redirect to a short-lived signed link when the audio bucket has it (the bytes then
+    never pass through this server; tastr/blobs.py), else the file here, with Range support either way.
+    `filename`: save it under this name instead of playing it (the Files view's downloads)."""
+    headers = _strudel_cors(origin)
+    disposition = content_disposition(filename) if filename else None
+    if blobs.in_bucket(path):
+        return RedirectResponse(blobs.signed_url(path, disposition=disposition), status_code=302,
+                                headers={**headers, "Cache-Control": "private, no-store"})
+    if disposition:
+        headers["Content-Disposition"] = disposition
+    return FileResponse(path, media_type=media or blobs.content_type(path), headers=headers)
 
 
 def router(ctx: AppContext) -> APIRouter:
@@ -54,11 +64,8 @@ def router(ctx: AppContext) -> APIRouter:
         path = ctx.audio_path(card)
         if path is None:
             raise HTTPException(404, "The original audio file is not on disk.")
-        media = AUDIO_TYPES.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        headers = _strudel_cors(origin)
-        if download:
-            headers["Content-Disposition"] = content_disposition(_base(card, track_id) + path.suffix.lower())
-        return FileResponse(path, media_type=media, headers=headers)
+        name = _base(card, track_id) + path.suffix.lower() if download else None
+        return _serve(path, origin, filename=name)
 
     def _preflight(origin: str | None) -> Response:
         if origin not in STRUDEL_ORIGINS:
@@ -140,12 +147,9 @@ def router(ctx: AppContext) -> APIRouter:
             raise HTTPException(404, f"Stems are {', '.join(stems.STEM_NAMES)}.")
         card = ctx.card_or_404(track_id)
         path = stems.stem_path(ctx.stems_dir(card, track_id), name)
-        if not path.is_file():
+        if not blobs.exists(path):
             raise HTTPException(404, "This track has not been separated into stems.")
-        headers = _strudel_cors(origin)
-        if download:
-            headers["Content-Disposition"] = content_disposition(stem_file_name(_base(card, track_id), name))
-        return FileResponse(path, media_type="audio/flac", headers=headers)
+        return _serve(path, origin, "audio/flac", filename=stem_file_name(_base(card, track_id), name) if download else None)
 
     def _drum_model_status(track_id: int) -> dict[str, Any]:
         return {**ctx.drum_runs.status(track_id), "available": drum_jobs.available()}

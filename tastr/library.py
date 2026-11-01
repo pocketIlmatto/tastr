@@ -18,7 +18,7 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
-from . import db, stems
+from . import blobs, db, stems
 
 DB_NAME = "tastr.db"
 FOLDERS = ("uploads", "stems")
@@ -89,6 +89,8 @@ def unpack(archive: str | os.PathLike, home: str | os.PathLike, db_path: str | o
             dest.parent.mkdir(parents=True, exist_ok=True)
             with tar.extractfile(m) as f, open(dest, "wb") as out:
                 shutil.copyfileobj(f, out)
+            if dest != copy:
+                blobs.push(dest)  # into the audio bucket too, when the server has one (tastr/blobs.py)
         if not copy.is_file():
             raise ValueError(f"no {DB_NAME} in the archive")
         with closing(sqlite3.connect(copy)) as c:

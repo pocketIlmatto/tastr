@@ -9,7 +9,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any
 
-from .. import db
+from .. import blobs, db
 from . import watch
 from .analysis_jobs import ref
 from .context import AppContext, log, tastr_home, upload_dir
@@ -25,6 +25,9 @@ def expire_loop(ctx: AppContext, stop: threading.Event) -> None:
             with closing(ctx.conn()) as c:
                 gone = expire_audio(c, upload_dir(), settings.audio_days, settings.admins)
             ctx.snapshot_storage()
+            evicted = blobs.evict()  # local copies of what the audio bucket holds; the disk is a cache then
+            if evicted:
+                log.info("Removed %d local copies of files kept in the audio bucket", evicted)
             if gone:
                 log.info("Deleted the audio of %d track(s) older than %g days", len(gone), settings.audio_days)
         except Exception:  # noqa: BLE001 - try again next time

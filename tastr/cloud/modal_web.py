@@ -1,6 +1,7 @@
 """Modal app for a hosted Tastr server (docs/deploy.md): track analysis and stem separation, nothing else.
 
-The web server is small (it fits in 512 MB) because the engine runs here: each upload is sent to `analyze`,
+The web server is small (it fits in 512 MB) because the engine runs here: each upload is sent to `analyze`
+(as its bytes, or with the audio bucket on (tastr/blobs.py) as a signed link that the function downloads from),
 which returns the card, "Detect drums with the model" calls `analyze_drums` (the same analysis plus the
 pretrained drum model, in its own image so everyday analysis doesn't load PyTorch), and "Separate stems"
 calls `stems`. Kept apart from modal_app.py (benchmarks), so
@@ -88,7 +89,7 @@ app = modal.App(APP_NAME)
 # About 240 MB at peak for a 3-minute track with the Rust engine (66 MB a minute; Python took 810 MB). A container stays warm 1 minute after a request: enough for the
 # uploads of one batch to share a cold start, without paying for minutes of idle time after every upload.
 @app.function(image=image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=60)
-def analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
+def analyze(audio: bytes | str, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
     from tastr.cloud.jobs import run_analyze
 
     return run_analyze(audio, suffix, stages, options)
@@ -96,7 +97,7 @@ def analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options:
 
 # The same, reporting each stage as it starts (the app's progress bars): yields {"stage", "i", "n"}, then {"card"}.
 @app.function(image=image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=60)
-def analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None):
+def analyze_stream(audio: bytes | str, suffix: str, stages: list[str] | None = None, options: dict | None = None):
     from tastr.cloud.jobs import run_analyze_stream
 
     yield from run_analyze_stream(audio, suffix, stages, options)
@@ -104,14 +105,14 @@ def analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, o
 
 # The analysis above plus the drum model, only when someone asks for it on a track.
 @app.function(image=drums_image, cpu=2, memory=4096, timeout=15 * 60)
-def analyze_drums(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
+def analyze_drums(audio: bytes | str, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
     from tastr.cloud.jobs import run_analyze
 
     return run_analyze(audio, suffix, stages, options)
 
 
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)
-def stems(audio: bytes, suffix: str) -> dict[str, bytes]:
+def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:
     from tastr.cloud.jobs import run_stems
 
-    return run_stems(audio, suffix)
+    return run_stems(audio, suffix, put_urls)

@@ -12,7 +12,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from ... import db, service
+from ... import blobs, db, service
 from ...engine import browser_card
 from ...ingest import AUDIO_EXTENSIONS, IngestError, is_url, resolve_inputs
 from ..analysis_jobs import JobError, new_id, ref
@@ -68,6 +68,7 @@ def router(ctx: AppContext) -> APIRouter:
                              f"{ctx.settings.max_minutes:g} minutes, so a long mix needs cutting into shorter files first.",
                              f"track length limit ({ctx.settings.max_minutes:g} min)", f"{name}, {minutes:.0f} min")
         sig = save_card(card[0], Path(paths[0])) if ctx.browser_engine and card and len(card) == len(paths) == 1 else {}
+        store(paths, sig, request)
         given = [Path(p).name for p in paths]
         job_id = new_id()
         if ctx.hosted:
@@ -85,15 +86,47 @@ def router(ctx: AppContext) -> APIRouter:
                 raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.") from None
             finally:
                 drop_cards(sig)
+                release(paths)
             if ctx.hosted:  # only tracks that analyzed count toward the daily limit, so a failed try can be retried
                 db.add_usage(c, request.state.user, "tracks", today(), sum(r.track_id is not None for r in rs))
             return ctx.results(rs, ctx.owner_of(request))
+
+    def store(paths: list[str], sig: dict[str, str], request: Request) -> None:
+        """With the audio bucket on (tastr/blobs.py), copy each upload there before analysis, so Modal reads it
+        from there and the server's disk only caches it."""
+        try:
+            for p in paths:
+                blobs.push(p)
+        except Exception as e:
+            log.exception("couldn't store an upload in the audio bucket")
+            drop_cards(sig)
+            for p in paths:  # what did reach the bucket goes again
+                try:
+                    blobs.remove(p)
+                except Exception:  # noqa: BLE001 - the bucket is unreachable; nothing more to clean up there
+                    log.warning("couldn't remove %s from the audio bucket", Path(p).name)
+            discard(map(Path, paths))
+            if ctx.hosted:
+                ctx.event(request.state.user, "failed", f"Couldn't store the upload: {names([Path(p).name for p in paths])}, "
+                          f"{type(e).__name__}", ok=False)
+            raise HTTPException(503, "Couldn't store the upload. Try again in a minute.") from None
+
+    def release(paths) -> None:
+        """Once analyzed, an upload the audio bucket holds needs no copy here."""
+        if not blobs.enabled():
+            return
+        for p in map(Path, paths):
+            if blobs.in_bucket(p):
+                p.unlink(missing_ok=True)
+                if p.parent.is_dir() and not any(p.parent.iterdir()):
+                    p.parent.rmdir()
 
     def discard(files) -> None:
         """Nothing from a refused upload stays on disk."""
         for p in files:
             p.unlink(missing_ok=True)
-            p.parent.rmdir()
+            if p.parent.is_dir():
+                p.parent.rmdir()
 
     def save_card(upload: UploadFile, audio: Path) -> dict[str, str]:
         """Store the card the page made next to its audio until the analysis has read it: {audio: card file}.
@@ -135,6 +168,8 @@ def router(ctx: AppContext) -> APIRouter:
                 raise
             finally:
                 drop_cards(sig)
+                if not link:
+                    release(inputs)
 
         def run(progress) -> dict[str, Any]:
             with closing(ctx.conn()) as c:

@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from .. import db, drum_jobs, lookup, service, stems
+from .. import blobs, db, drum_jobs, lookup, service, stems
 from ..engine import browser_card
 from ..filemeta import describe, legacy_upload_prefix
 from .analysis_jobs import AnalysisJobs, ref
@@ -99,11 +99,14 @@ class AppContext:
         self.slots = AnalysisSlots(settings.max_analyses) if hosted else None
         # Without TASTR_LINK_SECRET the Strudel links last only until the server restarts.
         self.signer = LinkSigner(settings.link_secret or secrets.token_bytes(32)) if hosted else None
-        self.extra_headers = (security_headers(inline_script_hashes((STATIC_DIR / "index.html").read_text()))
+        # With the audio bucket on, the page plays audio from signed links to it (tastr/blobs.py).
+        self.extra_headers = (security_headers(inline_script_hashes((STATIC_DIR / "index.html").read_text()),
+                                               media_origin=blobs.origin())
                               if hosted else {})
-        self.stem_jobs = stems.Jobs()
-        self.analyses = AnalysisJobs(tastr_home() / "analysis-jobs")
-        self.drum_runs = drum_jobs.Jobs(self.run_drum_model)
+        # Their unfinished jobs are kept in the database (tastr/markers.py), so a restart picks them up.
+        self.stem_jobs = stems.Jobs(db_path)
+        self.analyses = AnalysisJobs(db_path, legacy_folder=tastr_home() / "analysis-jobs")
+        self.drum_runs = drum_jobs.Jobs(self.run_drum_model, db_path)
         self.last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
         self.snapshot_day = ""  # the UTC day storage was last recorded for (storage_days)
 
@@ -149,12 +152,20 @@ class AppContext:
             db.add_blocked(c, today())
 
     def scan_library(self, c: sqlite3.Connection) -> list[dict[str, Any]]:
-        """Each track's owner, upload time, last analysis and bytes on disk (audio, and stems separately)."""
+        """Each track's owner, upload time, last analysis and bytes stored (audio, and stems separately): on
+        disk, or in the audio bucket when that is on (tastr/blobs.py)."""
+        inbucket = {k: size for f in blobs.FOLDERS for k, (size, _) in blobs.listing(f + "/").items()}
         rows = []
         for owner, tid, sha, path, at, created in c.execute(
                 "SELECT owner, id, sha256, local_path, analyzed_at, created_at FROM tracks"):
-            audio, folder = file_bytes(path), stems.stems_dir(sha, tid)
-            stem_b = sum(f.stat().st_size for f in folder.iterdir() if f.is_file()) if folder.is_dir() else 0
+            folder = stems.stems_dir(sha, tid)
+            if inbucket:
+                audio = inbucket.get(blobs.key(path) or "", 0) if path else 0
+                prefix = (blobs.key(folder / "x") or "")[:-1]
+                stem_b = sum(size for k, size in inbucket.items() if prefix and k.startswith(prefix))
+            else:
+                audio = file_bytes(path)
+                stem_b = sum(f.stat().st_size for f in folder.iterdir() if f.is_file()) if folder.is_dir() else 0
             rows.append({"owner": owner, "analyzed_at": at, "created_at": created or at, "audio": audio,
                          "stems": stem_b, "bytes": audio + stem_b})
         return rows
@@ -248,5 +259,6 @@ class AppContext:
 
     @staticmethod
     def audio_path(card) -> Path | None:
+        """Where the track's audio is: on disk, or (only) in the audio bucket; None when it's gone."""
         p = card.source.local_path
-        return Path(p) if p and Path(p).is_file() else None
+        return Path(p) if blobs.exists(p) else None

@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ... import stems
+from ... import blobs, stems
 from ..context import AppContext, _unprefixed, tastr_home
 from ..downloads import (ZIP_MAX_BYTES, ZIP_MAX_TRACKS, base_name, content_disposition, stem_file_name,
                          stream_zip, unique)
@@ -25,10 +25,7 @@ FORMATS = {".mp3": "MP3", ".wav": "WAV", ".flac": "FLAC", ".m4a": "M4A", ".aac":
 
 
 def _size(p: Path) -> int:
-    try:
-        return p.stat().st_size
-    except OSError:
-        return 0
+    return blobs.size(p)  # here, or in the audio bucket
 
 
 def _fmt_bytes(b: int) -> str:
@@ -58,7 +55,7 @@ def router(ctx: AppContext) -> APIRouter:
             r["base"] = base_name(r["title"], r["artist"], r["id"])
             r["folder"] = stems.stems_dir(r["sha256"], r["id"])
             p = Path(r["local_path"]) if r["local_path"] else None
-            r["audio_path"] = p if p and p.is_file() else None
+            r["audio_path"] = p if p and blobs.exists(p) else None
         return out
 
     def stem_info(r: dict[str, Any]) -> dict[str, Any] | None:
@@ -75,7 +72,7 @@ def router(ctx: AppContext) -> APIRouter:
 
     @api.get("/api/files")
     def files(request: Request):
-        """Your tracks with the size of their audio and stems (read from the file system, not the files), plus
+        """Your tracks with the size of their audio and stems (from the file system or the bucket's listing), plus
         the storage used, and on a hosted server the cap and the server's free space."""
         tracks, audio_b, stem_b = [], 0, 0
         for r in rows(ctx.owner_of(request)):
@@ -159,7 +156,8 @@ def router(ctx: AppContext) -> APIRouter:
         state = ctx.stem_jobs.status(folder)["state"]
         if state in ("queued", "running"):
             raise HTTPException(409, "Stems are being made for this track. Delete them once that finishes.")
-        if not folder.is_dir():
+        paths = [stems.stem_path(folder, n) for n in stems.STEM_NAMES]
+        if not folder.is_dir() and not any(blobs.in_bucket(p) for p in paths):
             ctx.stem_jobs.forget(folder)  # a failed job: clear its error
             raise HTTPException(404, "This track has no stems.")
         if r["sha256"]:
@@ -167,7 +165,7 @@ def router(ctx: AppContext) -> APIRouter:
                 shared = c.execute("SELECT 1 FROM tracks WHERE sha256 = ? AND id != ?", (r["sha256"], track_id)).fetchone()
             if shared:
                 raise HTTPException(409, "Another copy of this audio uses the same stems, so they stay.")
-        freed = sum(_size(p) for p in folder.iterdir() if p.is_file())
+        freed = sum(_size(p) for p in paths)
         ctx.stem_jobs.forget(folder)
         stems.remove(folder)
         ctx.event(ctx.owner_of(request), "stems", "Deleted stems for 1 track")

@@ -3,7 +3,7 @@ the optional pretrained drum model (engine/adt.py) in the background, like a ste
 
 Everyday analysis uses the built-in drum lanes. The model is slower (and on a hosted server runs in its
 own, larger Modal function), so it runs only for the tracks someone asks for, one at a time; later
-requests wait their turn. Each queued or running job leaves `<TASTR_HOME>/drum-jobs/<track id>.job` until
+requests wait their turn. Each queued or running job leaves a marker in the database (tastr/markers.py) until
 it ends, and `resume()` restarts them, so a server that stopped meanwhile doesn't lose them.
 """
 
@@ -17,6 +17,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
+
+from .markers import Markers, legacy_files
 
 INSTALL_HINT = ("Detecting drums with the model needs PyTorch, an optional install: pip install 'tastr[drums]' "
                 "(it shares PyTorch with tastr[stems])")
@@ -34,14 +36,17 @@ def available() -> bool:
 
 
 def jobs_root() -> Path:
+    """Where older servers kept their markers as files (read once by `resume()`)."""
     return Path(os.environ.get("TASTR_HOME", Path.home() / ".tastr")) / "drum-jobs"
 
 
 class Jobs:
-    """`run(track_id)` re-analyzes one track with the model and raises on failure."""
+    """`run(track_id)` re-analyzes one track with the model and raises on failure. `db_path`: the database
+    that keeps the markers (None: the default one)."""
 
-    def __init__(self, run: Callable[[int], None]) -> None:
+    def __init__(self, run: Callable[[int], None], db_path=None) -> None:
         self._run_track = run
+        self.markers = Markers(db_path, "drums")
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tastr-drums")
         self._lock = threading.Lock()
         self._state: dict[int, dict] = {}
@@ -59,19 +64,22 @@ class Jobs:
             if job and job["state"] in ("queued", "running"):
                 return dict(job)
             self._state[track_id] = {"state": "queued"}
-        jobs_root().mkdir(parents=True, exist_ok=True)
-        self._marker(track_id).touch()
+        self.markers.put(str(track_id))
         self._pool.submit(self._run, track_id)
         return self.status(track_id)
 
     def resume(self) -> int:
         """Restart the jobs a previous run of the server left unfinished; returns how many."""
+        for f in legacy_files(jobs_root(), "*.job"):  # from a server that kept them as files
+            if f.stem.isdigit():
+                self.markers.put(f.stem)
+            f.unlink(missing_ok=True)
         n = 0
-        for marker in sorted(jobs_root().glob("*.job")):
+        for key, _, _ in self.markers.items():
             try:
-                track_id = int(marker.stem)
+                track_id = int(key)
             except ValueError:
-                marker.unlink(missing_ok=True)
+                self.markers.remove(key)
                 continue
             log.info("Resuming the drum model for track %s", track_id)
             self.start(track_id)
@@ -90,9 +98,6 @@ class Jobs:
                 job["cancelled"] = True
             else:
                 self._state.pop(track_id, None)
-
-    def _marker(self, track_id: int) -> Path:
-        return jobs_root() / f"{track_id}.job"
 
     def _set(self, track_id: int, **kw) -> None:
         with self._lock:
@@ -114,6 +119,6 @@ class Jobs:
                 log.info("Drum model done for track %s (%.0f s)", track_id, time.monotonic() - start)
                 self._set(track_id, state="done")
         with self._lock:
-            self._marker(track_id).unlink(missing_ok=True)
+            self.markers.remove(str(track_id))
             if self._state[track_id].get("cancelled"):
                 del self._state[track_id]

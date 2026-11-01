@@ -50,7 +50,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_MAX_MINUTES` | 25 | longest track accepted, read from the file's header before analysis (see [below](#when-an-upload-fails)) |
 | `TASTR_MAX_FILES` | 20 | files per upload |
 | `TASTR_DAILY_TRACKS` | 30 | tracks each person can upload per UTC day |
-| `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this |
+| `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this (on disk, or in the audio bucket when that is on) |
 | `TASTR_MAX_ANALYSES` | 2 | analyses that run at once; more wait in a queue |
 | `TASTR_BULK_AT_ONCE` | `TASTR_MAX_ANALYSES` | tracks a bulk action (reload, re-analyze, look up) runs at once from the browser. Stems and the drum model always go one at a time. At home it defaults to about half the CPU cores, 1 to 4 |
 | `TASTR_DAILY_STEMS` | 10 | stem separations each person can start per UTC day |
@@ -64,6 +64,10 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_WATCH_MINUTES` | 15 | how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off |
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
+| `TASTR_AUDIO_BUCKET` | none | keep uploads and stems in this S3-compatible bucket (R2), with the disk as a cache; see [Audio in a bucket](#audio-in-a-bucket) |
+| `TASTR_AUDIO_ENDPOINT` | none | the bucket's S3 endpoint, for R2 `https://<account id>.r2.cloudflarestorage.com` |
+| `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | none | a token that can read and write that bucket only. Keep them secret |
+| `TASTR_AUDIO_REGION` | `auto` | the region to sign for; R2 takes `auto` |
 | `TASTR_BROWSER_ENGINE` | off | `1` has each visitor's browser make the whole card with the Rust engine's WebAssembly build; the server checks it and skips analysis ([ARCHITECTURE.md](ARCHITECTURE.md#browser-engine)). Needs the image's `TASTR_ENGINE_WASM` |
 
 With `TASTR_HOSTED=1` but no team domain or AUD tag, `tastr serve` refuses to start rather than run
@@ -180,6 +184,37 @@ can play the audio until it expires, the same as a shared Strudel sketch.
 Every 6 hours (and when the server starts) uploaded files older than `TASTR_AUDIO_DAYS` are deleted, with
 their stems unless another track still has the same file. The track card stays, with everything except
 playback, waveform scrubbing, stems and re-analysis. Tracks owned by `TASTR_ADMIN_EMAILS` keep their audio.
+With the audio bucket on, the bucket's copy goes too, and the age is counted from when it reached the bucket.
+
+## Audio in a bucket
+
+With `TASTR_AUDIO_BUCKET` set (`tastr/blobs.py`, `pip install -e '.[hosted]'` for boto3), uploads and stems
+live in an S3-compatible bucket and the server's disk only caches them, so a lost volume loses no audio and
+the server could later run without one:
+
+- Each upload is copied to the bucket, under the same path it has under `TASTR_HOME` (`uploads/ab12cd34/song.mp3`),
+  before it is analyzed. If the copy fails the upload is refused (503) and nothing is kept.
+- Modal gets a signed link to the upload instead of its bytes, and uploads stems to signed links of its own.
+- Playback (`/api/tracks/{id}/audio`, `/stems/{name}`, and the signed `/pub` links for strudel.cc) answers with
+  a redirect to a signed link that lasts an hour; the browser seeks with Range requests against the bucket.
+- What needs the file here (re-reading its tags, analysis on this machine) downloads it first. Every 6 hours
+  the server deletes local copies the bucket holds that are more than an hour old.
+- Deleting a track, or expiring its audio, deletes the bucket's copy; the storage cap and the admin view's
+  storage figures count what the bucket holds.
+- Each card's waveform and spectrogram data (about a megabyte) goes to the bucket as `views/<track id>.json`,
+  gzipped, and the card in the database keeps only a marker; `/api/tracks/{id}/views` redirects to a signed link.
+  Cards saved before keep their data inline until they are re-analyzed. If the bucket can't take it, the data
+  stays in the card. `tastr db-size` shows the database's size by table and how much waveform data is still inline.
+- `tastr unpack` copies the archive's audio and stems to the bucket as well.
+- The Files view reads sizes from the bucket's listing; single downloads redirect to a signed link that names the
+  file, and zips stream each file from the bucket.
+
+Files uploaded before the bucket was turned on stay on the disk only, and keep working from there.
+
+The bucket needs a CORS rule so pages can fetch from it (the app fetches audio to draw and play it, and strudel.cc
+follows the redirect): allow `GET` and `HEAD` from any origin (`*`), with the `Range` header. A signed link is
+what grants access, and it expires; the bucket stays private. [deploy.md](deploy.md#2b-r2-bucket-for-audio-optional)
+has the steps.
 
 ## Moving your own library to a hosted server
 

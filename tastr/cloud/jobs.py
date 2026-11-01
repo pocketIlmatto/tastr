@@ -139,20 +139,50 @@ def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = No
     return report
 
 
-def run_analyze(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
-    """Analyze one file's bytes; returns the card as a dict (its source names a temporary file). `stages` is
-    still in the call so servers and Modal apps deployed at different times agree; the engine makes every stage."""
+DOWNLOAD_SECONDS = 120  # for one file from the audio bucket
+
+
+def _write_audio(audio: bytes | str, dest: Path) -> None:
+    """Put the audio at `dest`: `audio` is the file's bytes, or a signed link to it in the audio bucket
+    (tastr/blobs.py), which a server with the bucket on sends instead of the bytes."""
+    if isinstance(audio, bytes):
+        dest.write_bytes(audio)
+        return
+    import shutil
+    import urllib.request
+
+    if not audio.startswith("https://"):
+        raise ValueError("the audio link must be https")
+    with urllib.request.urlopen(audio, timeout=DOWNLOAD_SECONDS) as r, open(dest, "wb") as out:  # noqa: S310
+        shutil.copyfileobj(r, out, 1 << 20)
+
+
+def _put(url: str, path: Path) -> int:
+    """Upload a file to a signed PUT link; returns its size."""
+    import urllib.request
+
+    data = path.read_bytes()
+    req = urllib.request.Request(url, data=data, method="PUT", headers={"Content-Type": "audio/flac"})
+    with urllib.request.urlopen(req, timeout=DOWNLOAD_SECONDS):  # noqa: S310 - a link the server signed
+        pass
+    return len(data)
+
+
+def run_analyze(audio: bytes | str, suffix: str, stages: list[str] | None = None, options: dict | None = None) -> dict:
+    """Analyze one file (its bytes or a signed link to it); returns the card as a dict (its source names a
+    temporary file). `stages` is still in the call so servers and Modal apps deployed at different times agree;
+    the engine makes every stage."""
     import tempfile
 
     from ..engine import analyze_file
 
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / f"track{suffix}"
-        src.write_bytes(audio)
+        _write_audio(audio, src)
         return analyze_file(src, options=options).to_dict()
 
 
-def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = None, options: dict | None = None):
+def run_analyze_stream(audio: bytes | str, suffix: str, stages: list[str] | None = None, options: dict | None = None):
     """run_analyze, yielding {"stage", "i", "n"} as each stage starts and then {"card": ...}, for progress bars."""
     import queue
     import tempfile
@@ -163,7 +193,7 @@ def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = Non
     events: queue.Queue = queue.Queue()
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / f"track{suffix}"
-        src.write_bytes(audio)
+        _write_audio(audio, src)
 
         def work():
             try:
@@ -183,15 +213,19 @@ def run_analyze_stream(audio: bytes, suffix: str, stages: list[str] | None = Non
                 return
 
 
-def run_stems(audio: bytes, suffix: str) -> dict[str, bytes]:
-    """Separate one file's bytes with the local Demucs; returns {stem name: FLAC bytes}."""
+def run_stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:
+    """Separate one file (its bytes or a signed link to it) with the local Demucs. Returns {stem name: FLAC
+    bytes}, or with `put_urls` ({stem name: signed upload link}) uploads each stem there and returns
+    {stem name: bytes written}."""
     import tempfile
 
     from .. import stems
 
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / f"track{suffix}"
-        src.write_bytes(audio)
+        _write_audio(audio, src)
         out = Path(tmp) / "stems"
         stems.separate(src, out)
+        if put_urls:
+            return {n: _put(put_urls[n], stems.stem_path(out, n)) for n in stems.STEM_NAMES if n in put_urls}
         return {n: stems.stem_path(out, n).read_bytes() for n in stems.STEM_NAMES}

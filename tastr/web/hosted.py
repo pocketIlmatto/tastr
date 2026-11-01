@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .. import blobs
+
 log = logging.getLogger(__name__)
 
 HEALTH_PATH = "/api/health"
@@ -218,6 +220,7 @@ class LinkSigner:
 def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[str, ...] = (),
                  now: float | None = None) -> list[int]:
     """Delete uploaded audio under `root` older than `days`, except tracks owned by `keep` (the admins).
+    With the audio bucket on (tastr/blobs.py), its copy goes too, and its upload time decides the age.
 
     Cards stay, so the track still shows everything but playback. Stems go too, unless another track
     still has the same file. Returns the ids of tracks whose audio went.
@@ -226,18 +229,23 @@ def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[
 
     cutoff = (now or time.time()) - days * 86400
     root = root.resolve()
+    inbucket = blobs.listing(blobs.key(root / "x").rsplit("/", 1)[0] + "/") if blobs.key(root / "x") else {}
     gone = []
     for tid, owner, path, sha in conn.execute("SELECT id, owner, local_path, sha256 FROM tracks WHERE local_path IS NOT NULL").fetchall():
         p = Path(path).resolve()
-        if owner in keep or root not in p.parents or not p.is_file() or p.stat().st_mtime >= cutoff:
+        if owner in keep or root not in p.parents:
             continue
-        p.unlink()
-        if p.parent != root and not any(p.parent.iterdir()):
+        stored = inbucket.get(blobs.key(p) or "")
+        when = stored[1] if stored else (p.stat().st_mtime if p.is_file() else None)
+        if when is None or when >= cutoff:
+            continue
+        blobs.remove(p)
+        if p.parent != root and p.parent.is_dir() and not any(p.parent.iterdir()):
             p.parent.rmdir()
         gone.append((tid, sha))
     for tid, sha in gone:
         paths = conn.execute("SELECT local_path FROM tracks WHERE sha256 = ? AND local_path IS NOT NULL", (sha,)).fetchall()
-        if not any(Path(lp).is_file() for (lp,) in paths):
+        if not any(blobs.exists(lp) for (lp,) in paths):
             stems.remove(stems.stems_dir(sha, tid))
     return [tid for tid, _ in gone]
 
@@ -270,7 +278,10 @@ def audio_minutes(path: str | Path) -> float | None:
 
 
 def stored_bytes(home: Path) -> int:
-    """Bytes of uploaded audio and stems under TASTR_HOME, for the storage cap."""
+    """Bytes of uploaded audio and stems under TASTR_HOME, for the storage cap: what the audio bucket holds
+    when that is on (tastr/blobs.py), since the disk is then only a cache."""
+    if blobs.enabled():
+        return blobs.stored_bytes()
     total = 0
     for sub in ("uploads", "stems"):
         d = home / sub
@@ -319,15 +330,17 @@ def inline_script_hashes(html: str) -> list[str]:
     return out
 
 
-def security_headers(script_hashes: list[str]) -> dict[str, str]:
+def security_headers(script_hashes: list[str], media_origin: str | None = None) -> dict[str, str]:
+    """`media_origin`: where else audio comes from (the audio bucket's signed links, tastr/blobs.py)."""
+    extra = f" {media_origin}" if media_origin else ""
     csp = "; ".join([
         "default-src 'self'",
         "script-src 'self' " + " ".join(script_hashes),
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",  # the UI sets style attributes
         "font-src 'self' https://fonts.gstatic.com",
         "img-src 'self' data: blob:",
-        "media-src 'self' blob:",
-        "connect-src 'self'",
+        "media-src 'self' blob:" + extra,
+        "connect-src 'self'" + extra,
         "object-src 'none'",
         "base-uri 'self'",
         "form-action 'self'",

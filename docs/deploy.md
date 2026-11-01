@@ -33,6 +33,34 @@ In the Cloudflare dashboard:
 This is a separate bucket and token from the benchmark datasets' `tastr-data` ([cloud.md](cloud.md)), so the
 server's key can't touch the datasets.
 
+## 2b. R2 bucket for audio (optional)
+
+Without this, uploads and stems live on the Fly volume only and a lost volume loses them. With it, they live
+in R2 and the volume only caches them ([hosting.md](hosting.md#audio-in-a-bucket)).
+
+1. **R2 Object Storage > Create bucket**, named `tastr-audio`. Leave it private.
+2. In the bucket, **Settings > CORS Policy > Add CORS policy**:
+
+   ```json
+   [{"AllowedOrigins": ["*"], "AllowedMethods": ["GET", "HEAD"], "AllowedHeaders": ["Range"],
+     "ExposeHeaders": ["Content-Length", "Content-Range", "Accept-Ranges"], "MaxAgeSeconds": 3600}]
+   ```
+
+   Signed links are what grant access; this only lets pages read the response. Any origin, because strudel.cc
+   follows a redirect from your hostname, after which its requests carry no origin a list could match.
+3. **Manage API tokens > Create API token**: **Object Read & Write**, applied to `tastr-audio` only. Keep the
+   Access Key ID and Secret Access Key.
+4. After the first deploy (step 7), turn it on:
+
+   ```
+   fly secrets set TASTR_AUDIO_BUCKET=tastr-audio \
+     TASTR_AUDIO_ENDPOINT=https://<account id>.r2.cloudflarestorage.com \
+     TASTR_AUDIO_ACCESS_KEY_ID=<access key id> TASTR_AUDIO_SECRET_ACCESS_KEY=<secret access key>
+   ```
+
+   Deploy Modal first if it is older than this setting: the server then sends Modal signed links instead of
+   audio bytes. The deploy workflow always deploys Modal first.
+
 ## 3. Modal environment
 
 ```

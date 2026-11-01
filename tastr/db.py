@@ -12,6 +12,7 @@ DuckDB can read this file directly for heavier analysis:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -21,7 +22,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import blobs
 from .engine.card import TrackCard
+
+log = logging.getLogger(__name__)
 
 DB_SCHEMA_VERSION = 1
 
@@ -263,6 +267,15 @@ CREATE TABLE IF NOT EXISTS blocked_requests (
     last_at TEXT
 );
 
+-- Background jobs still queued or running (tastr/markers.py): stems, drum model runs, analyses.
+CREATE TABLE IF NOT EXISTS job_markers (
+    kind       TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    data       TEXT NOT NULL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (kind, key)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
 CREATE INDEX IF NOT EXISTS idx_tracks_owner ON tracks(owner);
 CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
@@ -400,8 +413,48 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
             [(track_id, name, i, t, v)
              for name, ser in card.series.items() for i, (t, v) in enumerate(zip(ser.times, ser.values))],
         )
-        conn.execute("INSERT INTO cards VALUES (?, ?, ?)", (track_id, card.schema_version, card.to_json()))
+        conn.execute("INSERT INTO cards VALUES (?, ?, ?)", (track_id, card.schema_version, _card_json(card, track_id)))
     return track_id
+
+
+def _card_json(card: TrackCard, track_id: int) -> str:
+    """The card as stored. With the audio bucket on, its waveform and spectrogram data (about a megabyte) goes to
+    the bucket and the card keeps only blobs.IN_BUCKET; if that upload fails the data stays in the card."""
+    views = card.extras.get("views")
+    if views is None or views == blobs.IN_BUCKET or not blobs.enabled():
+        return card.to_json()
+    try:
+        blobs.put_views(track_id, views)
+    except Exception as e:  # noqa: BLE001 - kept in the card instead; nothing is lost
+        log.warning("couldn't store track %s's views in the bucket, keeping them in the card: %s", track_id, e)
+        return card.to_json()
+    d = card.to_dict()  # a deep copy: the caller's card keeps its data
+    d["extras"]["views"] = blobs.IN_BUCKET
+    return json.dumps(d)
+
+
+D1_ROW_LIMIT = 2_000_000  # the largest row Cloudflare D1 takes, in bytes
+
+
+def size_report(path: str | os.PathLike | None = None) -> dict[str, Any]:
+    """How big the database is and what takes the room, for the move to D1 (`tastr db-size`): the file, each
+    table and index, and the cards (the largest rows), with how much of them is inline waveform data."""
+    path = Path(path or default_db_path())
+    with closing(connect(path, readonly=True)) as conn:
+        try:
+            tables = dict(conn.execute("SELECT name, SUM(pgsize) FROM dbstat GROUP BY name ORDER BY 2 DESC"))
+        except sqlite3.OperationalError:  # an SQLite built without the dbstat table
+            tables = {}
+        n, total, largest = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(json)), 0), COALESCE(MAX(LENGTH(json)), 0) FROM cards").fetchone()
+        inline, inline_bytes = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH(json_extract(json, '$.extras.views'))), 0) FROM cards "
+            "WHERE json_type(json, '$.extras.views') = 'object' "
+            "AND json_extract(json, '$.extras.views.in_bucket') IS NULL").fetchone()
+        over = conn.execute("SELECT COUNT(*) FROM cards WHERE LENGTH(json) > ?", (D1_ROW_LIMIT,)).fetchone()[0]
+    return {"file_bytes": path.stat().st_size, "tables": tables, "cards": n, "card_bytes": total,
+            "largest_card_bytes": largest, "cards_over_d1_row_limit": over, "inline_views": inline,
+            "inline_view_bytes": inline_bytes}
 
 
 def find_track_id(conn: sqlite3.Connection, sha256: str | None = None, source_uri: str | None = None,
@@ -447,7 +500,13 @@ def list_tracks(conn: sqlite3.Connection, owner: str | None = None) -> list[dict
 
 def delete_track(conn: sqlite3.Connection, track_id: int) -> bool:
     with conn:
-        return conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,)).rowcount > 0
+        gone = conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,)).rowcount > 0
+    if gone:
+        try:
+            blobs.remove_views(track_id)  # the card's waveform data, when it is in the audio bucket
+        except Exception as e:  # noqa: BLE001 - an orphaned object costs a megabyte, not a failed delete
+            log.warning("couldn't remove track %s's views from the bucket: %s", track_id, e)
+    return gone
 
 
 def save_lookup(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:
@@ -730,7 +789,7 @@ def retag_track(conn: sqlite3.Connection, track_id: int) -> str:
     kind, local_path = row
     if kind != "file":
         return "not_file"
-    if not local_path or not Path(local_path).is_file():
+    if blobs.ensure(local_path) is None:  # brought back from the audio bucket if only it has the file
         return "no_file"
     card = load_card(conn, track_id)
     tags, info = read_file_meta(local_path)

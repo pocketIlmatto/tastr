@@ -247,25 +247,34 @@ def test_unfinished_jobs_resume_after_a_restart(db_path, track, stub, gate, home
     first.post(f"/api/tracks/{track}/stems")
     wait_for(first, track, "running")
     folder = home / "stems" / ("f00d" * 4)
-    marker = stems.job_marker(folder)
-    assert marker.read_text() == str(tmp_path / "song.wav")
+    markers = stems.Jobs(db_path).markers  # kept in the database, so a server on a fresh disk still finds them
+    assert markers.get(folder.name) == {"audio": str(tmp_path / "song.wav")}
     gate.set()
     wait_for(first, track, "ready")
-    assert not marker.exists()
+    assert markers.items() == []
 
     # What a machine stopped mid-job leaves behind: a marker and no stems.
     stems.remove(folder)
-    marker.write_text(str(tmp_path / "song.wav"))
+    markers.put(folder.name, {"audio": str(tmp_path / "song.wav")})
     with TestClient(create_app(db_path)) as again:  # startup picks the job up again
         wait_for(again, track, "ready")
-    assert len(stub) == 2 and not marker.exists()
+    assert len(stub) == 2 and markers.items() == []
 
 
-def test_stale_job_markers_are_dropped(home):
+def test_marker_files_from_an_older_server_are_read_once(home, db_path, tmp_path, stub):
     root = home / "stems"
     root.mkdir(parents=True)
-    (root / "gone.job").write_text(str(home / "missing.wav"))
-    assert stems.Jobs().resume() == 0 and not (root / "gone.job").exists()
+    (root / "gone.job").write_text(str(home / "missing.wav"))  # its audio is gone: dropped
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"RIFF")
+    (root / "kept.job").write_text(str(audio))
+    jobs = stems.Jobs(db_path)
+    assert jobs.resume() == 1 and not (root / "gone.job").exists() and not (root / "kept.job").exists()
+    for _ in range(250):  # the separation runs in the background; its marker goes when it ends
+        if not jobs.markers.items():
+            break
+        time.sleep(0.02)
+    assert stub == [audio] and jobs.markers.items() == []
 
 
 def test_queued_jobs_say_how_many_are_ahead(home, tmp_path, stub, gate):

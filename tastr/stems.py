@@ -24,6 +24,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
+from . import blobs
+from .markers import Markers, legacy_files
+
 STEM_NAMES = ("vocals", "bass", "other", "drums")
 MODEL = "htdemucs"
 HF_REPO = "adefossez/HTDemucs"  # where Demucs 4.1 keeps MODEL on the Hugging Face Hub
@@ -49,8 +52,8 @@ def stems_dir(sha256: str | None, track_id: int) -> Path:
     return stems_root() / (sha256[:16] if sha256 else f"track-{track_id}")
 
 
-def job_marker(folder: Path) -> Path:
-    """Holds the audio path while a separation is queued or running, so a restarted server can pick it up again."""
+def legacy_marker(folder: Path) -> Path:
+    """Where older servers kept a queued or running separation's audio path (read once by `Jobs.resume()`)."""
     return folder.with_name(folder.name + ".job")
 
 
@@ -59,11 +62,14 @@ def stem_path(folder: Path, name: str) -> Path:
 
 
 def is_ready(folder: Path) -> bool:
-    return all(stem_path(folder, n).is_file() for n in STEM_NAMES)
+    """Every stem is here, or in the audio bucket (tastr/blobs.py)."""
+    return all(stem_path(folder, n).is_file() for n in STEM_NAMES) or (
+        blobs.enabled() and all(blobs.in_bucket(stem_path(folder, n)) for n in STEM_NAMES))
 
 
 def remove(folder: Path) -> None:
     shutil.rmtree(folder, ignore_errors=True)
+    blobs.remove_tree(folder)
 
 
 def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None) -> None:
@@ -92,7 +98,7 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
     with _hub_offline_if_cached():
         model = get_model(MODEL)  # downloads the weights (about 80 MB) the first time
     model.eval()
-    wav = load_audio(audio_path, model.samplerate, mono=False)  # (channels, n); m4a/aac go through ffmpeg
+    wav = load_audio(blobs.ensure(audio_path) or audio_path, model.samplerate, mono=False)  # (channels, n); m4a/aac go through ffmpeg
     if wav.shape[0] < model.audio_channels:
         wav = np.repeat(wav[:1], model.audio_channels, axis=0)
     mix = torch.from_numpy(np.ascontiguousarray(wav[: model.audio_channels], dtype=np.float32))
@@ -164,7 +170,11 @@ def _default_device(torch) -> str:
 
 
 def separate_track(audio_path: str | Path, folder: Path, progress: Progress | None = None) -> None:
-    """Separate into a scratch folder, then move it into place, so a half-done run never looks ready."""
+    """Separate into a scratch folder, then move it into place, so a half-done run never looks ready. With
+    the audio bucket on, the stems end up there (and Modal writes them there itself)."""
+    if blobs.enabled() and backend() == "modal":
+        _separate_into_bucket(audio_path, folder, progress)
+        return
     tmp = folder.with_name(folder.name + ".partial")
     remove(tmp)
     try:
@@ -175,17 +185,38 @@ def separate_track(audio_path: str | Path, folder: Path, progress: Progress | No
         remove(folder)
         tmp.rename(folder)
     finally:
-        remove(tmp)
+        shutil.rmtree(tmp, ignore_errors=True)
+    for n in STEM_NAMES:
+        blobs.push(stem_path(folder, n))
+
+
+def _separate_into_bucket(audio_path: str | Path, folder: Path, progress: Progress | None) -> None:
+    """Modal uploads each stem to a signed link for its place in the bucket, so no stem passes through here.
+    The stems count as ready only once all of them are there."""
+    from .cloud import remote
+
+    if progress:
+        progress(0.05)  # Modal reports no progress; show that the job has started
+    blobs.remove_tree(folder)  # a failed earlier run may have left some
+    remote.stems(audio_path, {n: blobs.put_url(stem_path(folder, n)) for n in STEM_NAMES})
+    blobs.reset_listings()
+    missing = [n for n in STEM_NAMES if not blobs.in_bucket(stem_path(folder, n))]
+    if missing:
+        raise RuntimeError(f"Separation produced no {', '.join(missing)} stem")
+    if progress:
+        progress(1.0)
 
 
 class Jobs:
     """Background separations for the web server, one at a time; later requests wait their turn.
 
-    Each queued or running job leaves a `<folder>.job` marker until it ends, and `resume()` restarts
-    them, so a server that stopped meanwhile (a hosted machine that auto-stops, a crash) doesn't lose them.
+    Each queued or running job leaves a marker in the database (tastr/markers.py) until it ends, and
+    `resume()` restarts them, so a server that stopped meanwhile (a hosted machine that auto-stops, a crash)
+    doesn't lose them. `db_path`: the database that keeps the markers (None: the default one).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, db_path=None) -> None:
+        self.markers = Markers(db_path, "stems")
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tastr-stems")
         self._lock = threading.Lock()
         self._state: dict[Path, dict] = {}
@@ -214,18 +245,20 @@ class Jobs:
                 return dict(job)
             self._seq += 1
             self._state[folder] = {"state": "queued", "progress": 0.0, "_seq": self._seq}
-        folder.parent.mkdir(parents=True, exist_ok=True)
-        job_marker(folder).write_text(str(audio_path))
+        self.markers.put(folder.name, {"audio": str(audio_path)})
         self._pool.submit(self._run, audio_path, folder)
         return self.status(folder)
 
     def resume(self) -> int:
         """Restart the jobs a previous run of the server left unfinished; returns how many."""
+        for f in legacy_files(stems_root(), "*.job"):  # from a server that kept them as files
+            self.markers.put(f.stem, {"audio": f.read_text().strip()})
+            f.unlink(missing_ok=True)
         n = 0
-        for marker in sorted(stems_root().glob("*.job")):
-            folder, audio = marker.with_suffix(""), Path(marker.read_text().strip())
-            if is_ready(folder) or not audio.is_file():
-                marker.unlink(missing_ok=True)
+        for key, data, _ in self.markers.items():
+            folder, audio = stems_root() / key, Path(data.get("audio") or "")
+            if is_ready(folder) or not data.get("audio") or not blobs.exists(audio):
+                self.markers.remove(key)
                 continue
             log.info("Resuming stem separation for %s", audio)
             self.start(audio, folder)
@@ -265,7 +298,7 @@ class Jobs:
             else:
                 log.info("Stems ready for %s (%.0f s)", audio_path, time.monotonic() - start)
         with self._lock:
-            job_marker(folder).unlink(missing_ok=True)
+            self.markers.remove(folder.name)
             job = self._state[folder]
             if job.get("cancelled"):  # the track was deleted meanwhile
                 del self._state[folder]

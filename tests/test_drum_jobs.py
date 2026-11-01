@@ -156,15 +156,16 @@ def test_remote_analysis_picks_the_drum_function(monkeypatch, tmp_path):
 def test_unfinished_runs_resume(home):
     ran = []
     done = threading.Event()
-    jobs = drum_jobs.Jobs(lambda tid: (ran.append(tid), done.set()))
+    jobs = drum_jobs.Jobs(lambda tid: (ran.append(tid), ran.__len__() == 2 and done.set()))
+    jobs.markers.put("7")  # left in the database by the last run
     drum_jobs.jobs_root().mkdir(parents=True)
-    (drum_jobs.jobs_root() / "7.job").touch()
-    assert jobs.resume() == 1
+    (drum_jobs.jobs_root() / "8.job").touch()  # and a file from a server older than that
+    assert jobs.resume() == 2
     assert done.wait(5)
     end = time.monotonic() + 5
-    while (drum_jobs.jobs_root() / "7.job").exists() and time.monotonic() < end:
+    while jobs.markers.items() and time.monotonic() < end:
         time.sleep(0.02)
-    assert ran == [7] and not (drum_jobs.jobs_root() / "7.job").exists()
+    assert ran == [7, 8] and jobs.markers.items() == [] and not (drum_jobs.jobs_root() / "8.job").exists()
 
 
 def test_hosted_daily_limit(db_path, home, tmp_path, monkeypatch):

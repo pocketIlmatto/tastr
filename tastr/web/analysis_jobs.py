@@ -5,7 +5,7 @@ then polls GET /api/analyze/jobs/{id}. A job is {state: queued|running|done|erro
 file_count, position?, results?, error?}; `stage` is "waiting" (for an analysis slot), "fetch" (a link),
 "decode", or an engine stage (core, sections, tags, suggestions, views).
 
-Each job is also a small JSON file under $TASTR_HOME/analysis-jobs/, so a job a restarted server left
+Each job is also kept in the database (tastr/markers.py, kind "analysis"), so a job a restarted server left
 unfinished reads as failed ("upload it again") instead of vanishing. Finished jobs are forgotten after an hour.
 """
 
@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+
+from ..markers import Markers, legacy_files
 
 log = logging.getLogger(__name__)
 
@@ -26,25 +29,31 @@ RESTARTED = "The server restarted before this finished. Upload it again."
 
 
 class AnalysisJobs:
-    def __init__(self, folder: Path):
-        self.folder = folder
+    def __init__(self, db_path=None, legacy_folder: Path | None = None):
+        """`db_path`: the database that keeps the jobs (None: the default one). `legacy_folder`: where older
+        servers kept them as JSON files, read once by `resume()`."""
+        self.markers = Markers(db_path, "analysis")
+        self.legacy_folder = legacy_folder
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._seq = 0
 
     def resume(self) -> list[dict[str, Any]]:
         """Mark the jobs a previous run of the server left unfinished as failed; returns them (for the admin log)."""
-        cut = []
-        for f in self.folder.glob("*.json") if self.folder.is_dir() else []:
+        for f in legacy_files(self.legacy_folder, "*.json") if self.legacy_folder else []:
             try:
                 job = json.loads(f.read_text())
+                if f.stem.isalnum() and isinstance(job, dict):
+                    self.markers.put(f.stem, job)
             except (OSError, ValueError):
-                f.unlink(missing_ok=True)
-                continue
+                pass
+            f.unlink(missing_ok=True)
+        cut = []
+        for key, job, _ in self.markers.items():
             if job.get("state") in ("queued", "running"):
                 cut.append(dict(job))
                 job.update(state="error", error=RESTARTED)
-                f.write_text(json.dumps(job))
+                self.markers.put(key, job)
         return cut
 
     def start(self, owner: str | None, files: list[str], work: Callable[["Progress"], dict[str, Any]],
@@ -81,9 +90,8 @@ class AnalysisJobs:
         """A job from an earlier run of the server (see resume)."""
         if not job_id.isalnum():
             return None, None
-        try:
-            job = json.loads((self.folder / f"{job_id}.json").read_text())
-        except (OSError, ValueError):
+        job = self.markers.get(job_id)
+        if job is None:
             return None, None
         return {k: v for k, v in job.items() if not k.startswith("_") and k != "owner"}, job.get("owner")
 
@@ -105,13 +113,9 @@ class AnalysisJobs:
         self._save(job)
 
     def _save(self, job: dict[str, Any]) -> None:
-        try:
-            self.folder.mkdir(parents=True, exist_ok=True)
-            with self._lock:
-                text = json.dumps({k: v for k, v in job.items() if not k.startswith("_")})
-            (self.folder / f"{job['id']}.json").write_text(text)
-        except OSError:
-            log.warning("couldn't save analysis job %s", job["id"])
+        with self._lock:
+            data = {k: v for k, v in job.items() if not k.startswith("_")}
+        self.markers.put(job["id"], data)
 
     def _forget_old(self) -> None:
         cutoff = time.time() - KEEP_SECONDS
@@ -119,12 +123,10 @@ class AnalysisJobs:
             old = [k for k, j in self._jobs.items() if j["state"] in ("done", "error") and j["created"] < cutoff]
             for k in old:
                 del self._jobs[k]
-        for f in self.folder.glob("*.json") if self.folder.is_dir() else []:
-            try:
-                if f.stat().st_mtime < cutoff:
-                    f.unlink(missing_ok=True)
-            except OSError as e:  # another worker may have removed it first; the next sweep tries again
-                log.debug("can't remove old job file %s: %s", f, e)
+        try:
+            self.markers.prune(cutoff)
+        except sqlite3.Error as e:  # the next start tries again
+            log.debug("can't forget old analysis jobs: %s", e)
 
 
 def new_id() -> str:

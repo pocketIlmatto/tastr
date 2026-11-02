@@ -284,5 +284,4 @@ export function init() {
   $("fl-sel").addEventListener("click", () => setSelecting(!flSelecting));
   $("fl-show").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { flState.show = b.dataset.v; syncTools(); renderFiles(); }));
   $("view-files").addEventListener("keydown", (e) => { if (e.key === "Escape" && flSelecting) setSelecting(false); });
-  if (location.hash === "#files") switchTo("files");
 }

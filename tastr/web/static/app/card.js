@@ -10,6 +10,7 @@ import { delay, trackAudio } from "./audio.js";
 import { energyChart } from "./chart.js";
 import { grooveView } from "./groove.js";
 import { loadEdits, savedEdits } from "./groove-edits.js";
+import { setRoute } from "./route.js";
 import { audioCtx, player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { pollStems, stemStatus, stemsBusy, trackMenu } from "./menu.js";
 import { setStatus } from "./upload.js";
@@ -102,6 +103,7 @@ export async function openTrack(id) {
   });
   document.querySelectorAll("#review-list > li[data-id]").forEach((li) => li.classList.toggle("active", +li.dataset.id === id)); // both review tabs
   switchTo("library");
+  setRoute(`track/${id}`);  // a refresh reopens this track
   try {
     const [card] = await Promise.all([api(`/api/tracks/${id}`), loadEdits(id)]);
     if (currentId === id) renderCard(card);

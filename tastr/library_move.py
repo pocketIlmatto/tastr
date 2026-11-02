@@ -5,6 +5,7 @@ bucket.
    running server doesn't have to stop) to the audio bucket as `import/library.db`. Audio and stems are in the
    bucket already, under the same names on both servers.
 2. When the Worker starts (worker/src/entry.py) with a library that has never been imported and has no tracks,
+   and every few minutes after that while it is still `waiting` (the copy may land after the Worker starts),
    `import_from_bucket` copies every table's rows from that file into the Durable Object's database, in one
    transaction, and records the import in `meta` so it never runs twice.
 
@@ -75,12 +76,17 @@ def import_rows(conn, data: bytes) -> dict[str, int]:
     return counts
 
 
+def waiting(conn) -> bool:
+    """Whether this library could still take an import: the bucket is on, it never imported, and it has no tracks
+    (a library that is in use already is never overwritten)."""
+    return (blobs.enabled() and not db.get_meta(conn, DONE)
+            and not conn.execute("SELECT 1 FROM tracks LIMIT 1").fetchone())
+
+
 def import_from_bucket(conn) -> dict[str, int] | None:
     """Import KEY into `conn` once, if the library is still empty; returns the counts, or None if nothing ran."""
-    if not blobs.enabled() or db.get_meta(conn, DONE):
+    if not waiting(conn):
         return None
-    if conn.execute("SELECT 1 FROM tracks LIMIT 1").fetchone():
-        return None  # a library that is in use already: never overwrite it
     size = blobs.client().head(KEY)
     if size is None:
         return None

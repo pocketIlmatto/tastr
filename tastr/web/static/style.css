@@ -1059,6 +1059,30 @@ details.sec.sec-moved > summary { animation: secMoved .9s ease-out; }
 .ln-note { min-height: 1.2em; margin: 6px 0 10px; font-size: 12px; color: var(--muted); }
 .ln-note.err { color: var(--warn); }
 .ln-dlg .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Send copies of tracks to someone (sendtracks.js, sandbox v190) */
+.snd-dlg { width: min(520px, calc(100vw - 32px)); }
+.snd-to { display: flex; align-items: center; gap: 8px; }
+.snd-to input { flex: 1; min-width: 0; }
+.snd-quick { margin: 6px 0 0; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.snd-quick:empty { display: none; }
+.snd-who { margin: 10px 0 6px; font-size: 13px; }
+.snd-who.warn, .snd-who.err { color: var(--warn); }
+.snd-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+.snd-list:empty { display: none; }
+.snd-list li { display: flex; justify-content: space-between; gap: 10px; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.snd-list li:last-child { border-bottom: 0; }
+.snd-list li.skip .snd-t { opacity: .55; text-decoration: line-through; }
+.snd-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snd-st { flex: none; font-size: 12px; color: var(--muted); }
+.snd-list li:not(.skip) .snd-st { color: var(--ok, #2f8f4e); }
+.snd-sum { margin: 8px 0 0; font-size: 13px; font-weight: 600; }
+.snd-sum:empty { display: none; }
+.snd-note { font-size: 12px; margin: 8px 0 12px; }
+.snd-ok { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+.snd-ok h3 { margin: 2px 0 4px; }
+.snd-ok p { margin: 0; font-size: 13px; }
+.snd-okmark { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--ok, #2f8f4e); color: #fff; font-size: 18px; font-weight: 700; }
+.snd-dlg .error:empty { display: none; }
 .lib-listbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .lib-listbar[hidden] { display: none; }
 #lib .lib-listbar .pl-mini { font-size: 12px; padding: 3px 10px; }

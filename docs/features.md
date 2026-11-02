@@ -124,6 +124,10 @@ Everything a track card shows and what you can do with it. The [README](../READM
     Lists are kept on the server, per person; deleting a track takes it out of every list. Saving asks for the
     name (up to 80 characters; a long suggested name is shortened), and deleting a list asks first, with an
     Undo for 10 seconds.
+- **Send copies to a friend** (shared server, admins): Library › Select › Actions › "Send copies to…". Type their
+  email (or pick someone who uses the server) to see who they are, when they were last here and which tracks
+  they'd get. Tracks they already have, and tracks without audio on the server, are skipped. They get the same
+  analysis and can play the audio; your edits, labels, cues and lists stay yours.
 - **Play and export lists:** Library › List shows one list in its own order, with **Play**, **Shuffle** and
   **Export**. The player bar at the bottom streams each track in turn (previous, play/pause, next, shuffle,
   seek), and the keyboard's media keys work too. Starting a card's playback pauses the list. Export saves the

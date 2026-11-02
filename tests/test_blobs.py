@@ -524,11 +524,12 @@ def test_a_storage_refusal_is_logged_for_the_admin(bucket, home, db_path, monkey
     assert c.post(f"/api/uploads/{up['id']}/failed", json={}, headers=GOOD).status_code == 404  # closed; Retry starts anew
 
 
-def test_a_copied_track_gets_its_own_views(bucket, db_path):
+def test_a_copied_track_gets_its_own_views(bucket, db_path, home):
     from tastr import library_copy
 
     conn = db.connect(db_path)
     card = full_card()
+    card.source.local_path = str(write(home / "uploads" / "ab" / "x.wav"))
     card.extras["views"] = blobs.IN_BUCKET
     tid = db.save_card(conn, card, owner="a@b.c")
     blobs.put_views(tid, {"wave": [1, 2, 3]})

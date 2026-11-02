@@ -24,7 +24,7 @@ USAGE_RANGES = {"1": 1, "7": 7, "30": 30, "all": 365}  # the admin chart's range
 
 class CopyBody(BaseModel):
     to: str
-    track_ids: list[int] = Field(..., min_length=1, max_length=50)
+    track_ids: list[int] = Field(..., min_length=1, max_length=200)
 
 
 class LimitsBody(BaseModel):
@@ -168,24 +168,35 @@ def router(ctx: AppContext) -> APIRouter:
             return db.find_events(c, type, who, source, since, until, problems, limit)
 
     @api.get("/api/admin/copy-tracks")
-    def copy_preview(request: Request, to: str, count: int = Query(10, ge=1, le=50)):
+    def copy_preview(request: Request, to: str, count: int = Query(10, ge=1, le=50), ids: str = ""):
         """What copying your tracks to `to` would do, without doing it: whether `to` has used the server yet, and
-        your `count` most recently added tracks with audio that `to` doesn't have. Admins only."""
+        `ids` (comma-separated, up to 200, all yours), each with `they_have` and `has_audio`; without `ids`, your
+        `count` most recently added tracks with audio that `to` doesn't have. Admins only."""
         admin = ctx.require_admin(request)
         to = to.strip().lower()
         if not EMAIL.match(to) or to == admin:
             raise HTTPException(400, "Give someone else's email address.")
+        wanted = None
+        if ids.strip():
+            try:
+                wanted = sorted({int(x) for x in ids.split(",") if x.strip()})
+            except ValueError:
+                raise HTTPException(400, "ids is a comma-separated list of track ids.") from None
+            if len(wanted) > 200:
+                raise HTTPException(400, "Preview at most 200 tracks at a time.")
         with closing(ctx.conn()) as c:
             seen = c.execute("SELECT min(at), max(at) FROM events WHERE user = ?", (to,)).fetchone()
             theirs = c.execute("SELECT count(*) FROM tracks WHERE owner = ?", (to,)).fetchone()[0]
-            picks = library_copy.plan(c, admin, to, count=count)
+            picks = library_copy.plan(c, admin, to, wanted, count=count)
+        if wanted is not None and len(picks) != len(wanted):
+            raise HTTPException(404, "no such track")
         return {"to": to, "first_seen": seen[0], "last_seen": seen[1] or ctx.last_seen.get(to), "their_tracks": theirs,
                 "tracks": picks}
 
     @api.post("/api/admin/copy-tracks")
     def copy_tracks(body: CopyBody, request: Request):
         """Copy some of your tracks into someone else's library (tastr/library_copy.py): same analysis, same audio
-        file. Tracks they have already are skipped. Admins only; logged as an admin change."""
+        file. Tracks they have already, and tracks without audio on the server, are skipped. Admins only; logged as an admin change."""
         admin = ctx.require_admin(request)
         to = body.to.strip().lower()
         if not EMAIL.match(to) or to == admin:

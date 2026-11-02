@@ -40,6 +40,7 @@ def to_bucket(db_path: str | Path | None) -> int:
         dst = sqlite3.connect(copy)
         with dst:
             src.backup(dst)
+        dst.execute("PRAGMA journal_mode=DELETE")  # Fly's is WAL; the copy must open from memory (import_rows)
         dst.close()
         src.close()
         blobs.client().put(KEY, copy, "application/vnd.sqlite3")
@@ -49,6 +50,11 @@ def to_bucket(db_path: str | Path | None) -> int:
 def import_rows(conn, data: bytes) -> dict[str, int]:
     """Copy every table's rows from the SQLite file `data` into `conn` (an empty, migrated library), for the
     columns both have. Returns {table: rows}. One transaction: all of it or none."""
+    if data[18:20] == b"\x02\x02":
+        # A WAL-mode file (Fly's database is, and a backup keeps the mark). SQLite can't open a WAL database
+        # from memory ("unable to open database file"); bytes 18 and 19 set to 1 make it a plain one, which it is
+        # once copied (the backup leaves nothing in a WAL file).
+        data = data[:18] + b"\x01\x01" + data[20:]
     src = sqlite3.connect(":memory:")
     src.deserialize(data)
     theirs = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}

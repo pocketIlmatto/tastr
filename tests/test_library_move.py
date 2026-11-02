@@ -1,6 +1,7 @@
 """Moving the hosted library from Fly to the Cloudflare Worker (tastr/library_move.py, TAS-51): the database goes
 through the audio bucket and is imported once into the Durable Object's database."""
 
+import sqlite3
 from contextlib import closing
 
 import pytest
@@ -89,3 +90,20 @@ def test_library_to_bucket_needs_the_bucket(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("TASTR_AUDIO_BUCKET", raising=False)
     assert cli.main(["--db", str(tmp_path / "x.db"), "library-to-bucket"]) == 1
     assert "bucket is off" in capsys.readouterr().err
+
+
+def test_a_wal_mode_copy_imports(tmp_path, worker_db):
+    """Fly's database is in WAL mode, and an older copy in the bucket kept that mark; SQLite can't open such a
+    file from memory unless the import clears it."""
+    fly = tmp_path / "fly.db"
+    fly_library(fly)
+    with closing(sqlite3.connect(fly)) as c:
+        c.execute("PRAGMA journal_mode=WAL")
+        dst = sqlite3.connect(tmp_path / "copy.db")
+        c.backup(dst)
+        dst.close()
+    data = (tmp_path / "copy.db").read_bytes()
+    assert data[18:20] == b"\x02\x02"
+    db.use_storage(lambda path, st=do_sqlite.FakeStorage(worker_db): st)
+    with closing(db.connect(worker_db)) as conn:
+        assert library_move.import_rows(conn, data)["tracks"] == 2

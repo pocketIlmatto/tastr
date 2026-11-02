@@ -46,23 +46,53 @@ def _cross_site(request) -> bool:
     return urlparse(origin).netloc != request.headers.get("host", "")
 
 
+APP_DIR_RE = re.compile(r"app-([0-9a-f]{10})/")
+
+
+def app_version() -> str:
+    """One hash over every UI module (static/app/*.js): the page loads them from /static/app-<hash>/, so each
+    deploy that changes any of them gives all of them a new address."""
+    h = hashlib.sha256()
+    for f in sorted((STATIC_DIR / "app").glob("*.js")):
+        h.update(f.name.encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()[:10]
+
+
 def versioned_index() -> str:
-    """index.html with `?v=<content hash>` on each /static/ file it loads.
+    """index.html with `?v=<content hash>` on each /static/ file it loads, and the UI's modules from
+    /static/app-<app_version()>/.
 
     Browsers and Cloudflare cache scripts and style.css for hours when no Cache-Control is sent; a new
-    hash after a deploy is a new URL, so the new files load right away. The UI's modules (static/app/) are
-    loaded by main.js, not the page, so they carry no hash: ModuleFiles serves them with no-cache instead."""
+    hash after a deploy is a new URL, so the new files load right away. The UI's modules (static/app/) import
+    each other by relative paths, so a query on main.js wouldn't reach them; the hash goes in their folder
+    instead, and "./core.js" from /static/app-<hash>/main.js is /static/app-<hash>/core.js. A deploy can then
+    never mix a new page with old modules (TAS-79: a stale blend.js broke Blend after #102)."""
+    ver = app_version()
+
     def tag(m: re.Match) -> str:
-        f = STATIC_DIR / m.group(2)
+        name = m.group(2)
+        if name.startswith("app/"):
+            return f'{m.group(1)}/static/app-{ver}/{name.removeprefix("app/")}"'
+        f = STATIC_DIR / name
         if not f.is_file():
             return m.group(0)
-        return f'{m.group(1)}/static/{m.group(2)}?v={hashlib.sha256(f.read_bytes()).hexdigest()[:10]}"'
+        return f'{m.group(1)}/static/{name}?v={hashlib.sha256(f.read_bytes()).hexdigest()[:10]}"'
     return re.sub(r'((?:src|href)=")/static/([\w./-]+)"', tag, (STATIC_DIR / "index.html").read_text())
 
 
 class ModuleFiles(StaticFiles):
-    """/static, with the UI's ES modules (static/app/*.js) revalidated on every load (no-cache: a 304 when
-    unchanged), so a deploy never mixes old and new modules."""
+    """/static. /static/app-<hash>/x.js serves static/app/x.js and may be cached for good, since its address
+    changes with every new version of the modules; the plain /static/app/x.js is revalidated on every load."""
+
+    def lookup_path(self, path: str):
+        m = APP_DIR_RE.match(path)
+        return super().lookup_path("app/" + path[m.end():] if m else path)
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if APP_DIR_RE.match(path) and response.status_code in (200, 304):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
     def file_response(self, full_path, stat_result, scope, status_code=200):
         response = super().file_response(full_path, stat_result, scope, status_code)

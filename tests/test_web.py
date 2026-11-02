@@ -85,8 +85,10 @@ def test_index_and_static_assets(client):
     r = client.get("/")
     assert r.status_code == 200 and "text/html" in r.headers["content-type"]
     for ref in ("/static/app/main.js", "/static/style.css"):
-        assert ref in r.text
         assert client.get(ref).status_code == 200
+    import re
+
+    assert "/static/style.css?v=" in r.text and re.search(r'src="/static/app-\w{10}/main.js"', r.text)
 
 
 def test_index_versions_its_assets_so_a_deploy_skips_stale_caches(client):
@@ -98,10 +100,27 @@ def test_index_versions_its_assets_so_a_deploy_skips_stale_caches(client):
 
     r = client.get("/")
     assert r.headers["cache-control"] == "no-cache"
-    for name in ("app/main.js", "strudel.js", "style.css"):
+    for name in ("strudel.js", "style.css"):
         v = re.search(rf'"/static/{re.escape(name)}\?v=(\w+)"', r.text).group(1)
         assert v == hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:10]
         assert client.get(f"/static/{name}?v={v}").status_code == 200
+
+
+
+def test_ui_modules_load_from_a_folder_named_by_their_hash(client):
+    """The modules import each other by relative paths, so the page loads them from /static/app-<hash>/: a deploy
+    that changes any module moves all of them, and a new page can't run with old cached modules (TAS-79)."""
+    import re
+
+    from tastr.web import server
+
+    v = server.app_version()
+    assert f'src="/static/app-{v}/main.js"' in client.get("/").text
+    r = client.get(f"/static/app-{v}/blend.js")
+    assert r.status_code == 200 and "trackCombo" in r.text and "immutable" in r.headers["cache-control"]
+    assert client.get(f"/static/app-{v}/nope.js").status_code == 404
+    assert client.get("/static/app-zz/blend.js").status_code == 404  # not a hash
+    assert re.fullmatch(r"[0-9a-f]{10}", v)
 
 
 def test_empty_card_serves(client, db_path):

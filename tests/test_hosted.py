@@ -998,3 +998,28 @@ def test_admin_copies_tracks_to_someone(db_path, home):
     assert t.get(f"/api/tracks/{mine[0]}", headers=GOOD).status_code == 404
     assert t.delete(f"/api/tracks/{new}", headers=GOOD).status_code == 204
     assert path.exists()
+
+
+def test_copy_preview_of_a_selection(db_path, home):
+    up = home / "uploads"
+    path = up / "ab" / "song.wav"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"x")
+    have = save(db_path, "friend@example.com", sha="s1", path=str(path), uri="u1")
+    new = save(db_path, "friend@example.com", sha="s2", path=str(path), uri="u2")
+    silent = save(db_path, "friend@example.com", sha="s3", path=str(up / "gone.wav"), uri="u3")
+    save(db_path, "t@example.com", sha="s1", path=str(path), uri="u1")  # they have s1 already
+    other = save(db_path, "other@example.com", sha="o1")
+    c = make_client(db_path, admins=("friend@example.com",))
+    url = "/api/admin/copy-tracks?to=t@example.com&ids="
+    body = c.get(url + f"{have},{new},{silent}", headers=GOOD).json()
+    rows = {t["id"]: (t["they_have"], t["has_audio"]) for t in body["tracks"]}
+    assert rows == {have: (True, True), new: (False, True), silent: (False, False)}
+    assert body["their_tracks"] == 1
+    assert c.get(url + f"{new},{other}", headers=GOOD).status_code == 404  # not yours
+    assert c.get(url + "x", headers=GOOD).status_code == 400
+    assert c.get(url + ",".join(map(str, range(1, 202))), headers=GOOD).status_code == 400
+    assert c.get(f"/api/admin/copy-tracks?to=friend@example.com&ids={new}", headers=GOOD).status_code == 400
+    sent = c.post("/api/admin/copy-tracks", json={"to": "t@example.com", "track_ids": [have, new, silent]},
+                  headers=GOOD).json()
+    assert [r["from"] for r in sent["copied"]] == [new] and sorted(sent["skipped"]) == sorted([have, silent])

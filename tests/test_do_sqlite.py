@@ -69,11 +69,15 @@ def test_library_snapshot_without_attach(on_do):
     assert snap.execute("SELECT count(*) FROM sections").fetchone()[0] > 0
 
 
-def test_tracks_copy_to_someone_through_the_adapter(on_do):
+def test_tracks_copy_to_someone_through_the_adapter(on_do, tmp_path):
     from tastr import library_copy
 
+    audio = tmp_path / "x.wav"
+    audio.write_bytes(b"x")
+    card = full_card()
+    card.source.local_path = str(audio)
     with closing(db.connect(on_do)) as c:
-        tid = db.save_card(c, full_card(), owner="a@b.c")
+        tid = db.save_card(c, card, owner="a@b.c")
         made = library_copy.copy_tracks(c, [tid], "a@b.c", "t@b.c")
         new = made[tid]
         assert new != tid and c.execute("SELECT owner FROM tracks WHERE id = ?", (new,)).fetchone()[0] == "t@b.c"

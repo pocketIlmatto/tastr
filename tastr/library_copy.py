@@ -26,30 +26,34 @@ def _columns(conn, table: str) -> list[str]:
 
 
 def plan(conn, src: str, dst: str, track_ids: list[int] | None = None, count: int = 10) -> list[dict[str, Any]]:
-    """The tracks of `src` a copy to `dst` would take: `track_ids` (only `src`'s own), or else the `count` most
-    recently added that have audio. Tracks `dst` has already (the same audio) are left out."""
-    sql = ("SELECT id, title, artist, sha256, local_path, created_at, analyzed_at FROM tracks t WHERE owner = ? "
-           "AND NOT EXISTS (SELECT 1 FROM tracks o WHERE o.owner = ? AND o.sha256 = t.sha256)")
-    args: list[Any] = [src, dst]
+    """`src`'s tracks a copy to `dst` would look at: `track_ids` (only `src`'s own, each marked `they_have` when `dst`
+    has the same audio already), or else the `count` most recently added that have audio and `dst` doesn't have.
+    Each row says whether its audio is on the server (`has_audio`); a copy skips the ones without, and the ones
+    `dst` has."""
+    sql = ("SELECT id, title, artist, sha256, local_path, created_at, analyzed_at, "
+           "EXISTS (SELECT 1 FROM tracks o WHERE o.owner = ? AND o.sha256 = t.sha256) FROM tracks t WHERE owner = ?")
+    args: list[Any] = [dst, src]
     if track_ids is not None:
         if not track_ids:
             return []
         sql += f" AND id IN ({', '.join('?' * len(track_ids))}) ORDER BY id"
         args += track_ids
     else:
-        sql += " AND local_path IS NOT NULL ORDER BY coalesce(created_at, analyzed_at) DESC, id DESC LIMIT ?"
-        args.append(count)
-    rows = [dict(zip(("id", "title", "artist", "sha256", "local_path", "created_at", "analyzed_at"), r))
-            for r in conn.execute(sql, args).fetchall()]
+        sql += (" AND local_path IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tracks o WHERE o.owner = ? AND o.sha256 = t.sha256)"
+                " ORDER BY coalesce(created_at, analyzed_at) DESC, id DESC LIMIT ?")
+        args += [dst, count]
+    keys = ("id", "title", "artist", "sha256", "local_path", "created_at", "analyzed_at", "they_have")
+    rows = [dict(zip(keys, r)) for r in conn.execute(sql, args).fetchall()]
     for r in rows:
+        r["they_have"] = bool(r["they_have"])
         r["has_audio"] = blobs.exists(r.pop("local_path"))
     return rows
 
 
 def copy_tracks(conn, track_ids: list[int], src: str, dst: str) -> dict[int, int]:
     """Copy `src`'s tracks `track_ids` into `dst`'s library, all in one transaction. Returns {old id: new id}; a
-    track that isn't `src`'s, or whose audio `dst` has already, is skipped."""
-    ids = [r["id"] for r in plan(conn, src, dst, track_ids)]
+    track that isn't `src`'s, whose audio `dst` has already, or whose audio isn't on the server is skipped."""
+    ids = [r["id"] for r in plan(conn, src, dst, track_ids) if r["has_audio"] and not r["they_have"]]
     track_cols = [c for c in _columns(conn, "tracks") if c not in ("id", "owner")]
     names = ", ".join(f'"{c}"' for c in track_cols)
     tables = {t: [c for c in _columns(conn, t) if c != "track_id"] for t in ANALYSIS_TABLES}

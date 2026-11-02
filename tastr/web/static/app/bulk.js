@@ -9,6 +9,7 @@ import { dropEdits, flushEdits } from "./groove-edits.js";
 import { runDrumModel, setStems, stemsBusy, stemsEta, stemsLabel } from "./menu.js";
 import { LIST_NAME_MAX, addToList, lists, loadLists, saveList } from "./lists.js";
 import { pinPop } from "./pin.js";
+import { askSendTracks } from "./sendtracks.js";
 
 // Selection is by track id, so it survives filtering and sorting.
 export const sel = new Set();
@@ -122,6 +123,8 @@ function bulkMenu() {
     ...Object.entries(BULK).filter(([, v]) => !v.when || v.when()).map(([k, v]) => item(v.label, () => { close(false); runBulk(k, [...sel]); }, { note: v.note })),
     item("Add to review", () => { close(false); const ids = [...sel]; setInReview(ids, true).then(() => { sayBulk(`Added ${ids.length} to review.`, 4000); renderList(); }); }),
     item("Save as a list…", () => showSaveList()),
+    // Admins only, like the routes behind it (sendtracks.js).
+    ...(serverCfg.admin ? [item("Send copies to…", () => { close(false); askSendTracks([...sel], serverCfg.user, (m) => { sayBulk(m, 6000); renderList(); }); }, { note: "admin" })] : []),
     item("Remove from review", () => { close(false); const ids = [...sel]; setInReview(ids, false).then(() => { sayBulk(`Took ${ids.length} out of review.`, 4000); renderList(); }); }),
     h("hr", { class: "menu-sep" }),
     item(`Delete ${plural(n)}…`, showConfirm, { danger: true }));

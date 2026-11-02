@@ -145,8 +145,9 @@ changed), and `DELETE` puts them back on the defaults. The upload and stem check
 
 Sharing some of your tracks with a friend: `GET /api/admin/copy-tracks?to=EMAIL&count=10` shows, without changing
 anything, whether they have signed in yet and which of your most recently added tracks (with audio, and not already
-theirs) a copy would take; `POST /api/admin/copy-tracks` with `{"to": EMAIL, "track_ids": [...]}` copies them
-(tastr/library_copy.py). A copy has the same analysis and points at the same audio file and stems; your own edits,
+theirs) a copy would take (or, with `ids=1,2,3`, exactly those tracks of yours, each marked `they_have` and `has_audio`); `POST /api/admin/copy-tracks` with `{"to": EMAIL, "track_ids": [...]}` copies them
+(tastr/library_copy.py), skipping the ones they have and the ones without audio on the server. In the app it's
+Library › Select › Actions › **Send copies to…** (admins only). A copy has the same analysis and points at the same audio file and stems; your own edits,
 labels, cues and playlists stay yours. The file stays while either track uses it, and the audio expiry keeps it while
 an admin's track does.
 

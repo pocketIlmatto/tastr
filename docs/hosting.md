@@ -143,6 +143,13 @@ one person's daily caps (`null` = the server default; `scope` `today` ends at 00
 changed), and `DELETE` puts them back on the defaults. The upload and stem checks use the change, and
 `/api/config` returns the caller's own caps. Each change is logged as an admin line.
 
+Sharing some of your tracks with a friend: `GET /api/admin/copy-tracks?to=EMAIL&count=10` shows, without changing
+anything, whether they have signed in yet and which of your most recently added tracks (with audio, and not already
+theirs) a copy would take; `POST /api/admin/copy-tracks` with `{"to": EMAIL, "track_ids": [...]}` copies them
+(tastr/library_copy.py). A copy has the same analysis and points at the same audio file and stems; your own edits,
+labels, cues and playlists stay yours. The file stays while either track uses it, and the audio expiry keeps it while
+an admin's track does.
+
 Admins see an **Admin** tab in the header with all of this: tiles for people, tracks, stem jobs,
 storage, analyses running and an estimated 30-day Modal cost, a per-person chart of the last 30 days,
 the people table with today's quotas, the activity log, the limits and the blocked count. Nobody else

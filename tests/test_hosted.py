@@ -948,3 +948,53 @@ def test_admin_tab_links_the_workers_logs_first():
     assert "links.worker && h(" in body and "links.modal && h(" in body and "links.fly && h(" in body
     assert body.index('"Worker logs"') < body.index('"Modal"') < body.index('"Fly logs"')
     assert "The Cloudflare Worker's logs, in the Cloudflare dashboard" in body
+
+def test_admin_copies_tracks_to_someone(db_path, home):
+    up = home / "uploads"
+    path = up / "ab" / "song.wav"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"x")
+    os.utime(path, (0, 0))  # long past the audio expiry
+    mine = [save(db_path, "friend@example.com", sha=f"s{i}", path=str(path), uri=f"{path}#{i}") for i in range(3)]
+    other = save(db_path, "other@example.com", sha="o1")
+    conn = db.connect(db_path)
+    db.save_lookup(conn, mine[0], {"provider": "freqblog", "status": "found", "bpm": 120.0})
+    conn.close()
+    plain = make_client(db_path)
+    assert plain.get("/api/admin/copy-tracks?to=t@example.com", headers=GOOD).status_code == 404
+    assert plain.post("/api/admin/copy-tracks", json={"to": "t@example.com", "track_ids": mine},
+                      headers=GOOD).status_code == 404
+    c = make_client(db_path, admins=("friend@example.com",))
+    assert c.get("/api/admin/copy-tracks?to=friend@example.com", headers=GOOD).status_code == 400
+    preview = c.get("/api/admin/copy-tracks?to=T@example.com&count=2", headers=GOOD).json()
+    assert preview["to"] == "t@example.com" and preview["last_seen"] is None and preview["their_tracks"] == 0
+    assert [t["id"] for t in preview["tracks"]] == [mine[2], mine[1]] and preview["tracks"][0]["has_audio"]
+
+    body = c.post("/api/admin/copy-tracks", json={"to": "t@example.com", "track_ids": [mine[0], mine[1], other]},
+                  headers=GOOD).json()
+    assert [r["from"] for r in body["copied"]] == [mine[0], mine[1]] and body["skipped"] == [other]  # not theirs
+    new = body["copied"][0]["id"]
+    conn = db.connect(db_path)
+    row = conn.execute("SELECT owner, local_path, sha256 FROM tracks WHERE id = ?", (new,)).fetchone()
+    assert tuple(row) == ("t@example.com", str(path), "s0")
+    assert db.load_card(conn, new).core.bpm == db.load_card(conn, mine[0]).core.bpm
+    assert conn.execute("SELECT count(*) FROM lookups WHERE track_id = ?", (new,)).fetchone()[0] == 1
+    assert conn.execute("SELECT owner FROM tracks WHERE id = ?", (mine[0],)).fetchone()[0] == "friend@example.com"
+    assert "Copied 2 tracks to t" in [e["detail"] for e in db.find_events(conn, "", "", "", "", "", False, 50)["events"]]
+    conn.close()
+    again = c.post("/api/admin/copy-tracks", json={"to": "t@example.com", "track_ids": [mine[0]]}, headers=GOOD).json()
+    assert again["copied"] == [] and again["skipped"] == [mine[0]]  # they have it already
+
+    # The shared file outlives the copy's expiry while the admin's track uses it, and a deleted copy leaves it.
+    conn = db.connect(db_path)
+    assert hosted.expire_audio(conn, up, 30, keep=("friend@example.com",)) == []
+    conn.close()
+    assert path.exists()
+
+    def as_t(token):
+        return "t@example.com"
+    t = TestClient(create_app(db_path, Settings(hosted=True, access_team_domain=TEAM, access_aud=AUD), verifier=as_t))
+    assert t.get(f"/api/tracks/{new}", headers=GOOD).status_code == 200
+    assert t.get(f"/api/tracks/{mine[0]}", headers=GOOD).status_code == 404
+    assert t.delete(f"/api/tracks/{new}", headers=GOOD).status_code == 204
+    assert path.exists()

@@ -67,3 +67,14 @@ def test_library_snapshot_without_attach(on_do):
     cols = {r[1] for r in snap.execute("PRAGMA table_info(tracks)")}
     assert "owner" not in cols and "local_path" not in cols and "bpm" in cols
     assert snap.execute("SELECT count(*) FROM sections").fetchone()[0] > 0
+
+
+def test_tracks_copy_to_someone_through_the_adapter(on_do):
+    from tastr import library_copy
+
+    with closing(db.connect(on_do)) as c:
+        tid = db.save_card(c, full_card(), owner="a@b.c")
+        made = library_copy.copy_tracks(c, [tid], "a@b.c", "t@b.c")
+        new = made[tid]
+        assert new != tid and c.execute("SELECT owner FROM tracks WHERE id = ?", (new,)).fetchone()[0] == "t@b.c"
+        assert db.load_card(c, new).core.bpm == full_card().core.bpm

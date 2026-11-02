@@ -232,7 +232,8 @@ class LinkSigner:
 
 def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[str, ...] = (),
                  now: float | None = None) -> list[int]:
-    """Delete uploaded audio under `root` older than `days`, except tracks owned by `keep` (the admins).
+    """Delete uploaded audio under `root` older than `days`, except tracks owned by `keep` (the admins) and files
+    one of their tracks shares.
     With the audio bucket on (tastr/blobs.py), its copy goes too, and its upload time decides the age.
 
     Cards stay, so the track still shows everything but playback. Stems go too, unless another track
@@ -244,9 +245,13 @@ def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[
     root = root.resolve()
     inbucket = blobs.listing(blobs.key(root / "x").rsplit("/", 1)[0] + "/") if blobs.key(root / "x") else {}
     gone = []
-    for tid, owner, path, sha in conn.execute("SELECT id, owner, local_path, sha256 FROM tracks WHERE local_path IS NOT NULL").fetchall():
+    rows = conn.execute("SELECT id, owner, local_path, sha256 FROM tracks WHERE local_path IS NOT NULL").fetchall()
+    # A file several tracks point at (tracks copied to someone, tastr/library_copy.py) stays while a kept owner's
+    # track uses it.
+    kept = {path for _, owner, path, _ in rows if owner in keep}
+    for tid, owner, path, sha in rows:
         p = Path(path).resolve()
-        if owner in keep or root not in p.parents:
+        if owner in keep or path in kept or root not in p.parents:
             continue
         stored = inbucket.get(blobs.key(p) or "")
         when = stored[1] if stored else (p.stat().st_mtime if p.is_file() else None)

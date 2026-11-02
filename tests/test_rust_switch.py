@@ -220,7 +220,9 @@ def test_upload_with_a_browser_card_skips_the_analysis(song, db_path, tmp_path, 
     stored = client.get(f"/api/tracks/{job['results'][0]['track_id']}").json()
     assert stored["extras"]["browser_card"] is True and stored["core"]["bpm"] == card["core"]["bpm"]
     assert not analyzed
-    # A card from another build is set aside and the server analyzes the file itself.
+    # A card from another build is set aside and the server analyzes the file itself. (The track goes first: an
+    # upload of audio the library already has isn't analyzed again.)
+    assert client.delete(f"/api/tracks/{job['results'][0]['track_id']}").status_code == 204
     r = client.post("/api/analyze?background=1", files=[("files", ("song.wav", song.read_bytes(), "audio/wav")),
                                                         ("card", ("card.json", message(card, "f" * 16), "application/json"))])
     job = wait_job(client, r.json()["id"])

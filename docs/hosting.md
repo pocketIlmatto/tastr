@@ -194,7 +194,7 @@ With the audio bucket on, the bucket's copy goes too, and the age is counted fro
 
 ## Audio in a bucket
 
-With `TASTR_AUDIO_BUCKET` set (`tastr/blobs.py`, `pip install -e '.[hosted]'` for boto3), uploads and stems
+With `TASTR_AUDIO_BUCKET` set (`tastr/blobs.py`, which talks to the bucket through its own small S3 client, `tastr/s3.py`), uploads and stems
 live in an S3-compatible bucket and the server's disk only caches them, so a lost volume loses no audio and
 the server could later run without one:
 

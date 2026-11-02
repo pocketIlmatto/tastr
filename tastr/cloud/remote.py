@@ -6,8 +6,8 @@ TASTR_MODAL_APP picks the deployed app: `tastr` (modal_app.py, benchmarks and st
 With TASTR_MODAL_URL set (the `api` web endpoint of modal_web.py), analysis and stems go over HTTPS instead of
 through the Modal client, which doesn't run on the Cloudflare Worker (worker/, TAS-84). The endpoint needs a
 Modal proxy auth token: TASTR_MODAL_KEY and TASTR_MODAL_SECRET. Each call answers with lines of JSON: the events
-of a streaming call, then {"result": ...} or {"error": "..."}. `use_transport` swaps how the request is sent
-(the Worker sends it with its own fetch).
+of a streaming call, then {"result": ...} or {"error": "..."}. Requests go through tastr/http.py, which the Worker
+points at its own fetch.
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from __future__ import annotations
 import base64
 import json
 import os
-import urllib.error
-import urllib.request
 from pathlib import Path
-from typing import Callable, Iterable, Iterator
+from typing import Iterator
+
+from .. import http
 
 APP_NAME = "tastr"  # modal_app.APP_NAME; that module needs deploy-time settings to import
 
@@ -54,37 +54,19 @@ def available() -> bool:
     return http_enabled() or importlib.util.find_spec("modal") is not None
 
 
-def _urllib_post(url: str, data: bytes, headers: dict[str, str]) -> Iterable[bytes]:
-    """POST and yield the answer's body as it arrives; raises RemoteError for an HTTP error."""
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        resp = urllib.request.urlopen(req, timeout=20 * 60)  # noqa: S310 - our own Modal endpoint
-    except urllib.error.HTTPError as e:
-        raise RemoteError(f"Modal answered {e.code}: {e.read()[:200].decode(errors='replace')}") from e
-    except OSError as e:
-        raise RemoteError(f"couldn't reach Modal: {e}") from e
-    with resp:
-        while chunk := resp.read1(65536):
-            yield chunk
-
-
-_transport: Callable[[str, bytes, dict[str, str]], Iterable[bytes]] = _urllib_post
-
-
-def use_transport(post: Callable[[str, bytes, dict[str, str]], Iterable[bytes]] | None) -> None:
-    """`post(url, body, headers)` yields the answer's body in chunks and raises RemoteError for an HTTP error.
-    None: back to urllib."""
-    global _transport
-    _transport = post or _urllib_post
-
-
 def _http(name: str, payload: dict) -> Iterator[dict]:
     """Call `name` on the web endpoint; yields its events, the last one {"result": ...}."""
     url = f"{os.environ['TASTR_MODAL_URL'].rstrip('/')}/{name}"
     headers = {"Content-Type": "application/json", "Modal-Key": os.environ.get("TASTR_MODAL_KEY", ""),
                "Modal-Secret": os.environ.get("TASTR_MODAL_SECRET", "")}
+    try:
+        resp = http.request("POST", url, headers, json.dumps(payload).encode())
+    except http.HTTPError as e:
+        raise RemoteError(f"couldn't reach Modal: {e}") from e
+    if resp.status != 200:
+        raise RemoteError(f"Modal answered {resp.status}: {resp.text()[:200]}")
     buf = b""
-    for chunk in _transport(url, json.dumps(payload).encode(), headers):
+    for chunk in resp.chunks():
         buf += chunk
         *lines, buf = buf.split(b"\n")
         for line in lines:

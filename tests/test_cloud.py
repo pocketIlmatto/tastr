@@ -378,7 +378,8 @@ def modal_api(monkeypatch):
     """remote.py over HTTPS (TASTR_MODAL_URL), sent to modal_web's `api` app with the Modal functions faked."""
     from fastapi.testclient import TestClient
 
-    from tastr.cloud import remote
+    from tastr import http
+    from tastr.cloud import remote  # noqa: F401 - the module under test
     from test_foundation import full_card
 
     mod, _ = _load_modal_web(monkeypatch)
@@ -406,20 +407,16 @@ def modal_api(monkeypatch):
     monkeypatch.setattr(mod, "stems", Fn("stems", {"drums": b"flac", "bass": b"flac2"}), raising=False)
     client = TestClient(mod.api())
 
-    def post(url, data, headers):
+    def post(method, url, headers, data):
         sent.append((url, headers))
         r = client.post(url.removeprefix("https://modal.example"), content=data, headers=headers)
-        if r.status_code >= 400:
-            raise remote.RemoteError(f"Modal answered {r.status_code}")
-        yield r.content[:7]  # in pieces, as a network delivers it
-        yield r.content[7:]
+        return http.Response(r.status_code, dict(r.headers), iter([r.content[:7], r.content[7:]]))  # in pieces
 
     monkeypatch.setenv("TASTR_MODAL_URL", "https://modal.example/")
     monkeypatch.setenv("TASTR_MODAL_KEY", "wk-1")
     monkeypatch.setenv("TASTR_MODAL_SECRET", "ws-1")
-    remote.use_transport(post)
+    monkeypatch.setattr(http, "_transport", post)
     yield types.SimpleNamespace(mod=mod, Fn=Fn, calls=calls, sent=sent, card=card)
-    remote.use_transport(None)
 
 
 def test_remote_analyze_over_https_reports_stages(modal_api, tmp_path):

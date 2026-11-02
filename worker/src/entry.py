@@ -9,10 +9,8 @@ Two parts:
 Background work runs on the event loop (tastr/runner.py `Loop`): jobs as asyncio tasks, the repeating work
 (expiry, the watch) from the Durable Object's alarm, which `arm()` sets after each request and each alarm.
 
-Modal is called over HTTPS (TASTR_MODAL_URL, tastr/cloud/remote.py), sent with the Worker's own fetch
-(`modal_post`), since the Modal client doesn't run on Pyodide.
-
-Not here yet (TAS-84 part 5): boto3 doesn't run on Pyodide, so the audio bucket doesn't work yet.
+Outgoing requests (Modal over HTTPS, tastr/cloud/remote.py; the audio bucket, tastr/s3.py) go through
+tastr/http.py, which here sends them with the Worker's own fetch (`fetch_request`).
 """
 
 import os
@@ -23,36 +21,44 @@ os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: 
 
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
-from tastr import db, runner  # noqa: E402
-from tastr.cloud import remote  # noqa: E402
+from tastr import db, http, runner  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
 
 DB_PATH = "/tmp/tastr/tastr.db"  # only a name here: the database is the Durable Object's own storage
 KEYS_SECONDS = 3600
-def modal_post(url: str, data: bytes, headers: dict):
-    """remote.py's transport: POST with the Worker's fetch, from synchronous code (run_sync waits on it while
-    other requests run), and yield the body as it arrives."""
+def fetch_request(method: str, url: str, headers: dict, body) -> http.Response:
+    """tastr/http.py's transport: the Worker's fetch, from synchronous code (run_sync waits on it while other
+    requests run). The answer's body is read as it arrives."""
     import js
     from pyodide.ffi import run_sync, to_js
 
-    opts = to_js({"method": "POST", "headers": headers, "body": to_js(data)}, dict_converter=js.Object.fromEntries)
+    if hasattr(body, "read"):
+        body = body.read()  # a file: the Worker's files are in memory anyway
+    init = {"method": method, "headers": headers} | ({"body": to_js(body)} if body is not None else {})
     try:
-        resp = run_sync(js.fetch(url, opts))
+        resp = run_sync(js.fetch(url, to_js(init, dict_converter=js.Object.fromEntries)))
     except Exception as e:  # noqa: BLE001 - a JsException: unreachable, DNS, refused
-        raise remote.RemoteError(f"couldn't reach Modal: {e}") from e
-    if not resp.ok:
-        text = run_sync(resp.text())
-        raise remote.RemoteError(f"Modal answered {resp.status}: {text[:200]}")
-    reader = resp.body.getReader()
-    while True:
-        part = run_sync(reader.read())
-        if part.done:
-            return
-        yield part.value.to_bytes()
+        raise http.HTTPError(f"couldn't reach {urlparse(url).netloc}: {e}") from e
+    names = {}
+    resp.headers.forEach(lambda value, name, *_: names.__setitem__(name.lower(), value))
+    reader = resp.body.getReader() if resp.body else None
+
+    def chunks():
+        while reader is not None:
+            part = run_sync(reader.read())
+            if part.done:
+                return
+            yield part.value.to_bytes()
+
+    def close():
+        if reader is not None:
+            reader.releaseLock()
+
+    return http.Response(resp.status, names, chunks(), close)
 
 
-remote.use_transport(modal_post)
+http.use(fetch_request)
 RUNNER = runner.Loop()
 runner.use(RUNNER)  # before the app is built: its job queues take their lanes from it
 

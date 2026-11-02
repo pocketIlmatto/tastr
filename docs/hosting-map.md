@@ -202,6 +202,7 @@ database and deletes them.
 | Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. Cards always come from the Rust engine, whose library the image builds (`tastr/cloud/rust_image.py`). |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. The model runs in Python and the Rust library, built into this image too, makes the card. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. With the audio bucket on, it reads the upload from a signed link and uploads each stem to a signed link of its own, so stems never pass through the server. |
+| HTTPS front for Modal (not used by Fly yet) | Modal `api` | A small web endpoint in front of the functions above, for the Cloudflare Worker, which can't run the Modal client (TAS-84). Only callers with a Modal proxy auth token get in. Every answer streams lines of JSON, with a blank line every 20 seconds so a long call stays open. A server uses it when `TASTR_MODAL_URL` is set, with the token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET` (`tastr/cloud/remote.py`). |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
 | Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then Fly, from main. Runs after `tests` passes on a push to main when something that ships changed since the last deploy, or by hand. |
 
@@ -299,6 +300,7 @@ flowchart LR
     W -->|everything else| DO["Durable Object Library<br/>FastAPI app + the library database<br/>in its SQLite storage"]
     DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
     AL[Durable Object alarm] -->|expiry sweep, watch| DO
+    DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, stems)"]
 ```
 
 - The Durable Object runs the same FastAPI app as Fly (`create_app(threads=False)`) on one event loop. The
@@ -312,8 +314,9 @@ flowchart LR
   jobs (analyses, stems, drum model runs) are asyncio tasks in lanes that queue them, and the repeating work (the
   expiry sweep every 6 hours, the watch) runs from the Durable Object's alarm, which wakes the object when it is
   due. Background analyses queue for an analysis slot in their lane there, since there are no threads to wait.
-- Not there yet: the Modal client (part 4) and boto3 for the audio bucket (part 5). Until then the Worker serves
-  the library, cards and admin pages but can't analyze or upload.
+- Modal: the Worker calls the `api` web endpoint of `tastr-web` (`TASTR_MODAL_URL`, with a Modal proxy auth
+  token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET`) through its own fetch, instead of the Modal client.
+- Not there yet: boto3 for the audio bucket (part 5). Until then uploads on the Worker live only in its memory.
 
 ## Common tasks
 

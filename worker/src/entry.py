@@ -9,8 +9,10 @@ Two parts:
 Background work runs on the event loop (tastr/runner.py `Loop`): jobs as asyncio tasks, the repeating work
 (expiry, the watch) from the Durable Object's alarm, which `arm()` sets after each request and each alarm.
 
-Not here yet (TAS-84 parts 4 and 5): the Modal client and boto3 don't run on Pyodide, so analysis, stems and the
-audio bucket don't work yet. Until then this serves the library, the cards and the admin pages.
+Modal is called over HTTPS (TASTR_MODAL_URL, tastr/cloud/remote.py), sent with the Worker's own fetch
+(`modal_post`), since the Modal client doesn't run on Pyodide.
+
+Not here yet (TAS-84 part 5): boto3 doesn't run on Pyodide, so the audio bucket doesn't work yet.
 """
 
 import os
@@ -22,11 +24,35 @@ os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: 
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
 from tastr import db, runner  # noqa: E402
+from tastr.cloud import remote  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
 
 DB_PATH = "/tmp/tastr/tastr.db"  # only a name here: the database is the Durable Object's own storage
 KEYS_SECONDS = 3600
+def modal_post(url: str, data: bytes, headers: dict):
+    """remote.py's transport: POST with the Worker's fetch, from synchronous code (run_sync waits on it while
+    other requests run), and yield the body as it arrives."""
+    import js
+    from pyodide.ffi import run_sync, to_js
+
+    opts = to_js({"method": "POST", "headers": headers, "body": to_js(data)}, dict_converter=js.Object.fromEntries)
+    try:
+        resp = run_sync(js.fetch(url, opts))
+    except Exception as e:  # noqa: BLE001 - a JsException: unreachable, DNS, refused
+        raise remote.RemoteError(f"couldn't reach Modal: {e}") from e
+    if not resp.ok:
+        text = run_sync(resp.text())
+        raise remote.RemoteError(f"Modal answered {resp.status}: {text[:200]}")
+    reader = resp.body.getReader()
+    while True:
+        part = run_sync(reader.read())
+        if part.done:
+            return
+        yield part.value.to_bytes()
+
+
+remote.use_transport(modal_post)
 RUNNER = runner.Loop()
 runner.use(RUNNER)  # before the app is built: its job queues take their lanes from it
 

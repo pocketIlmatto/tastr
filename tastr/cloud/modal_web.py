@@ -9,7 +9,9 @@ it needs no dataset bucket or secrets and can live in its own Modal environment 
 
     modal deploy --env friends tastr/cloud/modal_web.py
 
-The server finds it with TASTR_MODAL_APP=tastr-web and MODAL_ENVIRONMENT=friends. The deploy workflow
+The server finds it with TASTR_MODAL_APP=tastr-web and MODAL_ENVIRONMENT=friends. A server without the Modal
+client (the Cloudflare Worker, TAS-84) calls the same functions through `api`, an HTTPS endpoint behind a Modal
+proxy auth token, at TASTR_MODAL_URL (tastr/cloud/remote.py). The deploy workflow
 (.github/workflows/deploy.yml) deploys it together with the web app, so the two run the same engine.
 """
 
@@ -116,3 +118,79 @@ def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = Non
     from tastr.cloud.jobs import run_stems
 
     return run_stems(audio, suffix, put_urls)
+
+
+# A small HTTPS front for the functions above, for servers that can't run the Modal client (the Cloudflare
+# Worker). Only callers with a proxy auth token of this workspace get in (headers Modal-Key and Modal-Secret).
+# Every answer is lines of JSON, streamed: a streaming call's events, then {"result": ...} or {"error": ...};
+# a blank line every 20 seconds keeps a long call (a drum model run, stems) from timing out on the way.
+api_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[standard]").add_local_python_source("tastr")
+KEEPALIVE = 20
+
+
+@app.function(image=api_image, cpu=0.25, memory=256, timeout=20 * 60, scaledown_window=60)
+@modal.concurrent(max_inputs=20)
+@modal.asgi_app(requires_proxy_auth=True)
+def api():
+    import asyncio
+    import base64
+    import json
+
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse, StreamingResponse
+
+    web = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    def line(event: dict) -> str:
+        return json.dumps(event) + "\n"
+
+    async def answer(call):
+        """Run `call()` (a coroutine), with keep-alive lines until it ends."""
+        task = asyncio.ensure_future(call())
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=KEEPALIVE)
+            if done:
+                break
+            yield "\n"
+        try:
+            result = task.result()
+        except Exception as e:  # noqa: BLE001 - the caller gets the message
+            yield line({"error": f"{type(e).__name__}: {e}"})
+            return
+        if isinstance(result, dict):  # stems without upload links: the FLAC bytes, base64-encoded
+            result = {k: base64.b64encode(v).decode() if isinstance(v, bytes) else v for k, v in result.items()}
+        yield line({"result": result})
+
+    async def stream(args):
+        try:
+            async for event in analyze_stream.remote_gen.aio(*args):
+                yield line({"result": event["card"]} if "card" in event else event)
+        except Exception as e:  # noqa: BLE001
+            yield line({"error": f"{type(e).__name__}: {e}"})
+
+    async def call(request):  # a plain route: this module's postponed annotations would hide Request from FastAPI
+        name = request.path_params["name"]
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return JSONResponse({"detail": "a JSON object"}, status_code=422)
+        audio = body.get("audio_url") or base64.b64decode(body.get("audio_b64") or "")
+        if not audio or not isinstance(body.get("suffix"), str):
+            return JSONResponse({"detail": "audio_url or audio_b64, and suffix"}, status_code=422)
+        args = (audio, body["suffix"], None, body.get("options"))
+        if name == "analyze_stream":
+            out = stream(args)
+        elif name == "analyze":
+            out = answer(lambda: analyze.remote.aio(*args))
+        elif name == "analyze_drums":
+            out = answer(lambda: analyze_drums.remote.aio(*args))
+        elif name == "stems":
+            out = answer(lambda: stems.remote.aio(audio, body["suffix"], body.get("put_urls")))
+        else:
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        return StreamingResponse(out, media_type="application/x-ndjson")
+
+    web.add_route("/{name}", call, methods=["POST"])
+    return web

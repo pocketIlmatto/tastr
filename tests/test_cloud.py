@@ -329,8 +329,8 @@ def test_modal_images_add_local_files_last(monkeypatch):
     assert images and all(i.local for i in images)  # every function's image ships the tastr source
 
 
-def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
-    """Like modal_app: a build step after add_local_python_source fails a deploy unless the source is copied."""
+def _load_modal_web(monkeypatch):
+    """tastr/cloud/modal_web.py with a stand-in `modal`; returns (the module, each function's image)."""
     class Image:
         def __init__(self, local=False, copied=False):
             self.local, self.copied = local, copied
@@ -355,14 +355,101 @@ def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
             images.append(image)
             return lambda f: f
 
-    fake = types.SimpleNamespace(Image=types.SimpleNamespace(debian_slim=lambda **kw: Image()), App=App)
+    same = lambda **kw: (lambda f: f)  # noqa: E731 - decorators that change nothing here
+    fake = types.SimpleNamespace(Image=types.SimpleNamespace(debian_slim=lambda **kw: Image()), App=App,
+                                 concurrent=same, asgi_app=same)
     monkeypatch.setitem(sys.modules, "modal", fake)
     import importlib
 
     sys.modules.pop("tastr.cloud.modal_web", None)
-    importlib.import_module("tastr.cloud.modal_web")
+    mod = importlib.import_module("tastr.cloud.modal_web")
     sys.modules.pop("tastr.cloud.modal_web", None)
-    assert len(images) == 4 and all(i.local for i in images)
+    return mod, images
+
+
+def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
+    """Like modal_app: a build step after add_local_python_source fails a deploy unless the source is copied."""
+    _, images = _load_modal_web(monkeypatch)
+    assert len(images) == 5 and all(i.local for i in images)
+
+
+@pytest.fixture
+def modal_api(monkeypatch):
+    """remote.py over HTTPS (TASTR_MODAL_URL), sent to modal_web's `api` app with the Modal functions faked."""
+    from fastapi.testclient import TestClient
+
+    from tastr.cloud import remote
+    from test_foundation import full_card
+
+    mod, _ = _load_modal_web(monkeypatch)
+    card, calls, sent = full_card().to_dict(), [], []
+
+    class Fn:
+        def __init__(self, name, result=None, fail=None):
+            self.name, self.result, self.fail = name, result, fail
+            self.remote = types.SimpleNamespace(aio=self.call)
+            self.remote_gen = types.SimpleNamespace(aio=self.gen)
+
+        async def call(self, *a):
+            calls.append((self.name, a))
+            if self.fail:
+                raise RuntimeError(self.fail)
+            return self.result
+
+        async def gen(self, *a):
+            calls.append((self.name, a))
+            yield {"stage": "decode", "i": 0, "n": 1}
+            yield {"card": card}
+
+    monkeypatch.setattr(mod, "analyze_stream", Fn("analyze_stream"), raising=False)
+    monkeypatch.setattr(mod, "analyze_drums", Fn("analyze_drums", card), raising=False)
+    monkeypatch.setattr(mod, "stems", Fn("stems", {"drums": b"flac", "bass": b"flac2"}), raising=False)
+    client = TestClient(mod.api())
+
+    def post(url, data, headers):
+        sent.append((url, headers))
+        r = client.post(url.removeprefix("https://modal.example"), content=data, headers=headers)
+        if r.status_code >= 400:
+            raise remote.RemoteError(f"Modal answered {r.status_code}")
+        yield r.content[:7]  # in pieces, as a network delivers it
+        yield r.content[7:]
+
+    monkeypatch.setenv("TASTR_MODAL_URL", "https://modal.example/")
+    monkeypatch.setenv("TASTR_MODAL_KEY", "wk-1")
+    monkeypatch.setenv("TASTR_MODAL_SECRET", "ws-1")
+    remote.use_transport(post)
+    yield types.SimpleNamespace(mod=mod, Fn=Fn, calls=calls, sent=sent, card=card)
+    remote.use_transport(None)
+
+
+def test_remote_analyze_over_https_reports_stages(modal_api, tmp_path):
+    from tastr.cloud import remote
+
+    song = tmp_path / "a.mp3"
+    song.write_bytes(b"mp3 bytes")
+    stages = []
+    card = remote.analyze(song, {"beats_per_bar": 3}, on_stage=lambda s, i, n: stages.append(s))
+    assert card.core.bpm == modal_api.card["core"]["bpm"] and stages == ["decode"]
+    assert modal_api.calls == [("analyze_stream", (b"mp3 bytes", ".mp3", None, {"beats_per_bar": 3}))]
+    url, headers = modal_api.sent[0]
+    assert url == "https://modal.example/analyze_stream"
+    assert headers["Modal-Key"] == "wk-1" and headers["Modal-Secret"] == "ws-1"
+    remote.analyze(song, {"drum_model": True})
+    assert modal_api.calls[-1][0] == "analyze_drums"
+
+
+def test_remote_stems_over_https_and_errors(modal_api, tmp_path):
+    from tastr.cloud import remote
+
+    song = tmp_path / "a.wav"
+    song.write_bytes(b"wav")
+    assert remote.stems(song) == {"drums": b"flac", "bass": b"flac2"}  # bytes come back base64-encoded
+    modal_api.mod.stems = modal_api.Fn("stems", fail="out of GPUs")
+    with pytest.raises(remote.RemoteError, match="out of GPUs"):
+        remote.stems(song, {"drums": "https://put"})
+    assert modal_api.calls[-1] == ("stems", (b"wav", ".wav", {"drums": "https://put"}))
+    with pytest.raises(remote.RemoteError, match="404"):
+        remote._http_result("nothing", remote._payload("https://audio", ".wav"))
 
 
 def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):

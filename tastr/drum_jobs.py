@@ -9,7 +9,6 @@ it ends, and `resume()` restarts them, so a server that stopped meanwhile doesn'
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import os
 import threading
@@ -31,7 +30,9 @@ def available() -> bool:
     from .engine import adt
 
     if os.environ.get("TASTR_ANALYSIS_BACKEND", "local") == "modal":
-        return not adt.switched_off() and importlib.util.find_spec("modal") is not None
+        from .cloud import remote
+
+        return not adt.switched_off() and remote.available()
     return adt.installed()
 
 

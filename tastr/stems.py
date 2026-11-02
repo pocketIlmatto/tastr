@@ -40,7 +40,11 @@ def backend() -> str:
 
 
 def available() -> bool:
-    return importlib.util.find_spec("modal" if backend() == "modal" else "demucs") is not None
+    if backend() == "modal":
+        from .cloud import remote
+
+        return remote.available()
+    return importlib.util.find_spec("demucs") is not None
 
 
 def stems_root() -> Path:

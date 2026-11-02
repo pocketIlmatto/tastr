@@ -19,6 +19,9 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: v
 nav button, button { font: inherit; background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
 nav button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 main { padding: 16px; max-width: 1100px; margin: 0 auto; }
+/* A refresh on another view: index.html's head script names it in data-start, so Library never shows first (nav.js clears it). */
+html[data-start] #view-library { display: none; }
+html[data-start=explore] #view-explore, html[data-start=glossary] #view-glossary, html[data-start=files] #view-files, html[data-start=admin] #view-admin { display: block; }
 .muted { color: var(--muted); }
 /* Text that updates itself (benchmark scores and run dates in the Glossary): a muted green. */
 .bench-asof.muted, [data-bench] { color: color-mix(in srgb, var(--sec1) 60%, var(--muted)); }

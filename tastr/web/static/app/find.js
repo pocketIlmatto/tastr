@@ -3,7 +3,7 @@
 import { $, api, h, isNum, mmss, tracks } from "./core.js";
 import { refresh } from "./library.js";
 import { openTrack, switchTo } from "./card.js";
-import { routeOf } from "./route.js";
+import { endStart, routeOf } from "./route.js";
 import { setServerCfg } from "./daw.js";
 import { setStatus } from "./upload.js";
 import * as qlib from "./query-lib.js";
@@ -332,5 +332,6 @@ export function init() {
       document.querySelector("nav button[data-view=admin]").hidden = false;
       if (startView === "admin") switchTo("admin");
     }
-  }).catch(() => {});
+    endStart();  // a refresh on #admin waited for this answer before showing anything
+  }).catch(endStart);
 }

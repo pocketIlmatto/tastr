@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tastr</title>
 <script>try { var l = localStorage.getItem("tastr-look"); document.documentElement.dataset.look = (l === "technics") ? l : "808"; } catch (_) { document.documentElement.dataset.look = "808"; }</script>
+<script>try { var v = /^#(explore|glossary|files|admin|g-)/.exec(location.hash); if (v) document.documentElement.dataset.start = v[1] === "g-" ? "glossary" : v[1]; } catch (_) {}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600&family=Michroma&family=Space+Grotesk:wght@400;600&family=Space+Mono:wght@400;700&display=swap">
 <link rel="stylesheet" href="/static/style.css">
@@ -21,6 +22,7 @@
       <button data-view="files">Files</button>
       <button data-view="admin" hidden title="Only admins see this, and only when Tastr is hosted">Admin</button>
     </nav>
+    <script>(function () { var v = document.documentElement.dataset.start, b = v && document.querySelector("nav button[data-view=" + v + "]"); if (b) { document.querySelector("nav button.active").classList.remove("active"); b.classList.add("active"); } })();</script>
   </div>
   <button type="button" id="help-btn" aria-haspopup="dialog" aria-controls="help" aria-keyshortcuts="?" title="Keyboard and mouse shortcuts (?)">?</button>
 </header>

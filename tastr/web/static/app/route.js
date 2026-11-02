@@ -14,6 +14,18 @@ export function routeOf(hash = location.hash) {
   return VIEWS.includes(view) ? { view, sub: sub || "" } : { view: "library" };
 }
 
+// endStart hands the page back from index.html's pre-paint view pick (data-start) to the views' hidden flags.
+// A non-admin refreshing on #admin lands on the Library, so its nav button lights up again.
+export function endStart() {
+  if (!document.documentElement.dataset.start) return;
+  delete document.documentElement.dataset.start;
+  const on = document.querySelector("nav button.active");
+  if (!on || on.hidden) {
+    document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === "library"));
+    document.getElementById("view-library").hidden = false;
+  }
+}
+
 // setRoute("explore/find") records where we are. Moving to another view adds a history entry (so Back returns);
 // a change inside the same view (the next track, another Explore tab) replaces it, so Back doesn't replay every click.
 // Changing the address this way fires no event, so applying a route never loops back here.

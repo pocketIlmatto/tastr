@@ -120,7 +120,8 @@ def test_logged_in_requests_work_and_carry_security_headers(client):
 
 def test_csp_allows_the_pages_own_inline_script():
     hashes = hosted.inline_script_hashes((STATIC_DIR / "index.html").read_text())
-    assert len(hashes) == 1 and hashes[0].startswith("'sha256-")
+    # the look picker, the refreshed view's pick before first paint (TAS-89), and its nav highlight
+    assert len(hashes) == 3 and all(x.startswith("'sha256-") for x in hashes)
 
 
 def test_hosted_searches_run_in_the_browser_not_on_the_server(db_path, home, tmp_path, monkeypatch):

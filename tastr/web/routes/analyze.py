@@ -339,6 +339,7 @@ def router(ctx: AppContext) -> APIRouter:
         """Store the card the page made next to its audio until the analysis has read it: {audio: card file}.
         Nothing ({}) when it is too big; the server then analyzes the file itself."""
         dest, size = audio.parent / CARD_NAME, 0
+        dest.parent.mkdir(parents=True, exist_ok=True)  # gone if the checked copy was dropped (blobs.keep_copies)
         with open(dest, "wb") as out:
             while chunk := upload.file.read(1 << 20):
                 size += len(chunk)

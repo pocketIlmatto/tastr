@@ -6,8 +6,11 @@ Two parts:
 - `Library`, a SQLite-backed Durable Object: the library database lives in its SQL storage (tastr/do_sqlite.py)
   and it runs the same FastAPI app as Fly does, one request at a time.
 
-Not here yet (TAS-84 parts 3 to 5): background work (analysis jobs, expiry, the watch loop) needs threads, the
-Modal client and boto3 don't run on Pyodide. Until then this serves the library, the cards and the admin pages.
+Background work runs on the event loop (tastr/runner.py `Loop`): jobs as asyncio tasks, the repeating work
+(expiry, the watch) from the Durable Object's alarm, which `arm()` sets after each request and each alarm.
+
+Not here yet (TAS-84 parts 4 and 5): the Modal client and boto3 don't run on Pyodide, so analysis, stems and the
+audio bucket don't work yet. Until then this serves the library, the cards and the admin pages.
 """
 
 import os
@@ -18,12 +21,14 @@ os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: 
 
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
-from tastr import db  # noqa: E402
+from tastr import db, runner  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
 
 DB_PATH = "/tmp/tastr/tastr.db"  # only a name here: the database is the Durable Object's own storage
 KEYS_SECONDS = 3600
+RUNNER = runner.Loop()
+runner.use(RUNNER)  # before the app is built: its job queues take their lanes from it
 
 
 class Storage:
@@ -123,7 +128,20 @@ class Library(DurableObject):
                 await KEYS.refresh(SETTINGS.access_team_domain)
             except Exception as e:  # noqa: BLE001 - keys unreachable: the known keys (or none: every login fails) stand
                 print(f"couldn't fetch the Access signing keys: {type(e).__name__}: {e}")
-        return await asgi.fetch(APP, request, self.env)
+        response = await asgi.fetch(APP, request, self.env)
+        await self.arm()
+        return response
+
+    async def alarm(self, *_):
+        RUNNER.run_due()
+        await self.arm()
+
+    async def arm(self):
+        """Set the alarm for when the repeating work is next due (the alarm outlives the object, and wakes it)."""
+        due = RUNNER.next_due()
+        if due is not None and due != getattr(self, "_armed", None):
+            await self.ctx.storage.setAlarm(int(due * 1000))
+            self._armed = due
 
 
 class Default(WorkerEntrypoint):

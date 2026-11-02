@@ -14,10 +14,10 @@ import logging
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
+from . import runner
 from .markers import Markers, legacy_files
 
 INSTALL_HINT = ("Detecting drums with the model needs PyTorch, an optional install: pip install 'tastr[drums]' "
@@ -47,7 +47,7 @@ class Jobs:
     def __init__(self, run: Callable[[int], None], db_path=None) -> None:
         self._run_track = run
         self.markers = Markers(db_path, "drums")
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tastr-drums")
+        self._lane = runner.current().lane("drums", 1)  # one at a time
         self._lock = threading.Lock()
         self._state: dict[int, dict] = {}
 
@@ -65,7 +65,7 @@ class Jobs:
                 return dict(job)
             self._state[track_id] = {"state": "queued"}
         self.markers.put(str(track_id))
-        self._pool.submit(self._run, track_id)
+        self._lane.submit(self._run, track_id)
         return self.status(track_id)
 
     def resume(self) -> int:

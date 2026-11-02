@@ -1,6 +1,6 @@
 """Admin log lines from outside the server: GitHub Actions runs on main, and Litestream's backups to R2.
 
-A hosted server checks both every TASTR_WATCH_MINUTES (server.watch_loop) and writes what's new to the
+A hosted server checks both every TASTR_WATCH_MINUTES (background.start) and writes what's new to the
 activity log (db.add_event). What it has already logged is kept in the `meta` table, so a restart or a
 machine Fly stopped for being idle picks up where it left off.
 """

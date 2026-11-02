@@ -27,3 +27,7 @@ uv run pywrangler dev           # http://localhost:8787
 
 Tests of the entry module run with the app's tests (`tests/test_worker_entry.py`, the Workers runtime stubbed),
 and `TASTR_TEST_DO_SQLITE=1 pytest` runs the whole suite through the Durable Object database adapter.
+
+Background work on the Worker has no threads: `tastr/runner.py` runs jobs as asyncio tasks and the repeating
+work from the Durable Object's alarm. Synchronous code that has to wait on the network does it with
+`pyodide.ffi.run_sync`, and other requests run while it waits, so no lock may be held across such a wait.

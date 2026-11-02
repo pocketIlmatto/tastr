@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from .. import runner
 from ..markers import Markers, legacy_files
 
 log = logging.getLogger(__name__)
@@ -29,14 +30,16 @@ RESTARTED = "The server restarted before this finished. Upload it again."
 
 
 class AnalysisJobs:
-    def __init__(self, db_path=None, legacy_folder: Path | None = None):
+    def __init__(self, db_path=None, legacy_folder: Path | None = None, limit: int | None = None):
         """`db_path`: the database that keeps the jobs (None: the default one). `legacy_folder`: where older
-        servers kept them as JSON files, read once by `resume()`."""
+        servers kept them as JSON files, read once by `resume()`. `limit`: how many jobs run at once (None: each
+        starts at once, and waits for an analysis slot itself)."""
         self.markers = Markers(db_path, "analysis")
         self.legacy_folder = legacy_folder
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._seq = 0
+        self._lane = runner.current().lane("analysis", limit)
 
     def resume(self) -> list[dict[str, Any]]:
         """Mark the jobs a previous run of the server left unfinished as failed; returns them (for the admin log)."""
@@ -58,7 +61,7 @@ class AnalysisJobs:
 
     def start(self, owner: str | None, files: list[str], work: Callable[["Progress"], dict[str, Any]],
               job_id: str | None = None) -> dict[str, Any]:
-        """Run `work(progress)` in a thread; it returns the job's results ({"results": [...]}) or raises
+        """Run `work(progress)` in the background (tastr/runner.py); it returns the job's results ({"results": [...]}) or raises
         JobError with a message for the page. `files` are the names the person gave (for the admin log after a
         restart). Returns the new job's status."""
         self._forget_old()
@@ -68,7 +71,7 @@ class AnalysisJobs:
                    "file_count": len(files), "files": files, "created": time.time(), "_seq": self._seq}
             self._jobs[job["id"]] = job
         self._save(job)
-        threading.Thread(target=self._run, args=(job, work), name="tastr-analysis", daemon=True).start()
+        self._lane.submit(self._run, job, work)
         return self.status(job["id"], owner)
 
     def status(self, job_id: str, owner: str | None) -> dict[str, Any] | None:

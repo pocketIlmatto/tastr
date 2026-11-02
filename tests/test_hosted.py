@@ -937,3 +937,14 @@ def test_github_runs_come_through_the_shared_http_layer():
             watch.fetch_runs("private/repo")
     finally:
         http.use(None)
+
+
+def test_admin_tab_links_the_workers_logs_first():
+    """Admin › Activity (sandbox v188): Worker logs · Modal · Fly logs, each only when log_links has its URL."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "tastr/web/static/app/admin.js").read_text()
+    body = src[src.index("const linkEls = () =>"):src.index(".filter(Boolean);", src.index("const linkEls = () =>"))]
+    assert "links.worker && h(" in body and "links.modal && h(" in body and "links.fly && h(" in body
+    assert body.index('"Worker logs"') < body.index('"Modal"') < body.index('"Fly logs"')
+    assert "The Cloudflare Worker's logs, in the Cloudflare dashboard" in body

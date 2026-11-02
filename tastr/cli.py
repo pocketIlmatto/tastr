@@ -1,5 +1,5 @@
 """Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr set-owner EMAIL`, `tastr pack OUT --owner EMAIL`, `tastr unpack FILE`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
-`tastr vibe-bench`, `tastr vibe-fit`, `tastr fetch`."""
+`tastr vibe-bench`, `tastr vibe-fit`, `tastr fetch`, `tastr rekordbox-compare`."""
 
 from __future__ import annotations
 
@@ -159,6 +159,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="a Rekordbox collection export of the same tracks: score its BPM, key and beat grid next to "
                         "Tastr's (with --remote, a path in the dataset bucket; docs/rekordbox.md)")
 
+    rc = sub.add_parser("rekordbox-compare",
+                        help="compare your library's stored BPM, key and beat grid with Rekordbox's (docs/rekordbox.md)")
+    rc.add_argument("xml", help="Rekordbox collection XML export (File > Export Collection in xml format)")
+    rc.add_argument("--owner", help="on a hosted server's database, only this person's tracks")
+    rc.add_argument("--show", type=int, default=15, help="disagreements to list (default 15)")
+    rc.add_argument("--out", help="write the full JSON report here")
+
     for name, parser in sub.choices.items():
         parser.set_defaults(func=COMMANDS[name])
     args = p.parse_args(argv)
@@ -296,6 +303,22 @@ def _analyze(args) -> int:
         else:
             print(_summary_line(r.track_id, r.card))
     return 1 if failed else 0
+
+
+def _rekordbox_compare(args) -> int:
+    from xml.etree.ElementTree import ParseError
+
+    from . import rekordbox_compare
+
+    try:
+        rep = rekordbox_compare.compare(db.connect(args.db, readonly=True), args.xml, owner=args.owner)
+    except (FileNotFoundError, ValueError, ParseError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(rekordbox_compare.format_report(rep, args.show))
+    if args.out:
+        Path(args.out).write_text(json.dumps(rep, indent=2, default=str))
+    return 0
 
 
 def _list(args) -> int:
@@ -779,6 +802,7 @@ COMMANDS = {
     "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
     "key-profiles": _key_profiles, "drum-model": _drum_model, "drum-bench": _drum_bench,
     "vibe-bench": _vibe_bench, "vibe-fit": _vibe_fit, "fetch": _fetch, "bench": _bench,
+    "rekordbox-compare": _rekordbox_compare,
 }
 
 

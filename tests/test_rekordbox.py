@@ -92,3 +92,52 @@ def test_rekordbox_dataset_finds_audio_by_name(tmp_path, xml):
     assert it.path.endswith("Night Shift.mp3")
     assert it.truth.bpm == 120 and it.truth.downbeats[0] == 1.5
     assert it.meta["rekordbox_key"] == "Am"
+
+
+def _library(tmp_path):
+    import json
+
+    from tastr import db
+
+    conn = db.connect(tmp_path / "lib.db")
+
+    def add(tid, title, artist, path, bpm, tonic, mode, key_name, beats=(), downbeats=(), duration=10.0):
+        conn.execute("INSERT INTO tracks (id, source_kind, source_uri, local_path, title, artist, duration, bpm, "
+                     "key_tonic, key_mode, key_name, analyzed_at) VALUES (?, 'file', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'x')",
+                     (tid, path, path, title, artist, duration, bpm, tonic, mode, key_name))
+        conn.execute("INSERT INTO cards VALUES (?, 1, ?)",
+                     (tid, json.dumps({"core": {"beat_times": list(beats), "downbeat_times": list(downbeats)}})))
+
+    half = [0.5 + 0.5 * k for k in range(19)]
+    add(1, "Night Shift", "Someone", "/home/pam/uploads/Night Shift.mp3", 120.0, 9, "minor", "A minor",
+        beats=half, downbeats=half[2::4])
+    add(2, "Drift", "", "/x/other-name.mp3", 50.0, 9, "minor", "A minor", duration=8.0)  # matched by title
+    add(3, "Unrelated", "", "/x/zzz.mp3", 128.0, 0, "major", "C major")
+    conn.execute("INSERT INTO track_labels (track_id, bpm, key_name, updated_at) VALUES (2, 100, 'C major', 'x')")
+    conn.commit()
+    return conn
+
+
+def test_compare_library_with_rekordbox(tmp_path, xml):
+    from tastr import rekordbox_compare
+
+    rep = rekordbox_compare.compare(_library(tmp_path), xml)
+    assert (rep["tastr_tracks"], rep["rekordbox_tracks"], rep["matched"]) == (3, 3, 2)
+    assert rep["matched_by"] == {"file name": 1, "artist and title": 1}
+    a = rep["agreement"]
+    assert a["acc1"] == 0.5 and a["acc2"] == 1.0 and a["tempo_octave_errors"] == {"/2": 1}
+    assert a["key_categories"] == {"correct": 1, "relative": 1}
+    assert a["beat_f"] == 1.0 and a["downbeat_f"] == 1.0
+    lab = rep["labeled"]
+    assert lab["tracks"] == 1 and lab["rekordbox"]["acc1"] == 1.0 and lab["tastr"]["acc1"] == 0.0
+    assert [r["track_id"] for r in rep["disagreements"]] == [2]
+    text = rekordbox_compare.format_report(rep)
+    assert "2 tracks in both" in text and "Against your labels (1 tracks)" in text and "#2 Drift" in text
+
+
+def test_rekordbox_compare_cli(tmp_path, xml, capsys):
+    from tastr import cli
+
+    _library(tmp_path).close()
+    assert cli.main(["--db", str(tmp_path / "lib.db"), "rekordbox-compare", str(xml), "--out", str(tmp_path / "r.json")]) == 0
+    assert "tracks in both" in capsys.readouterr().out and (tmp_path / "r.json").is_file()

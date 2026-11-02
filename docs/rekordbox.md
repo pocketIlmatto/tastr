@@ -27,7 +27,7 @@ ratings, My Tag) are left out. Rekordbox's column describes versions 6 and 7.
 | Mix suggestions | Related tracks / track suggestions by BPM, key and genre | Keys that mix, Blend map, "between two songs" paths | No |
 | Cloud analysis | Can fetch BPM, grid, waveform and vocal analysis of the same file from AlphaTheta's server | Runs its own analysis, locally or on Modal | Turn it off for the bench (below) |
 
-## Two ways to benchmark
+## Three ways to benchmark
 
 **1. Head-to-head on labeled tracks (the real comparison).** Analyze a labeled dataset's audio in Rekordbox,
 export the XML, and run the usual bench with `--rekordbox`. Rekordbox's answers and Tastr's are both scored
@@ -66,14 +66,41 @@ Each track's audio is its path in the XML when that file exists (the same Mac); 
 name in the XML's folder or below, which is how a copy in the bucket is found. Tracks Rekordbox hasn't analyzed
 are skipped. Agreement is not accuracy: where they disagree, either could be wrong.
 
+**3. Your library: Tastr's stored analysis vs Rekordbox's.** For tracks that are in both libraries, compare
+what each app already worked out, with no re-analysis:
+
+```
+tastr rekordbox-compare ~/Music/rekordbox.xml                 # your library at ~/.tastr (or --db FILE)
+tastr --db hosted.db rekordbox-compare rekordbox.xml --owner you@example.com
+```
+
+```
+212 tracks in both (480 in Tastr, 1,950 analyzed in Rekordbox; matched by file name 150, artist and title 62)
+How often Tastr agrees with Rekordbox:
+  Same BPM (within 4%)         0.xxx  n=212
+  Same key                     0.xxx  n=205
+  Beats line up (70 ms)        0.xxx  n=212
+  key differences (Tastr vs Rekordbox): correct .., fifth .., relative ..
+Against your labels (14 tracks):  Rekordbox   Tastr
+  Same BPM (within 4%)             0.xxx   0.xxx  n=14
+Biggest disagreements (31 in all; label these to see who's right):
+  #42 Artist - Title: Tastr 87.0 F minor, Rekordbox 174.0 F minor
+```
+
+Tracks are matched by file name first, then by artist and title (with lengths within 3 s), each track once.
+Where you labeled a track in Tastr ([bench.md](bench.md#your-own-tracks)), both apps are scored against your
+label. This reads the analysis as it was stored, so a track analyzed by an older Tastr shows the older answer;
+re-analyze first to compare the current engine. `--out` writes every matched track as JSON.
+
 ## Making the export
 
 1. In Rekordbox's Preferences › Analysis, note the BPM range and whether analysis is Normal or Dynamic, and turn
    off cloud analysis (it can fetch results from AlphaTheta's server, which may have been corrected by hand).
    Leave Key, BPM and beat grid analysis on.
 2. Import the folder of audio and analyze it. Don't adjust any grid or key by hand.
-3. File › Export Collection in xml format. For a dataset run, a separate Rekordbox library (or a playlist
-   exported on its own) keeps your own collection out of the file.
+3. File › Export Collection in xml format. Exporting your whole collection is fine for a dataset run: only
+   the dataset's files are matched and the rest are ignored. Keep the dataset's file names
+   (`<id>.LOFI.mp3` for GiantSteps) so they match.
 4. For `--remote`, upload the XML (and for the `rekordbox` dataset, the audio) to the dataset bucket, e.g.
    `tastr-data/rekordbox/giantsteps.xml`.
 

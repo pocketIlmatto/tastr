@@ -107,3 +107,21 @@ def test_a_wal_mode_copy_imports(tmp_path, worker_db):
     db.use_storage(lambda path, st=do_sqlite.FakeStorage(worker_db): st)
     with closing(db.connect(worker_db)) as conn:
         assert library_move.import_rows(conn, data)["tracks"] == 2
+
+
+def test_imports_cut_off_stop_after_a_few_tries(tmp_path, monkeypatch, s3_server, worker_db):  # noqa: F811
+    """Each import is counted before it starts. An import the Worker cut off (CPU limit) never finishes, so after
+    MAX_TRIES of them the Worker stops trying instead of failing every restart."""
+    monkeypatch.setenv("TASTR_HOME", str(tmp_path / "home"))
+    use_bucket(monkeypatch, s3_server)
+    fly_library(tmp_path / "fly.db")
+    library_move.to_bucket(tmp_path / "fly.db")
+    db.use_storage(lambda path, st=do_sqlite.FakeStorage(worker_db): st)
+    with closing(db.connect(worker_db)) as conn:
+        db.set_meta(conn, library_move.TRIES, str(library_move.MAX_TRIES))
+        assert not library_move.waiting(conn)
+        assert library_move.import_from_bucket(conn) is None
+        db.set_meta(conn, library_move.TRIES, "1")
+        assert library_move.import_from_bucket(conn)["tracks"] == 2
+        assert library_move.tries(conn) == 2  # kept through the import's own meta rows
+    blobs.reset()

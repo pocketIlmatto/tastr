@@ -26,8 +26,10 @@ log = logging.getLogger(__name__)
 
 KEY = "import/library.db"
 DONE = "library_imported"  # meta: when, and from what, the library was imported
+TRIES = "library_import_tries"  # meta: imports started; one cut off (the Worker's CPU limit) never finishes
+MAX_TRIES = 3
 SKIP_TABLES = {"job_markers"}
-SKIP_META = {"db_schema_version", DONE}
+SKIP_META = {"db_schema_version", DONE, TRIES}
 
 
 def to_bucket(db_path: str | Path | None) -> int:
@@ -62,6 +64,7 @@ def import_rows(conn, data: bytes) -> dict[str, int]:
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
                                          "ORDER BY rowid") if r[0] in theirs and r[0] not in SKIP_TABLES]
     keep_meta = f" WHERE key NOT IN ({', '.join('?' * len(SKIP_META))})"
+    storage = getattr(conn, "storage", None)  # tastr/do_sqlite.py: each adapter call costs CPU the Worker caps
     counts: dict[str, int] = {}
 
     def copy():
@@ -73,8 +76,12 @@ def import_rows(conn, data: bytes) -> dict[str, int]:
             names = ", ".join(f'"{c}"' for c in cols)
             rows = src.execute(f'SELECT {names} FROM "{t}"' + (keep_meta if t == "meta" else ""),
                                tuple(SKIP_META) if t == "meta" else ()).fetchall()
-            if rows:
-                conn.executemany(f'INSERT INTO "{t}" ({names}) VALUES ({", ".join("?" * len(cols))})', rows)
+            sql = f'INSERT INTO "{t}" ({names}) VALUES ({", ".join("?" * len(cols))})'
+            if storage is not None:  # the Durable Object: straight to its SQL, without the adapter's row counts
+                for row in rows:
+                    storage.exec(sql, *row)
+            elif rows:
+                conn.executemany(sql, rows)
             counts[t] = len(rows)
 
     db.atomic(conn, copy)
@@ -85,8 +92,12 @@ def import_rows(conn, data: bytes) -> dict[str, int]:
 def waiting(conn) -> bool:
     """Whether this library could still take an import: the bucket is on, it never imported, and it has no tracks
     (a library that is in use already is never overwritten)."""
-    return (blobs.enabled() and not db.get_meta(conn, DONE)
+    return (blobs.enabled() and not db.get_meta(conn, DONE) and tries(conn) < MAX_TRIES
             and not conn.execute("SELECT 1 FROM tracks LIMIT 1").fetchone())
+
+
+def tries(conn) -> int:
+    return int(db.get_meta(conn, TRIES) or 0)
 
 
 def import_from_bucket(conn) -> dict[str, int] | None:
@@ -96,6 +107,9 @@ def import_from_bucket(conn) -> dict[str, int] | None:
     size = blobs.client().head(KEY)
     if size is None:
         return None
+    # Counted before it starts, in its own transaction: if the Worker is cut off mid-import (its CPU limit), the
+    # import's transaction is rolled back but this stays, so it stops after MAX_TRIES instead of looping.
+    db.set_meta(conn, TRIES, str(tries(conn) + 1))
     started = time.monotonic()
     counts = import_rows(conn, blobs.client().get(KEY).read())
     db.set_meta(conn, DONE, f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} from {KEY} ({size} bytes)")

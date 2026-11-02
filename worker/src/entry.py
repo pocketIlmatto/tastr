@@ -192,6 +192,8 @@ class Library(DurableObject):
                         IMPORT_AT = time.time() + IMPORT_RETRY
                     elif library_move.tries(conn) >= library_move.MAX_TRIES and not db.get_meta(conn, library_move.DONE):
                         print(f"not importing the library: {library_move.MAX_TRIES} tries were cut off")
+                    if moved := library_move.rehome(conn):  # the imported tracks' audio, by Fly's paths
+                        print(f"moved {moved} tracks' audio paths from {library_move.FLY_HOME} to this server's")
             except Exception as e:  # noqa: BLE001 - the app still serves; it tries again in a while
                 print(f"couldn't import the library: {type(e).__name__}: {e}")
                 IMPORT_AT = time.time() + IMPORT_RETRY

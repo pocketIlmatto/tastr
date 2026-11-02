@@ -125,3 +125,35 @@ def test_imports_cut_off_stop_after_a_few_tries(tmp_path, monkeypatch, s3_server
         assert library_move.import_from_bucket(conn)["tracks"] == 2
         assert library_move.tries(conn) == 2  # kept through the import's own meta rows
     blobs.reset()
+
+
+def test_fly_paths_move_to_this_servers_home(tmp_path, monkeypatch, worker_db):
+    """Imported tracks name their audio by Fly's paths; on the Worker they must point under its own home, which the
+    audio bucket's keys are worked out from, or the audio is "no longer on disk"."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("TASTR_HOME", str(home))
+    with closing(db.connect(worker_db)) as conn:
+        card = full_card()
+        card.source.uri = card.source.local_path = "/data/uploads/ab12-song.mp3"
+        moved_id = db.save_card(conn, card, owner="a@b.c")
+        other = full_card()
+        other.source.uri = other.source.local_path = "/elsewhere/song.mp3"
+        other.source.sha256 = "d" * 64
+        kept_id = db.save_card(conn, other, owner="a@b.c")
+
+        assert blobs.key(db.load_card(conn, moved_id).source.local_path) is None  # what broke playback
+        assert library_move.rehome(conn) == 1
+        want = f"{home}/uploads/ab12-song.mp3"
+        assert db.load_card(conn, moved_id).source.local_path == want
+        assert db.load_card(conn, moved_id).source.uri == want
+        assert conn.execute("SELECT local_path, source_uri FROM tracks WHERE id = ?", (moved_id,)).fetchone() == (want, want)
+        assert blobs.key(want) == "uploads/ab12-song.mp3"
+        assert db.load_card(conn, kept_id).source.local_path == "/elsewhere/song.mp3"
+        assert library_move.rehome(conn) == 0  # nothing left: a no-op on every later start
+
+
+def test_fly_home_matches_fly_toml():
+    tomllib = pytest.importorskip("tomllib")
+    from pathlib import Path
+    fly = tomllib.loads((Path(__file__).resolve().parent.parent / "fly.toml").read_text())
+    assert fly["env"]["TASTR_HOME"] == library_move.FLY_HOME

@@ -9,6 +9,10 @@ bucket.
    `import_from_bucket` copies every table's rows from that file into the Durable Object's database, in one
    transaction, and records the import in `meta` so it never runs twice.
 
+3. The copy's tracks name their audio by Fly's paths (`/data/uploads/...`), and the Worker keeps its files under
+   another TASTR_HOME, where the audio bucket's keys are worked out from (tastr/blobs.py). `rehome`, run on each
+   start, moves those paths to the Worker's home, so the bucket's audio plays again.
+
 Jobs a server left half-done (`job_markers`) aren't copied: the Worker starts with none running.
 """
 
@@ -29,6 +33,7 @@ DONE = "library_imported"  # meta: when, and from what, the library was imported
 TRIES = "library_import_tries"  # meta: imports started; one cut off (the Worker's CPU limit) never finishes
 MAX_TRIES = 3
 SKIP_TABLES = {"job_markers"}
+FLY_HOME = "/data"  # TASTR_HOME on Fly (fly.toml), which the copy's paths start with
 SKIP_META = {"db_schema_version", DONE, TRIES}
 
 
@@ -115,3 +120,34 @@ def import_from_bucket(conn) -> dict[str, int] | None:
     db.set_meta(conn, DONE, f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} from {KEY} ({size} bytes)")
     log.info("Imported the library from %s in %.1f s: %s", KEY, time.monotonic() - started, counts)
     return counts
+
+
+def rehome(conn, old: str = FLY_HOME, new: str | None = None) -> int:
+    """Point tracks whose audio is under `old`'s uploads or stems folder at the same files under `new` (this
+    server's TASTR_HOME): the tracks' paths and the same paths inside their cards. Returns how many tracks moved;
+    0, cheaply, once none are left."""
+    old, new = old.rstrip("/"), (new or str(blobs.home())).rstrip("/")
+    if old == new:
+        return 0
+    moved = 0
+
+    def move():
+        nonlocal moved
+        for folder in blobs.FOLDERS:
+            a, b = f"{old}/{folder}/", f"{new}/{folder}/"
+            under = "substr({col}, 1, ?) = ?"
+            ids = [r[0] for r in conn.execute(f"SELECT id FROM tracks WHERE {under.format(col='local_path')} "
+                                              f"OR {under.format(col='source_uri')}", (len(a), a, len(a), a))]
+            if not ids:
+                continue
+            marks = ", ".join("?" * len(ids))
+            # JSON doesn't escape "/", so the paths in a card read as in the columns.
+            conn.execute(f"UPDATE cards SET json = replace(json, ?, ?) WHERE track_id IN ({marks})",
+                         (f'"{a}', f'"{b}', *ids))
+            for col in ("local_path", "source_uri"):
+                conn.execute(f"UPDATE tracks SET {col} = ? || substr({col}, ?) WHERE {under.format(col=col)}",
+                             (b, len(a) + 1, len(a), a))
+            moved += len(ids)
+
+    db.atomic(conn, move)
+    return moved

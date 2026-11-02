@@ -229,9 +229,11 @@ function renderActivity() {
   const E = admEvents, A = admData;
   if (!E) return;
   const links = (A && A.log_links) || {};
-  const linkEls = () => [links.fly && h("a", { href: links.fly, target: "_blank", rel: "noopener" }, "Fly logs"),
-    links.modal && h("a", { href: links.modal, target: "_blank", rel: "noopener" }, "Modal")].filter(Boolean);
-  // A deploy links to its GitHub Actions run; a problem links to the Fly and Modal logs.
+  // Worker logs · Modal · Fly logs, each only when the server sent its URL (the Fly one goes when Fly does).
+  const linkEls = () => [links.worker && h("a", { href: links.worker, target: "_blank", rel: "noopener", title: "The Cloudflare Worker's logs, in the Cloudflare dashboard" }, "Worker logs"),
+    links.modal && h("a", { href: links.modal, target: "_blank", rel: "noopener" }, "Modal"),
+    links.fly && h("a", { href: links.fly, target: "_blank", rel: "noopener" }, "Fly logs")].filter(Boolean);
+  // A deploy links to its GitHub Actions run; a problem links to the server's (Worker or Fly) and Modal logs.
   const own = (e) => e.link && /^https:\/\//.test(e.link) ? [h("a", { href: e.link, target: "_blank", rel: "noopener" }, /github\.com/.test(e.link) ? "Deploy run on GitHub" : "Details")] : [];
   const dig = (e) => { const as = [...own(e), ...(e.ok || e.type === "blocked" ? [] : linkEls())]; return as.length ? h("span", { class: "adm-dig" }, ...as.flatMap((a, i) => (i ? [" · ", a] : [a]))) : null; };
   const active = Boolean(actF.type || actF.who || actF.src || (actF.when && (actF.when !== "range" || actF.from || actF.to)));

@@ -61,8 +61,9 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `ANTHROPIC_API_KEY` | none | Tastr's own Anthropic API key, for "Ask Claude to change it". Without it Ask is off. Keep it secret |
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
-| `TASTR_CF_ACCOUNT_ID` | none | your Cloudflare account id (32 hex characters, from the dashboard URL); the Admin tab then links to Access's applications and its log of blocked requests. Not secret, but keep it out of the repository |
-| `TASTR_GITHUB_REPO` | none | `owner/name` of the repository whose GitHub Actions runs on main the Admin log shows (fly.toml sets it) |
+| `TASTR_CF_ACCOUNT_ID` | none | your Cloudflare account id (32 hex characters, from the dashboard URL); the Admin tab then links to Access's applications and its log of blocked requests (and, with `TASTR_WORKER_NAME`, to the Worker's logs). Not secret; `worker/wrangler.jsonc` sets it |
+| `TASTR_WORKER_NAME` | none | the Cloudflare Worker this server runs as (`worker/wrangler.jsonc` sets `tastr`): the Admin log's source and its link to the Worker's logs |
+| `TASTR_GITHUB_REPO` | none | `owner/name` of the repository whose GitHub Actions runs on main the Admin log shows (fly.toml and `worker/wrangler.jsonc` set it) |
 | `TASTR_GITHUB_WORKFLOWS` | none | which workflows' runs the Admin log shows, comma-separated names or file names (fly.toml: `tests,deploy`); none logs no runs |
 | `TASTR_GITHUB_TOKEN` | none | a fine-grained token with read-only Actions access, needed only while that repository is private |
 | `TASTR_WATCH_MINUTES` | 15 | how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off |

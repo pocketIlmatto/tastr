@@ -1024,3 +1024,38 @@ def test_copy_preview_of_a_selection(db_path, home):
     sent = c.post("/api/admin/copy-tracks", json={"to": "t@example.com", "track_ids": [have, new, silent]},
                   headers=GOOD).json()
     assert [r["from"] for r in sent["copied"]] == [new] and sorted(sent["skipped"]) == sorted([have, silent])
+
+
+def test_admin_rekordbox_compare_reads_the_export_from_the_bucket(db_path, home, monkeypatch):
+    from tastr import blobs, s3
+
+    mine = save(db_path, "friend@example.com", path="/up/ab/Night Shift.mp3")
+    save(db_path, "other@example.com", sha="o", path="/up/cd/Night Shift.mp3")  # someone else's copy: not compared
+    conn = db.connect(db_path)
+    conn.execute("UPDATE tracks SET bpm = 120, key_tonic = 9, key_mode = 'minor', key_name = 'A minor'")
+    conn.commit()
+    conn.close()
+    xml = (b'<DJ_PLAYLISTS><COLLECTION><TRACK Name="Night Shift" AverageBpm="60.00" Tonality="Am" '
+           b'Location="file://localhost/Users/pam/Music/Night%20Shift.mp3"/></COLLECTION></DJ_PLAYLISTS>')
+    store = {"rekordbox/collection.xml": xml}
+
+    class Bucket:
+        def get(self, key):
+            if key not in store:
+                raise s3.S3Error(404, "NoSuchKey", key)
+            return type("R", (), {"read": lambda self: store[key]})()
+
+    monkeypatch.setattr(blobs, "enabled", lambda: True)
+    monkeypatch.setattr(blobs, "client", lambda: Bucket())
+    assert make_client(db_path).get("/api/admin/rekordbox-compare", headers=GOOD).status_code == 404  # admins only
+    c = make_client(db_path, admins=("friend@example.com",))
+    rep = c.get("/api/admin/rekordbox-compare", headers=GOOD).json()
+    assert rep["tastr_tracks"] == 1 and rep["matched"] == 1
+    assert rep["agreement"]["acc1"] == 0.0 and rep["agreement"]["key_correct"] == 1.0
+    assert rep["disagreements"][0]["track_id"] == mine
+    text = c.get("/api/admin/rekordbox-compare?format=text", headers=GOOD).text
+    assert "1 tracks in both" in text
+    assert c.get("/api/admin/rekordbox-compare?key=rekordbox/missing.xml", headers=GOOD).status_code == 404
+    assert c.get("/api/admin/rekordbox-compare?key=uploads/x.xml", headers=GOOD).status_code == 400
+    store["rekordbox/bad.xml"] = b"<not xml"
+    assert c.get("/api/admin/rekordbox-compare?key=rekordbox/bad.xml", headers=GOOD).status_code == 400

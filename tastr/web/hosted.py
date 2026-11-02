@@ -268,6 +268,43 @@ def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[
     return [tid for tid, _ in gone]
 
 
+ORPHAN_DAYS = 2  # an upload object nothing points at is deleted once it is this old (unfinished uploads are younger)
+ORPHAN_SHARE = 0.5  # a sweep that would delete more than this share of the uploads stops instead: something is off
+
+
+def orphan_uploads(conn: sqlite3.Connection, root: Path, open_ids: set[str] = frozenset(), days: float = ORPHAN_DAYS,
+                   now: float | None = None) -> int:
+    """Delete audio in the bucket's uploads/ folder that no track points at and that is older than `days`: copies left
+    behind when the same file was uploaded again (before duplicates were skipped, TAS-94). `open_ids`: direct uploads
+    still waiting to be finished, which are kept. Returns how many objects went; 0 with the bucket off.
+
+    A sweep that finds more than ORPHAN_SHARE of the uploads unreferenced deletes nothing and logs a warning, as
+    that means the tracks' paths don't match the bucket (another TASTR_HOME), not that the files are unused."""
+    prefix = blobs.key(root / "x")
+    if not blobs.enabled() or prefix is None:
+        return 0
+    prefix = prefix.rsplit("/", 1)[0] + "/"
+    stored = blobs.listing(prefix, fresh=True)
+    if not stored:
+        return 0
+    used = {blobs.key(lp) for (lp,) in conn.execute("SELECT DISTINCT local_path FROM tracks WHERE local_path IS NOT NULL")}
+    cutoff = (now if now is not None else time.time()) - days * 86400
+    unused = [k for k in stored if k not in used]
+    if len(unused) > ORPHAN_SHARE * len(stored) and len(unused) > 10:
+        log.warning("Orphan sweep stopped: %d of %d uploads in the bucket match no track", len(unused), len(stored))
+        return 0
+    gone = [k for k in unused if stored[k][1] < cutoff and k[len(prefix):].split("/", 1)[0] not in open_ids]
+    if gone:
+        blobs.client().delete_many(gone)
+        blobs.reset_listings()
+        for k in gone:  # a local copy, if the disk still caches one
+            p = blobs.home() / k
+            p.unlink(missing_ok=True)
+            if p.parent.resolve() != root.resolve() and p.parent.is_dir() and not any(p.parent.iterdir()):
+                p.parent.rmdir()
+    return len(gone)
+
+
 def today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 

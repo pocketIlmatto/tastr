@@ -6,19 +6,22 @@ import os
 import re
 import sqlite3
 from contextlib import closing
+from xml.etree.ElementTree import ParseError
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
-from ... import db, library_copy
+from ... import blobs, db, library_copy, rekordbox_compare, s3
 from .. import claude
 from ..context import AppContext, tastr_home
 from ..hosted import stored_bytes, today
 
 EMAIL = re.compile(r"^[^@\s/]{1,64}@[^@\s/]{1,190}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+REKORDBOX_KEY = "rekordbox/collection.xml"  # where /api/admin/rekordbox-compare looks in the audio bucket by default
 USAGE_RANGES = {"1": 1, "7": 7, "30": 30, "all": 365}  # the admin chart's ranges in days; "all" stops at a year
 
 
@@ -208,6 +211,33 @@ def router(ctx: AppContext) -> APIRouter:
             ctx.event(admin, "admin", f"Copied {n} track{'' if n == 1 else 's'} to {to.split('@')[0]}")
         return {"to": to, "copied": [{"from": a, "id": b} for a, b in made.items()],
                 "skipped": [t for t in body.track_ids if t not in made]}
+
+    @api.get("/api/admin/rekordbox-compare")
+    def rekordbox(request: Request, key: str = REKORDBOX_KEY, format: Literal["json", "text"] = "json",
+                  show: int = Query(25, ge=0, le=500)):
+        """Your tracks' stored BPM, key and beat grid next to Rekordbox's, for tracks in both libraries
+        (tastr/rekordbox_compare.py, docs/rekordbox.md). Reads the Rekordbox collection XML you put in the audio
+        bucket at `key`. `format=text` for the readable summary. Admins only."""
+        admin = ctx.require_admin(request)
+        if not key.startswith("rekordbox/") or not key.endswith(".xml") or ".." in key:
+            raise HTTPException(400, "key is an .xml file under rekordbox/ in the audio bucket.")
+        if not blobs.enabled():
+            raise HTTPException(409, "This server has no audio bucket.")
+        try:
+            data = blobs.client().get(key).read()
+        except s3.S3Error as e:
+            if e.status == 404:
+                raise HTTPException(404, f"Upload your Rekordbox export to the audio bucket as {key} first.") from None
+            raise
+        try:
+            with closing(ctx.conn()) as c:
+                rep = rekordbox_compare.compare(c, data, owner=admin)
+        except ParseError as e:
+            raise HTTPException(400, f"{key} isn't a Rekordbox XML export: {e}") from None
+        if format == "text":
+            return PlainTextResponse(rekordbox_compare.format_report(rep, show))
+        rep["disagreements"] = rep["disagreements"][:show]
+        return rep
 
     @api.put("/api/admin/limits/{email}")
     def set_limits(email: str, body: LimitsBody, request: Request):

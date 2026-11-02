@@ -12,8 +12,9 @@ from .. import backfill, blobs, db, runner
 from . import watch
 from .analysis_jobs import ref
 from .context import AppContext, log, tastr_home, upload_dir
-from .hosted import expire_audio, names
-from .routes.analyze import prune_uploads
+from ..markers import Markers
+from .hosted import expire_audio, names, orphan_uploads
+from .routes.analyze import UPLOAD_MARKERS, prune_uploads
 
 EXPIRY_EVERY = 6 * 3600  # seconds between sweeps for expired audio on a hosted server
 
@@ -32,8 +33,8 @@ def start(ctx: AppContext) -> list[Callable[[], None]]:
 
 
 def expire_once(ctx: AppContext) -> None:
-    """Delete expired audio, abandoned direct uploads and local copies of what the audio bucket holds, and move
-    waveform data still kept in cards to the bucket."""
+    """Delete expired audio, abandoned direct uploads, uploads no track uses and local copies of what the audio
+    bucket holds, and move waveform data still kept in cards to the bucket."""
     settings = ctx.settings
     try:
         with closing(ctx.conn()) as c:
@@ -42,6 +43,10 @@ def expire_once(ctx: AppContext) -> None:
         abandoned = prune_uploads(ctx.db_path)  # direct uploads given a link and never finished
         if abandoned:
             log.info("Deleted %d unfinished upload(s)", abandoned)
+        with closing(ctx.conn()) as c:  # copies nothing points at (a file uploaded again, before TAS-94)
+            orphans = orphan_uploads(c, upload_dir(), {k for k, _, _ in Markers(ctx.db_path, UPLOAD_MARKERS).items()})
+        if orphans:
+            log.info("Deleted %d uploaded file(s) no track uses", orphans)
         evicted = blobs.evict()  # local copies of what the audio bucket holds; the disk is a cache then
         if evicted:
             log.info("Removed %d local copies of files kept in the audio bucket", evicted)

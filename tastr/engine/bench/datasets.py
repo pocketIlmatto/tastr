@@ -373,6 +373,7 @@ DATASETS: dict[str, Callable[..., list[Item]]] = {
     "beatport-tempo": beatport_tempo,
     "harmonix": harmonix,
     "manifest": manifest,
+    # "rekordbox" is added by bench/rekordbox.py, which the package imports
 }
 
 

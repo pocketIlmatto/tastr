@@ -546,6 +546,20 @@ def find_track_id(conn: sqlite3.Connection, sha256: str | None = None, source_ur
     return None
 
 
+def set_audio_path(conn: sqlite3.Connection, track_id: int, local_path: str) -> None:
+    """Point a track (and its stored card) at another copy of its audio file: an upload of the same bytes after
+    the track's own copy expired. Nothing else about the track changes."""
+    card = load_card(conn, track_id)
+
+    def write() -> None:
+        conn.execute("UPDATE tracks SET local_path = ? WHERE id = ?", (local_path, track_id))
+        if card is not None:
+            card.source.local_path = local_path
+            conn.execute("UPDATE cards SET json = ? WHERE track_id = ?", (card.to_json(), track_id))
+
+    atomic(conn, write)
+
+
 def track_owner(conn: sqlite3.Connection, track_id: int) -> tuple[bool, str | None]:
     """(exists, owner) for one track."""
     r = conn.execute("SELECT owner FROM tracks WHERE id = ?", (track_id,)).fetchone()

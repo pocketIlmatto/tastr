@@ -1,5 +1,5 @@
 """Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr set-owner EMAIL`, `tastr pack OUT --owner EMAIL`, `tastr unpack FILE`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
-`tastr vibe-bench`, `tastr vibe-fit`, `tastr fetch`."""
+`tastr vibe-bench`, `tastr vibe-fit`, `tastr fetch`, `tastr rekordbox-compare`."""
 
 from __future__ import annotations
 
@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     fe.add_argument("--remote", action="store_true", help="run on Modal, writing into the R2 bucket (docs/cloud.md)")
 
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
-    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, ballroom, harmonix or manifest")
+    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, ballroom, harmonix, manifest or rekordbox")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
     b.add_argument("--stages", help="comma-separated stage names (default: core,sections)")
     b.add_argument("--limit", type=int, help="only the first N tracks")
@@ -155,6 +155,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="which engine analyzes (default: TASTR_ENGINE, else rust); rust always runs every stage")
     b.add_argument("--record", action="store_true",
                    help="save the headline score to tastr/engine/bench_scores.json, quoted in the UI (full runs only)")
+    b.add_argument("--rekordbox", metavar="XML",
+                   help="a Rekordbox collection export of the same tracks: score its BPM, key and beat grid next to "
+                        "Tastr's (with --remote, a path in the dataset bucket; docs/rekordbox.md)")
+
+    rc = sub.add_parser("rekordbox-compare",
+                        help="compare your library's stored BPM, key and beat grid with Rekordbox's (docs/rekordbox.md)")
+    rc.add_argument("xml", help="Rekordbox collection XML export (File > Export Collection in xml format)")
+    rc.add_argument("--owner", help="on a hosted server's database, only this person's tracks")
+    rc.add_argument("--show", type=int, default=15, help="disagreements to list (default 15)")
+    rc.add_argument("--out", help="write the full JSON report here")
 
     for name, parser in sub.choices.items():
         parser.set_defaults(func=COMMANDS[name])
@@ -197,7 +207,8 @@ def _bench_remote(args) -> int:
     try:
         report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
                               jobs=args.jobs if args.jobs > 1 else None,
-                              **({"engine": args.engine} if args.engine else {}))
+                              **({"engine": args.engine} if args.engine else {}),
+                              **({"rekordbox": args.rekordbox} if args.rekordbox else {}))
     except (remote.RemoteError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -211,10 +222,18 @@ def _bench_remote(args) -> int:
               f"imports {timing.get('import_seconds', 0):.0f} s, loading the dataset {timing['load_seconds']:.0f} s, analysis {report['seconds']:.0f} s"
               f" ({timing['jobs']} workers)", file=sys.stderr)
     baseline = runner.load_report(args.baseline) if args.baseline else None
-    print(runner.format_summary(report, baseline))
+    _print_bench(report, baseline)
     if args.out:
         runner.save(report, args.out)
     return _record(args, "bench", report)
+
+
+def _print_bench(report: dict, baseline: dict | None) -> None:
+    from .engine.bench import rekordbox, runner
+
+    print(runner.format_summary(report, baseline))
+    if report.get("rekordbox"):
+        print(rekordbox.format_comparison(report["rekordbox"]))
 
 
 def _bench_local(args) -> int:
@@ -238,8 +257,12 @@ def _bench_local(args) -> int:
     stages = args.stages.split(",") if args.stages else None
     report = runner.run(items, stages=stages, jobs=args.jobs, limit=args.limit, progress=progress)
     print(file=sys.stderr)
+    if args.rekordbox:
+        from .engine.bench import rekordbox
+
+        rekordbox.add_to_report(report, items, args.rekordbox, args.limit)
     baseline = runner.load_report(args.baseline) if args.baseline else None
-    print(runner.format_summary(report, baseline))
+    _print_bench(report, baseline)
     if args.out:
         runner.save(report, args.out)
     return _record(args, "bench", report)
@@ -280,6 +303,22 @@ def _analyze(args) -> int:
         else:
             print(_summary_line(r.track_id, r.card))
     return 1 if failed else 0
+
+
+def _rekordbox_compare(args) -> int:
+    from xml.etree.ElementTree import ParseError
+
+    from . import rekordbox_compare
+
+    try:
+        rep = rekordbox_compare.compare(db.connect(args.db, readonly=True), args.xml, owner=args.owner)
+    except (FileNotFoundError, ValueError, ParseError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(rekordbox_compare.format_report(rep, args.show))
+    if args.out:
+        Path(args.out).write_text(json.dumps(rep, indent=2, default=str))
+    return 0
 
 
 def _list(args) -> int:
@@ -763,6 +802,7 @@ COMMANDS = {
     "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
     "key-profiles": _key_profiles, "drum-model": _drum_model, "drum-bench": _drum_bench,
     "vibe-bench": _vibe_bench, "vibe-fit": _vibe_fit, "fetch": _fetch, "bench": _bench,
+    "rekordbox-compare": _rekordbox_compare,
 }
 
 

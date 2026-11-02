@@ -39,6 +39,7 @@ def _results(results) -> dict[str, Any]:
     return {
         "results": [
             {"track_id": r.track_id, "title": r.source.title or Path(r.source.uri).stem, "error": r.error}
+            | ({"already": True} if getattr(r, "already", False) else {})  # in the library already, not analyzed again
             for r in results
         ]
     }

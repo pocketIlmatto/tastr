@@ -94,7 +94,9 @@ and R2 backs up only the database (cards, edits, who owns what). With `TASTR_AUD
 deletes once they're an hour old, and expiry deletes the bucket's copy. Modal keeps nothing after a job.
 With `TASTR_DIRECT_UPLOAD` on as well, the page uploads each file straight to the bucket on a signed link, so the
 file's bytes never pass through the server on the way in; the same sweep deletes uploads that got a link and were
-never finished (after two hours).
+never finished (after two hours), and uploads no track points at once they're two days old (it deletes nothing
+if most uploads match no track, which would mean the paths are off). An upload of bytes the library already has
+isn't analyzed or kept again; the page can ask `POST /api/tracks/known` first and skip those files.
 
 ## An upload, step by step
 
@@ -140,6 +142,10 @@ sequenceDiagram
     end
   end
   W-->>B: a job id (the upload is done)
+  opt the library already has these exact bytes (SHA-256)
+    W->>A: delete the new copy (or keep it as the track's audio, if that had expired)
+    W-->>B: the existing track, marked already, with nothing analyzed
+  end
   opt a card came and checks out
     W->>W: save the card, skip Modal
   end

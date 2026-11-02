@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import closing
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 
 from ... import blobs, db, lookup, service, stems
 from ..context import AppContext, _failure_reason, _unprefixed, log, upload_dir
+
+
+class KnownBody(BaseModel):
+    sha256: list[str] = Field(max_length=2000)
+
+
+SHA256 = re.compile(r"[0-9a-fA-F]{64}")
 
 
 def router(ctx: AppContext) -> APIRouter:
@@ -42,6 +51,17 @@ def router(ctx: AppContext) -> APIRouter:
             r["title"] = _unprefixed(r["title"], uris.get(r["id"]))
             r["tags"] = vibes.get(r["id"], [])
         return rows
+
+    @api.post("/api/tracks/known")
+    def known_tracks(body: KnownBody, request: Request):
+        """Which of these files (by their SHA-256, as hex) are in your library already: {known: {sha256: {id,
+        title, artist}}}. The upload page asks before uploading, so a file you have isn't uploaded or analyzed
+        again. A track whose audio has expired isn't listed: uploading it again brings its audio back."""
+        bad = [s for s in body.sha256 if not SHA256.fullmatch(s)]
+        if bad:
+            raise HTTPException(422, "Each sha256 is 64 hex characters.")
+        with closing(ctx.conn()) as c:
+            return {"known": service.known_tracks(c, body.sha256, ctx.owner_of(request))}
 
     @api.get("/api/tracks/{track_id}")
     def track(track_id: int):

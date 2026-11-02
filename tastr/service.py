@@ -26,16 +26,50 @@ class AnalyzeResult:
     card: TrackCard | None
     error: str | None = None
     edits_dropped: int = 0  # reanalyze_track: saved section edits whose section is gone
+    already: bool = False  # skip_known: the library already had this audio, so nothing was analyzed
+    audio_restored: bool = False  # ...and its stored audio had expired, so this upload became the track's audio
+
+
+def known_track(conn: sqlite3.Connection, sha256: str | None, owner: str | None = None) -> int | None:
+    """The track in `owner`'s library with exactly this audio (by its SHA-256), while that audio is still stored.
+    A track whose audio has expired doesn't count: uploading the file again is how it gets its audio back."""
+    r = _same_audio(conn, sha256, owner)
+    return r[0] if r and blobs.exists(r[1]) else None
+
+
+def _same_audio(conn: sqlite3.Connection, sha256: str | None, owner: str | None) -> tuple[int, str | None] | None:
+    if not sha256:
+        return None
+    return conn.execute("SELECT id, local_path FROM tracks WHERE sha256 = ? AND owner IS ?", (sha256, owner)).fetchone()
+
+
+def known_tracks(conn: sqlite3.Connection, sha256s: list[str], owner: str | None = None) -> dict[str, dict]:
+    """{sha256: {id, title, artist}} for those of `sha256s` already in `owner`'s library (as `known_track`)."""
+    out: dict[str, dict] = {}
+    for sha in dict.fromkeys(s.lower() for s in sha256s):
+        tid = known_track(conn, sha, owner)
+        if tid is not None:
+            title, artist = conn.execute("SELECT title, artist FROM tracks WHERE id = ?", (tid,)).fetchone()
+            out[sha] = {"id": tid, "title": title, "artist": artist}
+    return out
 
 
 def analyze_source(conn: sqlite3.Connection, source: Source, options: dict | None = None, owner: str | None = None, on_stage=None,
-                   card: str | Path | None = None) -> AnalyzeResult:
+                   card: str | Path | None = None, skip_known: bool = False) -> AnalyzeResult:
     """`on_stage(name, i, n)`: told as each step starts ("decode", then the engine's stages), for progress.
-    `card`: a file holding the card the browser made from this audio (tastr/engine/browser_card.py)."""
+    `card`: a file holding the card the browser made from this audio (tastr/engine/browser_card.py).
+    `skip_known`: when `owner`'s library already has exactly this audio, analyze nothing and answer with that
+    track (`already`); the caller deletes the new copy. If that track's audio had expired, the new copy becomes
+    its audio instead (`audio_restored`), card and edits untouched. Uploads use it; Re-analyze runs a track again."""
     try:
         if not source.local_path:
             raise ValueError(f"source {source.uri} has no local audio file")
         source.sha256 = source.sha256 or file_sha256(source.local_path)
+        if skip_known and (same := _same_audio(conn, source.sha256, owner)) is not None:
+            if blobs.exists(same[1]):
+                return AnalyzeResult(source, same[0], None, already=True)
+            db.set_audio_path(conn, same[0], source.local_path)
+            return AnalyzeResult(source, same[0], None, already=True, audio_restored=True)
         card = _analyze(source, options, on_stage, card)
         if (options or {}).get("drum_model_required") and not card.extras.get("drum_model"):
             # Asked for the drum model but it didn't run (not installed, or no network for the weights):
@@ -90,11 +124,14 @@ def _lookup(conn: sqlite3.Connection, track_id: int, card: TrackCard) -> None:
             log.warning("metadata lookup failed for track %s: %s", track_id, e)
 
 
-def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], owner: str | None = None, cards: dict[str, str] | None = None) -> list[AnalyzeResult]:
+def analyze_inputs(conn: sqlite3.Connection, inputs: list[str], owner: str | None = None, cards: dict[str, str] | None = None,
+                   skip_known: bool = False) -> list[AnalyzeResult]:
     """`owner`: whose library the tracks go in on a hosted server (None on your own machine).
-    `cards`: {audio file path: the card file the browser made} for uploads that came with one."""
+    `cards`: {audio file path: the card file the browser made} for uploads that came with one.
+    `skip_known`: as for `analyze_source`."""
     cards = {str(Path(k).resolve()): v for k, v in (cards or {}).items()}
-    return [analyze_source(conn, s, owner=owner, card=cards.get(s.local_path)) for s in resolve_inputs(inputs)]
+    return [analyze_source(conn, s, owner=owner, card=cards.get(s.local_path), skip_known=skip_known)
+            for s in resolve_inputs(inputs)]
 
 
 KEEP = "keep"

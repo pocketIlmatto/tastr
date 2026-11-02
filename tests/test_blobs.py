@@ -536,3 +536,136 @@ def test_a_copied_track_gets_its_own_views(bucket, db_path, home):
     new = library_copy.copy_tracks(conn, [tid], "a@b.c", "t@b.c")[tid]
     assert blobs.get_views(new) == {"wave": [1, 2, 3]}
     conn.close()
+
+
+# ---- uploads of audio the library already has (TAS-94) ----------------------------------------------------------
+
+def counting_client(db_path, monkeypatch, **settings):
+    """A hosted app whose analysis is faked; `calls` counts how many files it analyzed."""
+    calls = []
+
+    def fake(source, options, on_stage=None, browser=None):
+        calls.append(source.local_path)
+        card = full_card()
+        card.source = source
+        return card
+
+    monkeypatch.setattr(service, "_analyze", fake)
+    app = create_app(db_path, Settings(hosted=True, access_team_domain=TEAM, access_aud=AUD, **settings),
+                     verifier=stub_verifier)
+    return TestClient(app), calls
+
+
+def upload(c, data=b"RIFFsong", name="song.wav"):
+    r = c.post("/api/analyze", files=[("files", (name, data, "audio/wav"))], headers=GOOD)
+    assert r.status_code == 200, r.text
+    return r.json()["results"][0]
+
+
+def test_the_same_file_again_is_not_analyzed_or_stored_again(bucket, home, db_path, monkeypatch):
+    import hashlib
+
+    c, calls = counting_client(db_path, monkeypatch)
+    first = upload(c)
+    assert "already" not in first
+    again = upload(c, name="renamed.wav")  # the same bytes under another name
+    assert again == {"track_id": first["track_id"], "title": "renamed", "error": None, "already": True}
+    assert len(calls) == 1
+    (key,) = objects("uploads/")  # the second copy went, the first is still the track's audio
+    assert key.endswith("/song.wav")
+    assert [p for p in (home / "uploads").rglob("*") if p.is_file()] == []
+    with closing(db.connect(db_path)) as conn:
+        assert db.usage_today(conn, "friend@example.com", "tracks", hosted.today()) == 1  # only the first counts
+    assert upload(c, b"RIFFother")["track_id"] != first["track_id"]  # other bytes are another track
+    assert len(calls) == 2
+
+    sha = hashlib.sha256(b"RIFFsong").hexdigest()
+    known = c.post("/api/tracks/known", json={"sha256": [sha, "0" * 64]}, headers=GOOD).json()["known"]
+    assert list(known) == [sha] and known[sha]["id"] == first["track_id"]
+    assert c.post("/api/tracks/known", json={"sha256": ["nope"]}, headers=GOOD).status_code == 422
+    assert c.post("/api/tracks/known", json={"sha256": [sha]}).status_code == 401
+
+
+def test_known_files_are_per_library(bucket, home, db_path, monkeypatch):
+    import hashlib
+
+    c, calls = counting_client(db_path, monkeypatch)
+    tid = upload(c)["track_id"]
+    sha = hashlib.sha256(b"RIFFsong").hexdigest()
+    with closing(db.connect(db_path)) as conn:
+        assert service.known_tracks(conn, [sha], "other@example.com") == {}
+        assert service.known_tracks(conn, [sha.upper()], "friend@example.com")[sha]["id"] == tid
+
+
+def test_a_duplicate_direct_upload_in_the_background_is_skipped(bucket, home, db_path, monkeypatch):
+    c, calls = counting_client(db_path, monkeypatch, direct_upload=True)
+    tids = []
+    for _ in range(2):
+        (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+        browser_put(up, b"RIFFsong")
+        job = c.post("/api/analyze/uploaded?background=1", data={"ids": [up["id"]]}, headers=GOOD).json()
+        for _ in range(100):
+            job = c.get(f"/api/analyze/jobs/{job['id']}", headers=GOOD).json()
+            if job["state"] in ("done", "error"):
+                break
+            time.sleep(0.05)
+        assert job["state"] == "done"
+        tids.append(job["results"][0])
+    assert tids[1]["already"] is True and tids[1]["track_id"] == tids[0]["track_id"]
+    assert len(calls) == 1 and len(objects("uploads/")) == 1
+
+
+def test_uploading_a_track_whose_audio_expired_brings_the_audio_back(bucket, home, db_path, monkeypatch):
+    c, calls = counting_client(db_path, monkeypatch)
+    tid = upload(c)["track_id"]
+    with closing(db.connect(db_path)) as conn:
+        old = db.load_card(conn, tid).source.local_path
+        analyzed = conn.execute("SELECT analyzed_at FROM tracks WHERE id = ?", (tid,)).fetchone()
+    blobs.remove(old)  # what expire_audio does
+    assert c.get(f"/api/tracks/{tid}", headers=GOOD).json()["has_audio"] is False
+    assert c.post("/api/tracks/known", json={"sha256": [db_sha(db_path, tid)]}, headers=GOOD).json()["known"] == {}
+    back = upload(c, name="again.wav")
+    assert back["track_id"] == tid and back["already"] is True
+    assert len(calls) == 1  # not analyzed again
+    assert c.get(f"/api/tracks/{tid}", headers=GOOD).json()["has_audio"] is True
+    (key,) = objects("uploads/")
+    assert key.endswith("/again.wav")
+    with closing(db.connect(db_path)) as conn:
+        assert db.load_card(conn, tid).source.local_path.endswith("/again.wav")
+        assert conn.execute("SELECT analyzed_at FROM tracks WHERE id = ?", (tid,)).fetchone() == analyzed
+
+
+def db_sha(db_path, tid):
+    with closing(db.connect(db_path)) as conn:
+        return conn.execute("SELECT sha256 FROM tracks WHERE id = ?", (tid,)).fetchone()[0]
+
+
+def test_the_orphan_sweep_deletes_old_uploads_no_track_uses(bucket, home, db_path):
+    conn = db.connect(db_path)
+    used = []
+    for i in range(3):
+        f = write(home / "uploads" / f"u{i}" / "kept.wav")
+        blobs.push(f)
+        card = full_card()
+        card.source.sha256, card.source.local_path, card.source.uri = f"sha{i}", str(f), str(f)
+        db.save_card(conn, card, "friend@example.com")
+        used.append(f)
+    orphan = write(home / "uploads" / "orphan1" / "old copy.wav")
+    waiting = write(home / "uploads" / "open1234" / "a.wav")  # a direct upload not finished yet
+    for f in (orphan, waiting):
+        blobs.push(f)
+    later = time.time() + 3 * 86400
+    assert hosted.orphan_uploads(conn, home / "uploads", {"open1234"}) == 0  # too new yet
+    assert hosted.orphan_uploads(conn, home / "uploads", {"open1234"}, now=later) == 1
+    assert sorted(objects("uploads/")) == sorted(["uploads/open1234/a.wav"] + [f"uploads/u{i}/kept.wav" for i in range(3)])
+    assert not orphan.exists() and not orphan.parent.exists()
+    conn.close()
+
+
+def test_the_orphan_sweep_stops_when_most_uploads_match_no_track(bucket, home, db_path):
+    conn = db.connect(db_path)
+    for i in range(12):  # say the tracks were stored under another TASTR_HOME: nothing matches
+        blobs.push(write(home / "uploads" / f"x{i}" / "a.wav"))
+    assert hosted.orphan_uploads(conn, home / "uploads", now=time.time() + 3 * 86400) == 0
+    assert len(objects("uploads/")) == 12
+    conn.close()

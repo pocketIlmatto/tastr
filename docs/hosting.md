@@ -224,6 +224,12 @@ the server could later run without one:
   the server deletes local copies the bucket holds that are more than an hour old.
 - Deleting a track, or expiring its audio, deletes the bucket's copy; the storage cap and the admin view's
   storage figures count what the bucket holds.
+- An upload whose bytes (SHA-256) match a track already in that person's library isn't analyzed again and
+  doesn't count toward the daily limit: the answer names the existing track with `"already": true` and the new
+  copy is deleted. If that track's audio had expired, the new copy becomes its audio instead, card untouched.
+  `POST /api/tracks/known {"sha256": [...]}` answers which files are known, so the page can skip them before
+  uploading. The six-hourly sweep also deletes uploads in the bucket that no track points at once they are two
+  days old (copies left by re-uploads before this), and stops without deleting if most uploads match no track.
 - Each card's waveform and spectrogram data (about a megabyte) goes to the bucket as `views/<track id>.json`,
   gzipped, and the card in the database keeps only a marker; `/api/tracks/{id}/views` redirects to a signed link.
   Cards saved before keep their data inline until they are re-analyzed or backfilled. If the bucket can't take it, the data

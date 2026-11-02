@@ -281,6 +281,31 @@ Admin tab's deploy line names the commit and links to its GitHub Actions run.
 | Anthropic key and spend limit | Anthropic Console **Settings > API Keys** and **Limits** (set a monthly spend limit for the key's workspace) |
 | Deploy secrets | GitHub **Settings > Secrets and variables > Actions**: `FLY_API_TOKEN`, `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` |
 
+## Coming next: Cloudflare Workers instead of Fly (TAS-84)
+
+The Fly exit plan (option D) moves the web server onto a Cloudflare Python Worker. Nothing live uses it yet:
+Fly serves everything until the move (TAS-51). What exists so far, in `worker/` (setup in `worker/README.md`):
+
+```mermaid
+flowchart LR
+    B[Browser] -->|HTTPS, Access login| CF[Cloudflare edge]
+    CF --> W["Worker tastr<br/>(worker/src/entry.py)"]
+    W -->|/static/*| SA[Workers Static Assets<br/>worker/public/static]
+    W -->|everything else| DO["Durable Object Library<br/>FastAPI app + the library database<br/>in its SQLite storage"]
+    DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
+```
+
+- The Durable Object runs the same FastAPI app as Fly (`create_app(threads=False)`), one request at a time. The
+  database is the object's own SQL storage through `tastr/do_sqlite.py` (`db.use_storage`), with 30 days of
+  point-in-time recovery from Cloudflare instead of Litestream.
+- Settings are the same names as on Fly: `vars` in `worker/wrangler.jsonc` for the plain ones (`TASTR_HOSTED`),
+  `pywrangler secret put` for secrets.
+- Logins: the Worker checks the same Access token, with the signing keys fetched by the Worker itself
+  (`AccessKeys`) since PyJWT's own client can't open sockets there.
+- Not there yet: background work (analysis jobs, the expiry sweep and the watch loop need threads; part 3), the
+  Modal client (part 4) and boto3 for the audio bucket (part 5). Until then the Worker serves the library, cards
+  and admin pages but can't analyze or upload.
+
 ## Common tasks
 
 | To | Do this |

@@ -1,0 +1,9 @@
+# The Cloudflare Worker's Python packages (Pyodide builds, vendored by pywrangler). See worker/README.md.
+[project]
+name = "tastr-worker"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["fastapi", "numpy", "mutagen", "pyjwt[crypto]", "python-multipart"]
+
+[dependency-groups]
+dev = ["workers-py", "workers-runtime-sdk"]

@@ -1,0 +1,15 @@
+// Tastr on a Cloudflare Python Worker (TAS-84). See worker/README.md and docs/hosting-map.md.
+{
+  "name": "tastr",
+  "main": "src/entry.py",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["python_workers"],
+  // The browser files (python worker/build.py puts them here). The Worker answers first, so it decides which paths
+  // are static (only /static/*) and everything else reaches the app.
+  "assets": {"directory": "./public", "binding": "ASSETS", "run_worker_first": true},
+  // The library: one SQLite-backed Durable Object holds the database and runs the app.
+  "durable_objects": {"bindings": [{"name": "LIB", "class_name": "Library"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["Library"]}],
+  // Settings as on Fly (docs/hosting.md); secrets go in with `pywrangler secret put NAME`.
+  "vars": {"TASTR_HOSTED": "1"}
+}

@@ -71,21 +71,27 @@ class ModuleFiles(StaticFiles):
         return response
 
 
-def create_app(db_path: str | Path | None = None, settings: Settings | None = None, verifier=None) -> FastAPI:
+def create_app(db_path: str | Path | None = None, settings: Settings | None = None, verifier=None,
+               threads: bool = True) -> FastAPI:
     """`settings` default to the environment (TASTR_HOSTED etc.); `verifier` maps an Access token to an email
-    (tests pass a stub; hosted mode otherwise checks tokens against the Access team's keys)."""
+    (tests pass a stub; hosted mode otherwise checks tokens against the Access team's keys). `threads` False is
+    the Cloudflare Worker (worker/, TAS-84), which has no threads and runs an app's lifespan on every request: the
+    app then has no lifespan, and the Worker calls `app.state.startup()` once itself."""
     settings = settings or Settings.from_env()
     ctx = AppContext(db_path, settings, verifier)
     hosted = ctx.hosted
 
-    @asynccontextmanager
-    async def lifespan(_app):
-        stop = threading.Event()
+    def startup():
         ctx.stem_jobs.resume()  # stem separations the last run left unfinished (e.g. the machine auto-stopped)
         cut = ctx.analyses.resume()  # analyses it left unfinished read as failed
         if hosted:
             background.log_start(ctx, cut)
         ctx.drum_runs.resume()  # and drum model runs
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        stop = threading.Event()
+        startup()
         if hosted and settings.audio_days > 0:
             threading.Thread(target=background.expire_loop, args=(ctx, stop), name="tastr-expiry", daemon=True).start()
         if hosted and settings.watch_minutes > 0 and ((settings.github_repo and settings.github_workflows)
@@ -95,8 +101,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         stop.set()
 
     app = FastAPI(title="Tastr", docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
-                  openapi_url=None if hosted else "/openapi.json", lifespan=lifespan)
+                  openapi_url=None if hosted else "/openapi.json", lifespan=lifespan if threads else None)
     app.state.watch_once = partial(background.watch_once, ctx)  # for tests
+    app.state.startup = startup
 
     @app.middleware("http")
     async def same_origin_writes(request, call_next):

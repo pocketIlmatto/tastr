@@ -31,6 +31,8 @@ def main(argv: list[str] | None = None) -> int:
     bf = sub.add_parser("bucket-backfill", help="on a hosted server: copy audio, stems and waveform data from before "
                         "the audio bucket was on into it (docs/hosting.md)")
     bf.add_argument("--dry-run", action="store_true", help="only count what would move")
+    sub.add_parser("library-to-bucket", help="on Fly: copy the database to the audio bucket, for the Cloudflare "
+                   "Worker to import when it first starts (TAS-51, docs/hosting-map.md)")
     sub.add_parser("db-size", help="how big the database is, by table, and its largest cards (for the move to D1)")
     sub.add_parser("retag", help="re-read file tags for analyzed tracks without re-analyzing")
     so = sub.add_parser("set-owner", help="give tracks with no owner to EMAIL, to move a library to a hosted server")
@@ -350,6 +352,18 @@ def _bucket_backfill(args) -> int:
     if not args.dry_run and r["files"]:
         print("The local copies go in the next sweep (every 6 hours, once they're an hour old).")
     return 1 if r["failed"] else 0
+
+
+def _library_to_bucket(args) -> int:
+    from . import library_move
+
+    try:
+        size = library_move.to_bucket(args.db)
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"copied the database ({size / 1e6:,.1f} MB) to {library_move.KEY} in the audio bucket")
+    return 0
 
 
 def _db_size(args) -> int:
@@ -743,7 +757,8 @@ def _fmt_row(t: dict) -> str:
 
 # Each subcommand's handler; main() checks that every subcommand has one.
 COMMANDS = {
-    "analyze": _analyze, "list": _list, "show": _show, "query": _query, "db-size": _db_size, "bucket-backfill": _bucket_backfill, "retag": _retag,
+    "analyze": _analyze, "list": _list, "show": _show, "query": _query, "db-size": _db_size, "bucket-backfill": _bucket_backfill,
+    "library-to-bucket": _library_to_bucket, "retag": _retag,
     "set-owner": _set_owner, "pack": _pack, "unpack": _unpack, "lookup": _lookup, "labels": _labels,
     "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
     "key-profiles": _key_profiles, "drum-model": _drum_model, "drum-bench": _drum_bench,

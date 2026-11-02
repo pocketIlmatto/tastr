@@ -15,13 +15,14 @@ tastr/http.py, which here sends them with the Worker's own fetch (`fetch_request
 
 import os
 import time
+from contextlib import closing
 from urllib.parse import urlparse
 
 os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: a cache, nothing kept
 
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
-from tastr import db, http, runner  # noqa: E402
+from tastr import db, http, library_move, runner  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
 
@@ -137,6 +138,7 @@ def load_env(env) -> None:
 
 APP = None
 SETTINGS: Settings | None = None
+IMPORT_CHECKED = False
 KEYS = AccessKeys()
 
 
@@ -155,6 +157,14 @@ class Library(DurableObject):
             APP.state.startup()
 
     async def fetch(self, request):
+        global IMPORT_CHECKED
+        if not IMPORT_CHECKED:  # the library from Fly, once (tastr/library_move.py); here, where run_sync works
+            IMPORT_CHECKED = True
+            try:
+                with closing(db.connect(DB_PATH)) as conn:
+                    library_move.import_from_bucket(conn)
+            except Exception as e:  # noqa: BLE001 - the app still serves; the next start of the object tries again
+                print(f"couldn't import the library: {type(e).__name__}: {e}")
         if SETTINGS.hosted:
             try:
                 await KEYS.refresh(SETTINGS.access_team_domain)

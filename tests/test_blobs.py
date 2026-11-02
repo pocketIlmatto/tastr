@@ -1,6 +1,7 @@
 """The audio bucket (tastr/blobs.py): uploads and stems kept in S3-compatible storage (R2), the disk as a cache.
 
-Runs against moto's in-memory S3, so no network or credentials are needed.
+Runs against moto's S3 server on this machine (tastr/s3.py speaks HTTP to it), so no network or credentials are
+needed.
 """
 
 import os
@@ -19,6 +20,7 @@ from tastr.web.server import create_app
 from test_foundation import full_card
 
 moto = pytest.importorskip("moto")
+moto_server = pytest.importorskip("moto.server")
 
 TEAM, AUD = "friends.cloudflareaccess.com", "aud-tag"
 GOOD = {"cf-access-jwt-assertion": "good"}
@@ -38,17 +40,37 @@ def home(tmp_path, monkeypatch):
     return h
 
 
-@pytest.fixture
-def bucket(home, monkeypatch):
-    for k, v in {"TASTR_AUDIO_BUCKET": BUCKET, "TASTR_AUDIO_REGION": "us-east-1",
+@pytest.fixture(scope="session")
+def s3_server():
+    server = moto_server.ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    yield f"http://{host}:{port}"
+    server.stop()
+
+
+def use_bucket(monkeypatch, url):
+    """Point blobs at a fresh, empty bucket on the moto server."""
+    import urllib.request
+
+    for k, v in {"TASTR_AUDIO_BUCKET": BUCKET, "TASTR_AUDIO_REGION": "us-east-1", "TASTR_AUDIO_ENDPOINT": url,
                  "TASTR_AUDIO_ACCESS_KEY_ID": "test", "TASTR_AUDIO_SECRET_ACCESS_KEY": "test"}.items():
         monkeypatch.setenv(k, v)
-    monkeypatch.delenv("TASTR_AUDIO_ENDPOINT", raising=False)
-    with moto.mock_aws():
-        blobs.reset()
-        blobs.client().create_bucket(Bucket=BUCKET)
-        yield
+    urllib.request.urlopen(urllib.request.Request(url + "/moto-api/reset", method="POST")).close()
     blobs.reset()
+    blobs.client().create_bucket()
+
+
+@pytest.fixture
+def bucket(home, monkeypatch, s3_server):
+    use_bucket(monkeypatch, s3_server)
+    yield
+    blobs.reset()
+
+
+def headers(k):
+    with blobs.client().get(k) as resp:
+        return resp.headers
 
 
 def objects(prefix=""):
@@ -83,8 +105,7 @@ def test_keys_follow_the_path_under_tastr_home(home):
 def test_push_ensure_remove(bucket, home):
     f = write(home / "uploads" / "ab" / "song.mp3", b"ID3 audio")
     assert blobs.push(f) and blobs.in_bucket(f)
-    head = blobs.client().head_object(Bucket=BUCKET, Key="uploads/ab/song.mp3")
-    assert head["ContentType"] == "audio/mpeg"  # so browsers can play it from a signed link
+    assert headers("uploads/ab/song.mp3")["content-type"] == "audio/mpeg"  # so browsers can play it from a signed link
     f.unlink()
     assert blobs.exists(f) and not f.exists()
     assert blobs.ensure(f) == f and f.read_bytes() == b"ID3 audio"  # brought back down
@@ -174,7 +195,7 @@ def test_modal_gets_a_signed_link_instead_of_the_bytes(bucket, home, monkeypatch
     blobs.push(f)
     f.unlink()
     remote.analyze(f, {"drum_model": True})
-    assert calls[-1][1][0].startswith("https://") and BUCKET in calls[-1][1][0]
+    assert calls[-1][1][0].startswith(blobs.endpoint()) and BUCKET in calls[-1][1][0]
 
 
 def test_modal_writes_stems_straight_to_the_bucket(bucket, home, monkeypatch):
@@ -186,7 +207,7 @@ def test_modal_writes_stems_straight_to_the_bucket(bucket, home, monkeypatch):
     def fake_stems(path, put_urls=None):
         assert set(put_urls) == set(stems.STEM_NAMES)
         for name in put_urls:  # what Modal's run_stems does with each link
-            blobs.client().put_object(Bucket=BUCKET, Key=blobs.key(stems.stem_path(folder, name)), Body=b"fLaC")
+            blobs.client().put(blobs.key(stems.stem_path(folder, name)), b"fLaC", "audio/flac")
         return {n: 4 for n in put_urls}
 
     monkeypatch.setattr(remote, "stems", fake_stems)
@@ -216,8 +237,8 @@ def test_views_data_goes_to_the_bucket_and_the_card_keeps_a_marker(bucket, home,
     tid = db.save_card(conn, card)
     assert card.extras["views"] == VIEWS  # the caller's card is left alone
     assert db.load_card(conn, tid).extras["views"] == blobs.IN_BUCKET
-    head = blobs.client().head_object(Bucket=BUCKET, Key=f"views/{tid}.json")
-    assert head["ContentEncoding"] == "gzip" and head["ContentType"] == "application/json"
+    head = headers(f"views/{tid}.json")
+    assert head["content-encoding"] == "gzip" and head["content-type"] == "application/json"
     assert blobs.get_views(tid) == VIEWS
     db.retag_track(conn, tid)  # rewrites the card: the marker stays
     assert db.load_card(conn, tid).extras["views"] == blobs.IN_BUCKET
@@ -286,7 +307,6 @@ def test_db_size_reports_cards_and_inline_views(db_path, capsys):
 def test_files_view_reads_sizes_zips_and_downloads_from_the_bucket(bucket, home, db_path):
     import io
     import zipfile
-    from urllib.parse import unquote
 
     audio = write(home / "uploads" / "ab" / "song.wav", b"RIFF" + b"x" * 96)
     card = full_card()
@@ -318,7 +338,7 @@ def test_files_view_reads_sizes_zips_and_downloads_from_the_bucket(bucket, home,
     assert objects("stems/") == {}
 
 
-def test_backfill_moves_what_was_there_before_the_bucket(home, db_path, monkeypatch, capsys):
+def test_backfill_moves_what_was_there_before_the_bucket(home, db_path, monkeypatch, capsys, s3_server):
     from tastr import cli
 
     # Before the bucket: an upload, its stems and a card with its waveform data inline
@@ -333,26 +353,22 @@ def test_backfill_moves_what_was_there_before_the_bucket(home, db_path, monkeypa
     conn.close()
     assert db.size_report(db_path)["inline_views"] == 1
 
-    for k, v in {"TASTR_AUDIO_BUCKET": BUCKET, "TASTR_AUDIO_REGION": "us-east-1",
-                 "TASTR_AUDIO_ACCESS_KEY_ID": "test", "TASTR_AUDIO_SECRET_ACCESS_KEY": "test"}.items():
-        monkeypatch.setenv(k, v)
-    with moto.mock_aws():
-        blobs.reset()
-        blobs.client().create_bucket(Bucket=BUCKET)
-        assert cli.main(["--db", str(db_path), "bucket-backfill", "--dry-run"]) == 0
-        assert "would move 2 file(s)" in capsys.readouterr().out and objects() == {}
-        assert db.size_report(db_path)["inline_views"] == 1  # a dry run changes nothing
+    use_bucket(monkeypatch, s3_server)
+    # The bucket is turned on only now, after the files and the card were made.
+    assert cli.main(["--db", str(db_path), "bucket-backfill", "--dry-run"]) == 0
+    assert "would move 2 file(s)" in capsys.readouterr().out and objects() == {}
+    assert db.size_report(db_path)["inline_views"] == 1  # a dry run changes nothing
 
-        assert cli.main(["--db", str(db_path), "bucket-backfill"]) == 0
-        assert set(objects()) == {"uploads/ab/old.wav", "stems/abcd/drums.flac", f"views/{tid}.json"}
-        assert db.size_report(db_path)["inline_views"] == 0
-        conn = db.connect(db_path)
-        assert db.load_card(conn, tid).extras["views"] == blobs.IN_BUCKET and blobs.get_views(tid) == VIEWS
-        conn.close()
-        capsys.readouterr()
-        assert cli.main(["--db", str(db_path), "bucket-backfill"]) == 0  # again: nothing left to move
-        assert "moved 0 file(s)" in capsys.readouterr().out
-        assert audio.exists() and stem.exists()  # the sweep deletes them later, once they're an hour old
+    assert cli.main(["--db", str(db_path), "bucket-backfill"]) == 0
+    assert set(objects()) == {"uploads/ab/old.wav", "stems/abcd/drums.flac", f"views/{tid}.json"}
+    assert db.size_report(db_path)["inline_views"] == 0
+    conn = db.connect(db_path)
+    assert db.load_card(conn, tid).extras["views"] == blobs.IN_BUCKET and blobs.get_views(tid) == VIEWS
+    conn.close()
+    capsys.readouterr()
+    assert cli.main(["--db", str(db_path), "bucket-backfill"]) == 0  # again: nothing left to move
+    assert "moved 0 file(s)" in capsys.readouterr().out
+    assert audio.exists() and stem.exists()  # the sweep deletes them later, once they're an hour old
     blobs.reset()
 
 
@@ -379,9 +395,11 @@ def direct_client(db_path, monkeypatch, **settings):
 
 
 def browser_put(upload, data):
-    """What the page's PUT to the signed link leaves in the bucket (moto doesn't serve the signed URL itself)."""
-    key = unquote(upload["url"].split(f"{BUCKET}/", 1)[1].split("?", 1)[0])
-    blobs.client().put_object(Bucket=BUCKET, Key=key, Body=data, ContentType=upload["content_type"])
+    """What the page does: PUT the file to its signed link."""
+    import urllib.request
+
+    req = urllib.request.Request(upload["url"], data=data, method="PUT", headers={"Content-Type": upload["content_type"]})
+    urllib.request.urlopen(req).close()
 
 
 def test_direct_upload_goes_to_the_bucket_then_analyzes(bucket, home, db_path, monkeypatch):

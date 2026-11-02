@@ -32,15 +32,15 @@ stems = ["demucs>=4.0.1", "tastr[engine]"]
 # `stems`; the weights (CC BY-NC-SA 4.0, about 5 MB) download on first use.
 drums = ["torch>=2.1", "tastr[engine]"]
 # Hosted mode: checks Cloudflare Access logins (docs/hosting.md), and keeps uploads and stems in an
-# S3-compatible bucket such as R2 when TASTR_AUDIO_BUCKET is set (tastr/blobs.py).
-hosted = ["pyjwt[crypto]>=2.8", "boto3>=1.34", "tastr[claude]"]
+# S3-compatible bucket such as R2 when TASTR_AUDIO_BUCKET is set (tastr/blobs.py, through tastr/s3.py).
+hosted = ["pyjwt[crypto]>=2.8", "tastr[claude]"]
 # "Ask Claude to change it" in Try this in > Strudel (tastr/web/claude.py), with ANTHROPIC_API_KEY set.
 claude = ["anthropic>=2.3"]
 # Benchmarks and stem separation on Modal (docs/cloud.md).
 cloud = ["modal>=1.0"]
 # ruff is pinned so a new release cannot turn CI red on its own; bump it on purpose.
 dev = ["tastr[engine]", "pytest>=8", "pytest-xdist>=3.5", "httpx>=0.27", "pyjwt[crypto]>=2.8", "ruff==0.17.3",
-       "boto3>=1.34", "moto[s3]>=5", "tastr[claude]"]
+       "boto3>=1.34", "moto[s3,server]>=5", "tastr[claude]"]  # boto3: tests/test_s3.py checks our signatures
 
 [project.scripts]
 tastr = "tastr.cli:main"

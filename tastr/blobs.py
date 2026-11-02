@@ -16,7 +16,7 @@ disk loses no audio and the server no longer needs a volume for it.
 
 Settings (docs/hosting.md): TASTR_AUDIO_BUCKET, TASTR_AUDIO_ENDPOINT (for R2,
 https://<account id>.r2.cloudflarestorage.com) and TASTR_AUDIO_ACCESS_KEY_ID / TASTR_AUDIO_SECRET_ACCESS_KEY,
-a token that can read and write that bucket only. Needs boto3 (`pip install 'tastr[hosted]'`).
+a token that can read and write that bucket only. Requests go through tastr/s3.py (no boto3).
 """
 
 from __future__ import annotations
@@ -30,6 +30,8 @@ import threading
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from . import s3
 
 log = logging.getLogger(__name__)
 
@@ -85,20 +87,14 @@ def key(path: str | Path) -> str | None:
     return rel.as_posix() if rel.parts and rel.parts[0] in FOLDERS and len(rel.parts) > 1 else None
 
 
-def client():
-    """The bucket's S3 client (boto3, made once)."""
+def client() -> s3.Client:
+    """The bucket's S3 client (tastr/s3.py, made once)."""
     global _client
     with _client_lock:
         if _client is None:
-            import boto3
-            from botocore.config import Config
-
-            _client = boto3.client(
-                "s3", endpoint_url=endpoint() or None, region_name=os.environ.get("TASTR_AUDIO_REGION", "auto"),
-                aws_access_key_id=os.environ.get("TASTR_AUDIO_ACCESS_KEY_ID") or None,
-                aws_secret_access_key=os.environ.get("TASTR_AUDIO_SECRET_ACCESS_KEY") or None,
-                config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
-                              retries={"max_attempts": 4, "mode": "standard"}))
+            _client = s3.Client(endpoint() or None, os.environ.get("TASTR_AUDIO_REGION", "auto"),
+                                os.environ.get("TASTR_AUDIO_ACCESS_KEY_ID", ""),
+                                os.environ.get("TASTR_AUDIO_SECRET_ACCESS_KEY", ""), bucket())
         return _client
 
 
@@ -128,7 +124,7 @@ def push(path: str | Path) -> bool:
     k = key(path)
     if not enabled() or k is None:
         return False
-    client().upload_file(str(path), bucket(), k, ExtraArgs={"ContentType": content_type(path)})
+    client().put(k, Path(path), content_type(path))
     _forget_listings()
     return True
 
@@ -161,13 +157,12 @@ def arrived(path: str | Path) -> int | None:
     k = key(path)
     if not enabled() or k is None:
         return None
-    try:
-        head = client().head_object(Bucket=bucket(), Key=k)
-    except Exception as e:  # noqa: BLE001 - botocore's ClientError 404 (or 403 without list rights): not there
-        log.info("no %s in the audio bucket: %s", k, e)
+    got = client().head(k)
+    if got is None:
+        log.info("no %s in the audio bucket", k)
         return None
     _forget_listings()
-    return int(head["ContentLength"])
+    return got
 
 
 def size(path: str | Path | None) -> int:
@@ -195,7 +190,7 @@ def open_read(path: str | Path):
     p = Path(path)
     if p.is_file():
         return open(p, "rb")
-    return client().get_object(Bucket=bucket(), Key=key(p))["Body"]
+    return client().get(key(p))
 
 
 def ensure(path: str | Path | None) -> Path | None:
@@ -209,7 +204,7 @@ def ensure(path: str | Path | None) -> Path | None:
         return None
     p.parent.mkdir(parents=True, exist_ok=True)
     part = p.with_name(p.name + ".part")
-    client().download_file(bucket(), key(p), str(part))
+    client().download(key(p), part)
     part.replace(p)
     return p
 
@@ -221,7 +216,7 @@ def remove(path: str | Path | None) -> None:
     Path(path).unlink(missing_ok=True)
     k = key(path)
     if enabled() and k is not None:
-        client().delete_object(Bucket=bucket(), Key=k)
+        client().delete(k)
         _forget_listings()
 
 
@@ -231,9 +226,9 @@ def remove_tree(folder: str | Path) -> None:
     if not enabled() or k is None:
         return
     prefix = k[:-1]
-    names = [{"Key": name} for name in listing(prefix, fresh=True)]
-    for i in range(0, len(names), 1000):
-        client().delete_objects(Bucket=bucket(), Delete={"Objects": names[i:i + 1000], "Quiet": True})
+    names = list(listing(prefix, fresh=True))
+    if names:
+        client().delete_many(names)
     _forget_listings()
 
 
@@ -243,8 +238,7 @@ def signed_url(path: str | Path, seconds: int = LINK_SECONDS, disposition: str |
     k = key(path)
     if not enabled() or k is None:
         return None
-    params = {"Bucket": bucket(), "Key": k} | ({"ResponseContentDisposition": disposition} if disposition else {})
-    return client().generate_presigned_url("get_object", Params=params, ExpiresIn=seconds)
+    return client().presign("GET", k, seconds, {"response-content-disposition": disposition} if disposition else None)
 
 
 def put_url(path: str | Path, seconds: int = LINK_SECONDS) -> str | None:
@@ -252,9 +246,7 @@ def put_url(path: str | Path, seconds: int = LINK_SECONDS) -> str | None:
     k = key(path)
     if not enabled() or k is None:
         return None
-    return client().generate_presigned_url("put_object", Params={"Bucket": bucket(), "Key": k,
-                                                                 "ContentType": content_type(path)},
-                                           ExpiresIn=seconds)
+    return client().presign("PUT", k, seconds)
 
 
 # ---- a card's waveform and spectrogram data ---------------------------------------------------------------
@@ -271,27 +263,25 @@ def put_views(track_id: int, views) -> bool:
     if not enabled():
         return False
     body = gzip.compress(json.dumps(views, separators=(",", ":")).encode(), mtime=0)
-    client().put_object(Bucket=bucket(), Key=views_key(track_id), Body=body, ContentType="application/json",
-                        ContentEncoding="gzip")
+    client().put(views_key(track_id), body, "application/json", content_encoding="gzip")
     return True
 
 
 def get_views(track_id: int):
     """A card's views data from the bucket (the CLI and tests; the page fetches it from `views_url()`)."""
-    body = client().get_object(Bucket=bucket(), Key=views_key(track_id))["Body"].read()
+    body = client().get(views_key(track_id)).read()
     return json.loads(gzip.decompress(body) if body[:2] == b"\x1f\x8b" else body)
 
 
 def views_url(track_id: int, seconds: int = LINK_SECONDS) -> str | None:
     if not enabled():
         return None
-    return client().generate_presigned_url("get_object", Params={"Bucket": bucket(), "Key": views_key(track_id)},
-                                           ExpiresIn=seconds)
+    return client().presign("GET", views_key(track_id), seconds)
 
 
 def remove_views(track_id: int) -> None:
     if enabled():
-        client().delete_object(Bucket=bucket(), Key=views_key(track_id))
+        client().delete(views_key(track_id))
 
 
 # ---- many files -------------------------------------------------------------------------------------------
@@ -306,9 +296,8 @@ def listing(prefix: str, fresh: bool = False) -> dict[str, tuple[int, float]]:
         if hit and not fresh and now - hit[0] < LISTING_SECONDS:
             return hit[1]
     out: dict[str, tuple[int, float]] = {}
-    for page in client().get_paginator("list_objects_v2").paginate(Bucket=bucket(), Prefix=prefix):
-        for obj in page.get("Contents", []):
-            out[obj["Key"]] = (obj["Size"], obj["LastModified"].timestamp())
+    for k, size, modified in client().list(prefix):
+        out[k] = (size, modified)
     with _listing_lock:
         _listing[prefix] = (now, out)
     return out

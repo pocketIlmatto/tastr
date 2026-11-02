@@ -118,4 +118,44 @@ def test_every_built_in_template_plays():
     assert at(loop, "s", "orig") and at(loop, "s", "bd")
     assert {e[2].get("bank") for e in at(drums, "s", "bd")} == {"RolandTR909"}
     assert at(half, "speed", 0.5)
-    assert at(mash, "s", "b") and at(mash, "s", "orig")
+    assert at(mash, "s", "a_mix") and at(mash, "s", "b_mix")
+
+
+def test_mash_up_toggles_set_each_parts_gain_per_section():
+    """TAS-87: with toggles, a part plays at gain 0 where it's off and at its level where it's on."""
+    from test_strudel import AUDIO, B_AUDIO, BOTH, MA, MB, run_tpl
+
+    code = run_tpl("(() => { const st = strudelMashApply(a, b, strudelMashState(a, b, null, both), 'trade', both);"
+                   " const f = strudelFillins(a, { audioUrl: url, canStems: true, mash: st, b: { card: b, audioUrl: burl, canStems: true } });"
+                   " return strudelFill(STRUDEL_TEMPLATES.find((t) => t.id === 'mash').text, f).code; })()",
+                   a=MA, b=MB, url=AUDIO, burl=B_AUDIO, both=BOTH)
+    verse, chorus = play((code, 8, 9), (code, 24, 25))  # bar 9: Verse B; bar 25: Chorus C
+    gain = lambda ev, s: {e[2].get("gain") for e in at(ev, "s", s)}  # noqa: E731
+    assert gain(verse, "a_vocals") == {1} and gain(verse, "b_vocals") == {0}
+    assert gain(chorus, "a_vocals") == {0} and gain(chorus, "b_vocals") == {1}
+    assert gain(chorus, "a_drums") == {1} and gain(chorus, "b_drums") == {0}
+    plain = run_tpl("(() => { const st = strudelMashApply(a, b, strudelMashState(a, b, null, both), 'trade', both); st.ctl = 'plain';"
+                    " return strudelFill(STRUDEL_TEMPLATES.find((t) => t.id === 'mash').text,"
+                    " strudelFillins(a, { audioUrl: url, canStems: true, mash: st, b: { card: b, audioUrl: burl, canStems: true } })).code; })()",
+                    a=MA, b=MB, url=AUDIO, burl=B_AUDIO, both=BOTH)
+    (ch,) = play((plain, 24, 25))
+    assert at(ch, "s", "b_vocals") and not at(ch, "s", "a_vocals")
+
+
+@pytest.mark.parametrize("a_bpm, b_bpm, per", [(82, 162, 0.5), (120, 120, 1), (162, 82, 2)])
+def test_mash_up_b_bars_play_back_to_back(a_bpm, b_bpm, per):
+    """B in double or half time: its bars follow each other with no gaps and none skipped."""
+    from test_strudel import AUDIO, A_SECS, B_AUDIO, B_SECS, BOTH, mash_card, run_tpl
+
+    a, b = mash_card(7, a_bpm, A_SECS), mash_card(8, b_bpm, B_SECS)
+    out = run_tpl("(() => { const st = strudelMashState(a, b, null, {}); st.ctl = 'plain'; st.rows.forEach((r) => (r.on = ['b.mix']));"
+                  " const m = strudelMashCode(a, b, st, { aUrl: url, bUrl: burl, can: {} }); return [m.audio + '\\n' + m.arrange, b.duration]; })()",
+                  a=a, b=b, url=AUDIO, burl=B_AUDIO, both=BOTH)
+    code, dur = out
+    (ev,) = play((code, 8, 12))  # A's bars 9-12, the first verse; B from its bridge (bars 13-20)
+    ev = at(ev, "s", "b_mix")
+    assert [e[1] - e[0] for e in ev] == [per] * len(ev) and len(ev) == 4 / per
+    assert all(ev[i][1] == ev[i + 1][0] for i in range(len(ev) - 1))  # back to back
+    bar = (240 / b_bpm) / dur
+    starts = [round((e[2]["begin"] - 0.25 / dur) / bar) for e in ev]
+    assert starts == list(range(12, 12 + len(ev)))  # B's bars 13, 14, … in order

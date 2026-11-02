@@ -5,7 +5,7 @@ import { sectionBus, switchTo } from "./card.js";
 import { allEdits, editedKeys } from "./groove-edits.js";
 import { laneName } from "./groove-lanes.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
-import { askPanel, claudeCode, findTemplate, loadMine, mashCard, mashRow, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
+import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
 
 // Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.
 // Ableton Live is the only glossary so far; Strudel shows generated code instead. Other DAWs show in the picker but can't be selected.
@@ -95,10 +95,15 @@ export function strudelView(c) {
     const audioUrl = c.has_audio && wantsAudio ? strudelAudioUrl(c, paint) : null, st = stemsOf(c);
     const n = editedKeys(allEdits(c)).length;
     const b = strudelUsesMash(text) ? mashCard(c, paint) : null;
-    return { wantsAudio, audioUrl, st, useStems: !!audioUrl && strudelMix === "stems" && st.state === "ready",
-      stems: audioUrl && strudelMix === "stems" && st.state === "ready" ? STRUDEL_STEMS.filter((x) => strudelStems.has(x)) : null,
+    // A template with {mash.*} picks stems per track in its own panel; the general Full mix | Stems row is for the rest.
+    const parts = strudelUsesMashParts(text), picked = STRUDEL_STEMS.filter((x) => strudelStems.has(x));
+    const useStems = !parts && !!audioUrl && strudelMix === "stems" && st.state === "ready";
+    const bAudio = b && b.has_audio ? strudelAudioUrl(b, paint) : null;
+    return { wantsAudio, audioUrl, st, useStems, stems: useStems ? picked : null, canStems: st.state === "ready",
       edits: n && strudelMine ? allEdits(c) : null, n, startBar: +startSel.value || 1,
-      b: b ? { card: b, audioUrl: b.has_audio ? strudelAudioUrl(b, paint) : null } : null };
+      b: b ? { card: b, audioUrl: bAudio, canStems: mashCan(c, b).b,
+        stems: !parts && bAudio && strudelMix === "stems" && mashCan(c, b).b ? picked : null } : null,
+      mash: b && parts ? mashStateFor(c, b) : null };
   };
   const fillsFor = (text) => strudelFillins(c, ctxFor(text, false));
   const editor = (start) => {
@@ -133,9 +138,12 @@ export function strudelView(c) {
     tplBox.replaceChildren(templatesBar((id) => { tplState.pick = id; edBox.replaceChildren(); paint(); }, editor));
     audioOpt.hidden = !full || !c.has_audio;
     startRow.hidden = startSel.options.length < 2 || !(full || tpl.text.includes("{song}"));
-    paintStems(c.has_audio && ctx.wantsAudio, ctx.st);
+    paintStems(c.has_audio && ctx.wantsAudio && !strudelUsesMashParts(tpl.text), ctx.st);
     mashBox.hidden = !strudelUsesMash(tpl.text);
-    if (!mashBox.hidden) mashBox.replaceChildren(...mashRow(c, ctx.b && ctx.b.card, (id) => { tplState.mashB = id; paint(); }));
+    if (!mashBox.hidden) {
+      mashBox.replaceChildren(...mashRow(c, ctx.b && ctx.b.card, (id) => { tplState.mashB = id; paint(); }));
+      if (ctx.b && strudelUsesMashParts(tpl.text)) mashBox.append(mashPanel(c, ctx.b.card, paint).el);
+    }
     ask.paint();
     note.textContent = "Opens strudel.cc in a new tab with this code loaded. Drum sounds load from Strudel's sample library the first time you play." +
       (!audio ? "" : serverCfg.hosted ? ` The original ${ctx.useStems ? "stems stream" : "audio streams"} from this Tastr server through a private link that works for a week.`

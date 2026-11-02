@@ -59,8 +59,14 @@ Everything a track card shows and what you can do with it. The [README](../READM
 - **Strudel templates:** pick a template above the code: Full sketch (the sketch
   above), Loop the drop (four bars of the drop with a filter slider), Drums only
   (every section's drums with one line to switch the kit), Half-time remix, or
-  Mash-up (a second track's drop under this one, sped to line the bars up, with
-  the tracks that mix well in key listed first). Make your own: a template is
+  Mash-up (a second track sped to line the bars up, with the tracks that mix well
+  in key listed first). The Mash-up's "Parts by section" grid picks which parts
+  play in each of this track's sections: either track's full mix or its stems
+  (vocals, bass, other, drums), and which of the second track's sections they come
+  from. Quick picks fill it ("A's vocals over B's beat", "Trade vocals: A in
+  verses, B in choruses"), and the code gets an on/off toggle per part in every
+  section plus a level slider per part, to flip while it plays (or pick Plain
+  code). The grid is kept in your browser for each pair of tracks. Make your own: a template is
   Strudel code with fill-ins like `{cpm}`, `{key}`, `{chords}`, `{drums.drop}` or
   `{loop}`, filled from the open track. The editor lists every fill-in with its
   value and previews the result live; templates are saved with your account and

@@ -481,26 +481,32 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
             [(track_id, name, i, t, v)
              for name, ser in card.series.items() for i, (t, v) in enumerate(zip(ser.times, ser.values))],
         )
-        conn.execute("INSERT INTO cards VALUES (?, ?, ?)", (track_id, card.schema_version, _card_json(card, track_id)))
-        return track_id
+        text = card.to_json()
+        conn.execute("INSERT INTO cards VALUES (?, ?, ?)", (track_id, card.schema_version, text))
+        return track_id, text
 
-    return atomic(conn, write)
+    track_id, text = atomic(conn, write)
+    # After the transaction, not in it: on the Worker a transaction is transactionSync, a synchronous call from
+    # JavaScript, and the upload (a fetch waited on with run_sync) can't wait inside one.
+    _move_views(conn, card, track_id, text)
+    return track_id
 
 
-def _card_json(card: TrackCard, track_id: int) -> str:
-    """The card as stored. With the audio bucket on, its waveform and spectrogram data (about a megabyte) goes to
-    the bucket and the card keeps only blobs.IN_BUCKET; if that upload fails the data stays in the card."""
+def _move_views(conn, card: TrackCard, track_id: int, text: str) -> None:
+    """With the audio bucket on, the card's waveform and spectrogram data (about a megabyte) goes to the bucket
+    and the stored card keeps only blobs.IN_BUCKET; if that upload fails the data stays in the card."""
     views = card.extras.get("views")
     if views is None or views == blobs.IN_BUCKET or not blobs.enabled():
-        return card.to_json()
+        return
     try:
         blobs.put_views(track_id, views)
     except Exception as e:  # noqa: BLE001 - kept in the card instead; nothing is lost
         log.warning("couldn't store track %s's views in the bucket, keeping them in the card: %s", track_id, e)
-        return card.to_json()
+        return
     d = card.to_dict()  # a deep copy: the caller's card keeps its data
     d["extras"]["views"] = blobs.IN_BUCKET
-    return json.dumps(d)
+    with conn:  # only if the card is as written: a re-analysis meanwhile already wrote its own
+        conn.execute("UPDATE cards SET json = ? WHERE track_id = ? AND json = ?", (json.dumps(d), track_id, text))
 
 
 D1_ROW_LIMIT = 2_000_000  # the largest row Cloudflare D1 takes, in bytes

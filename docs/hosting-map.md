@@ -130,6 +130,9 @@ sequenceDiagram
     B->>W: POST /api/uploads/{id}/check
     W->>A: is it there, and how big?
     W->>W: read it back into the cache, check its length from the header
+    opt on the Worker (its files are memory)
+      W->>W: drop the local copy; the analysis reads it back on its turn
+    end
     B->>W: POST /api/analyze/uploaded, on its turn: the id (+ its card)
   else the upload goes through the server
     B->>C: upload a track (+ its card)
@@ -259,7 +262,7 @@ Set with `fly secrets set` (each change restarts the app); `fly secrets list` sh
 | `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | The server's Modal token |
 | `LITESTREAM_BUCKET`, `LITESTREAM_ENDPOINT`, `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY` | The R2 backup |
 | `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT`, `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` (optional) | Keeping uploads and stems in R2 bucket `tastr-audio` ([deploy.md](deploy.md#2b-r2-bucket-for-audio-optional)). A token for that bucket only, not the backup's. |
-| `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log while the repository is private: a fine-grained token with read-only Actions access to the repository |
+| `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log: a fine-grained token with read-only Actions access to the repository. Needed while the repository is private, and on the Worker even when public: GitHub's limit without a token is per IP address, which Cloudflare shares, so most checks get 403. |
 | `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#9b-catalog-lookups-optional)) |
 | `ANTHROPIC_API_KEY` (optional) | "Ask Claude to change it" in Try this in › Strudel ([deploy.md](deploy.md#9c-ask-claude-in-strudel-optional)). Tastr's own Anthropic key; each ask's tokens are counted per person and priced on the Admin tab. Without it the panel says Ask is off. |
 
@@ -335,7 +338,10 @@ flowchart LR
 - The audio bucket works the same as on Fly: `tastr/s3.py` signs each request itself (no boto3), and
   `tastr/http.py` sends it with the Worker's fetch. Uploads, stems, signed links and zips (streamed from the
   bucket) all go through it. The Worker's own files are in memory and gone after a restart, so on the Worker
-  the audio bucket is required, not optional.
+  the audio bucket is required, not optional. Its memory (128 MB for the Durable Object) is why it keeps no
+  local copies (`blobs.keep_copies`): a checked upload's copy is dropped until its analysis reads it back.
+  A card's waveform data goes to the bucket after the card's transaction, never inside it (`transactionSync` is
+  a synchronous call, so a fetch can't wait in it); the six-hourly sweep moves any that a card had to keep.
 - CI builds the Worker whenever the app or `worker/` changes (`worker/check.sh`, the last steps of
   `.github/workflows/test.yml`): it bundles it with its Pyodide packages, fails above 10 MiB gzipped (the Workers
   Paid limit; it is about 7.7 MiB), and runs it under `pywrangler dev` to check a few pages answer.

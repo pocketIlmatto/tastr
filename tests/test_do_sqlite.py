@@ -45,12 +45,13 @@ def test_cards_save_load_and_delete_through_the_adapter(on_do):
 
 def test_a_failed_save_leaves_nothing_behind(on_do, monkeypatch):
     with closing(db.connect(on_do)) as c:
-        def broken(card, track_id):
+        def broken():
             raise RuntimeError("disk full")
 
-        monkeypatch.setattr(db, "_card_json", broken)
+        card = full_card()
+        monkeypatch.setattr(card, "to_json", broken)  # the last step of the save's transaction
         with pytest.raises(RuntimeError):
-            db.save_card(c, full_card())
+            db.save_card(c, card)
         assert c.execute("SELECT count(*) FROM tracks").fetchone()[0] == 0  # atomic: rolled back
 
 

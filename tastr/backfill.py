@@ -44,29 +44,42 @@ def backfill(db_path=None, dry_run: bool = False, log_each=None) -> dict[str, in
             if log_each:
                 log_each(f"{'would copy' if dry_run else 'copied'} {k} ({size / 1e6:.1f} MB)")
     with closing(db.connect(db_path)) as conn:
-        ids = [r[0] for r in conn.execute(
-            "SELECT track_id FROM cards WHERE json_type(json, '$.extras.views') = 'object' "
-            "AND json_extract(json, '$.extras.views.in_bucket') IS NULL ORDER BY track_id")]
-        for tid in ids:
-            text = conn.execute("SELECT json FROM cards WHERE track_id = ?", (tid,)).fetchone()[0]
-            card = json.loads(text)
-            views = card["extras"]["views"]
-            size = len(json.dumps(views, separators=(",", ":")))
-            try:
-                if not dry_run:
-                    blobs.put_views(tid, views)
-                    card["extras"]["views"] = blobs.IN_BUCKET
-                    with conn:  # only if the card is as read: a re-analysis meanwhile already wrote its own
-                        conn.execute("UPDATE cards SET json = ? WHERE track_id = ? AND json = ?",
-                                     (json.dumps(card), tid, text))
-            except Exception as e:  # noqa: BLE001
-                out["failed"] += 1
-                log.warning("couldn't move track %s's waveform data to the bucket: %s", tid, e)
-                continue
-            out["views"] += 1
-            out["view_bytes"] += size
-            if log_each:
-                log_each(f"{'would move' if dry_run else 'moved'} track {tid}'s waveform data ({size / 1e6:.1f} MB)")
+        moved = move_views(conn, dry_run, log_each)
+        for k in ("views", "view_bytes", "failed"):
+            out[k] += moved[k]
         if not dry_run and out["views"]:
             conn.execute("VACUUM")  # give the freed pages back, so the database file (and Litestream) shrinks
+    return out
+
+
+def move_views(conn, dry_run: bool = False, log_each=None) -> dict[str, int]:
+    """Move each card's inline waveform data to the bucket, leaving blobs.IN_BUCKET in the card. The CLI backfill
+    runs it, and so does the hosted server's sweep (tastr/web/background.py), for cards stored while the upload
+    to the bucket failed. Returns {"views", "view_bytes", "failed"}."""
+    out = {"views": 0, "view_bytes": 0, "failed": 0}
+    if not blobs.enabled():
+        return out
+    ids = [r[0] for r in conn.execute(
+        "SELECT track_id FROM cards WHERE json_type(json, '$.extras.views') = 'object' "
+        "AND json_extract(json, '$.extras.views.in_bucket') IS NULL ORDER BY track_id")]
+    for tid in ids:
+        text = conn.execute("SELECT json FROM cards WHERE track_id = ?", (tid,)).fetchone()[0]
+        card = json.loads(text)
+        views = card["extras"]["views"]
+        size = len(json.dumps(views, separators=(",", ":")))
+        try:
+            if not dry_run:
+                blobs.put_views(tid, views)
+                card["extras"]["views"] = blobs.IN_BUCKET
+                with conn:  # only if the card is as read: a re-analysis meanwhile already wrote its own
+                    conn.execute("UPDATE cards SET json = ? WHERE track_id = ? AND json = ?",
+                                 (json.dumps(card), tid, text))
+        except Exception as e:  # noqa: BLE001
+            out["failed"] += 1
+            log.warning("couldn't move track %s's waveform data to the bucket: %s", tid, e)
+            continue
+        out["views"] += 1
+        out["view_bytes"] += size
+        if log_each:
+            log_each(f"{'would move' if dry_run else 'moved'} track {tid}'s waveform data ({size / 1e6:.1f} MB)")
     return out

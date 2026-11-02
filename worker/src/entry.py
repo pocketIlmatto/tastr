@@ -14,7 +14,9 @@ Outgoing requests (Modal over HTTPS, tastr/cloud/remote.py; the audio bucket, ta
 tastr/http.py, which here sends them with the Worker's own fetch (`fetch_request`).
 """
 
+import errno
 import os
+import sys
 import time
 from contextlib import closing
 from urllib.parse import urlparse
@@ -29,7 +31,7 @@ if ENGINE_WASM_ID:
 
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
-from tastr import db, http, library_move, runner  # noqa: E402
+from tastr import blobs, db, http, library_move, runner  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
 
@@ -81,7 +83,23 @@ def sleep(seconds: float) -> None:
     run_sync(asyncio.sleep(seconds))
 
 
+def quiet_unraisable(hook=sys.unraisablehook):
+    """sys.unraisablehook without one known harmless line: a ZipFile from the runtime's start-up snapshot whose
+    file is gone when it is garbage collected (EBADF in ZipFile.__del__). It went to the Worker's logs as an
+    error, hundreds a day, and buried the real ones (T31)."""
+
+    def unraisable(u):
+        if isinstance(u.exc_value, OSError) and u.exc_value.errno == errno.EBADF \
+                and getattr(u.object, "__qualname__", "") == "ZipFile.__del__":
+            return
+        hook(u)
+
+    return unraisable
+
+
+sys.unraisablehook = quiet_unraisable()
 http.use(fetch_request)
+blobs.keep_copies = False  # the file system is memory: drop local copies of uploads once read
 RUNNER = runner.Loop(sleep=sleep)
 runner.use(RUNNER)  # before the app is built: its job queues take their lanes from it
 

@@ -128,6 +128,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     app = FastAPI(title="Tastr", docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
                   openapi_url=None if hosted else "/openapi.json", lifespan=lifespan if threads else None)
     app.state.watch_once = partial(background.watch_once, ctx)  # for tests
+    app.state.expire_once = partial(background.expire_once, ctx)
     app.state.startup = startup
 
     @app.middleware("http")

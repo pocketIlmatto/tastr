@@ -38,6 +38,9 @@ log = logging.getLogger(__name__)
 FOLDERS = ("uploads", "stems")  # what lives in the bucket, by its folder under TASTR_HOME
 LINK_SECONDS = 3600  # signed links for playback and for Modal; a page asks again for a new one
 UPLOAD_SECONDS = 3600  # signed links a page uploads through (TASTR_DIRECT_UPLOAD); it asks again if one runs out
+# Where the disk is memory (the Cloudflare Worker sets this False, worker/src/entry.py), a local copy is dropped as
+# soon as what needed it has read it, so a batch of uploads waiting for their analysis doesn't fill the memory.
+keep_copies = True
 LISTING_SECONDS = 60  # how long a bucket listing is reused (the storage cap, the admin view)
 # Types the stdlib doesn't know everywhere; browsers need them to decode the stream.
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",

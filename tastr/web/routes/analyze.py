@@ -219,6 +219,8 @@ def router(ctx: AppContext) -> APIRouter:
             except HTTPException:
                 give_up(ids, paths)
                 raise
+            if not blobs.keep_copies:
+                release([path])  # the analysis brings it back when its turn comes
         return kept
 
     def give_up(ids: list[str], paths: list[Path]) -> None:
@@ -261,6 +263,8 @@ def router(ctx: AppContext) -> APIRouter:
                                 status_code=202)
         with closing(ctx.conn()) as c:
             try:
+                for p in paths:  # a stored upload whose local copy was dropped (blobs.keep_copies)
+                    blobs.ensure(p)
                 with ctx.analysis_slot():
                     rs = service.analyze_inputs(c, paths, owner=ctx.owner_of(request), cards=sig)
             except TimeoutError:
@@ -357,6 +361,9 @@ def router(ctx: AppContext) -> APIRouter:
                 if link:
                     progress.stage("fetch")
                 try:
+                    if not link:
+                        for p in inputs:  # a stored upload whose local copy was dropped (blobs.keep_copies)
+                            blobs.ensure(p)
                     sources = resolve_inputs(inputs)
                 except IngestError as e:
                     raise JobError(str(e)) from e

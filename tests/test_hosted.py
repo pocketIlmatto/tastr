@@ -597,6 +597,29 @@ def test_restart_logs_cut_off_analyses_and_deploys(db_path, home):
     assert (e["kind"], e["detail"], e["link"]) == ("deploy", "Deployed 49eeecf: Rust engine P0 (the server restarted)", run)
 
 
+def test_deploys_are_logged_on_the_worker_too(db_path, home):
+    """The Worker's files don't outlive a restart, so the version that last started is kept in the database."""
+    s = dict(hosted=True, access_team_domain=TEAM, access_aud=AUD, worker_name="tastr")
+    for commit in ("aaaaaaa1", "aaaaaaa1", "bbbbbbb2"):
+        with TestClient(create_app(db_path, Settings(**s, commit=commit, commit_subject="Ship it"), verifier=stub_verifier)):
+            pass
+        for f in home.glob("server-version"):  # as if the files were gone after each restart
+            f.unlink()
+    conn = db.connect(db_path)
+    log = [(e["kind"], e["detail"], e["source"]) for e in db.recent_events(conn)]
+    assert log == [("deploy", "Deployed bbbbbbb: Ship it (the server restarted)", "cloudflare")]
+
+
+def test_the_old_version_file_counts_once(db_path, home):
+    """A server that kept the version in a file before: its first start after the change isn't a new deploy."""
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "server-version").write_text("img:1")
+    s = dict(hosted=True, access_team_domain=TEAM, access_aud=AUD)
+    with TestClient(create_app(db_path, Settings(**s, fly_image="img:1"), verifier=stub_verifier)):
+        pass
+    assert db.recent_events(db.connect(db_path)) == []
+
+
 def test_events_table_gains_link_column(tmp_path):
     import sqlite3
 
@@ -617,6 +640,10 @@ def test_log_links():
     assert s.log_links("tastr-web") == {"fly": "https://fly.io/apps/tastr-x/monitoring",
                                         "modal": "https://modal.com/apps/me/friends/deployed/tastr-web"}
     assert Settings().log_links("tastr-web") == {"modal": "https://modal.com/apps"}
+    acct = "0123456789abcdef0123456789abcdef"
+    w = Settings(worker_name="tastr", cf_account_id=acct).log_links("tastr-web")
+    assert w["worker"] == f"https://dash.cloudflare.com/{acct}/workers/services/view/tastr/production/observability/events"
+    assert "worker" not in Settings(worker_name="tastr").log_links("tastr-web")  # no account id, no link
 
 
 def test_admin_routes_are_admins_only(db_path, home):
@@ -883,3 +910,30 @@ def test_admins_snapshot_holds_every_library_unless_mine(db_path, home):
     snap = _snapshot(c.get("/api/query/library", headers=GOOD))
     assert snap.execute("SELECT owner FROM tracks ORDER BY owner").fetchall() == [("friend@example.com",), ("other@example.com",)]
     assert _snapshot(c.get("/api/query/library?mine=1", headers=GOOD)).execute("SELECT count(*) FROM tracks").fetchone() == (1,)
+
+
+def test_github_runs_come_through_the_shared_http_layer():
+    """watch.fetch_runs sends with tastr/http.py, so the Worker's fetch carries it there (no sockets)."""
+    import json as _json
+
+    import pytest as _pytest
+
+    from tastr import http
+    from tastr.web import watch
+
+    seen = []
+
+    def transport(method, url, headers, body, timeout):
+        seen.append((method, url, headers.get("Authorization"), timeout))
+        status = 200 if "ok/" in url else 403
+        return http.Response(status, {}, iter([_json.dumps({"workflow_runs": [{"id": 7}]}).encode()]))
+
+    http.use(transport)
+    try:
+        assert watch.fetch_runs("ok/repo", token="t") == [{"id": 7}]
+        assert seen == [("GET", f"{watch.GITHUB_API}/repos/ok/repo/actions/runs?branch=main&status=completed&per_page=30",
+                         "Bearer t", 10)]
+        with _pytest.raises(http.HTTPError):
+            watch.fetch_runs("private/repo")
+    finally:
+        http.use(None)

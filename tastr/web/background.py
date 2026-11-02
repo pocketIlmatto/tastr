@@ -88,23 +88,27 @@ def _watch(ctx: AppContext, fetch_runs, snapshots) -> None:
             db.set_meta(c, watch.PROBLEM_DAY, day)
 
 
+SERVER_VERSION = "server_version"  # meta: the commit (or Fly image) that last started
+
+
 def log_start(ctx: AppContext, cut: list[dict[str, Any]]) -> None:
     """Admin log lines when the server starts: a new version deployed, and each analysis a restart cut off.
-    A plain wake-up after Fly stopped an idle machine logs nothing."""
+    A plain wake-up after an idle stop (Fly's machine, the Worker's Durable Object) logs nothing."""
     settings = ctx.settings
-    marker, version = tastr_home() / "server-version", settings.fly_image or settings.commit
-    host = "flyio" if settings.fly_app else "app"
-    try:
-        before = marker.read_text().strip()
-    except OSError:
-        before = None
+    version = settings.fly_image or settings.commit
+    host = "cloudflare" if settings.worker_name else "flyio" if settings.fly_app else "app"
+    # The version that last started, in the database: it outlives a restart on every host (the Worker's files
+    # don't). Before that it was a file in TASTR_HOME, read once so the first start after the change logs nothing.
+    with closing(ctx.conn()) as c:
+        before = db.get_meta(c, SERVER_VERSION)
+        if before is None:
+            try:
+                before = (tastr_home() / "server-version").read_text().strip()
+            except OSError:
+                pass
+        if version and before != version:
+            db.set_meta(c, SERVER_VERSION, version)
     deployed = bool(version) and before is not None and before != version
-    if version and before != version:
-        try:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text(version)
-        except OSError as e:  # without the marker the next start logs this deploy again, so say why
-            log.warning("can't record the deployed version in %s: %s", marker, e)
     if deployed:
         what = f"{settings.commit[:7]}: {settings.commit_subject[:100]}" if settings.commit_subject else settings.commit[:7]
         ctx.event(None, "deploy", f"Deployed {what or 'a new version'} (the server restarted)", link=settings.deploy_run or None,

@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import urllib.request
 from datetime import datetime, timedelta
 from typing import Any, Callable
+
+from .. import http
 
 GITHUB_API = "https://api.github.com"
 FIRST_LOOK = timedelta(hours=24)  # the first check logs what finished in the last day, not the whole history
@@ -43,12 +44,13 @@ def _took(start: str | None, end: str | None) -> str:
 def fetch_runs(repo: str, token: str = "", timeout: float = 10) -> list[dict[str, Any]]:
     """The latest finished workflow runs on main. A public repository needs no token; a private one needs a
     fine-grained token with read access to Actions."""
-    req = urllib.request.Request(f"{GITHUB_API}/repos/{repo}/actions/runs?branch=main&status=completed&per_page=30",
-                                 headers={"Accept": "application/vnd.github+json", "User-Agent": "tastr",
-                                          "X-GitHub-Api-Version": "2022-11-28",
-                                          **({"Authorization": f"Bearer {token}"} if token else {})})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - fixed https host
-        return json.load(r).get("workflow_runs", [])
+    # Through tastr/http.py, so it also works on the Cloudflare Worker (its fetch, not sockets).
+    with http.request("GET", f"{GITHUB_API}/repos/{repo}/actions/runs?branch=main&status=completed&per_page=30",
+                      {"Accept": "application/vnd.github+json", "User-Agent": "tastr", "X-GitHub-Api-Version": "2022-11-28",
+                       **({"Authorization": f"Bearer {token}"} if token else {})}, timeout=timeout) as r:
+        if r.status != 200:
+            raise http.HTTPError(f"GitHub answered {r.status}", r.status)
+        return json.loads(r.read()).get("workflow_runs", [])
 
 
 def allowed(run: dict[str, Any], workflows: tuple[str, ...]) -> bool:

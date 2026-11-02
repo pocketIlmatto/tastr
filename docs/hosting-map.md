@@ -339,8 +339,12 @@ flowchart LR
 - CI builds the Worker whenever the app or `worker/` changes (`worker/check.sh`, the last steps of
   `.github/workflows/test.yml`): it bundles it with its Pyodide packages, fails above 10 MiB gzipped (the Workers
   Paid limit; it is about 7.7 MiB), and runs it under `pywrangler dev` to check a few pages answer.
-- Not on the Worker: Litestream (the Durable Object's own recovery replaces it), and the "Deployed ..." line
-  in the Admin log, which needs a file that outlives a restart.
+- The Admin tab: the version that last started is kept in the database (`meta`), so a new `TASTR_COMMIT` logs a
+  "Deployed ..." line (with `TASTR_COMMIT_SUBJECT` and the run, `TASTR_DEPLOY_RUN`, which `deploy-worker.yml`
+  sets). `TASTR_WORKER_NAME` and `TASTR_CF_ACCOUNT_ID` (both `vars` in `worker/wrangler.jsonc`) give it a link to
+  the Worker's logs, and `TASTR_GITHUB_REPO` with `TASTR_GITHUB_WORKFLOWS` its GitHub Actions lines, fetched
+  through `tastr/http.py`.
+- Not on the Worker: Litestream (the Durable Object's own recovery replaces it).
 
 ### Before the switch (TAS-51)
 

@@ -6,4 +6,4 @@ requires-python = ">=3.13"
 dependencies = ["fastapi", "numpy", "mutagen", "pyjwt[crypto]", "python-multipart"]
 
 [dependency-groups]
-dev = ["workers-py", "workers-runtime-sdk"]
+dev = ["workers-py==1.17.9", "workers-runtime-sdk==1.9.5"]  # pinned: CI builds the Worker with them (check.sh)

@@ -27,7 +27,7 @@ jobs:
           elif git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
             files=$(git diff --name-only "${{ github.event.before }}" HEAD)
           else
-            echo "code=true" >> "$GITHUB_OUTPUT"; echo "audio=true" >> "$GITHUB_OUTPUT"; echo "strudel=true" >> "$GITHUB_OUTPUT"; echo "rust=true" >> "$GITHUB_OUTPUT"; echo "js=true" >> "$GITHUB_OUTPUT"; exit 0
+            echo "code=true" >> "$GITHUB_OUTPUT"; echo "audio=true" >> "$GITHUB_OUTPUT"; echo "strudel=true" >> "$GITHUB_OUTPUT"; echo "rust=true" >> "$GITHUB_OUTPUT"; echo "js=true" >> "$GITHUB_OUTPUT"; echo "worker=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
           code=$(echo "$files" | grep -Ev '^docs/|\.md$' | grep . || true)
           audio=$(echo "$code" | grep -Ev '^tastr/web/' | grep . || true)
@@ -39,6 +39,8 @@ jobs:
           echo "rust=$([ -n "$rust" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           js=$(echo "$code" | grep -E '^tastr/web/static/.*\.js$|^eslint\.config\.mjs$' | grep . || true)
           echo "js=$([ -n "$js" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          worker=$(echo "$code" | grep -E '^worker/|^tastr/|^pyproject\.toml$' | grep . || true)
+          echo "worker=$([ -n "$worker" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Docs-only change, tests skipped
         if: steps.scope.outputs.code != 'true'
         run: echo "Only docs/ and Markdown files changed; nothing to test."
@@ -128,3 +130,14 @@ jobs:
       - name: Performance budget
         if: github.event_name == 'push' && steps.scope.outputs.audio == 'true'
         run: python -m pytest -q -m perf
+      # The Cloudflare Worker (worker/, TAS-84): bundle it with its Pyodide packages, check the size limit, then
+      # run it locally and ask it a few pages (worker/check.sh). About a minute, only when the app or worker/ changes.
+      - uses: actions/setup-node@v4
+        if: steps.scope.outputs.worker == 'true'
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v6
+        if: steps.scope.outputs.worker == 'true'
+      - name: Cloudflare Worker build and smoke test
+        if: steps.scope.outputs.worker == 'true'
+        run: worker/check.sh --serve

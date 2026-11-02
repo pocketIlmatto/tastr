@@ -184,11 +184,37 @@ function pendingLi(p) {
     h("div", { class: "s" }, h("span", { class: p.retrying ? "p-retry" : null }, p.say || "Waiting…"), p.active && p.secs != null ? h("span", { class: "p-time", title: "Elapsed" }, mmss(p.secs)) : null),
     busy && p.frac != null ? progBar(p.frac, `${cleanName(p.name)} progress`) : null);
 }
+// Files already in your library (TAS-95, `known`: {id, restored}): not uploaded or analyzed again. Up to 3 show one by
+// one, after the files still working; more fold into one row that opens to list them, so a big import isn't flooded.
+// They aren't errors, so no red and no Retry.
+let knownOpen = false;
+const working = () => pending.filter((p) => !p.known);
+function knownLi(p) {
+  const drop = () => { pending.splice(pending.indexOf(p), 1); renderList(); };
+  return h("li", { class: "pending known", "aria-label": `${cleanName(p.name)}: already in your library` },
+    h("div", { class: "t" }, h("span", { class: "k-mark", "aria-hidden": "true" }, "✓"), cleanName(p.name)),
+    h("div", { class: "s" }, h("span", {}, p.known.restored ? "Already in your library: its audio was restored. "
+      : "Already in your library, so it wasn't uploaded again. "), h("span", { class: "p-acts" },
+      h("button", { type: "button", class: "linklike", onclick: () => openTrack(p.known.id) }, "Open it"),
+      h("button", { type: "button", class: "linklike", onclick: drop }, "Dismiss"))));
+}
+function knownRows(ul) {
+  const known = pending.filter((p) => p.known);
+  if (known.length <= 3) { known.forEach((p) => ul.append(knownLi(p))); return; }
+  const dropAll = () => { pending.splice(0, pending.length, ...working()); knownOpen = false; renderList(); };
+  ul.append(h("li", { class: "pending known known-group" },
+    h("div", { class: "t" }, h("span", { class: "k-mark", "aria-hidden": "true" }, "✓"), `${known.length} files already in your library`),
+    h("div", { class: "s" }, h("span", {}, "Skipped: same audio as tracks you have. "), h("span", { class: "p-acts" },
+      h("button", { type: "button", class: "linklike", "aria-expanded": String(knownOpen), onclick: () => { knownOpen = !knownOpen; renderList(); } },
+        knownOpen ? "Hide them" : "Show them"),
+      h("button", { type: "button", class: "linklike", onclick: dropAll }, "Dismiss all")))));
+  if (knownOpen) known.forEach((p) => ul.append(knownLi(p)));
+}
 // Repaint just the placeholder rows (every second while analyzing), so the rest of the list keeps focus, hover and scroll.
 export function paintPending() {
-  const lis = $("track-list").querySelectorAll("li.pending");
-  if (lis.length !== pending.length) { renderList(); return; }
-  pending.forEach((p, i) => lis[i].replaceWith(pendingLi(p)));
+  const lis = $("track-list").querySelectorAll("li.pending:not(.known)"), rows = working();
+  if (lis.length !== rows.length) { renderList(); return; }
+  rows.forEach((p, i) => lis[i].replaceWith(pendingLi(p)));
 }
 // "12 tracks", "3 of 12 tracks", or "8 tracks in “Name”" while a list is shown.
 function countLine(l, n) {
@@ -212,7 +238,8 @@ export function renderList() {
   $("lib-tools").hidden = !tracks.length;
   if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
   else if (!shown.length && !pending.length) ul.append(noneRow(l));
-  for (const p of pending) ul.append(pendingLi(p));
+  for (const p of working()) ul.append(pendingLi(p));
+  knownRows(ul);
   const inQ = new Set(reviewRows.map((r) => r.track_id)), now = playingId();
   for (const t of shown) {
     const picked = sel.has(t.id), job = jobs.get(t.id);

@@ -20,12 +20,13 @@ export const A_STEPS = [["waiting", "Waiting for a worker", 0.06, "waiting for a
   ["core", "Finding tempo, key and beats", 0.34, "finding tempo, key and beats"], ["sections", "Finding sections", 0.2, "finding sections"],
   ["tags", "Tagging vibes", 0.1, "tagging vibes"], ["suggestions", "Writing patterns", 0.16, "writing patterns"], ["views", "Drawing views", 0.06, "drawing views"]];
 let queue = Promise.resolve();
-function analyzeBatch(items) {
+// `skipped`: how many of the files dropped with these were already in the library (TAS-95), for the summary line.
+function analyzeBatch(items, skipped = 0) {
   if (!items.length) return;
   const rows = items.map((it) => ({ name: it.name, active: false }));
   pending.unshift(...rows);
   renderList();
-  queue = queue.then(() => runBatch(items, rows));
+  queue = queue.then(() => runBatch(items, rows, skipped));
 }
 // How far through the analysis a row is (0-1): the steps before its current one, and a slow creep through the current one.
 function analysisFrac(row) {
@@ -53,7 +54,7 @@ async function followJob(job, row, update) {
     }
   }
 }
-async function runBatch(items, rows) {
+async function runBatch(items, rows, skipped = 0) {
   const n = items.length;
   let done = 0, failed = 0, lastId = null, perFile = A_TYPICAL, timed = 0;
   for (let i = 0; i < n; i++) {
@@ -98,7 +99,11 @@ async function runBatch(items, rows) {
     } catch (e) { results = [{ track_id: null, title: row.name, error: e.message || "The upload failed with no reply from the server.", stage: row.stage }]; }
     clearInterval(tick);
     const bad = results.filter((r) => r.error);
-    const ok = results.filter((r) => r.track_id != null);
+    // `already`: the server had this audio (the check before uploading missed it, or the track's audio had expired
+    // and this upload brought it back), so nothing was analyzed: a known row, counted with the skipped files.
+    const again = results.filter((r) => r.already && r.track_id != null);
+    const ok = results.filter((r) => r.track_id != null && !r.already);
+    skipped += again.length;
     done += ok.length; failed += bad.length;
     if (ok.length) {
       lastId = ok[ok.length - 1].track_id;
@@ -106,11 +111,13 @@ async function runBatch(items, rows) {
     }
     // Keep a failed row only for what failed; a single result keeps the name the user gave (the server's title carries a hash prefix).
     pending.splice(pending.indexOf(row), 1, ...bad.map((r) => ({ name: results.length === 1 ? row.name : r.title, failed: true, error: r.error, stage: r.stage })));
+    pending.push(...again.map((r) => ({ name: results.length === 1 ? row.name : r.title, known: { id: r.track_id, restored: !!items[i].checked } })));
     try { await loadTracks(); } catch (_) {}
     renderList();
   }
   jobTitle("analyze", null);
-  setStatus(`Analyzed ${done} track(s)` + (failed ? `, ${failed} failed` : "") + ".", failed > 0);
+  setStatus(`Analyzed ${done} track${done === 1 ? "" : "s"}` + (failed ? `, ${failed} failed` : "") + "." +
+    (skipped ? ` Skipped ${skipped} already in your library.` : ""), failed > 0);
   if (lastId != null) await refresh(lastId);
 }
 // POST with XMLHttpRequest, for its upload progress (fetch has none). Errors read like api()'s.
@@ -153,10 +160,67 @@ async function checkUpload(f) {
   if (min != null && min > L.max_minutes)
     throw new Error(`${f.name} is ${Math.round(min)} minutes long. This server analyzes tracks up to ${L.max_minutes} minutes, so a long mix needs cutting into shorter files first.`);
 }
+// TAS-95: before uploading, fingerprint each file (SHA-256 of its bytes, one file at a time so a big batch isn't all
+// in memory) and ask the server which ones the library already has (POST /api/tracks/known). Those aren't uploaded
+// or analyzed: each becomes a known row (library.js). Returns the files still to upload, `checked` when the check
+// worked; if it can't run (no Web Crypto, the server didn't answer) everything uploads as before, and the server
+// still skips an exact duplicate.
+const KNOWN_CHUNK = 500;
+export async function sha256Hex(file) {
+  const d = await window.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function skipKnown(files) {
+  if (!files.length || !(window.crypto && window.crypto.subtle)) return { files, skipped: 0, checked: false };
+  const rows = files.map((f) => ({ name: f.name, active: false, say: "Checking if you have it…" }));
+  pending.unshift(...rows);
+  renderList();
+  const n = files.length, shas = [];
+  try {
+    for (let i = 0; i < n; i++) {
+      if (n > 3) {
+        const el = $("status");
+        el.className = "muted";
+        el.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), `Checking ${i + 1} of ${n} files against your library…`, progBar(0, "Overall progress"));
+      }
+      shas.push(await sha256Hex(files[i]));
+    }
+    const known = {};
+    for (let i = 0; i < n; i += KNOWN_CHUNK) {
+      const r = await api("/api/tracks/known", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sha256: shas.slice(i, i + KNOWN_CHUNK) }) });
+      Object.assign(known, r.known || {});
+    }
+    rows.forEach((row) => pending.splice(pending.indexOf(row), 1));
+    const keep = [];
+    files.forEach((f, i) => {
+      const k = known[shas[i]];
+      if (k) pending.push({ name: f.name, known: { id: k.id } }); else keep.push(f);
+    });
+    renderList();
+    return { files: keep, skipped: n - keep.length, checked: true };
+  } catch (e) {
+    console.warn("couldn't check for files already in the library; uploading them all", e);
+    rows.forEach((row) => pending.splice(pending.indexOf(row), 1));
+    renderList();
+    return { files, skipped: 0, checked: false };
+  }
+}
+function nothingNew(n) {
+  setStatus(`Nothing new: ${n === 1 ? "that file is" : n === 2 ? "both files are" : `all ${n} files are`} already in your library.`);
+}
 function uploadFiles(files) {
-  if (serverCfg.direct_upload) { directBatch(files); return; }
+  if (!files.length) return;
+  queue = queue.then(async () => {
+    const { files: rest, skipped, checked } = await skipKnown(files);
+    if (!rest.length) { nothingNew(skipped); return; }
+    sendFiles(rest, skipped, checked);
+  });
+}
+function sendFiles(files, skipped, checked) {
+  if (serverCfg.direct_upload) { directBatch(files, skipped, checked); return; }
   analyzeBatch(files.map((f) => ({
-    name: f.name,
+    name: f.name, checked,
     send: async (onProgress, onMeasure) => {
       await checkUpload(f);
       const fd = new FormData();
@@ -165,7 +229,7 @@ function uploadFiles(files) {
       if (card) fd.append("card", card, "card.json");
       return postWithProgress("/api/analyze?background=1", fd, onProgress);
     },
-  })));
+  })), skipped);
 }
 
 // TASTR_DIRECT_UPLOAD (hosted, TAS-66): each file goes straight to the audio bucket, 3 at a time, each row with
@@ -174,7 +238,7 @@ function uploadFiles(files) {
 // The uploaded files then take their turn to be analyzed as usual. A link that ran out is renewed once; a dropped
 // connection or a storage refusal leaves a row with Retry, which starts that file over.
 const UP_AT_ONCE = 3;
-function directBatch(files) {
+function directBatch(files, skipped = 0, checked = false) {
   if (!files.length) return;
   const rows = files.map((f) => ({ name: f.name, active: false, uploading: true, say: "Getting ready to upload…", frac: 0, up: 0 }));
   pending.unshift(...rows);
@@ -198,7 +262,7 @@ function directBatch(files) {
     const keep = ids.flatMap((id, i) => (id ? [i] : []));
     if (!keep.length) { jobTitle("analyze", null); setStatus("Nothing was uploaded. See the list for why.", true); return; }
     await runBatch(keep.map((i) => ({
-      name: files[i].name, uploaded: true,
+      name: files[i].name, uploaded: true, checked,
       send: async (_onProgress, onMeasure) => {
         const fd = new FormData();
         fd.append("ids", ids[i]);
@@ -206,7 +270,7 @@ function directBatch(files) {
         if (card) fd.append("card", card, "card.json");
         return postWithProgress("/api/analyze/uploaded?background=1", fd);
       },
-    })), keep.map((i) => rows[i]));
+    })), keep.map((i) => rows[i]), skipped);
   });
 }
 // One file of a direct batch: its upload's id once the server has checked it, or null with the row turned into a

@@ -499,6 +499,18 @@ def test_direct_upload_drops_the_checked_copy_where_the_disk_is_memory(bucket, h
     assert r.json()["results"][0]["track_id"] is not None  # brought back for its analysis
 
 
+def test_a_dropped_copy_still_takes_the_pages_card(bucket, home, db_path, monkeypatch):
+    # The page's own card is saved next to the upload, whose folder went with the dropped copy (T31).
+    monkeypatch.setattr(blobs, "keep_copies", False)
+    monkeypatch.setenv("TASTR_BROWSER_ENGINE", "1")
+    c = direct_client(db_path, monkeypatch)
+    (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+    browser_put(up, b"RIFFsong")
+    assert c.post(f"/api/uploads/{up['id']}/check", headers=GOOD).status_code == 200
+    r = c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, files={"card": ("card.json", b"{}")}, headers=GOOD)
+    assert r.status_code == 200, r.text
+
+
 def test_direct_upload_refusals(bucket, home, db_path, monkeypatch):
     c = direct_client(db_path, monkeypatch, max_upload_mb=10 / 1048576)  # 10 bytes
     ask = lambda files: c.post("/api/uploads", json={"files": files}, headers=GOOD)  # noqa: E731

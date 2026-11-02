@@ -87,6 +87,11 @@ Biggest disagreements (31 in all; label these to see who's right):
   #42 Artist - Title: Tastr 87.0 F minor, Rekordbox 174.0 F minor
 ```
 
+On the hosted server, upload the export to the audio bucket (`tastr-audio` in Cloudflare's dashboard, R2) as
+`rekordbox/collection.xml`, then open `/api/admin/rekordbox-compare?format=text` on the server (admins only;
+drop `format=text` for JSON, `key=rekordbox/other.xml` for another file, `show=N` for more disagreements). It
+compares your own tracks. Delete the export from the bucket when you're done: it lists your library's paths.
+
 Tracks are matched by file name first, then by artist and title (with lengths within 3 s), each track once.
 Where you labeled a track in Tastr ([bench.md](bench.md#your-own-tracks)), both apps are scored against your
 label. This reads the analysis as it was stored, so a track analyzed by an older Tastr shows the older answer;

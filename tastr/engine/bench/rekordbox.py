@@ -90,9 +90,9 @@ def expand_grid(anchors: list[tuple[float, float, int, int]], end: float) -> tup
     return beats, downbeats
 
 
-def parse_xml(path: str | Path) -> list[RbTrack]:
-    """Every track in a Rekordbox collection XML that has a BPM or key (i.e. was analyzed)."""
-    root = ET.parse(str(path)).getroot()
+def parse_xml(path: str | Path | bytes) -> list[RbTrack]:
+    """Every track in a Rekordbox collection XML (a file, or its contents) that has a BPM or key (i.e. was analyzed)."""
+    root = ET.fromstring(path) if isinstance(path, bytes) else ET.parse(str(path)).getroot()
     tracks = []
     for el in root.iterfind("./COLLECTION/TRACK"):
         loc = el.get("Location")

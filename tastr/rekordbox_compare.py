@@ -111,9 +111,10 @@ def _label_rows(t: dict, rb: RbTrack) -> tuple[dict, dict] | None:
     return out[0], out[1]
 
 
-def compare(conn: sqlite3.Connection, xml: str | Path, owner: str | None = None) -> dict:
+def compare(conn: sqlite3.Connection, xml: str | Path | bytes, owner: str | None = None) -> dict:
+    """`xml`: the export's path (or a folder holding it), or its contents. `owner`: only that person's tracks."""
     tastr = _tastr_tracks(conn, owner)
-    rb = parse_xml(find_xml(xml))
+    rb = parse_xml(xml if isinstance(xml, bytes) else find_xml(xml))
     pairs = match(tastr, rb)
     rows = [compare_pair(conn, t, r) | {"matched_by": how} for t, r, how in pairs]
     labeled = [x for x in (_label_rows(t, r) for t, r, _ in pairs) if x]

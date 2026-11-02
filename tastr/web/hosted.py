@@ -178,15 +178,17 @@ def names(files: list[str], most: int = 3) -> str:
 
 
 class AccessVerifier:
-    """Checks a Cloudflare Access JWT against the team's published signing keys; returns the user's email."""
+    """Checks a Cloudflare Access JWT against the team's published signing keys; returns the user's email.
+    `keys`: where the keys come from (anything with get_signing_key_from_jwt(token).key); PyJWT's client by default.
+    The Cloudflare Worker passes its own, fetched with the Worker's fetch (worker/src/entry.py)."""
 
-    def __init__(self, team_domain: str, aud: str):
+    def __init__(self, team_domain: str, aud: str, keys=None):
         import jwt  # PyJWT, from the `hosted` extra
 
         self._jwt = jwt
         self.issuer = f"https://{team_domain}"
         self.aud = aud
-        self.keys = jwt.PyJWKClient(f"{self.issuer}/cdn-cgi/access/certs", cache_keys=True)
+        self.keys = keys or jwt.PyJWKClient(f"{self.issuer}/cdn-cgi/access/certs", cache_keys=True)
 
     def __call__(self, token: str) -> str:
         key = self.keys.get_signing_key_from_jwt(token).key

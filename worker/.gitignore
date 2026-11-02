@@ -1,0 +1,9 @@
+# made by build.py and pywrangler
+src/tastr/
+public/
+python_modules/
+.venv-workers/
+.wrangler/
+pylock.toml
+uv.lock
+.dev.vars

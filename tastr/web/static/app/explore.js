@@ -4,9 +4,11 @@ import { $ } from "./core.js";
 import { loadTracks } from "./library.js";
 import { loadSaved, qMode, renderSimple, setQMode } from "./find.js";
 import { renderBlend } from "./blend.js";
+import { setRoute } from "./route.js";
 
 const EX_TABS = ["find", "blend"];
-let exTab = "find", findReady = false;
+export let exTab = "find";
+let findReady = false;
 
 function renderTab() {
   if (exTab === "blend") { renderBlend(); return; }
@@ -19,9 +21,10 @@ export async function renderExplore() {
   renderTab();
 }
 
-function setExTab(t, focus) {
+export function setExTab(t, focus) {
   if (!EX_TABS.includes(t)) t = "find";
   exTab = t;
+  if (!$("view-explore").hidden) setRoute("explore/" + t);
   try { localStorage.setItem("tastr-ex-tab", t); } catch (_) {}
   document.querySelectorAll(".ex-tabs [role=tab]").forEach((b) => {
     const on = b.dataset.ex === t;

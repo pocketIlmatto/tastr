@@ -111,5 +111,4 @@ export function init() {
     tr.classList.add("gl-row"); tr.title = `Hear ${name}`;
     tr.addEventListener("click", () => { glScale.value = name; glPlay("scale"); });
   });
-  if (location.hash === "#glossary") switchTo("glossary");
 }

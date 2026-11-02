@@ -6,7 +6,7 @@
 // CI runs it with `npx eslint@10.12.0` only when a script changes; see .github/workflows/test.yml.
 const BROWSER = ["Audio", "Blob", "CustomEvent", "Event", "EventTarget", "FormData", "Image", "TextEncoder", "URL",
   "URLSearchParams", "Worker", "XMLHttpRequest", "atob", "cancelAnimationFrame", "clearInterval", "clearTimeout", "console",
-  "document", "fetch", "innerWidth", "localStorage", "location", "matchMedia", "navigator", "performance",
+  "document", "fetch", "history", "innerWidth", "localStorage", "location", "matchMedia", "navigator", "performance",
   "requestAnimationFrame", "setInterval", "setTimeout", "window"];
 const PLAIN_SCRIPTS = ["STRUDEL_STEMS", "strudelCode", "strudelLink", "hpssHarmonic", // strudel.js, hpss.js
   "STRUDEL_TEMPLATES", "STRUDEL_NEW_TEXT", "strudelFillins", "strudelFill", "strudelUnfill", "strudelDiff", "strudelHunks",

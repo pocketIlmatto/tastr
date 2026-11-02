@@ -2,6 +2,9 @@
 
 Everything a track card shows and what you can do with it. The [README](../README.md) has the short version.
 
+The address bar keeps the page you're on (`#track/42` for a track card, `#explore/blend`, `#glossary`, `#files`, `#admin`),
+so a refresh or a bookmark reopens it, and Back and Forward move between the views.
+
 ## Track cards
 
 - **Tempo and key.** BPM with how likely it is to be right (calibrated on the benchmarks), a beat and bar grid, and the

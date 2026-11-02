@@ -1,6 +1,6 @@
 // The web UI's entry point: every module loads (declarations only), then each one's wiring runs in this order.
 
-import { init as navInit } from "./nav.js";
+import { init as navInit, start as navStart } from "./nav.js";
 import { init as bulkInit } from "./bulk.js";
 import { init as libraryInit } from "./library.js";
 import { init as labelsInit } from "./labels.js";
@@ -33,3 +33,4 @@ helpInit();
 glossaryInit();
 filesInit();
 initChartKeys();
+navStart();

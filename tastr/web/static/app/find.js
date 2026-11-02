@@ -3,6 +3,7 @@
 import { $, api, h, isNum, mmss, tracks } from "./core.js";
 import { refresh } from "./library.js";
 import { openTrack, switchTo } from "./card.js";
+import { routeOf } from "./route.js";
 import { setServerCfg } from "./daw.js";
 import { setStatus } from "./upload.js";
 import * as qlib from "./query-lib.js";
@@ -303,7 +304,7 @@ function renderHist() {
   h("button", { type: "button", class: "linklike q-hist-clear", onclick: () => { qHist = []; saveHist(); renderHist(); } }, "Clear history"));
 }
 
-const startView = location.hash.slice(1);  // read before anything can change the hash
+const startView = routeOf().view;  // read before anything can change the address
 
 // Wiring that touches the page or other modules, run once by main.js after every module has loaded.
 export function init() {

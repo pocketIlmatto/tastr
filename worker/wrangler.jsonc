@@ -14,6 +14,9 @@
   "assets": {"directory": "./public", "binding": "ASSETS", "run_worker_first": true},
   // Logs and errors in the dashboard (Workers > tastr > Observability). A deploy sets this from here, so it stays on.
   "observability": {"enabled": true},
+  // CPU time per request (Workers Paid allows up to 5 minutes; the default is 30 s). The one-time library import
+  // from Fly (tastr/library_move.py) needs more than 30 s.
+  "limits": {"cpu_ms": 300000},
   // The library: one SQLite-backed Durable Object holds the database and runs the app.
   "durable_objects": {"bindings": [{"name": "LIB", "class_name": "Library"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["Library"]}],

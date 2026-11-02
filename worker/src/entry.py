@@ -190,6 +190,8 @@ class Library(DurableObject):
                         print(f"imported the library from {library_move.KEY}: {counts}")
                     elif library_move.waiting(conn):  # no copy in the bucket yet: look again in a while
                         IMPORT_AT = time.time() + IMPORT_RETRY
+                    elif library_move.tries(conn) >= library_move.MAX_TRIES and not db.get_meta(conn, library_move.DONE):
+                        print(f"not importing the library: {library_move.MAX_TRIES} tries were cut off")
             except Exception as e:  # noqa: BLE001 - the app still serves; it tries again in a while
                 print(f"couldn't import the library: {type(e).__name__}: {e}")
                 IMPORT_AT = time.time() + IMPORT_RETRY

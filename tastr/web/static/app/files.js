@@ -56,8 +56,9 @@ function say(text, spin = true, error = false) {
 // server as it writes them (X-Zip-Bytes is the files' total), so "zipping" and receiving are the same bytes.
 let dlRun = 0;
 const nameFrom = (cd) => { const m = /filename\*=utf-8''([^;]+)/i.exec(cd || ""); try { return m ? decodeURIComponent(m[1]) : null; } catch (_) { return null; } };
-async function download(url, name, bytes, opts) {
-  const run = ++dlRun, show = (...a) => { if (run === dlRun) say(...a); };
+// `out`: where the progress goes instead of the Files view's line, as out(text, spin, error) (Library › List › Export).
+export async function download(url, name, bytes, opts, out) {
+  const run = out ? 0 : ++dlRun, show = (...a) => { if (out) out(...a); else if (run === dlRun) say(...a); };
   const zip = /\.zip$/.test(name) || /\.zip(\?|$)/.test(url) || (opts && opts.method === "POST");
   show(zip ? `Zipping ${name}…` : `Downloading ${name}${bytes ? ` (${fmtBytes(bytes)})` : ""}…`);
   try {

@@ -7,7 +7,8 @@ import { renderCard } from "./card.js";
 import { serverCfg } from "./daw.js";
 import { dropEdits, flushEdits } from "./groove-edits.js";
 import { runDrumModel, setStems, stemsBusy, stemsEta, stemsLabel } from "./menu.js";
-import { addToList, lists, loadLists, saveList } from "./lists.js";
+import { LIST_NAME_MAX, addToList, lists, loadLists, saveList } from "./lists.js";
+import { pinPop } from "./pin.js";
 
 // Selection is by track id, so it survives filtering and sorting.
 export const sel = new Set();
@@ -112,7 +113,8 @@ function bulkMenu() {
   const btn = h("button", { type: "button", class: "bulk-btn", "aria-haspopup": "menu", "aria-expanded": "false", disabled: n && !bulkBusy ? null : "" }, `Actions${n ? ` for ${n}` : ""} ▾`);
   const pop = h("div", { class: "menu-pop bulk-pop", role: "menu", hidden: "" });
   const wrap = h("div", { class: "menu-wrap bulk-wrap" }, btn, pop);
-  const close = (refocus) => { pop.hidden = true; btn.setAttribute("aria-expanded", "false"); document.removeEventListener("pointerdown", outside, true); if (refocus) btn.focus(); };
+  let unpin = null;  // the sidebar clips overflow, so the open menu is pinned to the window (pin.js)
+  const close = (refocus) => { pop.hidden = true; if (unpin) { unpin(); unpin = null; } btn.setAttribute("aria-expanded", "false"); document.removeEventListener("pointerdown", outside, true); if (refocus) btn.focus(); };
   const outside = (e) => { if (!wrap.contains(e.target)) close(false); };
   const item = (label, onclick, o = {}) => h("button", { type: "button", role: "menuitem", class: "menu-item" + (o.danger ? " danger" : ""), onclick }, label, o.note ? h("span", { class: "menu-note" }, o.note) : null);
   const items = () => [...pop.querySelectorAll("[role=menuitem], .menu-confirm button")];
@@ -127,7 +129,9 @@ function bulkMenu() {
   const showSaveList = async () => {
     const ids = [...sel];
     const done = (p) => p.then((m) => { close(true); sayBulk(m, 4000); renderList(); }, (e) => { err.textContent = e.message; });
-    const inp = h("input", { type: "text", maxlength: "80", placeholder: "New list name", "aria-label": "New list name", style: "width:100%;margin-bottom:8px" });
+    const inp = h("input", { type: "text", maxlength: String(LIST_NAME_MAX), placeholder: "New list name", "aria-label": "New list name", style: "width:100%;margin-bottom:4px" });
+    const cnt = h("div", { class: "muted ln-count", style: "text-align:right;margin-bottom:6px", "aria-hidden": "true" }, `0/${LIST_NAME_MAX}`);
+    inp.addEventListener("input", () => { cnt.textContent = `${inp.value.length}/${LIST_NAME_MAX}`; cnt.classList.toggle("full", inp.value.length >= LIST_NAME_MAX); });
     const err = h("p", { class: "error", role: "status" });
     const go = () => done(saveList(inp.value, ids));
     inp.addEventListener("keydown", (e) => {
@@ -136,7 +140,7 @@ function bulkMenu() {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); showMain(); items()[0].focus(); }
     });
     const paint = () => pop.replaceChildren(h("div", { class: "menu-confirm", role: "group", "aria-label": "Save as a list" },
-      h("p", {}, h("b", {}, `Save ${plural(n)} as a list`), h("br"), h("span", { class: "muted" }, "Compare lists in Explore › Blend.")), inp,
+      h("p", {}, h("b", {}, `Save ${plural(n)} as a list`), h("br"), h("span", { class: "muted" }, "Play it from Library › List, or compare lists in Explore › Blend.")), inp, cnt,
       h("div", { class: "menu-confirm-btns" }, h("button", { type: "button", onclick: go }, "Save"), h("button", { type: "button", onclick: () => { showMain(); items()[0].focus(); } }, "Cancel")), err),
     ...lists.map((l) => item(`Add to “${l.name}” (${l.track_ids.length})`, () => done(addToList(l.id, ids)))));
     paint(); inp.focus();
@@ -152,7 +156,7 @@ function bulkMenu() {
   };
   btn.onclick = () => {
     if (!pop.hidden) { close(true); return; }
-    showMain(); pop.hidden = false; btn.setAttribute("aria-expanded", "true"); items()[0].focus();
+    showMain(); pop.hidden = false; btn.setAttribute("aria-expanded", "true"); unpin = pinPop(pop, btn); items()[0].focus();
     document.addEventListener("pointerdown", outside, true);
   };
   pop.addEventListener("keydown", (e) => {

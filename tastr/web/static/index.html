@@ -136,6 +136,8 @@
             </select></label>
             <button type="button" id="lib-fbtn" aria-expanded="false" aria-controls="lib-filters">Filters</button>
           </div>
+          <div class="lib-row"><label>List <select id="lib-list" aria-label="Show a list"><option value="">All tracks</option></select></label></div>
+          <div id="lib-listbar" class="lib-listbar" hidden></div>
           <div id="lib-filters" hidden>
             <label>Vibe <select id="lib-vibe"></select></label>
             <label>Key <select id="lib-key"></select></label>
@@ -177,9 +179,8 @@
           <div id="bl-svg"></div><ul class="bl-legend" id="bl-legend"></ul></div>
         <div class="bl-ab">
           <b>Between two songs</b>
-          <label>From <input id="bl-a" list="bl-titles" placeholder="Pick a track…" autocomplete="off"></label>
-          <label>To <input id="bl-b" list="bl-titles" placeholder="Pick a track…" autocomplete="off"></label>
-          <datalist id="bl-titles"></datalist>
+          <label>From <input id="bl-a" placeholder="Type to find a track…" autocomplete="off"></label>
+          <label>To <input id="bl-b" placeholder="Type to find a track…" autocomplete="off"></label>
           <label class="bl-t">How far <input id="bl-tv" type="range" min="0" max="100" value="50" step="5"> <output id="bl-tout">50%</output></label>
           <div class="bl-btns"><button type="button" id="bl-swap" title="Swap From and To">⇄ Swap</button><button type="button" id="bl-path" title="5 steps from one song to the other, each the nearest unused track">Make a 5-step path</button></div>
           <p class="muted bl-hint" id="bl-why"></p>
@@ -503,6 +504,7 @@
     </div>
   </section>
 </main>
+<div id="pl-bar" role="region" aria-label="Playlist player" hidden></div>
 <script src="/static/strudel.js"></script>
 <script src="/static/engine.js"></script>
 <script src="/static/hpss.js"></script>

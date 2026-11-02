@@ -5,9 +5,14 @@ import { jobs, renderBulk, sel, selecting, setSelecting, toggleSel } from "./bul
 import { loadReview, renderReview } from "./labels.js";
 import { openTrack } from "./card.js";
 import { A_STEPS } from "./upload.js";
+import { lists, loadLists, onListsChange } from "./lists.js";
+import { exportMenu, onPlaying, playList, playingId } from "./playlist.js";
 
 export const LIB_CLEAR = () => ({ q: "", vibes: [], key: "", bmin: "", bmax: "", up: "", upFrom: "", upTo: "", lab: "" });
-export const lib = { sort: "new", ...LIB_CLEAR() };
+export const lib = { sort: "new", list: null, ...LIB_CLEAR() };  // list: the saved list shown (Library › List), or null for all tracks
+const shownList = () => (lib.list == null ? null : lists.find((l) => l.id === lib.list) || null);
+const listSig = () => { const l = shownList(); return l ? `${l.id}:${l.track_ids.join(",")}` : ""; };
+let shownSig = "";  // the list the track list last showed, and its tracks
 // Upload dates, as the sidebar shows them: the time if today, the weekday this week, else the date.
 const DAY = 864e5, dayStart = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return +d; };
 export const fmtUp = (t) => {
@@ -58,7 +63,27 @@ export function matchTracks(f, list = tracks) {
     (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi)) &&
     upMatch(t.uploaded, f) && (!f.lab || (need ? need.has(t.id) : (f.lab === "yes") === labels.has(t.id))));
 }
-export const visibleTracks = () => matchTracks(lib).sort(SORTS[lib.sort]);
+// A list shows in its own order (the Sort is off meanwhile); search and filters still narrow it.
+export function visibleTracks() {
+  const l = shownList();
+  if (!l) return matchTracks(lib).sort(SORTS[lib.sort]);
+  const byId = new Map(tracks.map((t) => [t.id, t]));
+  return matchTracks(lib, l.track_ids.map((id) => byId.get(id)).filter(Boolean));
+}
+// Library › List: the picker ("All tracks", then each list with its count) and the bar with Play, Shuffle and Export.
+function paintLibList() {
+  const sel = $("lib-list");
+  if (lib.list != null && !shownList()) lib.list = null;  // deleted, here or in Explore › Blend
+  sel.replaceChildren(h("option", { value: "" }, "All tracks"), ...lists.map((l) => h("option", { value: String(l.id) }, `${l.name} (${l.track_ids.length})`)));
+  sel.value = lib.list == null ? "" : String(lib.list);
+  const l = shownList(), bar = $("lib-listbar"), sort = $("lib-sort");
+  bar.hidden = !l; sort.disabled = !!l; sort.title = l ? "A list shows and plays in its own order" : "";
+  if (!l) { bar.replaceChildren(); return; }
+  bar.replaceChildren(
+    h("button", { type: "button", class: "pl-mini primary", onclick: () => playList(l.name, l.track_ids) }, "▶ Play"),
+    h("button", { type: "button", class: "pl-mini", onclick: () => playList(l.name, l.track_ids, { shuffle: true }) }, "⤮ Shuffle"),
+    h("button", { type: "button", class: "pl-mini", "aria-haspopup": "menu", "aria-expanded": "false", onclick: (e) => exportMenu(l, e.currentTarget) }, "Export ▾"));
+}
 // lib.key is a Camelot code, or "8A~" for that key plus the keys that mix with it (one step round the wheel, or the relative major/minor).
 export const camelotNear = (k) => { const m = /^(\d+)([AB])$/.exec(k || ""); if (!m) return [k]; const n = +m[1], l = m[2], o = l === "A" ? "B" : "A", w = (d) => ((n + d + 11) % 12) + 1; return [k, `${w(-1)}${l}`, `${w(1)}${l}`, `${n}${o}`]; };
 const keyMatch = (cam, f) => (f.key.endsWith("~") ? camelotNear(f.key.slice(0, -1)).includes(cam) : cam === f.key);
@@ -91,7 +116,7 @@ export async function loadTracks() {
 export async function refresh(selectId) {
   await loadTracks();
   // A freshly analyzed track must be visible, so show everything, newest first.
-  if (selectId != null) { Object.assign(lib, { ...LIB_CLEAR(), sort: "new" }); syncTools(); }
+  if (selectId != null) { Object.assign(lib, { ...LIB_CLEAR(), sort: "new", list: null }); syncTools(); paintLibList(); }
   renderList();
   if (selectId != null) openTrack(selectId);
 }
@@ -165,6 +190,13 @@ export function paintPending() {
   if (lis.length !== pending.length) { renderList(); return; }
   pending.forEach((p, i) => lis[i].replaceWith(pendingLi(p)));
 }
+// "12 tracks", "3 of 12 tracks", or "8 tracks in “Name”" while a list is shown.
+function countLine(l, n) {
+  const all = l ? l.track_ids.filter((id) => tracks.some((t) => t.id === id)).length : tracks.length, inL = l ? ` in “${l.name}”` : "";
+  return libActive() ? `${n} of ${all} tracks${inL}` : `${all} track${all === 1 ? "" : "s"}${inL}`;
+}
+const noneRow = (l) => (l && !libActive() ? h("li", { class: "muted empty" }, "This list has no tracks left.")
+  : h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
 export function renderList() {
   const ul = $("track-list"), top = ul.scrollTop;
   // Rows are rebuilt while bulk jobs run, so put keyboard focus back on the same track afterwards.
@@ -172,14 +204,16 @@ export function renderList() {
   const focusId = focused ? focused.dataset.id : null;
   ul.replaceChildren();
   const shown = visibleTracks();
+  shownSig = listSig();
   $("lib-total").textContent = tracks.length ? `(${tracks.length})` : "";
-  $("lib-n").textContent = libActive() ? `${shown.length} of ${tracks.length} tracks` : `${tracks.length} track${tracks.length === 1 ? "" : "s"}`;
+  const l = shownList();
+  $("lib-n").textContent = countLine(l, shown.length);
   $("lib-clear").hidden = !libActive();
   $("lib-tools").hidden = !tracks.length;
   if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
-  else if (!shown.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
+  else if (!shown.length && !pending.length) ul.append(noneRow(l));
   for (const p of pending) ul.append(pendingLi(p));
-  const inQ = new Set(reviewRows.map((r) => r.track_id));
+  const inQ = new Set(reviewRows.map((r) => r.track_id)), now = playingId();
   for (const t of shown) {
     const picked = sel.has(t.id), job = jobs.get(t.id);
     ul.append(h("li", { class: "trk" + (t.id === currentId ? " active" : "") + (picked ? " picked" : ""), "data-id": t.id, tabindex: "0",
@@ -187,7 +221,8 @@ export function renderList() {
         onclick: (e) => { if (selecting) toggleSel(t.id, e.shiftKey); else if (e.metaKey || e.ctrlKey) { setSelecting(true); toggleSel(t.id, false); } else openTrack(t.id); } },
       selecting ? h("span", { class: "pick" + (picked ? " on" : ""), "aria-hidden": "true" }) : null,
       h("div", { class: "trk-main" },
-        h("div", { class: "t-row" }, h("div", { class: "t", title: t.title }, t.title || `Track ${t.id}`),
+        h("div", { class: "t-row" }, t.id === now ? h("span", { class: "pl-mark", title: "Playing now", "aria-label": "Playing now" }, "♪") : null,
+          h("div", { class: "t", title: t.title }, t.title || `Track ${t.id}`),
           t.uploaded ? h("time", { class: "up", datetime: new Date(t.uploaded).toISOString(), title: `Uploaded ${fmtUpLong(t.uploaded)}` }, fmtUp(t.uploaded)) : null),
         job ? [h("div", { class: "s job" + (job.error ? " fail" : ""), title: job.error || null }, job.error ? null : h("span", { class: "spin" + (job.active ? "" : " idle"), "aria-hidden": "true" }), job.text),
             job.frac != null ? progBar(job.frac, `${t.title || "Track"} progress`) : null]
@@ -256,6 +291,11 @@ export function init() {
   matchMedia("(max-width: 700px)").addEventListener("change", () => setLibCollapsed(libCollapsed));
   $("lib-q").addEventListener("input", (e) => { lib.q = e.target.value; renderList(); });
   $("lib-sort").addEventListener("change", (e) => { lib.sort = e.target.value; renderList(); });
+  $("lib-list").addEventListener("change", (e) => { lib.list = e.target.value ? +e.target.value : null; paintLibList(); renderList(); });
+  // Repaint the track list only when the shown list's tracks changed, so an open bulk menu stays open while it saves.
+  onListsChange(() => { paintLibList(); if (listSig() !== shownSig) renderList(); });
+  onPlaying(() => renderList());
+  loadLists().catch(() => { /* the picker shows only "All tracks" */ });
   $("lib-vibe").addEventListener("change", (e) => { const v = e.target.value; if (v !== "__multi") lib.vibes = v ? [v] : []; syncFilterSelects(); renderList(); });
   $("lib-key").addEventListener("change", (e) => { lib.key = e.target.value; syncFilterSelects(); renderList(); });
   $("lib-bmin").addEventListener("input", (e) => { lib.bmin = e.target.value; renderList(); });

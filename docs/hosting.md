@@ -65,7 +65,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_WORKER_NAME` | none | the Cloudflare Worker this server runs as (`worker/wrangler.jsonc` sets `tastr`): the Admin log's source and its link to the Worker's logs |
 | `TASTR_GITHUB_REPO` | none | `owner/name` of the repository whose GitHub Actions runs on main the Admin log shows (fly.toml and `worker/wrangler.jsonc` set it) |
 | `TASTR_GITHUB_WORKFLOWS` | none | which workflows' runs the Admin log shows, comma-separated names or file names (fly.toml: `tests,deploy`); none logs no runs |
-| `TASTR_GITHUB_TOKEN` | none | a fine-grained token with read-only Actions access, needed only while that repository is private |
+| `TASTR_GITHUB_TOKEN` | none | a fine-grained token with read-only Actions access, needed while that repository is private, and on the Cloudflare Worker (GitHub's limit without one is per IP address, which Cloudflare shares) |
 | `TASTR_WATCH_MINUTES` | 15 | how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off |
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |

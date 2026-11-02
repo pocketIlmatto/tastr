@@ -8,7 +8,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .. import blobs, db, runner
+from .. import backfill, blobs, db, runner
 from . import watch
 from .analysis_jobs import ref
 from .context import AppContext, log, tastr_home, upload_dir
@@ -33,7 +33,8 @@ def start(ctx: AppContext) -> list[Callable[[], None]]:
 
 
 def expire_once(ctx: AppContext) -> None:
-    """Delete expired audio, abandoned direct uploads, uploads no track uses and local copies of what the audio bucket holds."""
+    """Delete expired audio, abandoned direct uploads, uploads no track uses and local copies of what the audio
+    bucket holds, and move waveform data still kept in cards to the bucket."""
     settings = ctx.settings
     try:
         with closing(ctx.conn()) as c:
@@ -49,6 +50,10 @@ def expire_once(ctx: AppContext) -> None:
         evicted = blobs.evict()  # local copies of what the audio bucket holds; the disk is a cache then
         if evicted:
             log.info("Removed %d local copies of files kept in the audio bucket", evicted)
+        with closing(ctx.conn()) as c:  # waveform data a card kept because the bucket couldn't take it then
+            moved = backfill.move_views(c)
+        if moved["views"]:
+            log.info("Moved %d card(s)' waveform data to the audio bucket", moved["views"])
         if gone:
             log.info("Deleted the audio of %d track(s) older than %g days", len(gone), settings.audio_days)
     except Exception:  # noqa: BLE001 - try again next time

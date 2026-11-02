@@ -266,6 +266,57 @@ def test_views_stay_in_the_card_when_the_bucket_cant_take_them(bucket, db_path, 
     conn.close()
 
 
+def test_views_go_to_the_bucket_after_the_transaction_on_a_durable_object(bucket, home, tmp_path, monkeypatch):
+    # On the Worker a transaction is transactionSync, a synchronous call from JavaScript: a fetch can't be waited
+    # on inside one ("Cannot stack switch", T31), so the upload has to happen after it.
+    from tastr import do_sqlite
+
+    st = do_sqlite.FakeStorage(tmp_path / "do.db")
+    depth = [0]
+    run = st._transaction
+
+    def counted(fn):
+        depth[0] += 1
+        try:
+            return run(fn)
+        finally:
+            depth[0] -= 1
+
+    monkeypatch.setattr(st, "_transaction", counted)
+    put = blobs.put_views
+
+    def outside(track_id, views):
+        assert depth[0] == 0, "uploaded inside a transaction"
+        return put(track_id, views)
+
+    monkeypatch.setattr(blobs, "put_views", outside)
+    db.use_storage(lambda path: st)
+    try:
+        conn = db.connect(tmp_path / "do.db")
+        card = full_card()
+        card.extras["views"] = VIEWS
+        tid = db.save_card(conn, card)
+        assert db.load_card(conn, tid).extras["views"] == blobs.IN_BUCKET and blobs.get_views(tid) == VIEWS
+    finally:
+        db.use_storage(None)
+
+
+def test_the_sweep_moves_views_a_card_kept(bucket, home, db_path, monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("bucket down")
+
+    card = full_card()
+    card.extras["views"] = VIEWS
+    with monkeypatch.context() as m:
+        m.setattr(blobs, "put_views", broken)
+        with closing(db.connect(db_path)) as conn:
+            tid = db.save_card(conn, card)
+    assert db.size_report(db_path)["inline_views"] == 1
+    create_app(db_path, Settings(hosted=True, access_team_domain=TEAM, access_aud=AUD),
+               verifier=stub_verifier).state.expire_once()
+    assert db.size_report(db_path)["inline_views"] == 0 and blobs.get_views(tid) == VIEWS
+
+
 def test_unpacked_libraries_go_into_the_bucket(bucket, home, db_path, tmp_path):
     import sqlite3
     import tarfile
@@ -433,6 +484,19 @@ def test_direct_upload_in_the_background(bucket, home, db_path, monkeypatch):
             break
         time.sleep(0.05)
     assert job["state"] == "done" and job["results"][0]["track_id"] is not None
+
+
+def test_direct_upload_drops_the_checked_copy_where_the_disk_is_memory(bucket, home, db_path, monkeypatch):
+    # The Worker (blobs.keep_copies False): a batch of checked uploads waiting their turn mustn't fill its memory.
+    monkeypatch.setattr(blobs, "keep_copies", False)
+    c = direct_client(db_path, monkeypatch)
+    (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+    browser_put(up, b"RIFFsong")
+    assert c.post(f"/api/uploads/{up['id']}/check", headers=GOOD).status_code == 200
+    assert [p for p in (home / "uploads").rglob("*") if p.is_file()] == []
+    r = c.post("/api/analyze/uploaded", data={"ids": [up["id"]]}, headers=GOOD)
+    assert r.status_code == 200, r.text
+    assert r.json()["results"][0]["track_id"] is not None  # brought back for its analysis
 
 
 def test_direct_upload_refusals(bucket, home, db_path, monkeypatch):

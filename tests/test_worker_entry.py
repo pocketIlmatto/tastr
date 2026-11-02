@@ -3,6 +3,7 @@ Access keys fetched with the Worker's fetch, the Durable Object storage wrapper,
 itself runs under `pywrangler dev` (worker/README.md)."""
 
 import asyncio
+import errno
 import importlib.util
 import json
 import os
@@ -15,7 +16,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from tastr import db, do_sqlite, http, runner
+from tastr import blobs, db, do_sqlite, http, runner
 from tastr.web.hosted import AccessVerifier
 
 ENTRY = Path(__file__).resolve().parent.parent / "worker" / "src" / "entry.py"
@@ -45,6 +46,8 @@ def entry(monkeypatch):
     monkeypatch.setitem(sys.modules, "pyodide", types.ModuleType("pyodide"))
     monkeypatch.setitem(sys.modules, "pyodide.ffi", ffi)
     before = runner.current()
+    monkeypatch.setattr(blobs, "keep_copies", True)  # loading the entry sets it False; put back after
+    monkeypatch.setattr(sys, "unraisablehook", sys.unraisablehook)
     spec = importlib.util.spec_from_file_location("tastr_worker_entry", ENTRY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -139,3 +142,18 @@ def test_engine_build_id_can_come_from_the_environment(monkeypatch):
 
     monkeypatch.setenv("TASTR_ENGINE_WASM_ID", "abc123")
     assert rust.wasm_id() == "abc123"
+
+
+def test_only_the_snapshot_zipfile_noise_is_dropped(entry):
+    seen = []
+    hook = entry.quiet_unraisable(seen.append)
+
+    def zip_del():
+        pass
+    zip_del.__qualname__ = "ZipFile.__del__"
+    hook(types.SimpleNamespace(exc_value=OSError(errno.EBADF, "Bad file descriptor"), object=zip_del))
+    assert seen == []
+    other = types.SimpleNamespace(exc_value=OSError(errno.EBADF, "Bad file descriptor"), object=print)
+    hook(other)
+    hook(oops := types.SimpleNamespace(exc_value=ValueError("x"), object=zip_del))
+    assert seen == [other, oops]

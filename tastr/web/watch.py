@@ -49,7 +49,10 @@ def fetch_runs(repo: str, token: str = "", timeout: float = 10) -> list[dict[str
                       {"Accept": "application/vnd.github+json", "User-Agent": "tastr", "X-GitHub-Api-Version": "2022-11-28",
                        **({"Authorization": f"Bearer {token}"} if token else {})}, timeout=timeout) as r:
         if r.status != 200:
-            raise http.HTTPError(f"GitHub answered {r.status}", r.status)
+            limited = r.status in (403, 429) and r.headers.get("x-ratelimit-remaining") == "0"
+            hint = (" (rate limit: without TASTR_GITHUB_TOKEN the limit is shared with everyone on this server's "
+                    "IP address, as on Cloudflare)") if limited and not token else ""
+            raise http.HTTPError(f"GitHub answered {r.status}{hint}", r.status)
         return json.loads(r.read()).get("workflow_runs", [])
 
 

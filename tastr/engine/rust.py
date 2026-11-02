@@ -176,9 +176,12 @@ def wasm_path() -> Path | None:
 
 def wasm_id() -> str | None:
     """A content hash of the WebAssembly build: the page names the build it ran, and the server takes a card
-    only from the build it serves now."""
+    only from the build it serves now. TASTR_ENGINE_WASM_ID gives it where the file isn't on this server's disk
+    (the Worker serves it as a static asset; worker/build.py records its hash)."""
     import hashlib
 
+    if os.environ.get("TASTR_ENGINE_WASM_ID"):
+        return os.environ["TASTR_ENGINE_WASM_ID"]
     p = wasm_path()
     if p is None:
         return None

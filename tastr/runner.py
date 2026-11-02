@@ -11,7 +11,8 @@ Two kinds of work use it:
 Work is plain synchronous code either way. On the Worker it runs on the event loop until it waits on the network
 (pyodide.ffi.run_sync), and then other requests and jobs run meanwhile. So no lock may be held across a wait
 there: nothing can release it, and the Worker would hang. `blocking` says which runner this is, for code that
-would otherwise wait on a lock (AnalysisSlots).
+would otherwise wait on a lock (AnalysisSlots, the lookup guard). `sleep(seconds)` pauses the calling work: on
+the Worker it lets other requests and jobs run meanwhile, where time.sleep would stop them all.
 
 `use(runner)` picks the runner for the whole process; the Worker calls it before it builds the app.
 """
@@ -32,6 +33,10 @@ class Threads:
     """Each lane is a thread pool (a thread per job when it has no limit); each `every` a thread of its own."""
 
     blocking = True
+
+    @staticmethod
+    def sleep(seconds: float) -> None:
+        time.sleep(seconds)
 
     def lane(self, name: str, limit: int | None = None) -> "ThreadLane":
         return ThreadLane(name, limit)
@@ -65,12 +70,13 @@ class ThreadLane:
 
 class Loop:
     """The Worker's runner. Jobs are asyncio tasks; repeating work is run by `run_due()`, which the Durable
-    Object calls from its alarm, and `next_due()` is when to set the next alarm for."""
+    Object calls from its alarm, and `next_due()` is when to set the next alarm for. `sleep` is the Worker's
+    own (run_sync on asyncio.sleep, worker/src/entry.py); time.sleep stands in for it in tests."""
 
     blocking = False
 
-    def __init__(self, clock: Callable[[], float] = time.time):
-        self.clock = clock
+    def __init__(self, clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep):
+        self.clock, self.sleep = clock, sleep
         self._every: dict[str, list] = {}  # name -> [seconds, fn, due]
 
     def lane(self, name: str, limit: int | None = None) -> "LoopLane":

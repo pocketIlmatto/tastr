@@ -25,6 +25,9 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
+from .. import runner
+
+LOCK_POLL = 0.05  # seconds between tries for a provider's lock on the Worker
 QUOTA_MARGIN = 20
 BACKOFF_START, BACKOFF_MAX, AUTH_PAUSE = 60.0, 3600.0, 3600.0
 
@@ -90,7 +93,7 @@ class Guard:
     def before_request(self) -> None:
         """Wait out the spacing, then count the request, or raise Limited if a budget or pause forbids it.
         Holds the provider's lock until after_response, so requests to one provider never overlap."""
-        self.lock.acquire()
+        self._acquire()
         try:
             now = time.time()
             if now < self.paused_until:
@@ -103,12 +106,22 @@ class Guard:
                 raise Limited(f"{self.p.label}: monthly limit of {lim['monthly']} requests reached")
             wait = self.last + lim["interval"] - now
             if wait > 0:
-                time.sleep(wait)
+                runner.current().sleep(wait)
             self.last = time.time()
             self._count(self.last)
         except BaseException:
             self.lock.release()
             raise
+
+    def _acquire(self) -> None:
+        """Take the provider's lock. On the Worker (tastr/runner.py) the holder is another task on the same event
+        loop, waiting on its request, so wait for it with the runner's sleep, which lets that task finish."""
+        r = runner.current()
+        if r.blocking:
+            self.lock.acquire()
+            return
+        while not self.lock.acquire(blocking=False):
+            r.sleep(LOCK_POLL)
 
     def after_response(self, status: int | None, headers=None) -> None:
         """Read quota headers and back off on 429 / 5xx / auth errors; releases the lock."""

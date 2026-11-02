@@ -67,13 +67,13 @@ class Response:
 
 
 Body = bytes | BinaryIO | None
-Transport = Callable[[str, str, dict[str, str], Body], Response]
+Transport = Callable[[str, str, dict[str, str], Body, float], Response]
 
 
-def _urllib(method: str, url: str, headers: dict[str, str], body: Body) -> Response:
+def _urllib(method: str, url: str, headers: dict[str, str], body: Body, timeout: float = TIMEOUT) -> Response:
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        resp = urllib.request.urlopen(req, timeout=TIMEOUT)  # noqa: S310 - our own bucket and Modal endpoint
+        resp = urllib.request.urlopen(req, timeout=timeout)  # noqa: S310 - our own bucket and Modal endpoint
     except urllib.error.HTTPError as e:  # an answer all the same: the caller decides what a status means
         resp = e
     except OSError as e:
@@ -91,10 +91,12 @@ _transport: Transport = _urllib
 
 
 def use(transport: Transport | None) -> None:
-    """`transport(method, url, headers, body)` returns a Response; None goes back to urllib."""
+    """`transport(method, url, headers, body, timeout)` returns a Response; None goes back to urllib."""
     global _transport
     _transport = transport or _urllib
 
 
-def request(method: str, url: str, headers: dict[str, str] | None = None, body: Body = None) -> Response:
-    return _transport(method, url, dict(headers or {}), body)
+def request(method: str, url: str, headers: dict[str, str] | None = None, body: Body = None,
+            timeout: float = TIMEOUT) -> Response:
+    """Send the request; `timeout` (seconds) bounds the wait for an answer."""
+    return _transport(method, url, dict(headers or {}), body, timeout)

@@ -11,13 +11,12 @@ import http.client
 import json
 import os
 import re
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .. import __version__
+from ..http import request as send
 
 USER_AGENT = f"tastr/{__version__} (+https://github.com/pocketIlmatto/tastr)"
 TIMEOUT = 10.0
@@ -121,26 +120,28 @@ class Provider:
         who = source or self.label
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})})
         self.guard.before_request()  # raises guard.Limited instead of sending
         status, resp_headers = None, None
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-                status, resp_headers = r.status, r.headers
-                return r.status, json.loads(r.read() or b"null")
-        except urllib.error.HTTPError as e:
-            status, resp_headers = e.code, e.headers
-            detail = e.read()[:300].decode("utf-8", "replace").strip()
-            raise ProviderError(f"{who} answered HTTP {e.code}" + (f": {detail}" if detail else ""), e.code) from None
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise ProviderError(f"Couldn't reach {who}: {getattr(e, 'reason', e)}") from None
-        except http.client.HTTPException as e:  # e.g. IncompleteRead: the response was cut off
-            raise ProviderError(f"{who}'s response was cut off ({type(e).__name__})") from None
-        except json.JSONDecodeError:
-            raise ProviderError(f"{who} sent a response that isn't JSON") from None
+            try:
+                # tastr/http.py: urllib here, the Worker's own fetch on Cloudflare
+                with send("GET", url, {"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})},
+                          timeout=TIMEOUT) as r:
+                    status, resp_headers = r.status, r.headers
+                    body = r.read()
+            except OSError as e:  # couldn't send, no answer in time, or the connection dropped
+                raise ProviderError(f"Couldn't reach {who}: {getattr(e, 'reason', None) or e.__cause__ or e}") from None
+            except http.client.HTTPException as e:  # e.g. IncompleteRead: the response was cut off
+                raise ProviderError(f"{who}'s response was cut off ({type(e).__name__})") from None
+            if status >= 400:
+                detail = body[:300].decode("utf-8", "replace").strip()
+                raise ProviderError(f"{who} answered HTTP {status}" + (f": {detail}" if detail else ""), status)
+            try:
+                return status, json.loads(body or b"null")
+            except json.JSONDecodeError:
+                raise ProviderError(f"{who} sent a response that isn't JSON") from None
         finally:
             self.guard.after_response(status, dict(resp_headers.items()) if resp_headers else None)
-
 
 def num(v: Any) -> float | None:
     """A positive number from a provider field ("128", 128, "128.0"), else None."""

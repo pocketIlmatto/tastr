@@ -1,5 +1,6 @@
 # made by build.py and pywrangler
 src/tastr/
+src/tastr_build.py
 public/
 python_modules/
 .venv-workers/

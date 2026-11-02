@@ -296,11 +296,12 @@ Fly serves everything until the move (TAS-51). What exists so far, in `worker/` 
 flowchart LR
     B[Browser] -->|HTTPS, Access login| CF[Cloudflare edge]
     CF --> W["Worker tastr<br/>(worker/src/entry.py)"]
-    W -->|/static/*| SA[Workers Static Assets<br/>worker/public/static]
+    W -->|"/static/*, /sqljs/*, /engine/*"| SA["Workers Static Assets<br/>worker/public: page files, sql.js,<br/>the engine's WebAssembly build"]
     W -->|everything else| DO["Durable Object Library<br/>FastAPI app + the library database<br/>in its SQLite storage"]
     DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
     AL[Durable Object alarm] -->|expiry sweep, watch| DO
     DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, stems)"]
+    DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, MusicBrainz])
 ```
 
 - The Durable Object runs the same FastAPI app as Fly (`create_app(threads=False)`) on one event loop. The
@@ -314,6 +315,14 @@ flowchart LR
   jobs (analyses, stems, drum model runs) are asyncio tasks in lanes that queue them, and the repeating work (the
   expiry sweep every 6 hours, the watch) runs from the Durable Object's alarm, which wakes the object when it is
   due. Background analyses queue for an analysis slot in their lane there, since there are no threads to wait.
+- Browser files: `worker/build.py` puts the page's files, sql.js (for the Simple and SQL searches; pinned in
+  `worker/package.json` at the version `routes/search.py` names) and the Rust engine's WebAssembly build (for
+  `TASTR_BROWSER_ENGINE`; `deploy-worker.yml` builds it, and `src/tastr_build.py` records its hash for the
+  card check) in `worker/public/`, and Static Assets serve them, as the Fly image's server does from
+  `TASTR_SQLJS_DIR` and `TASTR_ENGINE_WASM`.
+- Catalog lookups (`TASTR_LOOKUP`) send through `tastr/http.py` as well, so they use the Worker's fetch there.
+  Their per-provider guard waits with the runner's `sleep`, which lets other requests run, instead of holding the
+  event loop. The AcousticBrainz provider needs its index file on disk, so it stays off on the Worker.
 - Modal: the Worker calls the `api` web endpoint of `tastr-web` (`TASTR_MODAL_URL`, with a Modal proxy auth
   token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET`) through its own fetch, instead of the Modal client.
 - The audio bucket works the same as on Fly: `tastr/s3.py` signs each request itself (no boto3), and
@@ -337,8 +346,8 @@ nothing is public until step 5.
 | 1 | Cloudflare **Workers & Pages > Plans** | Workers Paid ($5 a month): the bundle (about 7.7 MiB gzipped) is over the Free plan's 3 MiB limit. |
 | 2 | Modal **Settings > Proxy Auth Tokens** | A token for the Worker. Its id and secret become `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET`. `TASTR_MODAL_URL` is the `api` endpoint's address, which `modal deploy` prints (in the deploy workflow's log). |
 | 3 | Cloudflare **My Profile > API Tokens**, then GitHub **Settings > Secrets and variables > Actions** | A token from the "Edit Cloudflare Workers" template, saved as the GitHub secret `CLOUDFLARE_API_TOKEN`. Then **Actions > deploy-worker > Run workflow** (`.github/workflows/deploy-worker.yml`) builds, checks and deploys the Worker. |
-| 4 | `pywrangler secret put NAME` in `worker/`, or the Worker's **Settings > Variables and Secrets** | The same secrets as on Fly, without the Fly, Modal-token and Litestream ones: `TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD`, `TASTR_ADMIN_EMAILS`, `TASTR_LINK_SECRET`, `TASTR_STORAGE_GB`, the four `TASTR_AUDIO_*` ones (required on the Worker), the three `TASTR_MODAL_*` ones above, and the optional ones you use. |
-| 5 | Cloudflare **Workers > tastr > Settings > Domains & Routes**, and Access | Try it first at a second hostname (say `tastr-next.pocketknows.com`) added to the same Access application. |
+| 4 | `pywrangler secret put NAME` in `worker/`, or the Worker's **Settings > Variables and Secrets** | The same secrets as on Fly, without the Fly, Modal-token and Litestream ones: `TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD`, `TASTR_ADMIN_EMAILS`, `TASTR_LINK_SECRET`, `TASTR_STORAGE_GB`, the four `TASTR_AUDIO_*` ones (required on the Worker), the three `TASTR_MODAL_*` ones above, and the optional ones you use: `TASTR_DIRECT_UPLOAD`, `TASTR_BROWSER_ENGINE`, `TASTR_MAX_ANALYSES`, `TASTR_AUDIO_DAYS`, `TASTR_LOOKUP` (not `acousticbrainz`) with `FREQBLOG_API_KEY`. Not `TASTR_ENGINE` (analysis is on Modal) or the Fly-only `TASTR_HOME`. |
+| 5 | Cloudflare **Workers > tastr > Settings > Domains & Routes**, Access, and the bucket's CORS policy | Try it first at a second hostname (say `tastr-next.pocketknows.com`) added to the same Access application. With `TASTR_DIRECT_UPLOAD` on, add that hostname to the audio bucket's CORS rule (PUT) too. |
 | 6 | Fly, then the Worker | `fly ssh console -C "tastr library-to-bucket"` copies the database to the audio bucket as `import/library.db` (`tastr/library_move.py`). The Worker imports it on its next start if its library is still empty, once (it notes the import in `meta`); to make it start again, redeploy. Audio and stems are in the bucket already. |
 | 7 | Cloudflare **Workers > tastr > Settings > Domains & Routes** | Right after step 6, point `tastr.pocketknows.com` at the Worker, keeping the Access application in front of it. Anything changed on Fly between steps 6 and 7 stays on Fly, so do them together. Then stop Fly. |
 

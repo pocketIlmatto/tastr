@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build the Worker and check it the way CI does (.github/workflows/test.yml, job "worker"):
-#   1. build.py copies the app in, and `pywrangler deploy --dry-run` bundles it with its Pyodide packages;
+#   1. build.py copies the app and the browser files in (sql.js from npm, and the engine's WebAssembly build when
+#      it has been built), and `pywrangler deploy --dry-run` bundles it with its Pyodide packages;
 #   2. the bundle must stay under Cloudflare's limit (10 MiB gzipped on Workers Paid);
 #   3. with --serve, `pywrangler dev` runs it in local mode and a few pages must answer.
 # Run it with the app's own Python environment active (build.py imports tastr.web.server).
@@ -9,8 +10,8 @@ cd "$(dirname "$0")"
 LIMIT_KIB=10240
 PORT=${PORT:-8799}
 
+[ -d node_modules/sql.js ] && [ -d node_modules/wrangler ] || npm install --no-audit --no-fund --silent
 python build.py
-[ -d node_modules ] || npm install --no-audit --no-fund --silent
 out=$(uv run pywrangler deploy --dry-run --outdir .dry 2>&1) || { echo "$out"; exit 1; }
 line=$(echo "$out" | sed 's/\x1b\[[0-9;]*m//g' | grep "Total Upload")
 echo "$line"
@@ -31,7 +32,8 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 fail=0
-for path in /api/health /api/config / /api/tracks /static/style.css; do
+for path in /api/health /api/config / /api/tracks /static/style.css /sqljs/sql-wasm.js \
+            ${CHECK_ENGINE:+/engine/tastr_engine.wasm}; do
   code=$(curl -s -o /dev/null -w "%{http_code}" "localhost:$PORT$path")
   echo "$code $path"
   [ "$code" = 200 ] || fail=1

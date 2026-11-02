@@ -407,7 +407,7 @@ def modal_api(monkeypatch):
     monkeypatch.setattr(mod, "stems", Fn("stems", {"drums": b"flac", "bass": b"flac2"}), raising=False)
     client = TestClient(mod.api())
 
-    def post(method, url, headers, data):
+    def post(method, url, headers, data, timeout):
         sent.append((url, headers))
         r = client.post(url.removeprefix("https://modal.example"), content=data, headers=headers)
         return http.Response(r.status_code, dict(r.headers), iter([r.content[:7], r.content[7:]]))  # in pieces

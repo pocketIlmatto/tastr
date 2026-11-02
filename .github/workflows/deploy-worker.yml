@@ -24,12 +24,20 @@ jobs:
         with:
           node-version: "22"
       - uses: astral-sh/setup-uv@v6
-      # The same build, size check and local smoke test as CI, then the real deploy. TASTR_COMMIT names the
-      # version on the Admin tab.
+      # The engine's WebAssembly build, for cards made in the browser (TASTR_BROWSER_ENGINE); the same Rust as the
+      # Dockerfile. build.py puts it in public/engine/.
+      - name: Build the engine for the browser
+        working-directory: engine-rs
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-unknown
+          cargo +1.97.0 build --release --lib --target wasm32-unknown-unknown --locked
+      # The same build, size check and local smoke test as CI (plus the engine file), then the real deploy.
+      # TASTR_COMMIT names the version on the Admin tab.
       - name: Check and deploy
         working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CHECK_ENGINE: "1"
         run: |
           ./check.sh --serve
           uv run pywrangler deploy --var "TASTR_COMMIT:${{ github.sha }}"

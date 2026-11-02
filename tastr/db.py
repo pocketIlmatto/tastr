@@ -15,14 +15,13 @@ import json
 import logging
 import os
 import sqlite3
-import tempfile
 import time
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import blobs
+from . import blobs, do_sqlite
 from .engine.card import TrackCard
 
 log = logging.getLogger(__name__)
@@ -335,12 +334,36 @@ def default_db_path() -> Path:
     return home / "tastr.db"
 
 
+# On a Cloudflare Durable Object the library lives in the object's own SQL storage, not a file (tastr/do_sqlite.py):
+# `use_storage(factory)` makes connect() hand out adapters over factory(path) instead. None: a SQLite file.
+_storage_for = None
+_migrated: set[Path] = set()  # with use_storage: databases whose schema is up to date (connect runs per request)
+
+
+def use_storage(factory) -> None:
+    global _storage_for
+    _storage_for = factory
+    _migrated.clear()
+
+
+def atomic(conn, fn):
+    """fn()'s writes all together or not at all: a transaction on a file, transactionSync on a Durable Object
+    (where `with conn:` can't roll back; see tastr/do_sqlite.py)."""
+    if isinstance(conn, do_sqlite.Connection):
+        return conn.atomic(fn)
+    with conn:
+        return fn()
+
+
 def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sqlite3.Connection:
     path = Path(path or default_db_path())
-    if readonly:
+    if _storage_for is not None:
+        conn = do_sqlite.Connection(_storage_for(path))
+    elif readonly:
         conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     else:
         conn = sqlite3.connect(path)
+    if not readonly and not (_storage_for is not None and path in _migrated):
         _add_owner_column(conn)
         conn.executescript(SCHEMA)
         if "album" not in {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}:
@@ -369,6 +392,8 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
                 conn.execute(f"ALTER TABLE track_labels ADD COLUMN {col} {ddl}")  # databases from before the review log
         conn.execute("INSERT OR IGNORE INTO meta VALUES ('db_schema_version', ?)", (str(DB_SCHEMA_VERSION),))
         conn.commit()
+        if _storage_for is not None:
+            _migrated.add(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -422,7 +447,7 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
         "errors_json": json.dumps(card.errors),
         "analyzed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
-    with conn:
+    def write() -> int:
         existing = find_track_id(conn, sha256=s.sha256, source_uri=s.uri, owner=owner)
         if existing is not None:
             sets = ", ".join(f"{col} = :{col}" for col in row)
@@ -457,7 +482,9 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
              for name, ser in card.series.items() for i, (t, v) in enumerate(zip(ser.times, ser.values))],
         )
         conn.execute("INSERT INTO cards VALUES (?, ?, ?)", (track_id, card.schema_version, _card_json(card, track_id)))
-    return track_id
+        return track_id
+
+    return atomic(conn, write)
 
 
 def _card_json(card: TrackCard, track_id: int) -> str:
@@ -977,25 +1004,25 @@ _PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_
 def library_snapshot(path: str | os.PathLike, owner: str | None) -> bytes:
     """A SQLite file of one person's library (LIBRARY_TABLES, their rows, no private columns), or with `owner`
     None every library's rows with all their columns (hosted admins), for the page to query in the browser with
-    sql.js (TAS-49). Indexes on tracks are added so the page's searches stay quick."""
-    with tempfile.TemporaryDirectory() as tmp:
-        out = Path(tmp) / "library.db"
-        with closing(sqlite3.connect(f"file:{out}", uri=True)) as dst:
-            dst.execute("ATTACH DATABASE ? AS src", (f"file:{Path(path)}?mode=ro",))
-            cols = ", ".join(f'"{r[1]}"' for r in dst.execute("PRAGMA src.table_info(tracks)")
-                             if owner is None or r[1] not in _PRIVATE_COLUMNS)
-            where, args = ("WHERE owner = ?", (owner,)) if owner is not None else ("", ())
-            dst.execute(f"CREATE TABLE tracks AS SELECT {cols} FROM src.tracks {where}", args)
-            for t in LIBRARY_TABLES[1:]:
-                dst.execute(f"CREATE TABLE {t} AS SELECT * FROM src.{t} WHERE track_id IN (SELECT id FROM tracks)")
-            dst.commit()
-            dst.execute("DETACH DATABASE src")
-            for name, cols in (("tracks", "id"), ("tracks", "bpm"), ("tracks", "camelot"), ("tags", "tag"),
-                               ("tags", "track_id"), ("features", "name, value")):
-                dst.execute(f"CREATE INDEX idx_{name}_{cols.split(',')[0]} ON {name}({cols})")
-            dst.commit()
-            dst.execute("VACUUM")
-        return out.read_bytes()
+    sql.js (TAS-49). Indexes on tracks are added so the page's searches stay quick. The rows are copied through a
+    connection into a database in memory (no ATTACH or temporary file), so it works on a Durable Object too."""
+    where, args = ("WHERE owner = ?", (owner,)) if owner is not None else ("", ())
+    with closing(connect(path, readonly=True)) as src, closing(sqlite3.connect(":memory:")) as dst:
+        for t in LIBRARY_TABLES:
+            cols = [(r[1], r[2]) for r in src.execute(f"PRAGMA table_info({t})")
+                    if t != "tracks" or owner is None or r[1] not in _PRIVATE_COLUMNS]
+            names = ", ".join(f'"{c}"' for c, _ in cols)
+            dst.execute(f"CREATE TABLE {t} ({', '.join(f'{chr(34)}{c}{chr(34)} {typ}' for c, typ in cols)})")
+            sql = (f"SELECT {names} FROM tracks {where}" if t == "tracks" else
+                   f"SELECT {names} FROM {t} WHERE track_id IN (SELECT id FROM tracks {where})")
+            rows = [tuple(r) for r in src.execute(sql, args).fetchall()]
+            if rows:
+                dst.executemany(f"INSERT INTO {t} VALUES ({', '.join('?' * len(cols))})", rows)
+        for name, cols in (("tracks", "id"), ("tracks", "bpm"), ("tracks", "camelot"), ("tags", "tag"),
+                           ("tags", "track_id"), ("features", "name, value")):
+            dst.execute(f"CREATE INDEX idx_{name}_{cols.split(',')[0]} ON {name}({cols})")
+        dst.commit()
+        return dst.serialize()
 
 
 def run_query(path: str | os.PathLike, sql: str, max_rows: int, seconds: float = 5.0) -> tuple[list[str], list[list]]:

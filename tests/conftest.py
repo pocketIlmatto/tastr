@@ -23,6 +23,20 @@ os.environ.setdefault("TASTR_ENGINE", "rust" if _rust.lib_path() else "python")
 from synth import make_track, write_wav  # noqa: E402
 
 
+if os.environ.get("TASTR_TEST_DO_SQLITE"):
+    # Run the suite with every db.connect() going through the Durable Object adapter (tastr/do_sqlite.py), as the
+    # Cloudflare Worker does (TAS-84). Tests of local-only tools (pack/unpack, the local SQL box, old-database
+    # migrations) are expected to fail this way.
+    @pytest.fixture(autouse=True)
+    def _durable_object_db():
+        from tastr import db, do_sqlite
+
+        stores: dict = {}
+        db.use_storage(lambda path: stores.setdefault(str(path), do_sqlite.FakeStorage(path)))
+        yield
+        db.use_storage(None)  # the stores stay open: a test's background thread may still be finishing
+
+
 @pytest.hookimpl(tryfirst=True)  # before -m "not audio" deselects
 def pytest_collection_modifyitems(config, items):
     """A `rust` test analyzes audio through the app: it is an audio test, and skips without the library."""

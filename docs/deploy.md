@@ -217,17 +217,18 @@ tracks stay until you delete them.
 ## Updating
 
 Merge to main. When the **tests** workflow passes on main, the **deploy** workflow runs on its own and deploys
-Modal and then Fly, so both run the same engine. It skips the deploy when nothing that ships changed since the
+Modal and then the Cloudflare Worker (`deploy-worker.yml`; Fly before the switch, TAS-51), so both run the same
+engine. It skips the deploy when nothing that ships changed since the
 last one (a merge of only docs, tests or Markdown; the list of paths is in `.github/workflows/deploy.yml`). To
 deploy by hand, run it from **Actions > deploy > Run workflow**. It needs three repository secrets (**Settings > Secrets and variables >
 Actions**):
 
 | Secret | Where it comes from |
 | --- | --- |
-| `FLY_API_TOKEN` | `fly tokens create deploy` |
+| `CLOUDFLARE_API_TOKEN` | A Cloudflare API token from the "Edit Cloudflare Workers" template ([hosting-map.md](hosting-map.md), step 3 of "Before the switch") |
 | `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | another Modal API token, as in step 3 |
 
-Or run the two commands from step 7 yourself.
+To deploy just the Worker: **Actions > deploy-worker > Run workflow**.
 
 The page loads `app/main.js`, `strudel.js` and `style.css` with a content hash in the URL (`?v=…`), and the UI's
 other modules (`tastr/web/static/app/*.js`, which `main.js` imports) are served with `Cache-Control: no-cache`, so a

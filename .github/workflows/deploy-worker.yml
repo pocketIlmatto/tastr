@@ -1,18 +1,29 @@
 name: deploy-worker
-# Deploys the Cloudflare Worker (worker/, TAS-84) by hand: Actions > deploy-worker > Run workflow. Fly keeps serving
-# tastr.pocketknows.com until the switch (TAS-51, docs/hosting-map.md); after it, this runs from deploy.yml instead.
+# Builds, checks and deploys the Cloudflare Worker (worker/) that serves the hosted Tastr since the switch (TAS-51,
+# docs/hosting-map.md). deploy.yml runs it after the Modal deploy on each merge to main that ships; by hand,
+# Actions > deploy-worker > Run workflow deploys just the Worker.
 # Needs the CLOUDFLARE_API_TOKEN secret: a Cloudflare API token from the "Edit Cloudflare Workers" template.
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to deploy
+        type: string
+        required: true
 concurrency:
   group: deploy-worker
   cancel-in-progress: false
+permissions:
+  contents: read
 jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -32,12 +43,13 @@ jobs:
           rustup toolchain install 1.97.0 --profile minimal --target wasm32-unknown-unknown
           cargo +1.97.0 build --release --lib --target wasm32-unknown-unknown --locked
       # The same build, size check and local smoke test as CI (plus the engine file), then the real deploy.
-      # TASTR_COMMIT names the version on the Admin tab.
-      - name: Check and deploy
+      # TASTR_COMMIT names the version on the Admin tab. deploy.yml's scope step looks this step up by name in
+      # earlier runs, so rename both together.
+      - name: Deploy the Worker
         working-directory: worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CHECK_ENGINE: "1"
         run: |
           ./check.sh --serve
-          uv run pywrangler deploy --var "TASTR_COMMIT:${{ github.sha }}"
+          uv run pywrangler deploy --var "TASTR_COMMIT:$(git rev-parse HEAD)"

@@ -12,8 +12,13 @@ Six services, each with one job:
 | Fly.io | Runs the web server (app `tastr-frienz` in `fly.toml`) and keeps the database on its volume, with uploads and stems too unless the audio bucket is on |
 | Modal | Analysis, the on-request drum model and stem separation (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
 | Cloudflare R2 | Litestream's backup of the library database (bucket `tastr-app`) and, once `TASTR_AUDIO_BUCKET` is set, the uploads and stems (bucket `tastr-audio`) |
-| GitHub Actions | The `deploy` workflow, which ships new code to Modal and Fly after the tests pass on main (or by hand) |
+| GitHub Actions | The `deploy` workflow, which ships new code to Modal and the Cloudflare Worker after the tests pass on main (or by hand) |
 | Anthropic (Claude API) | "Ask Claude to change it" under Try this in › Strudel, once `ANTHROPIC_API_KEY` is set (`tastr/web/claude.py`) |
+
+**Since the switch (2026-11-02, TAS-51) the web server is the Cloudflare Worker** described in
+[The Cloudflare Worker](#the-cloudflare-worker-since-the-switch-tas-84). Fly is stopped and kept for a week as a fallback;
+the map and tables below still show the Fly setup until it is deleted, except for shipping code, which now
+deploys the Worker.
 
 `tests/test_hosting_map.py` fails when a setting, secret or Modal function in the deploy files is missing
 from this page. Update the page in the same change.
@@ -51,6 +56,7 @@ flowchart TB
   R2A[(R2 bucket tastr-audio, if TASTR_AUDIO_BUCKET is set: uploads, stems, each card's waveform data)]
   GHT[GitHub Actions: tests workflow, on each push to main]
   GH[GitHub Actions: deploy workflow, after tests pass if app code changed]
+  WK[Cloudflare Worker tastr, the web server since the switch]
   CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, MusicBrainz])
   ANT([Claude API, if ANTHROPIC_API_KEY is set: claude-sonnet-5-5])
 
@@ -76,7 +82,7 @@ flowchart TB
   WEB -.->|Ask Claude: the Strudel code, the ask, BPM, key and sections| ANT
   GHT -->|passed| GH
   GH -->|modal deploy| MOD
-  GH -->|fly deploy, with the commit and run link| FLY
+  GH -->|deploy-worker: pywrangler deploy, with the commit| WK
   WEB -.->|every 15 min: runs on main, for the Admin log| GH
   WEB -.->|every 15 min: litestream snapshots, for the Admin log| R2
 ```
@@ -204,7 +210,7 @@ database and deletes them.
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. With the audio bucket on, it reads the upload from a signed link and uploads each stem to a signed link of its own, so stems never pass through the server. |
 | HTTPS front for Modal (not used by Fly yet) | Modal `api` | A small web endpoint in front of the functions above, for the Cloudflare Worker, which can't run the Modal client (TAS-84). Only callers with a Modal proxy auth token get in. Every answer streams lines of JSON, with a blank line every 20 seconds so a long call stays open. A server uses it when `TASTR_MODAL_URL` is set, with the token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET` (`tastr/cloud/remote.py`). |
 | Database backup | Litestream to R2 | `deploy/start.sh` restores onto an empty volume, then runs the server under `litestream replicate` (`deploy/litestream.yml`). |
-| Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then Fly, from main. Runs after `tests` passes on a push to main when something that ships changed since the last deploy, or by hand. |
+| Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then the Worker (`deploy-worker.yml`), from main. Runs after `tests` passes on a push to main when something that ships changed since the last deploy, or by hand. |
 
 ## How security works
 
@@ -238,7 +244,7 @@ Modal environment keeps the app's spending apart from benchmarks.
 | `fly.toml` | App name (`tastr-frienz`), region (`sjc`), the volume (`tastr_data` at `/data`), auto-stop, the `/api/health` check, a 512 MB VM, and the non-secret environment: `TASTR_HOSTED`, `TASTR_HOME`, `TASTR_ANALYSIS_BACKEND`, `TASTR_STEMS_BACKEND`, `TASTR_MODAL_APP`, `MODAL_ENVIRONMENT`, `TASTR_GITHUB_REPO` and `TASTR_GITHUB_WORKFLOWS` (whose GitHub Actions runs the Admin log shows, and which workflows) |
 | `Dockerfile`, `deploy/start.sh`, `deploy/litestream.yml` | The server image (`.[hosted,cloud]`: no librosa, scipy or numba, since the server analyzes nothing itself; sql.js from npm, checksum-pinned, in `/app/sqljs`), the restore-then-replicate start, and the backup target |
 | `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums` and `stems`, their images, CPU, GPU, memory and timeouts |
-| `.github/workflows/deploy.yml` | When it deploys (after `tests` on main, which files count), the deploy order, which repository secrets it uses, and the commit and run link it builds into the Fly image |
+| `.github/workflows/deploy.yml`, `.github/workflows/deploy-worker.yml` | When it deploys (after `tests` on main, which files count), the deploy order (Modal, then the Worker), which repository secrets it uses (`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `CLOUDFLARE_API_TOKEN`), and the commit it sets as the Worker's `TASTR_COMMIT` |
 
 ### Fly secrets
 
@@ -287,10 +293,10 @@ Admin tab's deploy line names the commit and links to its GitHub Actions run.
 | Anthropic key and spend limit | Anthropic Console **Settings > API Keys** and **Limits** (set a monthly spend limit for the key's workspace) |
 | Deploy secrets | GitHub **Settings > Secrets and variables > Actions**: `FLY_API_TOKEN`, `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` |
 
-## Coming next: Cloudflare Workers instead of Fly (TAS-84)
+## The Cloudflare Worker (since the switch, TAS-84)
 
-The Fly exit plan (option D) moves the web server onto a Cloudflare Python Worker. Nothing live uses it yet:
-Fly serves everything until the move (TAS-51). What exists so far, in `worker/` (setup in `worker/README.md`):
+The Fly exit plan (option D) moved the web server onto a Cloudflare Python Worker, which has served your
+hostname since 2026-11-02 (TAS-51). It lives in `worker/` (setup in `worker/README.md`):
 
 ```mermaid
 flowchart LR
@@ -300,6 +306,7 @@ flowchart LR
     W -->|everything else| DO["Durable Object Library<br/>FastAPI app + the library database<br/>in its SQLite storage"]
     DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
     AL[Durable Object alarm] -->|expiry sweep, watch| DO
+    GHD[GitHub Actions: deploy, then deploy-worker] -->|pywrangler deploy| W
     DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, stems)"]
     DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, MusicBrainz])
 ```
@@ -357,7 +364,7 @@ nothing is public until step 5.
 | --- | --- |
 | Invite someone | Add their email to the Access Allow policy. Nothing on Fly changes. |
 | Remove someone | Delete their email from the policy. Their tracks stay until you delete them. |
-| Ship new code | Merge to main. Once `tests` passes, `deploy` runs on its own (skipped when the merge only touched docs, tests or Markdown). To deploy anyway: **Actions > deploy > Run workflow**. |
+| Ship new code | Merge to main. Once `tests` passes, `deploy` runs on its own and deploys Modal, then the Worker (skipped when the merge only touched docs, tests or Markdown). To deploy anyway: **Actions > deploy > Run workflow**; just the Worker: **Actions > deploy-worker > Run workflow**. |
 | See usage | The Admin tab (today by hour, 7 or 30 days, or all time); Modal's usage page for actual cost. |
 | Let someone upload more today | Admin tab > ✎ on their row > Today only. The same row raises their Claude asks. |
 | Recover a lost volume | Create a volume named `tastr_data` and deploy. The database comes back from R2; audio and stems come back too when the audio bucket is on, and are lost otherwise. |

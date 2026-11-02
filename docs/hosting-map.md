@@ -318,8 +318,26 @@ flowchart LR
   token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET`) through its own fetch, instead of the Modal client.
 - The audio bucket works the same as on Fly: `tastr/s3.py` signs each request itself (no boto3), and
   `tastr/http.py` sends it with the Worker's fetch. Uploads, stems, signed links and zips (streamed from the
-  bucket) all go through it. The Worker's own files are in memory and gone after a restart, which is fine
-  since the bucket keeps everything.
+  bucket) all go through it. The Worker's own files are in memory and gone after a restart, so on the Worker
+  the audio bucket is required, not optional.
+- CI builds the Worker whenever the app or `worker/` changes (`worker/check.sh`, the last steps of
+  `.github/workflows/test.yml`): it bundles it with its Pyodide packages, fails above 10 MiB gzipped (the Workers
+  Paid limit; it is about 7.7 MiB), and runs it under `pywrangler dev` to check a few pages answer.
+- Not on the Worker: Litestream (the Durable Object's own recovery replaces it), and the "Deployed ..." line
+  in the Admin log, which needs a file that outlives a restart.
+
+### Before the switch (TAS-51)
+
+What has to exist before the Worker can take over from Fly, in order. Nothing here is done yet.
+
+| Step | Where | What |
+| --- | --- | --- |
+| 1 | Cloudflare **Workers & Pages > Plans** | Workers Paid ($5 a month): the bundle (about 7.7 MiB gzipped) is over the Free plan's 3 MiB limit. |
+| 2 | Modal **Settings > Proxy Auth Tokens** | A token for the Worker. Its id and secret become `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET`. `TASTR_MODAL_URL` is the `api` endpoint's address, which `modal deploy` prints (in the deploy workflow's log). |
+| 3 | `pywrangler secret put NAME` in `worker/` | The same secrets as on Fly, without the Fly, Modal-token and Litestream ones: `TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD`, `TASTR_ADMIN_EMAILS`, `TASTR_LINK_SECRET`, `TASTR_STORAGE_GB`, the four `TASTR_AUDIO_*` ones, the three `TASTR_MODAL_*` ones above, and the optional ones you use. |
+| 4 | GitHub Actions | A deploy job for the Worker, with a Cloudflare API token that can edit Workers (still to write). |
+| 5 | The library's data | Copy the Fly database into the Durable Object (an import step, still to write). Audio and stems are already in the bucket. |
+| 6 | Cloudflare **Workers > tastr > Settings > Domains & Routes**, and Access | Point `tastr.pocketknows.com` at the Worker, keeping the Access application in front of it. Fly stops after that. |
 
 ## Common tasks
 

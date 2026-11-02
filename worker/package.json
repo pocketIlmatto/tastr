@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "wrangler for pywrangler, pinned so CI builds the Worker the same way each time (worker/check.sh)",
+  "devDependencies": {"wrangler": "4.156.0"}
+}

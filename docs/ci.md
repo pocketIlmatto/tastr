@@ -34,6 +34,10 @@ skip the audio tests, perf budget only on main. Node and the Strudel test packag
 (`npm ci` in `tests/strudel-runtime`, npm cache, a few seconds) install only when
 `tastr/web/static/strudel.js` or its tests change.
 
+The Cloudflare Worker (`worker/check.sh`) builds and runs a short smoke test when anything under `tastr/`,
+`worker/` or `pyproject.toml` changes: Node and uv set up, pywrangler bundles the Worker with its Pyodide
+packages and starts it locally, about a minute in all.
+
 ## Audit, 2026-10-29
 
 All 97 runs since the repo started (2026-10-28 to 2026-10-29) used about 274 billed minutes:

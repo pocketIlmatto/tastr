@@ -7,3 +7,6 @@ python_modules/
 pylock.toml
 uv.lock
 .dev.vars
+node_modules
+package-lock.json
+.dry/

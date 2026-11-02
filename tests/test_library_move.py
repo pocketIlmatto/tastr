@@ -59,12 +59,14 @@ def test_import_from_the_bucket_runs_once(tmp_path, monkeypatch, s3_server, work
     monkeypatch.setenv("TASTR_HOME", str(tmp_path / "home"))
     use_bucket(monkeypatch, s3_server)
     fly_library(tmp_path / "fly.db")
-    assert library_move.to_bucket(tmp_path / "fly.db") > 0
-    assert blobs.client().head(library_move.KEY)
     db.use_storage(lambda path, st=do_sqlite.FakeStorage(worker_db): st)
     with closing(db.connect(worker_db)) as conn:
+        # The Worker may start before the copy lands: nothing to import yet, and it still waits for one.
+        assert library_move.import_from_bucket(conn) is None and library_move.waiting(conn)
+        assert library_move.to_bucket(tmp_path / "fly.db") > 0
+        assert blobs.client().head(library_move.KEY)
         assert library_move.import_from_bucket(conn)["tracks"] == 2
-        assert db.get_meta(conn, library_move.DONE)
+        assert db.get_meta(conn, library_move.DONE) and not library_move.waiting(conn)
         assert library_move.import_from_bucket(conn) is None  # once only
     blobs.reset()
 

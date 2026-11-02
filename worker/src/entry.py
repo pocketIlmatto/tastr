@@ -160,7 +160,8 @@ def load_env(env) -> None:
 
 APP = None
 SETTINGS: Settings | None = None
-IMPORT_CHECKED = False
+IMPORT_AT = 0.0  # when to look for the library from Fly next (tastr/library_move.py); inf once there's no need
+IMPORT_RETRY = 120  # seconds: the copy may reach the bucket after the Worker starts
 KEYS = AccessKeys()
 
 
@@ -179,14 +180,19 @@ class Library(DurableObject):
             APP.state.startup()
 
     async def fetch(self, request):
-        global IMPORT_CHECKED
-        if not IMPORT_CHECKED:  # the library from Fly, once (tastr/library_move.py); here, where run_sync works
-            IMPORT_CHECKED = True
+        global IMPORT_AT
+        if time.time() >= IMPORT_AT:  # the library from Fly (tastr/library_move.py); here, where run_sync works
+            IMPORT_AT = float("inf")
             try:
                 with closing(db.connect(DB_PATH)) as conn:
-                    library_move.import_from_bucket(conn)
-            except Exception as e:  # noqa: BLE001 - the app still serves; the next start of the object tries again
+                    counts = library_move.import_from_bucket(conn)
+                    if counts is not None:
+                        print(f"imported the library from {library_move.KEY}: {counts}")
+                    elif library_move.waiting(conn):  # no copy in the bucket yet: look again in a while
+                        IMPORT_AT = time.time() + IMPORT_RETRY
+            except Exception as e:  # noqa: BLE001 - the app still serves; it tries again in a while
                 print(f"couldn't import the library: {type(e).__name__}: {e}")
+                IMPORT_AT = time.time() + IMPORT_RETRY
         if SETTINGS.hosted:
             try:
                 await KEYS.refresh(SETTINGS.access_team_domain)

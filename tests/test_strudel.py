@@ -442,9 +442,16 @@ def test_built_in_templates_fill_without_unknowns():
                   c=tpl_card(), b=b, url=AUDIO)
     assert all(not r["unknown"] for r in out)
     mash = out[4]["code"]
-    assert "samples({ b: 'http://127.0.0.1:8000/api/tracks/8/audio' })" in mash and "const origB = (a, b) => {" in mash
-    assert "origB(17, 20).speed(0.969)" in mash and "B: 128 BPM, D minor (7A)" in mash
+    assert "  a_mix: 'http://127.0.0.1:8000/api/tracks/7/audio'," in mash and "  b_mix: 'http://127.0.0.1:8000/api/tracks/8/audio'," in mash
+    assert "const B = (name, a, b) => {" in mash and ".clip(1).speed(0.969)" in mash and "B: 128 BPM, D minor (7A)" in mash
+    assert "  section(32, [17, 48], [17, 48], {" in mash  # the drop takes B's drop
     assert run_tpl("STRUDEL_TEMPLATES.filter((t) => strudelUsesMash(t.text)).map((t) => t.id)") == ["mash"]
+    assert run_tpl("STRUDEL_TEMPLATES.filter((t) => strudelUsesMashParts(t.text)).map((t) => t.id)") == ["mash"]
+    # {b.audio} and {b.loop} stay for your own templates
+    own = run_tpl("strudelFill('{audio}\\n{b.audio}\\nstack({loop}, {b.loop}.speed({b.speed}))', strudelFillins(c, { audioUrl: url, b: { card: b, audioUrl: url.replace('/7/', '/8/') } }))",
+                  c=tpl_card(), b=b, url=AUDIO)
+    assert not own["unknown"] and "samples({ b: 'http://127.0.0.1:8000/api/tracks/8/audio' })" in own["code"]
+    assert "const origB = (a, b) => {" in own["code"] and "origB(17, 20).speed(0.969)" in own["code"]
     assert run_tpl("STRUDEL_TEMPLATES.filter((t) => strudelUsesAudio(t.text)).map((t) => t.id)") == ["loop", "half", "mash"]
 
 
@@ -477,3 +484,123 @@ def test_summary_for_claude():
     out = run_tpl("strudelSummary(c)", c=tpl_card())
     assert out.splitlines()[:2] == ["Night Shift by Okra Lane", "124 BPM, 4/4, A minor (8A)"]
     assert "Drop B bars 17-48" in out
+
+
+# ---- Mash-up parts by section (TAS-87) ----
+
+def mash_card(id_, bpm, secs, title="A track"):
+    """secs: (label, letter, first bar, last bar, energy). A bar grid at `bpm` in 4/4 starting at 0.25 s."""
+    bar = 240 / bpm
+    n = max(x[3] for x in secs) + 1
+    return {"id": id_, "duration": round(0.25 + n * bar, 3), "source": {"title": title}, "suggestions": [],
+            "core": {"bpm": bpm, "key": {"tonic": 9, "mode": "minor", "camelot": "8A"}, "downbeat_times": [round(0.25 + i * bar, 3) for i in range(n)]},
+            "sections": [{"start": 0, "end": 1, "label": l, "letter": k, "start_bar": a, "end_bar": b, "energy": e} for l, k, a, b, e in secs]}
+
+
+A_SECS = [("intro", "A", 1, 8, .3), ("verse", "B", 9, 24, .5), ("chorus", "C", 25, 40, .8), ("verse", "B", 41, 56, .5), ("chorus", "C", 57, 72, .8), ("outro", "D", 73, 80, .2)]
+B_SECS = [("intro", "A", 1, 4, .2), ("chorus", "B", 5, 12, .9), ("bridge", "C", 13, 20, .45), ("chorus", "B", 21, 28, .9), ("chorus", "B", 29, 36, .85)]
+MA, MB = mash_card(7, 120, A_SECS, "Quiet Garden"), mash_card(8, 120, B_SECS, "Second")
+B_AUDIO = AUDIO.replace("/7/", "/8/")
+BOTH = {"a": True, "b": True}
+
+
+def mash(expr: str, a=MA, b=MB, **data):
+    return run_tpl(expr, a=a, b=b, url=AUDIO, burl=B_AUDIO, both=BOTH, **data)
+
+
+def test_b_section_is_the_nth_same_label_else_the_closest_energy():
+    froms = mash("a.sections.map((x, idx) => strudelMashFrom(a, b, { ...x, idx }))")
+    # verses: B has none, so the closest energy (bridge .45); choruses: B's 1st and 2nd; intro: B's intro; outro: B's intro (.2)
+    assert froms == [0, 2, 1, 2, 3, 0]
+
+
+def test_quick_picks_fill_the_grid():
+    st = mash("strudelMashState(a, b, null, both)")
+    assert st["src"] == {"a": "stems", "b": "stems"} and st["preset"] == "avox"
+    assert all(r["on"] == ["a.vocals", "b.bass", "b.other", "b.drums"] for r in st["rows"])
+    trade = mash("strudelMashApply(a, b, strudelMashState(a, b, null, both), 'trade', both).rows.map((r) => r.on)")
+    verse, chorus = trade[1], trade[2]
+    assert verse == ["a.vocals", "a.bass", "a.other", "a.drums"]
+    assert chorus == ["a.bass", "a.other", "a.drums", "b.vocals"]
+    # A drop or hook row trades too
+    drop = mash_card(7, 120, [("verse", "A", 1, 8, .5), ("drop", "B", 9, 16, .9), ("hook", "C", 17, 24, .8)])
+    rows = run_tpl("strudelMashApply(a, b, strudelMashState(a, b, null, both), 'trade', both).rows.map((r) => r.on.includes('b.vocals'))", a=drop, b=MB, both=BOTH)
+    assert rows == [False, True, True]
+    # Full mixes only: the Mix columns
+    mix = mash("strudelMashApply(a, b, strudelMashState(a, b, null, {}), 'trade', {}).rows.map((r) => r.on)")
+    assert mix[1] == ["a.mix"] and mix[2] == ["a.mix", "b.mix"]
+    assert mash("strudelMashApply(a, b, strudelMashState(a, b, null, both), 'clear', both).rows.every((r) => !r.on.length)")
+
+
+def test_switching_mix_and_stems_keeps_the_picks():
+    out = mash("""(() => {
+      const st = strudelMashApply(a, b, strudelMashState(a, b, null, both), 'trade', both);
+      const mixed = JSON.parse(JSON.stringify(strudelMashSwitch(st, 'b', 'mix')));
+      return [mixed.rows.map((r) => r.on), strudelMashSwitch(st, 'b', 'stems').rows.map((r) => r.on), mixed.preset];
+    })()""")
+    mixed, back, preset = out
+    assert mixed[1] == ["a.vocals", "a.bass", "a.other", "a.drums"] and mixed[2] == ["a.bass", "a.other", "a.drums", "b.mix"]
+    assert back[2] == ["a.bass", "a.other", "a.drums", "b.vocals", "b.bass", "b.other", "b.drums"] and preset is None
+
+
+def test_saved_arrangement_is_checked_against_the_cards():
+    saved = {"src": {"a": "stems", "b": "stems"}, "ctl": "plain", "preset": None, "pick": "trade",
+             "rows": [{"idx": 0, "on": ["a.drums", "b.nope"], "from": 99}, {"idx": 1, "on": ["b.vocals"], "from": 4}]}
+    st = mash("strudelMashState(a, b, saved, both)", saved=saved)
+    assert st["ctl"] == "plain" and st["rows"][0] == {"idx": 0, "on": ["a.drums"], "from": 0}  # unknown part dropped, B section reset
+    assert st["rows"][1]["on"] == ["b.vocals"] and st["rows"][1]["from"] == 4
+    assert st["rows"][2]["on"] == ["a.bass", "a.other", "a.drums", "b.vocals"]  # new rows: the quick pick last used
+    # B without stems now: its stem picks become its Mix
+    st = mash("strudelMashState(a, b, saved, { a: true })", saved=saved)
+    assert st["src"]["b"] == "mix" and st["rows"][1]["on"] == ["b.mix"]
+
+
+def test_plain_code_loads_only_ticked_parts_and_silent_rows_are_silence():
+    out = mash("""(() => {
+      const st = strudelMashApply(a, b, strudelMashState(a, b, null, both), 'trade', both);
+      st.ctl = 'plain'; st.rows[0].on = []; st.rows[5].on = ['a.vocals'];
+      return strudelMashCode(a, b, st, { aUrl: url, bUrl: burl, can: both });
+    })()""")
+    assert "b_vocals: 'http://127.0.0.1:8000/api/tracks/8/stems/vocals'" in out["audio"] and "b_drums" not in out["audio"]
+    lines = out["arrange"].splitlines()
+    assert lines[2] == "  [8, silence], // Intro A, bars 1-8"
+    assert lines[4].startswith('  [16, stack(A("a_bass", 25, 40), A("a_drums", 25, 40), A("a_other", 25, 40), B("b_vocals", 5, 12))],')
+    assert lines[4].endswith("// Chorus C, bars 25-40 · B from Chorus B (bars 5-12, looped)")
+
+
+def test_live_code_has_toggles_and_levels():
+    out = mash("strudelMashCode(a, b, strudelMashApply(a, b, strudelMashState(a, b, null, both), 'trade', both), { aUrl: url, bUrl: burl, can: both })")
+    assert out["audio"].count("_vocals: '") == 2 and "b_drums: '" in out["audio"]  # every part loads
+    ar = out["arrange"]
+    assert "const levelA = { vocals: slider(1, 0, 1), bass:   slider(1, 0, 1)" in ar
+    assert "A('a_' + p, a1, a2).gain(t.mul(levelA[p]))" in ar and '"a_" +' not in ar
+    assert "  section(16, [25, 40], [5, 12], {\n    A: { vocals: slider(0, 0, 1, 1)," in ar
+    assert "    B: { vocals: slider(1, 0, 1, 1), bass:   slider(0, 0, 1, 1)" in ar
+
+
+def test_double_and_half_time_b_uses_per():
+    fast = mash_card(8, 162, B_SECS, "Fast")
+    out = run_tpl("[strudelMashPer({ bpm: 82, bar: 240 / 82 }, { bpm: 162, bar: 240 / 162 }), strudelMashPer({ bpm: 82, bar: 240 / 82 }, { bpm: 41, bar: 240 / 41 })]")
+    assert out == [0.5, 2]
+    slow_a = mash_card(7, 82, A_SECS, "Slow")
+    code = run_tpl("strudelMashCode(a, b, strudelMashState(a, b, null, both), { aUrl: url, bUrl: burl, can: both })", a=slow_a, b=fast, url=AUDIO, burl=B_AUDIO, both=BOTH)
+    assert "  const k = run(b - a + 1).slow((b - a + 1) * 0.5).add(a - 1)" in code["audio"] and "s(name).segment(2)" in code["audio"]
+    assert ".speed(1.012)" in code["audio"]
+    assert "  section(16, [9, 24], [13, 20], {" in code["arrange"]  # B's bridge is 8 bars of the 32 needed: looped
+    assert "(bars 13-20, looped)" in code["arrange"]
+    assert "  section(8, [1, 8], [1, 4], {" in code["arrange"]
+    # {b.loop}'s origB gets the same fix
+    f = run_tpl("strudelFillins(a, { audioUrl: url, b: { card: b, audioUrl: burl } })['b.audio'].v", a=slow_a, b=fast, url=AUDIO, burl=B_AUDIO)
+    assert 's("b").segment(2)' in f and ".slow((b - a + 1) * 0.5)" in f
+
+
+def test_b_stems_for_your_own_templates():
+    f = mash("Object.fromEntries(Object.entries(strudelFillins(a, { audioUrl: url, b: { card: b, audioUrl: burl, stems: ['vocals'] } })).map(([k, x]) => [k, x.v]))")
+    assert "samples({ b_vocals: 'http://127.0.0.1:8000/api/tracks/8/stems/vocals' })" in f["b.audio"] and "const origB = (a, b, name) => {" in f["b.audio"]
+    assert f["b.loop"] == 'stack(origB(5, 8, "b_vocals"))'
+
+
+def test_signed_links_reach_both_tracks_stems():
+    signed = "https://tastr.example/pub/tok123/tracks/7/audio"
+    out = mash("strudelMashCode(a, b, strudelMashState(a, b, null, both), { aUrl: s1, bUrl: s2, can: both })", s1=signed, s2=signed.replace("/7/", "/8/").replace("tok123", "tok456"))
+    assert "b_vocals: 'https://tastr.example/pub/tok456/tracks/8/stems/vocals'" in out["audio"] and "private links" in out["audio"]

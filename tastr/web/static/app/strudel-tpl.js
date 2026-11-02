@@ -2,7 +2,8 @@
 // change it" (TAS-67). The fill-in language and the diff live in strudel.js; strudelView (daw.js) puts these together.
 // The code only ever runs in strudel.cc, never inside Tastr.
 
-import { api, h, isNum, tracks } from "./core.js";
+import { SEC_COLORS, api, cap, h, isNum, tracks } from "./core.js";
+import { onStems, startStems, stemsBusy, stemsLabel, stemsOf } from "./menu.js";
 
 const JSON_BODY = (method, body) => ({ method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
@@ -148,6 +149,128 @@ export function mashRow(c, b, onPick) {
       : `Speed ×${fx.r} lines the bars up, moving its pitch ${fx.semis >= 0 ? "up" : "down"} ${Math.abs(fx.semis).toFixed(1)} semitones to about ${fx.cam || "an unknown key"}: ${fx.fit}`)
       + (fx.ok ? "." : ". Tracks marked ✓ fit better; they're listed first.");
   return [h("label", { class: "st-opt" }, "Mix with ", sel), h("span", { class: "st-fit " + (!b ? "" : fx.ok ? "ok" : "bad") }, text)];
+}
+
+// ---- Mash-up: parts by section (TAS-87) ----
+// The arrangement is kept per A+B pair in this browser (localStorage "tastr-mash:<A id>|<B id>"); it's quick to redo.
+const mashKey = (a, b) => `tastr-mash:${a.id}|${b.id}`;
+const stemsReady = (c) => stemsOf(c).state === "ready";
+export const mashCan = (a, b) => ({ a: stemsReady(a), b: stemsReady(b) });
+export function mashStateFor(a, b) {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(mashKey(a, b)) || "null"); } catch (_) { saved = null; }
+  return strudelMashState(a, b, saved, mashCan(a, b));
+}
+function mashSave(a, b, st) {
+  try { localStorage.setItem(mashKey(a, b), JSON.stringify(st)); } catch (_) { /* private window: kept for this view only */ }
+}
+let mashMsg = ""; // what the last quick pick did, shown once in the redrawn panel
+const mashName = (x) => `${cap(x.label)}${x.letter ? " " + x.letter : ""}`;
+const secsOf = (c) => (c.sections || []).map((x, idx) => ({ ...x, idx, end_bar: x.end_bar != null ? x.end_bar : x.start_bar })).filter((x) => x.start_bar != null);
+const PART_NAME = { mix: "Mix", vocals: "Vocals", bass: "Bass", other: "Other", drums: "Drums" };
+const PART_SHORT = { mix: "Mix", vocals: "Vox", bass: "Bass", other: "Other", drums: "Drums" };
+
+// The panel under "Mix with": a Full mix | Stems switch per track (or Separate stems), quick picks, the code style
+// and the grid of A's sections × both tracks' parts, with which of B's sections B's parts come from.
+// repaint(): redraw the Strudel view (the code follows the panel).
+export function mashPanel(a, b, repaint) {
+  const st = mashStateFor(a, b), can = mashCan(a, b);
+  const changed = () => { mashSave(a, b, st); repaint(); };
+  const as = secsOf(a), bs = secsOf(b);
+  const letters = [...new Set(as.map((x) => x.letter || x.label))];
+  const secColor = (x) => SEC_COLORS[letters.indexOf(x.letter || x.label) % SEC_COLORS.length];
+  const wrap = h("div", { class: "mx", role: "group", "aria-label": "Parts by section" });
+  const say = h("span", { class: "muted mx-say", role: "status", "aria-live": "polite" }, mashMsg);
+  mashMsg = "";
+  const srcPick = (c, who) => {
+    const kids = [h("span", { class: `mx-who mx-${who}`, "aria-hidden": "true" }, who.toUpperCase()), h("span", { class: "mx-tt", title: (c.source && c.source.title) || "" }, (c.source && c.source.title) || "Untitled")];
+    const ss = stemsOf(c);
+    if (can[who]) {
+      const radio = (val, label) => {
+        const r = h("input", { type: "radio", name: `mx-src-${who}`, value: val, ...(st.src[who] === val ? { checked: "" } : {}) });
+        r.addEventListener("change", () => { strudelMashSwitch(st, who, val); changed(); });
+        return h("label", { class: "st-opt" }, r, " " + label);
+      };
+      kids.push(h("span", { role: "radiogroup", "aria-label": `Track ${who.toUpperCase()}: full mix or stems`, class: "mx-radios" }, radio("mix", "Full mix"), radio("stems", "Stems")));
+    } else if (!c.stems_available && !stemsBusy(ss)) {
+      kids.push(h("span", { class: "muted" }, "Full mix only. Stems need Demucs on the server (", h("code", {}, "pip install 'tastr[stems]'"), ")."));
+    } else {
+      const busy = stemsBusy(ss);
+      const go = h("button", { type: "button", class: "mx-sep", ...(busy ? { disabled: "" } : {}) },
+        ...(busy ? [h("span", { class: "spin" + (ss.state === "queued" ? " idle" : ""), "aria-hidden": "true" }), stemsLabel(ss)] : ["Separate stems"]));
+      go.onclick = async () => {
+        go.disabled = true;
+        try { await startStems(c); } catch (e) { go.disabled = false; say.className = "error mx-say"; say.textContent = e.message; }
+      };
+      kids.push(h("span", { class: "muted" }, "Full mix only."), go);
+      if (ss.state === "error") kids.push(h("span", { class: "error mx-say" }, ss.error ? `The last separation failed: ${ss.error}` : "The last separation failed."));
+    }
+    const row = h("div", { class: "mx-src" }, ...kids);
+    // When a separation finishes, that track switches to Stems (keeping the picks) and the panel redraws.
+    onStems(row, c.id, (now, was) => {
+      if (now.state === "ready" && was && was.state !== "ready") { strudelMashSwitch(st, who, "stems"); mashSave(a, b, st); }
+      repaint();
+    });
+    return row;
+  };
+  const pa = strudelMashParts("a", st, can), pb = strudelMashParts("b", st, can), cols = [...pa, ...pb];
+  const pn = (p) => p.split(".")[1], W = (p) => p[0].toUpperCase();
+  const toggleCol = (p) => {
+    const all = st.rows.every((r) => r.on.includes(p));
+    st.rows.forEach((r) => { r.on = all ? r.on.filter((x) => x !== p) : r.on.includes(p) ? r.on : [...r.on, p]; });
+    st.preset = null; changed();
+  };
+  const head1 = h("tr", {}, h("th", { scope: "col", class: "mx-sec" }, "A's sections"),
+    h("th", { colspan: String(pa.length), class: "mx-grp mx-a", scope: "colgroup" }, "A"),
+    h("th", { colspan: String(pb.length), class: "mx-grp mx-b", scope: "colgroup" }, "B"),
+    h("th", { scope: "col", class: "mx-fromh" }, "B plays from"));
+  const head2 = h("tr", {}, h("td", {}),
+    ...cols.map((p) => h("th", { scope: "col", class: "mx-colh mx-" + p[0] },
+      h("button", { type: "button", class: "mx-colbtn", title: `${W(p)} ${PART_NAME[pn(p)]}: turn on or off in every section`, onclick: () => toggleCol(p) }, PART_SHORT[pn(p)]))),
+    h("td", {}));
+  const body = as.map((sec) => {
+    const r = st.rows.find((x) => x.idx === sec.idx);
+    const cells = cols.map((p) => {
+      const on = r.on.includes(p);
+      const cb = h("input", { type: "checkbox", class: "sr-only", "aria-label": `${W(p)} ${PART_NAME[pn(p)]} in ${mashName(sec)}`, ...(on ? { checked: "" } : {}) });
+      cb.addEventListener("change", () => { r.on = cb.checked ? [...r.on, p] : r.on.filter((x) => x !== p); st.preset = null; changed(); });
+      return h("td", { class: "mx-cell" }, h("label", { class: `mx-tick mx-${p[0]}` + (on ? " on" : "") }, cb, h("span", { "aria-hidden": "true" }, on ? "●" : "")));
+    });
+    const usesB = r.on.some((p) => p[0] === "b");
+    const sel = h("select", { class: "mx-from", "aria-label": `B's section for ${mashName(sec)}`, ...(usesB && bs.length ? {} : { disabled: "" }) },
+      bs.length ? bs.map((x) => h("option", { value: String(x.idx), ...(x.idx === r.from ? { selected: "" } : {}) }, `${mashName(x)} · ${x.end_bar - x.start_bar + 1} bars`))
+        : [h("option", {}, "From the start")]);
+    sel.addEventListener("change", () => { r.from = +sel.value; changed(); });
+    const silent = !r.on.length, bars = sec.end_bar - sec.start_bar + 1;
+    return h("tr", { class: (/^(chorus|drop|hook)$/.test(sec.label) ? "mx-top" : "") + (silent ? " mx-silent" : "") },
+      h("th", { scope: "row", class: "mx-sec" }, h("span", { class: "mx-sw", style: `background:${secColor(sec)}`, "aria-hidden": "true" }),
+        h("b", {}, mashName(sec)), h("span", { class: "muted" }, ` ${bars} bar${bars === 1 ? "" : "s"}`), silent ? h("span", { class: "muted mx-sil" }, " · silent") : null),
+      ...cells, h("td", { class: "mx-fromc" }, sel));
+  });
+  const presets = h("div", { class: "mx-pre", role: "group", "aria-label": "Quick picks" }, h("span", { class: "muted" }, "Quick picks:"),
+    ...STRUDEL_MASH_PRESETS.map(([id, label]) => h("button", { type: "button", class: "mx-prebtn", "aria-pressed": String(st.preset === id), onclick: () => {
+      strudelMashApply(a, b, st, id, can);
+      mashMsg = id === "clear" ? "Cleared. Tick the parts you want in each section." : `“${label}” applied. Change any section by hand.`;
+      changed();
+    } }, label)));
+  const ctlRadio = (val, label) => {
+    const r = h("input", { type: "radio", name: "mx-ctl", value: val, ...(st.ctl === val ? { checked: "" } : {}) });
+    r.addEventListener("change", () => { st.ctl = val; changed(); });
+    return h("label", { class: "st-opt" }, r, " " + label);
+  };
+  const ctl = h("div", { class: "mx-ctl", role: "radiogroup", "aria-label": "Controls in the code" }, h("span", { class: "muted" }, "In the code:"),
+    ctlRadio("live", "Toggles and level sliders"), ctlRadio("plain", "Plain"),
+    h("span", { class: "muted mx-ctl-tip" }, st.ctl === "live" ? "Every part gets an on/off toggle in each section, plus a level per part, to change while it plays."
+      : "Only the ticked parts, as plain code."));
+  wrap.append(...[
+    h("div", { class: "mx-head" }, h("b", {}, "Parts by section"), h("span", { class: "muted" }, " · plays in A's song order. Tick what plays in each section; click a column name to tick it everywhere.")),
+    srcPick(a, "a"), srcPick(b, "b"),
+    !can.a || !can.b ? h("p", { class: "muted mx-note" }, "With stems you can pick vocals, bass, other and drums on their own, so one track's vocals can sit over the other's beat.") : null,
+    presets, ctl,
+    as.length ? h("div", { class: "mx-scroll" }, h("table", { class: "mx-grid" }, h("thead", {}, head1, head2), h("tbody", {}, ...body)))
+      : h("p", { class: "muted mx-note" }, "This track has no sections with bars yet, so there's nothing to arrange."),
+    say].filter(Boolean));
+  return { el: wrap, st, can };
 }
 
 // ---- Ask Claude to change it ----

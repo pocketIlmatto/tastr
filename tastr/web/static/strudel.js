@@ -307,13 +307,15 @@ const STRUDEL_TEMPLATES = [
     text: "// {title}{by}: the drums, section by section\n// Press Ctrl+Enter to play.\n\nsetcpm({cpm}) // 1 cycle = 1 bar\n\n// The kit: change the name and re-run. Try RolandTR808, RolandTR707, AkaiLinn or RolandCR78.\nconst kit = \"RolandTR909\"\n// Or switch kits every bar: const kit = \"<RolandTR909 RolandTR808>\"\n\n{drums.song}.bank(kit)\n" },
   { id: "half", name: "Half-time remix", tip: "The drop at the same tempo but half the pace: drums spread over two bars, audio at half speed (an octave down).",
     text: "// {title}{by}: half-time remix of the drop\n// Same tempo, half the pace. Each drum bar spreads over two, and the audio plays at half speed,\n// which also drops it an octave. Remove .speed(.5) to keep the pitch and hear it stutter instead.\n\nsetcpm({cpm}) // 1 cycle = 1 bar\n\n{audio}\n\nconst drums = {drums.drop}\n\nstack(\n  {loop}.slow(2).speed(.5).gain(.8),\n  drums.slow(2).bank(\"RolandTR808\").gain(.7),\n  note(\"{bass}\").struct(\"x ~ ~ ~\").slow(2).s(\"sawtooth\").lpf(250).gain(.5),\n)\n" },
-  { id: "mash", name: "Mash-up", tip: "Pick a second track: its drop plays under this one, sped to line the bars up.",
-    text: "// Mash-up: {title} with {b.title}\n// A: {bpm} BPM, {key} ({camelot}). B: {b.bpm} BPM, {b.key} ({b.camelot}).\n// B plays at speed {b.speed} so its bars line up with A. That also moves its pitch {b.shift}, to about {b.newkey}.\n\nsetcpm({cpm}) // 1 cycle = 1 bar of A\n\n{audio}\n{b.audio}\n\nstack(\n  {loop},\n  {b.loop}.speed({b.speed}).gain(.8),\n)\n" },
+  { id: "mash", name: "Mash-up", tip: "Pick a second track, then pick which parts of each track play in each section, sped to line the bars up.",
+    text: "// Mash-up: {title} with {b.title}\n// A: {bpm} BPM, {key} ({camelot}). B: {b.bpm} BPM, {b.key} ({b.camelot}).\n// B plays at speed {b.speed} so its bars line up with A. That also moves its pitch {b.shift}, to about {b.newkey}.\n// Press Ctrl+Enter (Cmd+Enter on a Mac) to play, Ctrl+. to stop.\n\nsetcpm({cpm}) // 1 cycle = 1 bar of A\n\n{mash.audio}\n\n{mash.arrange}\n" },
 ];
 const STRUDEL_NEW_TEXT = "// {title}: my template\n// Fill-ins in curly braces come from the open track. Click one in the list to add it.\n\nsetcpm({cpm}) // 1 cycle = 1 bar\n\nconst drums = {drums.drop}\n\nstack(\n  drums.bank(\"RolandTR808\"),\n  note(\"{bass}\").struct(\"[~ x]*4\").s(\"sawtooth\").lpf(400).gain(.5),\n  chord(\"{chords}\").voicing().s(\"sawtooth\").lpf(1200).gain(.2),\n)\n";
 const FILL_RE = /\{\{([a-z][\w.]*)\}\}|\{([a-z][\w.]*)\}/gi;
-const strudelUsesAudio = (text) => /\{(audio|loop|track|stems\.\w+|b\.audio|b\.loop)\}/.test(text);
-const strudelUsesMash = (text) => /\{b\.[\w.]+\}/.test(text);
+const strudelUsesAudio = (text) => /\{(audio|loop|track|stems\.\w+|b\.audio|b\.loop|mash\.audio)\}/.test(text);
+const strudelUsesMash = (text) => /\{(b|mash)\.[\w.]+\}/.test(text);
+// Templates with {mash.*} get the "Parts by section" panel, which has its own Full mix | Stems switch per track.
+const strudelUsesMashParts = (text) => /\{mash\.[\w.]+\}/.test(text);
 
 // Camelot codes (8A = A minor, 8B = C major): each step round the wheel is a fifth.
 function strudelCamelot(tonic, mode) { return `${((tonic * 7 + (mode === "minor" ? 4 : 7)) % 12) + 1}${mode === "minor" ? "A" : "B"}`; }
@@ -350,28 +352,188 @@ const tplSec = (s, label) => s.secs.find((x) => x.label === label)
 const keyText = (k) => (k && typeof k.tonic === "number" ? `${STRUDEL_NOTES[k.tonic % 12]} ${k.mode || "major"}` : "unknown key");
 const quoteUrl = (u) => u.replace(/'/g, "%27");
 
+// One track's bar slicer: `const <lc>len, <lc>bar, <lc>first`, then fn(params) giving bars a to b of the sample `src`
+// names. per: A bars per one of this track's bars after its speed change (B in double time under A: 0.5, so two of its
+// bars fit in one of A's; half time: 2). One event per bar of this track, back to back.
+function slicerLines(s, fn, lc, { per = 1, speed = null, params = "name, a, b", src = "name", note = null } = {}) {
+  const len = typeof s.c.duration === "number" ? s.c.duration : 0;
+  return [`const ${lc}len = ${len.toFixed(3)}, ${lc}bar = ${s.bar.toFixed(4)}, ${lc}first = ${s.first.toFixed(3)} // seconds: track, one bar, first downbeat`,
+    ...(note ? [note] : []),
+    `const ${fn} = (${params}) => {`,
+    per === 1 ? "  const k = run(b - a + 1).slow(b - a + 1).add(a - 1)"
+      : `  const k = run(b - a + 1).slow((b - a + 1) * ${per}).add(a - 1) // ${per < 1 ? `${1 / per} of its bars fit in one bar of A` : `each of its bars spans ${per} bars of A`}`,
+    `  return s(${src})${per === 1 ? "" : `.segment(${1 / per})`}.begin(k.mul(${lc}bar).add(${lc}first).div(${lc}len)).end(k.add(1).mul(${lc}bar).add(${lc}first).div(${lc}len)).clip(1)${speed != null ? `.speed(${speed})` : ""}`,
+    "}"];
+}
+// A bars per B bar once B is sped to A's tempo: 1, or 0.5 / 2 when B is in double / half time (the speed folds by octaves).
+function strudelMashPer(sa, sb) {
+  const r = strudelSpeed(sa.bpm, sb.bpm);
+  return 2 ** Math.round(Math.log2((sb.bar / r) / sa.bar)) || 1;
+}
+
 // The original audio (or picked stems) as samples, cut into bars, with orig(name, a, b). `v` names the helpers
-// ("" for track A; "B" for a mash-up's second track: samples b, origB(a, b)).
-function tplAudio(s, url, stems, v = "") {
-  if (!url) return { audio: "// (No original audio: this track's file isn't on the server, or the private link is still loading.)", loop: "silence" };
+// ("" for track A; "B" for a mash-up's second track: samples b (or b_<stem>), origB(a, b[, name]) at `per`).
+function tplAudio(s, url, stems, v = "", per = 1) {
+  if (!url) return { audio: `// (No original audio${v ? " for the second track" : ""}: its file isn't on the server, or the private link is still loading.)`, loop: "silence" };
   const drop = tplSec(s, "drop"), a = drop.start_bar, b = Math.min(a + 3, drop.end_bar != null ? drop.end_bar : a + 3);
   const stemUrl = (n) => quoteUrl(url.replace(/\/audio$/, `/stems/${n}`)), names = stems && stems.length ? stems : null;
-  const lc = v.toLowerCase();
-  const lines = v ? [`samples({ ${lc}: '${quoteUrl(url)}' })`]
-    : ["// The original audio, cut into bars at the detected downbeats. Single quotes on purpose: double quotes mean a pattern.",
-      names ? `samples({\n${names.map((n) => `  ${n}: '${stemUrl(n)}',`).join("\n")}\n})` : `samples({ orig: '${quoteUrl(url)}' })`];
-  lines.push(`const ${lc}len = ${s.c.duration.toFixed(3)}, ${lc}bar = ${s.bar.toFixed(4)}, ${lc}first = ${s.first.toFixed(3)} // seconds: track, one bar, first downbeat`,
-    v ? `// orig${v}(a, b): bars a to b of the second track, one bar per cycle` : "// orig(name, a, b): bars a to b, one bar per cycle",
-    v ? `const orig${v} = (a, b) => {` : "const orig = (name, a, b) => {",
-    "  const k = run(b - a + 1).slow(b - a + 1).add(a - 1)",
-    `  return s(${v ? `"${lc}"` : "name"}).begin(k.mul(${lc}bar).add(${lc}first).div(${lc}len)).end(k.add(1).mul(${lc}bar).add(${lc}first).div(${lc}len)).clip(1)`,
-    "}");
-  const loop = v ? `orig${v}(${a}, ${b})` : names ? `stack(${names.map((n) => `orig("${n}", ${a}, ${b})`).join(", ")})` : `orig("orig", ${a}, ${b})`;
+  if (v) {
+    const lc = v.toLowerCase();
+    const lines = [names ? `samples({ ${names.map((n) => `${lc}_${n}: '${stemUrl(n)}'`).join(", ")} })` : `samples({ ${lc}: '${quoteUrl(url)}' })`,
+      ...slicerLines(s, `orig${v}`, lc, { per, params: names ? "a, b, name" : "a, b", src: names ? "name" : `"${lc}"`,
+        note: names ? `// orig${v}(a, b, name): bars a to b of one of the second track's stems` : `// orig${v}(a, b): bars a to b of the second track` })];
+    const loop = names ? `stack(${names.map((n) => `orig${v}(${a}, ${b}, "${lc}_${n}")`).join(", ")})` : `orig${v}(${a}, ${b})`;
+    return { audio: lines.join("\n"), loop, a, b };
+  }
+  const lines = ["// The original audio, cut into bars at the detected downbeats. Single quotes on purpose: double quotes mean a pattern.",
+    names ? `samples({\n${names.map((n) => `  ${n}: '${stemUrl(n)}',`).join("\n")}\n})` : `samples({ orig: '${quoteUrl(url)}' })`,
+    ...slicerLines(s, "orig", "", { note: "// orig(name, a, b): bars a to b, one bar per cycle" })];
+  const loop = names ? `stack(${names.map((n) => `orig("${n}", ${a}, ${b})`).join(", ")})` : `orig("orig", ${a}, ${b})`;
   return { audio: lines.join("\n"), loop, a, b };
 }
 
+// ---------- Mash-up parts by section (TAS-87) ----------
+// The Mash-up template plays A's song order. For each of A's sections you tick which parts play: A's stems (or its full
+// mix) and B's, and pick which of B's sections B's parts come from. The arrangement (st) is plain JSON:
+// { src: { a, b: "mix" | "stems" }, ctl: "live" | "plain", preset, pick, rows: [{ idx, on: ["a.vocals", "b.mix", …], from }] }
+// with one row per section of A (idx: its index in A's card.sections), `from`: B's section idx. can: { a, b } = stems ready.
+const MASH_TOP = /^(chorus|drop|hook)$/;
+const mashSecs = (c) => (c.sections || []).map((x, idx) => ({ ...x, idx, end_bar: x.end_bar != null ? x.end_bar : x.start_bar })).filter((x) => x.start_bar != null);
+const mashName = (s) => `${capWord(s.label)}${s.letter ? " " + s.letter : ""}`;
+function strudelMashParts(who, st, can) { return st.src[who] === "stems" && can[who] ? STRUDEL_STEMS.map((n) => `${who}.${n}`) : [`${who}.mix`]; }
+// B's section for one of A's: the same label (the nth one goes to B's nth, wrapping), else the closest in energy.
+function strudelMashFrom(a, b, sec) {
+  const bs = mashSecs(b), same = bs.filter((x) => x.label === sec.label);
+  if (same.length) { const nth = mashSecs(a).filter((x) => x.label === sec.label).findIndex((x) => x.idx === sec.idx); return same[Math.max(0, nth) % same.length].idx; }
+  const near = [...bs].sort((x, y) => Math.abs((x.energy ?? 0) - (sec.energy ?? 0)) - Math.abs((y.energy ?? 0) - (sec.energy ?? 0)))[0];
+  return near ? near.idx : null;
+}
+// Quick picks: [id, label, (part, A's section) -> ticked]. With full mixes only they fall back to the Mix columns.
+const STRUDEL_MASH_PRESETS = [
+  ["avox", "A's vocals over B's beat", (p) => (p.startsWith("a.") ? p === "a.vocals" || p === "a.mix" : p !== "b.vocals")],
+  ["trade", "Trade vocals: A in verses, B in choruses", (p, sec) => {
+    const top = MASH_TOP.test(sec.label);
+    if (p === "a.vocals") return !top;
+    if (p === "b.vocals" || p === "b.mix") return top;
+    return p === "a.mix" || p.startsWith("a.");
+  }],
+  ["bvox", "B's vocals over A's beat", (p) => (p.startsWith("b.") ? p === "b.vocals" || p === "b.mix" : p !== "a.vocals")],
+  ["clear", "Clear", () => false],
+];
+const presetFn = (id) => (STRUDEL_MASH_PRESETS.find((x) => x[0] === id) || STRUDEL_MASH_PRESETS[0])[2];
+function strudelMashApply(a, b, st, id, can) {
+  const fn = presetFn(id), parts = [...strudelMashParts("a", st, can), ...strudelMashParts("b", st, can)], secs = mashSecs(a);
+  st.rows.forEach((r) => { const sec = secs.find((x) => x.idx === r.idx); r.on = parts.filter((p) => fn(p, sec)); });
+  st.preset = st.pick = STRUDEL_MASH_PRESETS.some((x) => x[0] === id) ? id : "avox";
+  return st;
+}
+// Switching a track between full mix and stems carries the picks across: mix on = all its stems on, and back.
+function strudelMashSwitch(st, who, to) {
+  if (st.src[who] === to) return st;
+  const stems = STRUDEL_STEMS.map((n) => `${who}.${n}`), mix = `${who}.mix`;
+  st.rows.forEach((r) => {
+    const had = to === "stems" ? r.on.includes(mix) : r.on.some((p) => stems.includes(p));
+    r.on = r.on.filter((p) => p !== mix && !stems.includes(p));
+    if (had) r.on.push(...(to === "stems" ? stems : [mix]));
+  });
+  st.src[who] = to;
+  st.preset = null;
+  return st;
+}
+// The arrangement for A and B: a saved one (from localStorage) checked against the cards as they are now, else new.
+// Rows whose section no longer exists in A reset to the quick pick last used; picks of parts that aren't there drop out.
+function strudelMashState(a, b, saved, can) {
+  const sv = saved && typeof saved === "object" ? saved : {}, srcOk = (x) => (x === "mix" || x === "stems" ? x : null);
+  const st = { src: { a: srcOk(sv.src && sv.src.a) || (can.a ? "stems" : "mix"), b: srcOk(sv.src && sv.src.b) || (can.b ? "stems" : "mix") },
+    ctl: sv.ctl === "plain" ? "plain" : "live", preset: sv.preset === undefined ? "avox" : sv.preset, pick: sv.pick || sv.preset || "avox", rows: [] };
+  const old = new Map((Array.isArray(sv.rows) ? sv.rows : []).filter((r) => r && Array.isArray(r.on)).map((r) => [r.idx, r]));
+  const bIdx = new Set(mashSecs(b).map((x) => x.idx)), fresh = [];
+  for (const sec of mashSecs(a)) {
+    const r = old.get(sec.idx);
+    if (!r) fresh.push(sec.idx);
+    st.rows.push({ idx: sec.idx, on: r ? r.on.filter((p) => typeof p === "string") : [], from: r && bIdx.has(r.from) ? r.from : strudelMashFrom(a, b, sec) });
+  }
+  // A track whose stems are gone (or not separated yet) plays its full mix, with its stem picks as Mix picks.
+  for (const who of ["a", "b"]) if (st.src[who] === "stems" && !can[who]) strudelMashSwitch(st, who, "mix");
+  if (fresh.length) {
+    const keep = st.preset;
+    const all = strudelMashApply(a, b, JSON.parse(JSON.stringify(st)), st.pick, can);
+    st.rows.forEach((r, i) => { if (fresh.includes(r.idx)) r.on = all.rows[i].on; });
+    st.preset = fresh.length === st.rows.length ? all.preset : keep;
+  }
+  const cols = new Set([...strudelMashParts("a", st, can), ...strudelMashParts("b", st, can)]);
+  st.rows.forEach((r) => { r.on = [...new Set(r.on)].filter((p) => cols.has(p)); });
+  return st;
+}
+// The code: both tracks' samples, A(name, a, b) and B(name, a, b) slicers, and A's song order with the picked parts.
+// ctx: { aUrl, bUrl, can }. "live" (default): every part of each track loads, with a 0/1 toggle per part in every
+// section and a level slider per part; "plain": only the ticked parts, in arrange().
+function strudelMashCode(a, b, st, ctx = {}) {
+  const can = ctx.can || {}, sa = sketchInputs(a, ctx.aUrl, null), sb = sketchInputs(b, ctx.bUrl, null);
+  const fit = strudelMashFit({ bpm: sa.bpm }, { bpm: sb.bpm }), per = strudelMashPer(sa, sb), live = st.ctl !== "plain";
+  const pa = strudelMashParts("a", st, can), pb = strudelMashParts("b", st, can), pn = (p) => p.split(".")[1];
+  const used = live ? new Set([...pa, ...pb]) : new Set(st.rows.flatMap((r) => r.on));
+  const title = (c) => (c.source && c.source.title) || "Untitled";
+  const load = (c, who, url) => {
+    const ps = (who === "a" ? pa : pb).filter((p) => used.has(p));
+    if (!url) return `// ${who.toUpperCase()}: no audio yet for ${title(c)} (its file isn't on the server, or the private link is still loading)`;
+    if (!ps.length) return `// ${who.toUpperCase()}: nothing picked from ${title(c)}`;
+    const u = (n) => quoteUrl(n === "mix" ? url : url.replace(/\/audio$/, `/stems/${n}`));
+    return `samples({\n${ps.map((p) => `  ${who}_${pn(p)}: '${u(pn(p))}',`).join("\n")}\n})`;
+  };
+  const signed = [ctx.aUrl, ctx.bUrl].some((u) => u && /\/pub\/[^/]+\/tracks\//.test(u));
+  const audio = [
+    `// A: ${title(a)} (${pa[0] === "a.mix" ? "full mix" : "stems"}). B: ${title(b)} (${pb[0] === "b.mix" ? "full mix" : "stems"}), at speed ${fit.r} to line its bars up with A${per === 1 ? "" : per < 1 ? `, ${1 / per} of its bars to one of A's` : `, one of its bars to ${per} of A's`}.`,
+    signed ? "// Tastr serves the audio through private links that work for a week; after that, open the code from Tastr again."
+      : "// Keep `tastr serve` running: the audio streams from it. Single quotes on purpose: double quotes mean a pattern.",
+    load(a, "a", ctx.aUrl), load(b, "b", ctx.bUrl),
+    "// A(name, a, b) and B(name, a, b): bars a to b of that track. B plays sped up to A's tempo.",
+    ...slicerLines(sa, "A", "a"), ...slicerLines(sb, "B", "b", { per, speed: fit.r })].join("\n");
+  const as = mashSecs(a), bs = mashSecs(b);
+  const span = (sec, r) => {
+    const n = sec.end_bar - sec.start_bar + 1, from = bs.find((x) => x.idx === r.from) || bs[0];
+    const nb = Math.max(1, Math.round(n / per)), b1 = from ? from.start_bar : 1, b2 = from ? Math.min(from.end_bar, b1 + nb - 1) : nb;
+    return { n, from, b1, b2, looped: b2 - b1 + 1 < nb };
+  };
+  const rowOf = (sec) => st.rows.find((r) => r.idx === sec.idx) || { on: [], from: null };
+  if (!live) {
+    const rows = as.map((sec) => {
+      const r = rowOf(sec), { n, from, b1, b2, looped } = span(sec, r);
+      const pats = [...r.on].sort().map((p) => (p[0] === "a" ? `A("a_${pn(p)}", ${sec.start_bar}, ${sec.end_bar})` : `B("b_${pn(p)}", ${b1}, ${b2})`));
+      const what = pats.length ? (pats.length === 1 ? pats[0] : `stack(${pats.join(", ")})`) : "silence";
+      const hasB = r.on.some((p) => p[0] === "b");
+      return `  [${n}, ${what}], // ${mashName(sec)}, bars ${sec.start_bar}-${sec.end_bar}${hasB ? ` · B from ${from ? mashName(from) : "the start"} (bars ${b1}-${b2}${looped ? ", looped" : ""})` : ""}`;
+    });
+    return { audio, arrange: rows.length ? `// A's song order. Each line is one of A's sections and the parts playing in it.\narrange(\n${rows.join("\n")}\n)` : "// A has no sections with bars to arrange.\nsilence" };
+  }
+  const pad = (x, w) => x + " ".repeat(Math.max(0, w - x.length));
+  const wA = Math.max(...pa.map((p) => pn(p).length)) + 1, wB = Math.max(...pb.map((p) => pn(p).length)) + 1;
+  const levels = (W, ps, w) => `const level${W} = { ${ps.map((p) => `${pad(pn(p) + ":", w)} slider(1, 0, 1)`).join(", ")} }`;
+  const blocks = as.map((sec) => {
+    const r = rowOf(sec), { n, from, b1, b2, looped } = span(sec, r);
+    const tog = (ps, w) => ps.map((p) => `${pad(pn(p) + ":", w)} slider(${r.on.includes(p) ? 1 : 0}, 0, 1, 1)`).join(", ");
+    return [`  // ${mashName(sec)}: A's bars ${sec.start_bar}-${sec.end_bar}, B from ${from ? mashName(from) : "the start"} (bars ${b1}-${b2}${looped ? ", looped" : ""})`,
+      `  section(${n}, [${sec.start_bar}, ${sec.end_bar}], [${b1}, ${b2}], {`, `    A: { ${tog(pa, wA)} },`, `    B: { ${tog(pb, wB)} },`, "  }),"].join("\n");
+  });
+  if (!blocks.length) return { audio, arrange: "// A has no sections with bars to arrange.\nsilence" };
+  const arrange = [
+    "// Levels for the whole song: one slider per part. 0 is silent, 1 is full. Drag them while it plays.",
+    levels("A", pa, wA), levels("B", pb, wB), "",
+    "// section(bars, A's bars, B's bars, toggles): one section of A's song order.",
+    "// Each toggle brings a part in (1) or takes it out (0). Flip them while it plays: the change lands on the next bar.",
+    "const section = (bars, [a1, a2], [b1, b2], on) => [bars, stack(",
+    "  ...Object.entries(on.A).map(([p, t]) => A('a_' + p, a1, a2).gain(t.mul(levelA[p]))),",
+    "  ...Object.entries(on.B).map(([p, t]) => B('b_' + p, b1, b2).gain(t.mul(levelB[p]))),",
+    ")]", "",
+    "// A's song order. The toggles start as you ticked them in Tastr.",
+    `arrange(\n${blocks.join("\n")}\n)`].join("\n");
+  return { audio, arrange };
+}
+
 // Every fill-in for this track: name -> { v: value, d: what it is }.
-// ctx: { audioUrl, stems, edits, startBar, b: { card, audioUrl } for a mash-up's second track }.
+// ctx: { audioUrl, stems, edits, startBar, canStems (A's stems are ready),
+//        b: { card, audioUrl, stems (B's picked stems for {b.audio}), canStems } for a mash-up's second track,
+//        mash: the "Parts by section" arrangement (strudelMashState; a fresh one when left out) }.
 function strudelFillins(c, ctx = {}) {
   const s = sketchInputs(c, ctx.audioUrl, ctx.edits), key = (c.core || {}).key || {}, src = c.source || {};
   const ind = (n) => " ".repeat(n);
@@ -421,7 +583,9 @@ function strudelFillins(c, ctx = {}) {
   if (B) {
     const sb = sketchInputs(B, ctx.b.audioUrl, null), bk = (B.core || {}).key || {};
     const fit = strudelMashFit({ bpm: s.bpm, camelot: key.camelot }, { bpm: sb.bpm, camelot: bk.camelot });
-    const ba = tplAudio(sb, ctx.b.audioUrl, null, "B");
+    const ba = tplAudio(sb, ctx.b.audioUrl, ctx.b.stems, "B", strudelMashPer(s, sb));
+    const can = { a: !!ctx.canStems, b: !!ctx.b.canStems };
+    const mc = strudelMashCode(c, B, ctx.mash || strudelMashState(c, B, null, can), { aUrl: ctx.audioUrl, bUrl: ctx.b.audioUrl, can });
     Object.assign(f, {
       "b.title": { v: (B.source && B.source.title) || "Untitled", d: "Second track: title" },
       "b.bpm": { v: String(sb.bpm), d: "Second track: tempo" },
@@ -432,6 +596,8 @@ function strudelFillins(c, ctx = {}) {
       "b.newkey": { v: fit.nk ? `${keyText(fit.nk)} (${fit.cam}, ${fit.fit})` : "an unknown key", d: "B's key after the speed change" },
       "b.audio": { v: ba.audio, d: "Loads the second track and defines origB(a, b)" },
       "b.loop": { v: ba.loop, d: "Four bars of the second track's drop, needs {b.audio}" },
+      "mash.audio": { v: mc.audio, d: "Both tracks' audio or stems, with A(name, a, b) and B(name, a, b) (B sped to this track's tempo)" },
+      "mash.arrange": { v: mc.arrange, d: "This track's song order with the parts picked for each section (Parts by section)" },
     });
   }
   return f;
@@ -489,4 +655,5 @@ function strudelSummary(c) {
 
 if (typeof module !== "undefined") module.exports = { strudelCode, strudelLink, strudelLane, compactSteps, compactBars, STRUDEL_STEMS,
   STRUDEL_TEMPLATES, STRUDEL_NEW_TEXT, strudelFillins, strudelFill, strudelUnfill, strudelDiff, strudelHunks, strudelSummary,
-  strudelSpeed, strudelMashFit, strudelCamelot, strudelUsesAudio, strudelUsesMash };
+  strudelSpeed, strudelMashFit, strudelCamelot, strudelUsesAudio, strudelUsesMash, strudelUsesMashParts,
+  STRUDEL_MASH_PRESETS, strudelMashParts, strudelMashFrom, strudelMashApply, strudelMashSwitch, strudelMashState, strudelMashCode, strudelMashPer };

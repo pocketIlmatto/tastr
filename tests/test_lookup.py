@@ -320,6 +320,49 @@ def test_guard_pauses_on_pushback(status, headers, reason):
     assert g.status()["paused_for"] > 0
 
 
+def test_guard_waits_with_the_runners_sleep_on_the_worker():
+    """On the Worker (runner.Loop) the guard never blocks the event loop: it waits for the lock, and for the
+    spacing between requests, with the runner's sleep, which lets the request holding the lock finish."""
+    from tastr import runner
+
+    g = _guard(interval=30)
+    slept = []
+
+    def sleep(s):
+        slept.append(s)
+        if len(slept) == 1:  # meanwhile the task holding the lock gets its answer
+            g.after_response(200)
+
+    before = runner.current()
+    runner.use(runner.Loop(sleep=sleep))
+    try:
+        g.before_request()  # the first request: no wait
+        assert slept == []
+        g.before_request()  # the lock is held: polls, then waits out the 30 s spacing with the same sleep
+        assert slept[0] == guardmod.LOCK_POLL and 29 < slept[-1] <= 30
+        g.after_response(200)
+    finally:
+        runner.use(before)
+    assert not g.lock.locked()
+
+
+def test_get_json_goes_through_tastr_http(monkeypatch):
+    """Lookups send through tastr/http.py, so the Worker's fetch carries them there; a short timeout is asked."""
+    from tastr import http
+
+    sent = []
+
+    def transport(method, url, headers, body, timeout):
+        sent.append((method, url, headers["Accept"], timeout))
+        return http.Response(200, {}, iter([b'{"ok": 1}']))
+
+    monkeypatch.setattr(http, "_transport", transport)
+    p = getsongbpm.GetSongBPM()
+    assert p.get_json("https://example.invalid/x", {"q": "a b"}) == (200, {"ok": 1})
+    assert sent == [("GET", "https://example.invalid/x?q=a+b", "application/json", 10.0)]
+    assert not p.guard.lock.locked()
+
+
 def test_guard_ignores_healthy_quota_and_frees_the_lock():
     g = _guard()
     _req(g, 200, {"x-quota-used": "5", "x-quota-limit": "1000"})

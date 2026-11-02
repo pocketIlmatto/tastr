@@ -7,7 +7,7 @@ that also holds the library database. Fly still serves the live site; see the "C
 | File | What it is |
 | --- | --- |
 | `src/entry.py` | The Worker (`Default`: static files or the Durable Object) and the Durable Object (`Library`) |
-| `build.py` | Copies the `tastr` package into `src/tastr/` and the browser files into `public/static/` |
+| `build.py` | Copies the `tastr` package into `src/tastr/`, the browser files into `public/static/`, sql.js into `public/sqljs/` and, when built, the engine's WebAssembly build into `public/engine/` |
 | `wrangler.jsonc` | Bindings (`LIB`, `ASSETS`), the Durable Object migration, plain settings |
 | `pyproject.toml` | The Python packages, as Pyodide builds, and the pinned pywrangler |
 | `package.json` | The pinned wrangler that pywrangler runs |

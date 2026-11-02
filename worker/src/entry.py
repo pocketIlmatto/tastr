@@ -1,7 +1,8 @@
 """Tastr on a Cloudflare Python Worker (TAS-84, option D of the Fly exit plan; see docs/hosting-map.md).
 
 Two parts:
-- `Default`, the Worker: /static/* comes from Workers Static Assets (the files `build.py` copies to public/);
+- `Default`, the Worker: /static/*, /sqljs/* (sql.js) and /engine/* (the engine's WebAssembly build) come from
+  Workers Static Assets (the files `build.py` copies to public/);
   everything else goes to the one Durable Object.
 - `Library`, a SQLite-backed Durable Object: the library database lives in its SQL storage (tastr/do_sqlite.py)
   and it runs the same FastAPI app as Fly does, one request at a time.
@@ -19,6 +20,12 @@ from contextlib import closing
 from urllib.parse import urlparse
 
 os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: a cache, nothing kept
+try:
+    from tastr_build import ENGINE_WASM_ID  # build.py: the hash of the engine build in public/engine/
+except ImportError:
+    ENGINE_WASM_ID = None
+if ENGINE_WASM_ID:
+    os.environ.setdefault("TASTR_ENGINE_WASM_ID", ENGINE_WASM_ID)
 
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
@@ -28,15 +35,18 @@ from tastr.web.server import create_app  # noqa: E402
 
 DB_PATH = "/tmp/tastr/tastr.db"  # only a name here: the database is the Durable Object's own storage
 KEYS_SECONDS = 3600
-def fetch_request(method: str, url: str, headers: dict, body) -> http.Response:
+def fetch_request(method: str, url: str, headers: dict, body, timeout: float = http.TIMEOUT) -> http.Response:
     """tastr/http.py's transport: the Worker's fetch, from synchronous code (run_sync waits on it while other
-    requests run). The answer's body is read as it arrives."""
+    requests run). The answer's body is read as it arrives. A `timeout` shorter than the default (a catalog lookup)
+    cuts the request off after that long; the default leaves long Modal runs and downloads alone."""
     import js
     from pyodide.ffi import run_sync, to_js
 
     if hasattr(body, "read"):
         body = body.read()  # a file: the Worker's files are in memory anyway
     init = {"method": method, "headers": headers} | ({"body": to_js(body)} if body is not None else {})
+    if timeout < http.TIMEOUT:
+        init["signal"] = js.AbortSignal.timeout(int(timeout * 1000))
     try:
         resp = run_sync(js.fetch(url, to_js(init, dict_converter=js.Object.fromEntries)))
     except Exception as e:  # noqa: BLE001 - a JsException: unreachable, DNS, refused
@@ -47,7 +57,10 @@ def fetch_request(method: str, url: str, headers: dict, body) -> http.Response:
 
     def chunks():
         while reader is not None:
-            part = run_sync(reader.read())
+            try:
+                part = run_sync(reader.read())
+            except Exception as e:  # noqa: BLE001 - the connection dropped, or the timeout's signal fired
+                raise http.HTTPError(f"{urlparse(url).netloc} stopped answering: {e}") from e
             if part.done:
                 return
             yield part.value.to_bytes()
@@ -59,8 +72,17 @@ def fetch_request(method: str, url: str, headers: dict, body) -> http.Response:
     return http.Response(resp.status, names, chunks(), close)
 
 
+def sleep(seconds: float) -> None:
+    """runner.Loop's sleep: pauses the calling work while other requests and jobs run."""
+    import asyncio
+
+    from pyodide.ffi import run_sync
+
+    run_sync(asyncio.sleep(seconds))
+
+
 http.use(fetch_request)
-RUNNER = runner.Loop()
+RUNNER = runner.Loop(sleep=sleep)
 runner.use(RUNNER)  # before the app is built: its job queues take their lanes from it
 
 
@@ -186,8 +208,11 @@ class Library(DurableObject):
             self._armed = due
 
 
+ASSET_PATHS = ("/static/", "/sqljs/", "/engine/")  # the files build.py puts in public/
+
+
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        if urlparse(request.url).path.startswith("/static/"):
+        if urlparse(request.url).path.startswith(ASSET_PATHS):
             return await self.env.ASSETS.fetch(request)
         return await self.env.LIB.getByName("library").fetch(request)

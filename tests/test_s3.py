@@ -52,7 +52,7 @@ def test_signed_links_match_botocore(frozen, method, params):
 def test_signed_requests_match_botocore(frozen, monkeypatch):
     sent = []
 
-    def transport(method, url, headers, body):
+    def transport(method, url, headers, body, timeout):
         sent.append((method, url, headers))
         return http.Response(200, {}, iter([b""]))
 
@@ -68,7 +68,7 @@ def test_listing_follows_continuation_tokens(monkeypatch):
     pages = {None: ("true", "t2", "a.wav", 3), "t2": ("false", None, "b.wav", 5)}
     asked = []
 
-    def transport(method, url, headers, body):
+    def transport(method, url, headers, body, timeout):
         token = parse_qs(urlsplit(url).query).get("continuation-token", [None])[0]
         asked.append(token)
         truncated, nxt, key, size = pages[token]
@@ -85,7 +85,7 @@ def test_listing_follows_continuation_tokens(monkeypatch):
 
 
 def test_errors_say_what_the_bucket_said(monkeypatch):
-    def transport(method, url, headers, body):
+    def transport(method, url, headers, body, timeout):
         if method == "HEAD":
             return http.Response(404, {}, iter([b""]))
         return http.Response(403, {"content-type": "application/xml"},

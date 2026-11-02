@@ -123,3 +123,19 @@ def test_the_alarm_is_set_for_the_next_repeating_work(entry):
     asyncio.run(types.MethodType(entry.Library.alarm, lib)())
     assert ran == ["expiry"] and alarms == [1060_000, 4661_000]
     stop()
+
+
+def test_worker_pins_the_sqljs_the_app_names():
+    """worker/build.py copies sql.js from npm; the version must be the one the page asks /sqljs/ for."""
+    from tastr.web.routes.search import SQLJS_VERSION
+
+    pkg = json.loads((ENTRY.parent.parent / "package.json").read_text())
+    assert pkg["devDependencies"]["sql.js"] == SQLJS_VERSION
+
+
+def test_engine_build_id_can_come_from_the_environment(monkeypatch):
+    """On the Worker the engine's WebAssembly file is a static asset, not on disk: build.py records its hash."""
+    from tastr.engine import rust
+
+    monkeypatch.setenv("TASTR_ENGINE_WASM_ID", "abc123")
+    assert rust.wasm_id() == "abc123"

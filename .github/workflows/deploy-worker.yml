@@ -1,0 +1,35 @@
+name: deploy-worker
+# Deploys the Cloudflare Worker (worker/, TAS-84) by hand: Actions > deploy-worker > Run workflow. Fly keeps serving
+# tastr.pocketknows.com until the switch (TAS-51, docs/hosting-map.md); after it, this runs from deploy.yml instead.
+# Needs the CLOUDFLARE_API_TOKEN secret: a Cloudflare API token from the "Edit Cloudflare Workers" template.
+on:
+  workflow_dispatch:
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # build.py imports the app (for the prerendered page), so it needs the app's own packages.
+      - run: pip install -e .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v6
+      # The same build, size check and local smoke test as CI, then the real deploy. TASTR_COMMIT names the
+      # version on the Admin tab.
+      - name: Check and deploy
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          ./check.sh --serve
+          uv run pywrangler deploy --var "TASTR_COMMIT:${{ github.sha }}"

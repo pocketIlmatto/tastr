@@ -328,16 +328,19 @@ flowchart LR
 
 ### Before the switch (TAS-51)
 
-What has to exist before the Worker can take over from Fly, in order. Nothing here is done yet.
+What has to happen before the Worker takes over from Fly, in order. Steps 1 to 4 are setup; the Worker is
+reachable only at a custom domain (`workers_dev` and `preview_urls` are off in `worker/wrangler.jsonc`), so
+nothing is public until step 5.
 
 | Step | Where | What |
 | --- | --- | --- |
 | 1 | Cloudflare **Workers & Pages > Plans** | Workers Paid ($5 a month): the bundle (about 7.7 MiB gzipped) is over the Free plan's 3 MiB limit. |
 | 2 | Modal **Settings > Proxy Auth Tokens** | A token for the Worker. Its id and secret become `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET`. `TASTR_MODAL_URL` is the `api` endpoint's address, which `modal deploy` prints (in the deploy workflow's log). |
-| 3 | `pywrangler secret put NAME` in `worker/` | The same secrets as on Fly, without the Fly, Modal-token and Litestream ones: `TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD`, `TASTR_ADMIN_EMAILS`, `TASTR_LINK_SECRET`, `TASTR_STORAGE_GB`, the four `TASTR_AUDIO_*` ones, the three `TASTR_MODAL_*` ones above, and the optional ones you use. |
-| 4 | GitHub Actions | A deploy job for the Worker, with a Cloudflare API token that can edit Workers (still to write). |
-| 5 | The library's data | Copy the Fly database into the Durable Object (an import step, still to write). Audio and stems are already in the bucket. |
-| 6 | Cloudflare **Workers > tastr > Settings > Domains & Routes**, and Access | Point `tastr.pocketknows.com` at the Worker, keeping the Access application in front of it. Fly stops after that. |
+| 3 | Cloudflare **My Profile > API Tokens**, then GitHub **Settings > Secrets and variables > Actions** | A token from the "Edit Cloudflare Workers" template, saved as the GitHub secret `CLOUDFLARE_API_TOKEN`. Then **Actions > deploy-worker > Run workflow** (`.github/workflows/deploy-worker.yml`) builds, checks and deploys the Worker. |
+| 4 | `pywrangler secret put NAME` in `worker/`, or the Worker's **Settings > Variables and Secrets** | The same secrets as on Fly, without the Fly, Modal-token and Litestream ones: `TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD`, `TASTR_ADMIN_EMAILS`, `TASTR_LINK_SECRET`, `TASTR_STORAGE_GB`, the four `TASTR_AUDIO_*` ones (required on the Worker), the three `TASTR_MODAL_*` ones above, and the optional ones you use. |
+| 5 | Cloudflare **Workers > tastr > Settings > Domains & Routes**, and Access | Try it first at a second hostname (say `tastr-next.pocketknows.com`) added to the same Access application. |
+| 6 | Fly, then the Worker | `fly ssh console -C "tastr library-to-bucket"` copies the database to the audio bucket as `import/library.db` (`tastr/library_move.py`). The Worker imports it on its next start if its library is still empty, once (it notes the import in `meta`); to make it start again, redeploy. Audio and stems are in the bucket already. |
+| 7 | Cloudflare **Workers > tastr > Settings > Domains & Routes** | Right after step 6, point `tastr.pocketknows.com` at the Worker, keeping the Access application in front of it. Anything changed on Fly between steps 6 and 7 stays on Fly, so do them together. Then stop Fly. |
 
 ## Common tasks
 

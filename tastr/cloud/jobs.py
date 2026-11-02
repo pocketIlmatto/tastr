@@ -50,9 +50,11 @@ def load_items(dataset: str, folder: Path) -> list:
 
 
 def run_bench(dataset: str, path: str | None, root: str | Path, stages: list[str] | None = None,
-              limit: int | None = None, jobs: int = 1, progress=None, engine: str | None = None) -> dict:
+              limit: int | None = None, jobs: int = 1, progress=None, engine: str | None = None,
+              rekordbox: str | None = None) -> dict:
     """`tastr bench` with `path` relative to `root` (the bucket mount on Modal). Returns the report.
-    `engine`: "rust" or "python" (TASTR_ENGINE, which the worker processes inherit)."""
+    `engine`: "rust" or "python" (TASTR_ENGINE, which the worker processes inherit). `rekordbox`: a Rekordbox
+    XML export of the same tracks (relative to `root`), scored next to Tastr (docs/rekordbox.md)."""
     import os
 
     from ..engine import bench, rust
@@ -67,6 +69,10 @@ def run_bench(dataset: str, path: str | None, root: str | Path, stages: list[str
         raise ValueError(f"no labeled tracks with audio found for {dataset} at {path} in the bucket")
     load_seconds = round(time.time() - t0, 1)
     report = runner.run(items, stages=stages, jobs=jobs, limit=limit, progress=progress)
+    if rekordbox:
+        from ..engine.bench import rekordbox as rb
+
+        rb.add_to_report(report, items, Path(root) / rekordbox, limit)
     report["timing"] = {"load_seconds": load_seconds, "jobs": jobs}
     report["engine"] = rust.chosen()
     return report

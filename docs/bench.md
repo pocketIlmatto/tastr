@@ -13,6 +13,7 @@ tastr bench manifest ~/music/labels.csv             # your own tracks
 
 By default only the `core` and `sections` stages run (`--stages` to change).
 Danceability, energy and vibe tags have their own benchmark, `tastr vibe-bench` ([vibes.md](vibes.md)).
+`--rekordbox XML` scores Rekordbox's exported analysis of the same tracks next to Tastr's ([rekordbox.md](rekordbox.md)).
 `--limit N` takes the first N tracks for a quick check. `--remote` runs it on Modal
 with the datasets in an R2 bucket instead of on this machine (see [cloud.md](cloud.md)).
 
@@ -67,6 +68,7 @@ redistributing its labels or audio.
 | `beatport-tempo` | Beatport's listed BPM | 774 of those previews with a bpm in `meta/` | same folder plus `original_metadata.zip` unzipped to `<root>/meta/*.json`; see "Tempo notes" for its drum & bass conventions |
 | `harmonix` | BPM, beats, downbeats, sections | 912 pop/EDM tracks | github.com/urinieto/harmonixset; audio is not distributed, put your copies in `<root>/audio` named by track id |
 | `manifest` | whatever you fill in | your tracks | a CSV or JSON file, below |
+| `rekordbox` | Rekordbox's BPM, key, beat grid | your tracks Rekordbox analyzed | its collection XML export; scores agreement, not accuracy ([rekordbox.md](rekordbox.md)) |
 | `synth` | everything, exact | 12 generated tracks | built in; a smoke test, not a benchmark |
 
 GiantSteps is the closest match to dance music libraries and is the main key

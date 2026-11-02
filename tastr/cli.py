@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     fe.add_argument("--remote", action="store_true", help="run on Modal, writing into the R2 bucket (docs/cloud.md)")
 
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
-    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, ballroom, harmonix or manifest")
+    b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, ballroom, harmonix, manifest or rekordbox")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
     b.add_argument("--stages", help="comma-separated stage names (default: core,sections)")
     b.add_argument("--limit", type=int, help="only the first N tracks")
@@ -155,6 +155,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="which engine analyzes (default: TASTR_ENGINE, else rust); rust always runs every stage")
     b.add_argument("--record", action="store_true",
                    help="save the headline score to tastr/engine/bench_scores.json, quoted in the UI (full runs only)")
+    b.add_argument("--rekordbox", metavar="XML",
+                   help="a Rekordbox collection export of the same tracks: score its BPM, key and beat grid next to "
+                        "Tastr's (with --remote, a path in the dataset bucket; docs/rekordbox.md)")
 
     for name, parser in sub.choices.items():
         parser.set_defaults(func=COMMANDS[name])
@@ -197,7 +200,8 @@ def _bench_remote(args) -> int:
     try:
         report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
                               jobs=args.jobs if args.jobs > 1 else None,
-                              **({"engine": args.engine} if args.engine else {}))
+                              **({"engine": args.engine} if args.engine else {}),
+                              **({"rekordbox": args.rekordbox} if args.rekordbox else {}))
     except (remote.RemoteError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -211,10 +215,18 @@ def _bench_remote(args) -> int:
               f"imports {timing.get('import_seconds', 0):.0f} s, loading the dataset {timing['load_seconds']:.0f} s, analysis {report['seconds']:.0f} s"
               f" ({timing['jobs']} workers)", file=sys.stderr)
     baseline = runner.load_report(args.baseline) if args.baseline else None
-    print(runner.format_summary(report, baseline))
+    _print_bench(report, baseline)
     if args.out:
         runner.save(report, args.out)
     return _record(args, "bench", report)
+
+
+def _print_bench(report: dict, baseline: dict | None) -> None:
+    from .engine.bench import rekordbox, runner
+
+    print(runner.format_summary(report, baseline))
+    if report.get("rekordbox"):
+        print(rekordbox.format_comparison(report["rekordbox"]))
 
 
 def _bench_local(args) -> int:
@@ -238,8 +250,12 @@ def _bench_local(args) -> int:
     stages = args.stages.split(",") if args.stages else None
     report = runner.run(items, stages=stages, jobs=args.jobs, limit=args.limit, progress=progress)
     print(file=sys.stderr)
+    if args.rekordbox:
+        from .engine.bench import rekordbox
+
+        rekordbox.add_to_report(report, items, args.rekordbox, args.limit)
     baseline = runner.load_report(args.baseline) if args.baseline else None
-    print(runner.format_summary(report, baseline))
+    _print_bench(report, baseline)
     if args.out:
         runner.save(report, args.out)
     return _record(args, "bench", report)

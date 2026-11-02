@@ -65,11 +65,12 @@ BENCH_CPUS = 8
 
 @app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3 * 3600, volumes={DATA: datasets})
 def bench(dataset: str, path: str | None = None, stages: list[str] | None = None, limit: int | None = None,
-          jobs: int | None = None, engine: str | None = None) -> dict:
+          jobs: int | None = None, engine: str | None = None, rekordbox: str | None = None) -> dict:
     called = time.time()
     from tastr.cloud.jobs import run_bench
 
-    report = run_bench(dataset, path, DATA, stages=stages, limit=limit, jobs=jobs or BENCH_CPUS, engine=engine)
+    report = run_bench(dataset, path, DATA, stages=stages, limit=limit, jobs=jobs or BENCH_CPUS, engine=engine,
+                       rekordbox=rekordbox)
     report["timing"] |= {"container_started": _IMPORTED, "called": called, "import_seconds": round(time.time() - called - report["timing"]["load_seconds"] - report["seconds"], 1)}
     return report
 

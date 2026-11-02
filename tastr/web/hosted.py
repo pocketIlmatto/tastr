@@ -299,19 +299,21 @@ def stored_bytes(home: Path) -> int:
 
 
 class AnalysisSlots:
-    """At most `n` analyses at once; later ones wait their turn (up to `timeout` seconds)."""
+    """At most `n` analyses at once; later ones wait their turn (up to `timeout` seconds). With `wait` False
+    (the Cloudflare Worker, which has no threads to wait for: tastr/runner.py) a full house raises TimeoutError
+    at once, and background analyses queue in their lane instead."""
 
-    def __init__(self, n: int, timeout: float = 600):
+    def __init__(self, n: int, timeout: float = 600, wait: bool = True):
         self.max = max(1, n)
         self.sem = threading.BoundedSemaphore(self.max)
-        self.timeout = timeout
+        self.timeout = timeout if wait else 0
         self.lock = threading.Lock()
         self.running = self.waiting = 0
 
     def __enter__(self):
         with self.lock:
             self.waiting += 1
-        got = self.sem.acquire(timeout=self.timeout)
+        got = self.sem.acquire(timeout=self.timeout) if self.timeout else self.sem.acquire(blocking=False)
         with self.lock:
             self.waiting -= 1
             self.running += got

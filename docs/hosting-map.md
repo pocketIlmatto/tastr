@@ -298,18 +298,22 @@ flowchart LR
     W -->|/static/*| SA[Workers Static Assets<br/>worker/public/static]
     W -->|everything else| DO["Durable Object Library<br/>FastAPI app + the library database<br/>in its SQLite storage"]
     DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
+    AL[Durable Object alarm] -->|expiry sweep, watch| DO
 ```
 
-- The Durable Object runs the same FastAPI app as Fly (`create_app(threads=False)`), one request at a time. The
+- The Durable Object runs the same FastAPI app as Fly (`create_app(threads=False)`) on one event loop. The
   database is the object's own SQL storage through `tastr/do_sqlite.py` (`db.use_storage`), with 30 days of
   point-in-time recovery from Cloudflare instead of Litestream.
 - Settings are the same names as on Fly: `vars` in `worker/wrangler.jsonc` for the plain ones (`TASTR_HOSTED`),
   `pywrangler secret put` for secrets.
 - Logins: the Worker checks the same Access token, with the signing keys fetched by the Worker itself
   (`AccessKeys`) since PyJWT's own client can't open sockets there.
-- Not there yet: background work (analysis jobs, the expiry sweep and the watch loop need threads; part 3), the
-  Modal client (part 4) and boto3 for the audio bucket (part 5). Until then the Worker serves the library, cards
-  and admin pages but can't analyze or upload.
+- Background work goes through `tastr/runner.py` on both hosts. On Fly it is threads, as before. On the Worker,
+  jobs (analyses, stems, drum model runs) are asyncio tasks in lanes that queue them, and the repeating work (the
+  expiry sweep every 6 hours, the watch) runs from the Durable Object's alarm, which wakes the object when it is
+  due. Background analyses queue for an analysis slot in their lane there, since there are no threads to wait.
+- Not there yet: the Modal client (part 4) and boto3 for the audio bucket (part 5). Until then the Worker serves
+  the library, cards and admin pages but can't analyze or upload.
 
 ## Common tasks
 

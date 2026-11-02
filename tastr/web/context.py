@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from .. import blobs, db, drum_jobs, lookup, service, stems
+from .. import blobs, db, drum_jobs, lookup, runner, service, stems
 from ..engine import browser_card
 from ..filemeta import describe, legacy_upload_prefix
 from .analysis_jobs import AnalysisJobs, ref
@@ -96,7 +96,8 @@ class AppContext:
         if hosted and verifier is None:
             verifier = AccessVerifier(settings.access_team_domain, settings.access_aud)
         self.verifier = verifier
-        self.slots = AnalysisSlots(settings.max_analyses) if hosted else None
+        blocking = runner.current().blocking
+        self.slots = AnalysisSlots(settings.max_analyses, wait=blocking) if hosted else None
         # Without TASTR_LINK_SECRET the Strudel links last only until the server restarts.
         self.signer = LinkSigner(settings.link_secret or secrets.token_bytes(32)) if hosted else None
         # With the audio bucket on, the page plays audio from signed links to it (tastr/blobs.py).
@@ -105,7 +106,9 @@ class AppContext:
                               if hosted else {})
         # Their unfinished jobs are kept in the database (tastr/markers.py), so a restart picks them up.
         self.stem_jobs = stems.Jobs(db_path)
-        self.analyses = AnalysisJobs(db_path, legacy_folder=tastr_home() / "analysis-jobs")
+        # Without threads to wait for a slot (the Worker), background analyses queue for one in their lane.
+        self.analyses = AnalysisJobs(db_path, legacy_folder=tastr_home() / "analysis-jobs",
+                                     limit=None if blocking or not hosted else settings.max_analyses)
         self.drum_runs = drum_jobs.Jobs(self.run_drum_model, db_path)
         self.last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
         self.snapshot_day = ""  # the UTC day storage was last recorded for (storage_days)

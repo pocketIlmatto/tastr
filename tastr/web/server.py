@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
-import threading
 from contextlib import asynccontextmanager, closing
 from datetime import datetime, timezone
 from functools import partial
@@ -81,24 +79,21 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     ctx = AppContext(db_path, settings, verifier)
     hosted = ctx.hosted
 
-    def startup():
+    def startup() -> list:
+        """Pick up unfinished jobs and start the repeating work; returns the functions that stop the latter."""
         ctx.stem_jobs.resume()  # stem separations the last run left unfinished (e.g. the machine auto-stopped)
         cut = ctx.analyses.resume()  # analyses it left unfinished read as failed
         if hosted:
             background.log_start(ctx, cut)
         ctx.drum_runs.resume()  # and drum model runs
+        return background.start(ctx) if hosted else []
 
     @asynccontextmanager
     async def lifespan(_app):
-        stop = threading.Event()
-        startup()
-        if hosted and settings.audio_days > 0:
-            threading.Thread(target=background.expire_loop, args=(ctx, stop), name="tastr-expiry", daemon=True).start()
-        if hosted and settings.watch_minutes > 0 and ((settings.github_repo and settings.github_workflows)
-                                                       or os.environ.get("LITESTREAM_BUCKET")):
-            threading.Thread(target=background.watch_loop, args=(ctx, stop), name="tastr-watch", daemon=True).start()
+        stops = startup()
         yield
-        stop.set()
+        for stop in stops:
+            stop()
 
     app = FastAPI(title="Tastr", docs_url=None if hosted else "/docs", redoc_url=None if hosted else "/redoc",
                   openapi_url=None if hosted else "/openapi.json", lifespan=lifespan if threads else None)

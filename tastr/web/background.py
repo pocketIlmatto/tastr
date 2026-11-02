@@ -4,12 +4,11 @@
 from __future__ import annotations
 
 import os
-import threading
 from contextlib import closing
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
-from .. import blobs, db
+from .. import blobs, db, runner
 from . import watch
 from .analysis_jobs import ref
 from .context import AppContext, log, tastr_home, upload_dir
@@ -19,29 +18,47 @@ from .routes.analyze import prune_uploads
 EXPIRY_EVERY = 6 * 3600  # seconds between sweeps for expired audio on a hosted server
 
 
-def expire_loop(ctx: AppContext, stop: threading.Event) -> None:
+def start(ctx: AppContext) -> list[Callable[[], None]]:
+    """Start a hosted server's repeating work (tastr/runner.py: threads, or the Worker's alarm); returns the
+    functions that stop it."""
+    settings, every, stops = ctx.settings, runner.current().every, []
+    if settings.audio_days > 0:
+        stops.append(every("expiry", EXPIRY_EVERY, lambda: expire_once(ctx)))
+    if settings.watch_minutes > 0 and ((settings.github_repo and settings.github_workflows)
+                                       or os.environ.get("LITESTREAM_BUCKET")):
+        # The first check waits for the server to finish starting (and Litestream its first sync).
+        stops.append(every("watch", settings.watch_minutes * 60, lambda: watch_once(ctx), delay=60))
+    return stops
+
+
+def expire_once(ctx: AppContext) -> None:
+    """Delete expired audio, abandoned direct uploads and local copies of what the audio bucket holds."""
     settings = ctx.settings
-    while True:
-        try:
-            with closing(ctx.conn()) as c:
-                gone = expire_audio(c, upload_dir(), settings.audio_days, settings.admins)
-            ctx.snapshot_storage()
-            abandoned = prune_uploads(ctx.db_path)  # direct uploads given a link and never finished
-            if abandoned:
-                log.info("Deleted %d unfinished upload(s)", abandoned)
-            evicted = blobs.evict()  # local copies of what the audio bucket holds; the disk is a cache then
-            if evicted:
-                log.info("Removed %d local copies of files kept in the audio bucket", evicted)
-            if gone:
-                log.info("Deleted the audio of %d track(s) older than %g days", len(gone), settings.audio_days)
-        except Exception:  # noqa: BLE001 - try again next time
-            log.exception("Deleting expired audio failed")
-        if stop.wait(EXPIRY_EVERY):
-            return
+    try:
+        with closing(ctx.conn()) as c:
+            gone = expire_audio(c, upload_dir(), settings.audio_days, settings.admins)
+        ctx.snapshot_storage()
+        abandoned = prune_uploads(ctx.db_path)  # direct uploads given a link and never finished
+        if abandoned:
+            log.info("Deleted %d unfinished upload(s)", abandoned)
+        evicted = blobs.evict()  # local copies of what the audio bucket holds; the disk is a cache then
+        if evicted:
+            log.info("Removed %d local copies of files kept in the audio bucket", evicted)
+        if gone:
+            log.info("Deleted the audio of %d track(s) older than %g days", len(gone), settings.audio_days)
+    except Exception:  # noqa: BLE001 - try again next time
+        log.exception("Deleting expired audio failed")
 
 
 def watch_once(ctx: AppContext, fetch_runs=watch.fetch_runs, snapshots=watch.litestream_snapshots) -> None:
     """Log GitHub Actions runs on main and Litestream snapshots that are new since the last check."""
+    try:
+        _watch(ctx, fetch_runs, snapshots)
+    except Exception:  # noqa: BLE001 - try again next time
+        log.exception("Checking GitHub and the R2 backup failed")
+
+
+def _watch(ctx: AppContext, fetch_runs, snapshots) -> None:
     settings = ctx.settings
     now = datetime.now(timezone.utc)
     with closing(ctx.conn()) as c:
@@ -69,18 +86,6 @@ def watch_once(ctx: AppContext, fetch_runs=watch.fetch_runs, snapshots=watch.lit
                 db.add_event(c, **e)
             db.set_meta(c, watch.LAST_SNAPSHOT, newest)
             db.set_meta(c, watch.PROBLEM_DAY, day)
-
-
-def watch_loop(ctx: AppContext, stop: threading.Event) -> None:
-    if stop.wait(60):  # let the server finish starting (and Litestream its first sync)
-        return
-    while True:
-        try:
-            watch_once(ctx)
-        except Exception:  # noqa: BLE001 - try again next time
-            log.exception("Checking GitHub and the R2 backup failed")
-        if stop.wait(ctx.settings.watch_minutes * 60):
-            return
 
 
 def log_start(ctx: AppContext, cut: list[dict[str, Any]]) -> None:

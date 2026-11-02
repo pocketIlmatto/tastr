@@ -15,7 +15,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from tastr import db, do_sqlite
+from tastr import db, do_sqlite, runner
 from tastr.web.hosted import AccessVerifier
 
 ENTRY = Path(__file__).resolve().parent.parent / "worker" / "src" / "entry.py"
@@ -44,12 +44,14 @@ def entry(monkeypatch):
     monkeypatch.setitem(sys.modules, "js", js)
     monkeypatch.setitem(sys.modules, "pyodide", types.ModuleType("pyodide"))
     monkeypatch.setitem(sys.modules, "pyodide.ffi", ffi)
+    before = runner.current()
     spec = importlib.util.spec_from_file_location("tastr_worker_entry", ENTRY)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.calls, mod.fake_fetch = calls, fake_fetch
     yield mod
     db.use_storage(None)
+    runner.use(before)  # loading the entry picks the Worker's runner for the whole process
 
 
 def test_access_keys_come_from_the_workers_fetch(entry):
@@ -99,3 +101,24 @@ def test_storage_wrapper_and_env(entry, tmp_path, monkeypatch):
     monkeypatch.delenv("TASTR_SPIKE_X", raising=False)
     entry.load_env(types.SimpleNamespace(_env=types.SimpleNamespace(TASTR_SPIKE_X="1", LIB=object())))
     assert os.environ.pop("TASTR_SPIKE_X") == "1"  # strings only: LIB is a binding
+
+
+def test_the_alarm_is_set_for_the_next_repeating_work(entry):
+    assert isinstance(runner.current(), runner.Loop)
+    clock = [1000.0]
+    entry.RUNNER.clock = lambda: clock[0]
+    ran, alarms = [], []
+
+    async def set_alarm(ms):
+        alarms.append(ms)
+
+    lib = types.SimpleNamespace(ctx=types.SimpleNamespace(storage=types.SimpleNamespace(setAlarm=set_alarm)))
+    lib.arm = arm = types.MethodType(entry.Library.arm, lib)
+    stop = entry.RUNNER.every("expiry", 3600, lambda: ran.append("expiry"), delay=60)
+    asyncio.run(arm())
+    asyncio.run(arm())  # unchanged: not set again
+    assert alarms == [1060_000]
+    clock[0] = 1061
+    asyncio.run(types.MethodType(entry.Library.alarm, lib)())
+    assert ran == ["expiry"] and alarms == [1060_000, 4661_000]
+    stop()

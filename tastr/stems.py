@@ -20,11 +20,10 @@ import shutil
 import threading
 import time
 import types
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
 
-from . import blobs
+from . import blobs, runner
 from .markers import Markers, legacy_files
 
 STEM_NAMES = ("vocals", "bass", "other", "drums")
@@ -217,7 +216,7 @@ class Jobs:
 
     def __init__(self, db_path=None) -> None:
         self.markers = Markers(db_path, "stems")
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tastr-stems")
+        self._lane = runner.current().lane("stems", 1)  # one at a time
         self._lock = threading.Lock()
         self._state: dict[Path, dict] = {}
         self._seq = 0
@@ -246,7 +245,7 @@ class Jobs:
             self._seq += 1
             self._state[folder] = {"state": "queued", "progress": 0.0, "_seq": self._seq}
         self.markers.put(folder.name, {"audio": str(audio_path)})
-        self._pool.submit(self._run, audio_path, folder)
+        self._lane.submit(self._run, audio_path, folder)
         return self.status(folder)
 
     def resume(self) -> int:

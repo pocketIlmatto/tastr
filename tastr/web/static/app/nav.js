@@ -6,13 +6,14 @@ import { loadAdmin } from "./admin.js";
 import { loadGlossaryData } from "./glossary.js";
 import { loadFiles } from "./files.js";
 import { openTrack, switchTo } from "./card.js";
-import { routeOf, setRoute } from "./route.js";
+import { endStart, routeOf, setRoute } from "./route.js";
 
 
 // Wiring that touches the page or other modules, run once by main.js after every module has loaded.
 export function init() {
   document.querySelectorAll("nav button").forEach((b) =>
     b.addEventListener("click", () => {
+      endStart();
       document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("active", x === b));
       for (const v of ["library", "explore", "glossary", "files", "admin"]) $("view-" + v).hidden = v !== b.dataset.view;
       if (b.dataset.view === "explore") renderExplore();

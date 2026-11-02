@@ -262,14 +262,15 @@ def router(ctx: AppContext) -> APIRouter:
         with closing(ctx.conn()) as c:
             try:
                 with ctx.analysis_slot():
-                    rs = service.analyze_inputs(c, paths, owner=ctx.owner_of(request), cards=sig)
+                    rs = service.analyze_inputs(c, paths, owner=ctx.owner_of(request), cards=sig, skip_known=True)
             except TimeoutError:
                 raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.") from None
             finally:
                 drop_cards(sig)
                 release(paths)
+            drop_known(rs)
             if ctx.hosted:  # only tracks that analyzed count toward the daily limit, so a failed try can be retried
-                db.add_usage(c, request.state.user, "tracks", today(), sum(r.track_id is not None for r in rs))
+                db.add_usage(c, request.state.user, "tracks", today(), analyzed(rs))
             return ctx.results(rs, ctx.owner_of(request))
 
     def store(paths: list[str], sig: dict[str, str], request: Request) -> None:
@@ -301,6 +302,27 @@ def router(ctx: AppContext) -> APIRouter:
                 p.unlink(missing_ok=True)
                 if p.parent.is_dir() and not any(p.parent.iterdir()):
                     p.parent.rmdir()
+
+    def analyzed(rs) -> int:
+        """How many tracks these results analyzed (what the daily limit counts): not failures, not ones skipped."""
+        return sum(r.track_id is not None and not r.already for r in rs)
+
+    def drop_known(rs) -> None:
+        """An upload of audio the library already had was not analyzed (`already`): its new copy goes, here and
+        in the audio bucket, so it isn't left behind with nothing pointing at it (unless it became the track's audio,
+        `audio_restored`). Only Tastr's own upload copies."""
+        root = upload_dir().resolve()
+        for r in rs:
+            p = Path(r.source.local_path or "")
+            if not r.already or r.audio_restored or root not in p.resolve().parents:
+                continue
+            try:
+                blobs.remove(p)
+            except Exception:  # noqa: BLE001 - the orphan sweep (hosted.orphan_uploads) gets it later
+                log.warning("couldn't remove the duplicate upload %s", p.name)
+            (p.parent / CARD_NAME).unlink(missing_ok=True)  # the card the page sent with it, unread
+            if p.parent.resolve() != root and p.parent.is_dir() and not any(p.parent.iterdir()):
+                p.parent.rmdir()
 
     def discard(files) -> None:
         """Nothing from a refused upload stays on disk."""
@@ -368,13 +390,16 @@ def router(ctx: AppContext) -> APIRouter:
                         for i, source in enumerate(sources):
                             progress.stage("decode", i)
                             r = service.analyze_source(c, source, owner=owner, card=sig.get(source.local_path),
-                                                       on_stage=lambda name, *_, i=i: progress.stage(name, i))
+                                                       on_stage=lambda name, *_, i=i: progress.stage(name, i),
+                                                       skip_known=not link)
+                            if r.already:
+                                drop_known([r])
                             rs.append(r)
                             failed_at.append(progress.last_stage if r.error else None)
                 except TimeoutError:
                     raise JobError("The server is busy analyzing other tracks. Try again in a few minutes.") from None
                 if ctx.hosted:  # as for a plain upload: only tracks that analyzed count toward the daily limit
-                    db.add_usage(c, user, "tracks", today(), sum(r.track_id is not None for r in rs))
+                    db.add_usage(c, user, "tracks", today(), analyzed(rs))
             out = ctx.results(rs, user, job_id, failed_at)
             for item, stage in zip(out["results"], failed_at):
                 if stage:

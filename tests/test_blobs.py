@@ -522,3 +522,16 @@ def test_a_storage_refusal_is_logged_for_the_admin(bucket, home, db_path, monkey
         (e,) = [e for e in db.recent_events(conn, problems=True) if e["source"] == "r2"]
     assert e["kind"] == "failed" and not e["ok"] and "a.wav" in e["detail"] and "CORS" in e["detail"]
     assert c.post(f"/api/uploads/{up['id']}/failed", json={}, headers=GOOD).status_code == 404  # closed; Retry starts anew
+
+
+def test_a_copied_track_gets_its_own_views(bucket, db_path):
+    from tastr import library_copy
+
+    conn = db.connect(db_path)
+    card = full_card()
+    card.extras["views"] = blobs.IN_BUCKET
+    tid = db.save_card(conn, card, owner="a@b.c")
+    blobs.put_views(tid, {"wave": [1, 2, 3]})
+    new = library_copy.copy_tracks(conn, [tid], "a@b.c", "t@b.c")[tid]
+    assert blobs.get_views(new) == {"wave": [1, 2, 3]}
+    conn.close()

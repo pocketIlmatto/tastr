@@ -12,7 +12,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ... import db
+from ... import db, library_copy
 from .. import claude
 from ..context import AppContext, tastr_home
 from ..hosted import stored_bytes, today
@@ -20,6 +20,11 @@ from ..hosted import stored_bytes, today
 EMAIL = re.compile(r"^[^@\s/]{1,64}@[^@\s/]{1,190}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 USAGE_RANGES = {"1": 1, "7": 7, "30": 30, "all": 365}  # the admin chart's ranges in days; "all" stops at a year
+
+
+class CopyBody(BaseModel):
+    to: str
+    track_ids: list[int] = Field(..., min_length=1, max_length=50)
 
 
 class LimitsBody(BaseModel):
@@ -161,6 +166,37 @@ def router(ctx: AppContext) -> APIRouter:
             raise HTTPException(400, "from and to are days, like 2026-10-31.")
         with closing(ctx.conn()) as c:
             return db.find_events(c, type, who, source, since, until, problems, limit)
+
+    @api.get("/api/admin/copy-tracks")
+    def copy_preview(request: Request, to: str, count: int = Query(10, ge=1, le=50)):
+        """What copying your tracks to `to` would do, without doing it: whether `to` has used the server yet, and
+        your `count` most recently added tracks with audio that `to` doesn't have. Admins only."""
+        admin = ctx.require_admin(request)
+        to = to.strip().lower()
+        if not EMAIL.match(to) or to == admin:
+            raise HTTPException(400, "Give someone else's email address.")
+        with closing(ctx.conn()) as c:
+            seen = c.execute("SELECT min(at), max(at) FROM events WHERE user = ?", (to,)).fetchone()
+            theirs = c.execute("SELECT count(*) FROM tracks WHERE owner = ?", (to,)).fetchone()[0]
+            picks = library_copy.plan(c, admin, to, count=count)
+        return {"to": to, "first_seen": seen[0], "last_seen": seen[1] or ctx.last_seen.get(to), "their_tracks": theirs,
+                "tracks": picks}
+
+    @api.post("/api/admin/copy-tracks")
+    def copy_tracks(body: CopyBody, request: Request):
+        """Copy some of your tracks into someone else's library (tastr/library_copy.py): same analysis, same audio
+        file. Tracks they have already are skipped. Admins only; logged as an admin change."""
+        admin = ctx.require_admin(request)
+        to = body.to.strip().lower()
+        if not EMAIL.match(to) or to == admin:
+            raise HTTPException(400, "Give someone else's email address.")
+        with closing(ctx.conn()) as c:
+            made = library_copy.copy_tracks(c, body.track_ids, admin, to)
+        if made:
+            n = len(made)
+            ctx.event(admin, "admin", f"Copied {n} track{'' if n == 1 else 's'} to {to.split('@')[0]}")
+        return {"to": to, "copied": [{"from": a, "id": b} for a, b in made.items()],
+                "skipped": [t for t in body.track_ids if t not in made]}
 
     @api.put("/api/admin/limits/{email}")
     def set_limits(email: str, body: LimitsBody, request: Request):

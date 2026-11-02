@@ -97,6 +97,10 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   3D landscape of ridges. **⤢ Expand** shows any chart bigger, or full screen.
 - **Stem separation** into vocals, bass, other and drums with Demucs, on your
   machine or on a [Modal](https://modal.com) GPU (see [Stems](usage.md#stems-optional)).
+- **Files you already have are skipped.** Before uploading, the page fingerprints each file (SHA-256 of its
+  bytes) and leaves out the ones already in your library, so re-dropping a folder only uploads what's new.
+  It matches exact bytes: the same song exported again with other tags or another encoding is a new file and is
+  analyzed. If a matching track's audio has expired, the upload brings the audio back without a new analysis.
 - **Library sidebar** with search, sort (newest or oldest upload, title, BPM, key, energy, length) and filters
   by vibe, key, BPM, upload date and review state. Each row shows when the track was uploaded, a ✓ when you
   labeled it and a hollow dot when it's in your review list. Click a vibe, the BPM or the key on a track card

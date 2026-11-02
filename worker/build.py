@@ -3,7 +3,9 @@
 - src/tastr/: the tastr package's Python files (the Worker bundle takes Python modules; other files are left out).
 - src/tastr/web/static/index.html: the page, with each /static/ file's content hash already in its URL
   (server.versioned_index reads the files, which aren't in the bundle).
-- public/static/: the browser files, served by Workers Static Assets.
+- public/static/: the browser files, served by Workers Static Assets, with the UI's modules also in
+  public/static/app-<hash>/, where the page loads them (server.versioned_index), so a deploy never mixes old and
+  new modules.
 
     python worker/build.py
 """
@@ -21,7 +23,7 @@ PKG = ROOT / "tastr"
 
 def build() -> None:
     sys.path.insert(0, str(ROOT))
-    from tastr.web.server import versioned_index
+    from tastr.web.server import app_version, versioned_index
 
     src, public = HERE / "src" / "tastr", HERE / "public"
     shutil.rmtree(src, ignore_errors=True)
@@ -36,6 +38,7 @@ def build() -> None:
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(versioned_index())
     shutil.copytree(PKG / "web" / "static", public / "static", ignore=shutil.ignore_patterns("index.html"))
+    shutil.copytree(PKG / "web" / "static" / "app", public / "static" / f"app-{app_version()}")
     n = sum(1 for _ in src.rglob("*.py"))
     m = sum(1 for p in (public / "static").rglob("*") if p.is_file())
     print(f"worker/src/tastr: {n} Python files; worker/public/static: {m} files")

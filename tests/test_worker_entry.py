@@ -16,6 +16,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from tastr import db, do_sqlite, runner
+from tastr.cloud import remote
 from tastr.web.hosted import AccessVerifier
 
 ENTRY = Path(__file__).resolve().parent.parent / "worker" / "src" / "entry.py"
@@ -52,6 +53,7 @@ def entry(monkeypatch):
     yield mod
     db.use_storage(None)
     runner.use(before)  # loading the entry picks the Worker's runner for the whole process
+    remote.use_transport(None)  # and its fetch for Modal
 
 
 def test_access_keys_come_from_the_workers_fetch(entry):

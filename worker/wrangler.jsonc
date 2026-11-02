@@ -11,5 +11,6 @@
   "durable_objects": {"bindings": [{"name": "LIB", "class_name": "Library"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["Library"]}],
   // Settings as on Fly (docs/hosting.md); secrets go in with `pywrangler secret put NAME`.
-  "vars": {"TASTR_HOSTED": "1"}
+  // TASTR_MODAL_URL (the tastr-web app's api endpoint), TASTR_MODAL_KEY and TASTR_MODAL_SECRET are set per deploy.
+  "vars": {"TASTR_HOSTED": "1", "TASTR_ANALYSIS_BACKEND": "modal", "TASTR_STEMS_BACKEND": "modal"}
 }

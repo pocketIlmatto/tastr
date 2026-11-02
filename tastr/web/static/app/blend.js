@@ -3,7 +3,10 @@
 
 import { $, api, h, svg, tracks } from "./core.js";
 import { openTrack, switchTo } from "./card.js";
-import { deleteList, lists, loadLists, onListsChange, saveList } from "./lists.js";
+import { deleteList, fitName, lists, loadLists, onListsChange, restoreList } from "./lists.js";
+import { askListName } from "./listname.js";
+import { trackCombo } from "./combo.js";
+import { exportMenu, playList } from "./playlist.js";
 import { BL_DIMS, BL_PRESETS, blendSpace, blendable, compareLists, defaultWeights, dist, groupSummary, kmeans, lerp, makePath, nearest, pca2, presetOn } from "./blend-space.js";
 
 const BL_COLORS = ["var(--sec0)", "var(--sec1)", "var(--sec2)", "var(--sec3)", "var(--sec4)", "#8a8a8a", "#a0723a", "#3a9a9a"];
@@ -16,7 +19,10 @@ const items = () => tracks.map((t) => ({ ...t, vibes: scores[t.id] || {} })).fil
 const nameOf = (c) => (c ? (c.title || `Track ${c.id}`) + (c.artist ? ` — ${c.artist}` : "") : "");
 const open = (id) => { switchTo("library"); openTrack(id); };
 const say = (m) => ($("bl-why").textContent = m);
-const saveAs = (name, ids) => saveList(name, ids).then(say, (e) => say(e.message));
+// Every "save as a list" asks for the name first, with the suggestion cut to fit (TAS-79).
+const saveAs = (name, ids) => askListName(name, ids).then((m) => { if (m) say(m); }, (e) => say(e.message));
+const pathName = (a, b) => `Path: ${fitName(a, 36)} to ${fitName(b, 36)}`;
+let delAsk = null, gone = null, goneT = 0; // the list whose × asks first; the deleted list while Undo shows
 
 export async function renderBlend() {
   try { scores = await api("/api/vibe-scores"); } catch (_) { scores = {}; }
@@ -47,7 +53,6 @@ function paintWeights() {
 function paintBlend() {
   paintWeights();
   const cs = items(), have = new Set(cs.map((c) => c.id));
-  $("bl-titles").replaceChildren(...cs.map((c) => h("option", { value: nameOf(c) })));
   if (!have.has(blend.a) || !have.has(blend.b)) {  // lowest energy to highest, until you pick
     const byE = [...cs].sort((x, y) => x.energy - y.energy);
     blend.a = byE.length > 1 ? byE[0].id : null; blend.b = byE.length > 1 ? byE[byE.length - 1].id : null; blend.path = null;
@@ -63,13 +68,45 @@ function paintLists() {
   const ids = lists.map((l) => l.id);
   if (!ids.includes(blCmp.a)) blCmp.a = ids[0] ?? null;
   if (!ids.includes(blCmp.b)) blCmp.b = ids.find((x) => x !== blCmp.a) ?? null;
-  $("bl-lists").replaceChildren(...lists.map((l) => h("span", { class: "bl-list" }, h("span", {}, l.name), h("span", { class: "muted" }, String(l.track_ids.length)),
-    h("button", { type: "button", "aria-label": `Delete list ${l.name}`, title: "Delete this list (the tracks stay in your library)",
-      onclick: () => deleteList(l.id).catch((e) => say(e.message)) }, "×"))));
-  if (!lists.length) $("bl-lists").append(h("span", { class: "muted" }, "No lists yet."));
+  if (delAsk != null && !ids.includes(delAsk)) delAsk = null;
+  const plural = (n) => `${n} track${n === 1 ? "" : "s"}`;
+  const chips = lists.map((l) => l.id === delAsk
+    // The × asks first; Cancel has the focus, so an Enter pressed by accident does nothing.
+    ? h("span", { class: "bl-list bl-ask", role: "group", "aria-label": `Delete ${l.name}?` },
+      h("span", {}, `Delete “${l.name}” (${plural(l.track_ids.length)})? The tracks stay in your library.`),
+      h("button", { type: "button", class: "danger-solid", onclick: () => delList(l) }, "Delete list"),
+      h("button", { type: "button", class: "bl-ask-no", onclick: () => { delAsk = null; paintLists(); } }, "Cancel"))
+    : h("span", { class: "bl-list" }, h("span", {}, l.name), h("span", { class: "muted" }, String(l.track_ids.length)),
+      h("button", { type: "button", class: "bl-play", "aria-label": `Play ${l.name}`, title: "Play this list", onclick: () => playList(l.name, l.track_ids) }, "▶"),
+      h("button", { type: "button", "aria-label": `Export ${l.name}`, title: "Export as a playlist file", "aria-haspopup": "menu", "aria-expanded": "false",
+        onclick: (e) => exportMenu(l, e.currentTarget) }, "⤓"),
+      h("button", { type: "button", "aria-label": `Delete list ${l.name}`, title: "Delete this list (asks first; the tracks stay in your library)",
+        onclick: () => { delAsk = l.id; paintLists(); } }, "×")));
+  const undo = gone ? h("span", { class: "bl-gone", role: "status" }, `Deleted “${gone.name}”. `, h("button", { type: "button", class: "linklike", onclick: undoDel }, "Undo")) : null;
+  $("bl-lists").replaceChildren(...chips, ...(undo ? [undo] : []));
+  if (!lists.length && !gone) $("bl-lists").append(h("span", { class: "muted" }, "No lists yet."));
+  const ask = $("bl-lists").querySelector(".bl-ask");
+  if (ask) { ask.querySelector(".bl-ask-no").focus(); ask.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); delAsk = null; paintLists(); } }); }
   const opts = (sel) => lists.map((l) => h("option", { value: String(l.id), selected: l.id === sel ? "" : null }, `${l.name} (${l.track_ids.length})`));
   $("bl-la").replaceChildren(...opts(blCmp.a)); $("bl-lb").replaceChildren(...opts(blCmp.b));
   $("bl-showl").checked = blCmp.show;
+}
+
+async function delList(l) {
+  delAsk = null;
+  try {
+    gone = await deleteList(l.id) || l;
+    clearTimeout(goneT);
+    goneT = setTimeout(() => { gone = null; paintLists(); }, 10000);
+  } catch (e) { say(e.message); }
+  paintLists(); drawBlend();
+  $("bl-lists").querySelector(".bl-gone button")?.focus();
+}
+async function undoDel() {
+  const l = gone; if (!l) return;
+  clearTimeout(goneT); gone = null;
+  try { await restoreList(l); } catch (e) { say(e.message); }
+  paintLists(); drawBlend();
 }
 
 function clearAll(msg) {
@@ -163,7 +200,7 @@ function drawNear(cs, { ia, ib, pair, near, pathIdx }) {
     say("A 5-step path from A to B: each step is the nearest track to the next 1/6 of the way that isn't already used.");
     const ids = [ia, ...pathIdx, ib].map((i) => cs[i].id);
     $("bl-near").replaceChildren(row(cs[ia], "start"), ...pathIdx.map((i) => row(cs[i])), row(cs[ib], "end"),
-      h("li", { class: "bl-nonum" }, h("button", { type: "button", class: "linklike bl-save", onclick: () => saveAs(`Path: ${cs[ia].title} to ${cs[ib].title}`, ids) }, "Save this path as a list")));
+      h("li", { class: "bl-nonum" }, h("button", { type: "button", class: "linklike bl-save", onclick: () => saveAs(pathName(cs[ia].title || `Track ${cs[ia].id}`, cs[ib].title || `Track ${cs[ib].id}`), ids) }, "Save this path as a list")));
     return;
   }
   say(`Nearest tracks to the spot ${blend.t}% of the way from A to B. "Off by" is the distance from that spot, as a share of the A–B distance.`);
@@ -194,7 +231,7 @@ function drawCompare(cs, vec) {
   const between = nearest(vec, others, lerp(r.cA, r.cB, blCmp.t / 100));
   const slider = h("input", { type: "range", min: "0", max: "100", step: "5", value: String(blCmp.t), "aria-label": `How far from ${LA.name} to ${LB.name}` });
   slider.addEventListener("input", () => { blCmp.t = +slider.value; drawBlend(); document.querySelector("#bl-cmp input[type=range]")?.focus(); });
-  const saveBtn = h("button", { type: "button", class: "linklike bl-save", onclick: () => saveAs(`Between ${LA.name} and ${LB.name}`, between.map((x) => cs[x.i].id)) }, "Save as a list");
+  const saveBtn = h("button", { type: "button", class: "linklike bl-save", onclick: () => saveAs(`Between ${fitName(LA.name, 36)} and ${fitName(LB.name, 36)}`, between.map((x) => cs[x.i].id)) }, "Save as a list");
   box.replaceChildren(sum, table, h("div", { class: "bl-cols" },
     col(`In ${LB.name}, most like ${LA.name}`, nearest(vec, r.onlyB, r.cA), "Every track is in both."),
     col(`In ${LA.name}, most like ${LB.name}`, nearest(vec, r.onlyA, r.cB), "Every track is in both."),
@@ -204,13 +241,9 @@ function drawCompare(cs, vec) {
   return { ia, ib, cA: r.cA, cB: r.cB };
 }
 
+// From and To: type to find a track (combo.js)
 function pickBy(inputId, key) {
-  $(inputId).addEventListener("change", (e) => {
-    const v = e.target.value.trim().toLowerCase(), cs = items();
-    const c = cs.find((x) => nameOf(x).toLowerCase() === v) || cs.find((x) => (x.title || "").toLowerCase().startsWith(v));
-    if (c) { blend[key] = c.id; blend.path = null; }
-    paintBlend();
-  });
+  trackCombo($(inputId), items, () => blend[key], (c) => { blend[key] = c.id; blend.path = null; paintBlend(); });
 }
 
 // Wiring that touches the page or other modules, run once by main.js after every module has loaded.

@@ -115,7 +115,15 @@ Everything a track card shows and what you can do with it. The [README](../READM
   - **Lists**: save tracks as a list from Library › Select › Actions › "Save as a list…", from a group, a path
     or a comparison. Blend compares two lists: how easy they are to tell apart, how they differ in each
     measurement, the tracks in one that are most like the other, and tracks in neither that sit between them.
-    Lists are kept on the server, per person; deleting a track takes it out of every list.
+    Lists are kept on the server, per person; deleting a track takes it out of every list. Saving asks for the
+    name (up to 80 characters; a long suggested name is shortened), and deleting a list asks first, with an
+    Undo for 10 seconds.
+- **Play and export lists:** Library › List shows one list in its own order, with **Play**, **Shuffle** and
+  **Export**. The player bar at the bottom streams each track in turn (previous, play/pause, next, shuffle,
+  seek), and the keyboard's media keys work too. Starting a card's playback pauses the list. Export saves the
+  list as M3U8, XSPF or PLS, whose entries point at the tracks' audio on your Tastr server (on a shared server,
+  links that work for 7 days), or as a zip with the audio and an .m3u8 that plays anywhere. Blend's list chips
+  have the same ▶ and ⤓ buttons.
 - **Two looks:** 808 (a drum-machine panel) and Technics (70s hi-fi), picked
   in the header.
 - **Keyboard shortcuts** for most things; press `?` for the list.

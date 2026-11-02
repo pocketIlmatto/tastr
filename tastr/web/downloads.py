@@ -7,6 +7,7 @@ read against `X-Zip-Bytes`, the files' total size.
 
 from __future__ import annotations
 
+import io
 import re
 import time
 import unicodedata
@@ -73,16 +74,17 @@ class _Sink:
         return out
 
 
-def stream_zip(entries: Iterable[tuple[str, Path]]) -> Iterator[bytes]:
+def stream_zip(entries: Iterable[tuple[str, Path | bytes]]) -> Iterator[bytes]:
     """Yield a stored zip of (name inside the zip, file), a chunk at a time. A file not on disk is read from the
-    audio bucket (tastr/blobs.py)."""
+    audio bucket (tastr/blobs.py); bytes are a small file made on the spot (a playlist)."""
     sink = _Sink()
     with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
         for arcname, path in entries:
-            info = zipfile.ZipInfo(arcname, time.localtime(blobs.mtime(path))[:6])
+            made = isinstance(path, bytes)
+            info = zipfile.ZipInfo(arcname, time.localtime(time.time() if made else blobs.mtime(path))[:6])
             info.external_attr = 0o644 << 16
             info.compress_type = zipfile.ZIP_STORED
-            with closing(blobs.open_read(path)) as src, zf.open(info, "w", force_zip64=True) as dest:
+            with closing(io.BytesIO(path) if made else blobs.open_read(path)) as src, zf.open(info, "w", force_zip64=True) as dest:
                 while chunk := src.read(CHUNK):
                     dest.write(chunk)
                     if data := sink.take():

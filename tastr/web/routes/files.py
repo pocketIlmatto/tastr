@@ -24,8 +24,8 @@ FORMATS = {".mp3": "MP3", ".wav": "WAV", ".flac": "FLAC", ".m4a": "M4A", ".aac":
            ".opus": "OPUS", ".aif": "AIFF", ".aiff": "AIFF"}
 
 
-def _size(p: Path) -> int:
-    return blobs.size(p)  # here, or in the audio bucket
+def _size(p: Path | bytes) -> int:
+    return len(p) if isinstance(p, bytes) else blobs.size(p)  # here, or in the audio bucket
 
 
 def _fmt_bytes(b: int) -> str:
@@ -37,26 +37,45 @@ class ZipRequest(BaseModel):
     kind: Literal["audio", "stems"]
 
 
+def track_rows(ctx: AppContext, owner: str | None, ids: list[int] | None = None) -> list[dict[str, Any]]:
+    """The caller's tracks (all of them on your own machine): what a download needs, from the tracks table."""
+    where, args = (["owner = ?"], [owner]) if owner else ([], [])
+    if ids is not None:
+        where.append(f"id IN ({','.join('?' * len(ids))})")
+        args += ids
+    sql = ("SELECT id, title, artist, duration, created_at, analyzed_at, sha256, local_path, source_uri FROM tracks"
+           + (f" WHERE {' AND '.join(where)}" if where else "") + " ORDER BY id")
+    with closing(ctx.conn()) as c:
+        out = [dict(r) for r in c.execute(sql, args).fetchall()]
+    for r in out:
+        r["title"] = _unprefixed(r["title"], r["source_uri"]) or Path(r["source_uri"] or "").stem or None
+        r["base"] = base_name(r["title"], r["artist"], r["id"])
+        r["folder"] = stems.stems_dir(r["sha256"], r["id"])
+        p = Path(r["local_path"]) if r["local_path"] else None
+        r["audio_path"] = p if p and blobs.exists(p) else None
+    return out
+
+
+def zip_response(entries: list[tuple[str, Path | bytes]], name: str) -> StreamingResponse:
+    total = sum(_size(p) for _, p in entries)
+    return StreamingResponse(stream_zip(entries), media_type="application/zip",
+                             headers={"Content-Disposition": content_disposition(name), "X-Zip-Bytes": str(total),
+                                      "Access-Control-Expose-Headers": "X-Zip-Bytes", "Cache-Control": "no-store"})
+
+
+def zip_too_big(entries: list[tuple[str, Path]]) -> None:
+    """413 when the files add up to more than one zip may hold."""
+    total = sum(_size(p) for _, p in entries)
+    if total > ZIP_MAX_BYTES:
+        raise HTTPException(413, f"That's {_fmt_bytes(total)}, more than one zip can hold ({_fmt_bytes(ZIP_MAX_BYTES)}). "
+                                 "Download the tracks in smaller groups.")
+
+
 def router(ctx: AppContext) -> APIRouter:
     api = APIRouter()
 
     def rows(owner: str | None, ids: list[int] | None = None) -> list[dict[str, Any]]:
-        """The caller's tracks (all of them on your own machine): what a download needs, from the tracks table."""
-        where, args = (["owner = ?"], [owner]) if owner else ([], [])
-        if ids is not None:
-            where.append(f"id IN ({','.join('?' * len(ids))})")
-            args += ids
-        sql = ("SELECT id, title, artist, duration, created_at, analyzed_at, sha256, local_path, source_uri FROM tracks"
-               + (f" WHERE {' AND '.join(where)}" if where else "") + " ORDER BY id")
-        with closing(ctx.conn()) as c:
-            out = [dict(r) for r in c.execute(sql, args).fetchall()]
-        for r in out:
-            r["title"] = _unprefixed(r["title"], r["source_uri"]) or Path(r["source_uri"] or "").stem or None
-            r["base"] = base_name(r["title"], r["artist"], r["id"])
-            r["folder"] = stems.stems_dir(r["sha256"], r["id"])
-            p = Path(r["local_path"]) if r["local_path"] else None
-            r["audio_path"] = p if p and blobs.exists(p) else None
-        return out
+        return track_rows(ctx, owner, ids)
 
     def stem_info(r: dict[str, Any]) -> dict[str, Any] | None:
         st = ctx.stem_jobs.status(r["folder"])
@@ -91,12 +110,6 @@ def router(ctx: AppContext) -> APIRouter:
             free = max(0, cap - stored_bytes(tastr_home()))
         return {"used": {"audio_bytes": audio_b, "stem_bytes": stem_b}, "cap_bytes": cap, "free_bytes": free,
                 "stems_available": stems.available(), "tracks": tracks}
-
-    def zip_response(entries: list[tuple[str, Path]], name: str) -> StreamingResponse:
-        total = sum(_size(p) for _, p in entries)
-        return StreamingResponse(stream_zip(entries), media_type="application/zip",
-                                 headers={"Content-Disposition": content_disposition(name), "X-Zip-Bytes": str(total),
-                                          "Access-Control-Expose-Headers": "X-Zip-Bytes", "Cache-Control": "no-store"})
 
     @api.get("/api/tracks/{track_id}/stems.zip")
     def stems_zip(track_id: int):
@@ -138,10 +151,7 @@ def router(ctx: AppContext) -> APIRouter:
         if not entries:
             raise HTTPException(404, "None of these tracks has its original audio on the server." if body.kind == "audio"
                                 else "None of these tracks has stems yet.")
-        total = sum(_size(p) for _, p in entries)
-        if total > ZIP_MAX_BYTES:
-            raise HTTPException(413, f"That's {_fmt_bytes(total)}, more than one zip can hold ({_fmt_bytes(ZIP_MAX_BYTES)}). "
-                                     "Download the tracks in smaller groups.")
+        zip_too_big(entries)
         what = "audio" if body.kind == "audio" else "stems"
         return zip_response(entries, f"Tastr {what}, {n} track{'' if n == 1 else 's'}.zip")
 

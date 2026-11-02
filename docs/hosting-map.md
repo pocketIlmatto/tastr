@@ -31,6 +31,7 @@ to the catalog lookups when they're turned on, and to the Claude API for "Ask Cl
 flowchart TB
   F([Friend's browser])
   S([strudel.cc])
+  PL([Music players: exported M3U8, XSPF, PLS playlists])
   subgraph CF[Cloudflare]
     DNS[DNS, proxied CNAME to the fly.dev name]
     ACC[Access app: one-time PIN login]
@@ -56,6 +57,7 @@ flowchart TB
   F -->|your hostname| DNS --> ACC -->|request + signed token| WEB
   WEB -.->|a copy of your own library, for searches in the browser| F
   S -->|signed /pub link| DNS --> BYP --> WEB
+  PL -->|signed /pub link| DNS
   WEB --- VOL
   VOL -.- LS
   LS -->|every database change| R2
@@ -67,6 +69,7 @@ flowchart TB
   R2A -.->|signed links: audio, stems, waveform data| F
   WEB -->|each card's waveform data| R2A
   R2A -.->|signed links| S
+  R2A -.->|signed links| PL
   R2A -->|the upload| AN
   ST -->|stems, to signed upload links| R2A
   WEB -.->|artist + title| CAT
@@ -215,9 +218,11 @@ Four layers, each assuming the one before it might be bypassed.
 3. **Per-person libraries and limits.** Each track belongs to the email that uploaded it; anyone else gets
    404. Uploads (size and length), stems, drum model runs, Claude asks, storage and concurrent analyses are capped; link downloads and API docs are off; searches
    run in the browser on a copy of the person's own library (admins: every library), with no owner or path columns, so the server runs no one's SQL; errors don't name server paths; responses carry CSP (`'wasm-unsafe-eval'` lets workers compile WebAssembly, nothing else) and HSTS headers.
-4. **Signed Strudel links.** strudel.cc can't sign in, so the `/pub` Bypass application lets it through
-   Cloudflare. Tastr checks each link itself: an HMAC with `TASTR_LINK_SECRET` over one track id and an expiry
-   7 days out. Changing the secret ends every outstanding link.
+4. **Signed Strudel and playlist links.** strudel.cc can't sign in, and neither can a music player opening a
+   playlist exported from Library › List (`/api/lists/{id}/playlist.m3u8`, `.xspf`, `.pls`), so the `/pub`
+   Bypass application lets them through Cloudflare. Tastr checks each link itself: an HMAC with
+   `TASTR_LINK_SECRET` over one track id and an expiry 7 days out. Changing the secret ends every outstanding
+   link. The playlist zip (`playlist.zip`) holds the audio itself, so it needs no link.
 
 Keys are split so a leak stays small. The R2 token is scoped to `tastr-app`, not the benchmark bucket
 `tastr-data`. Fly and GitHub each use their own Modal token, so either can be revoked alone. The `friends`

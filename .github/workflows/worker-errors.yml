@@ -42,6 +42,7 @@ jobs:
             echo "The repository secret CF_LOGS_TOKEN isn't set (docs/ci.md#worker-errors)." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          set -o pipefail  # a failed log query fails this step instead of leaving an empty report
           python3 .github/scripts/worker_errors.py --minutes "${{ inputs.minutes || '60' }}" | tee report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"
       - id: issue

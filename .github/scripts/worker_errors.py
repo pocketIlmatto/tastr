@@ -18,7 +18,9 @@ import argparse
 import json
 import os
 import re
+import sys
 import time
+import urllib.error
 import urllib.request
 from collections import defaultdict
 
@@ -46,9 +48,13 @@ def query(token: str, start_ms: int, end_ms: int) -> list[dict]:
     req = urllib.request.Request(
         f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT}/workers/observability/telemetry/query",
         data=json.dumps(body).encode(), method="POST",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310 - Cloudflare's API
-        data = json.load(r)
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                 "User-Agent": "tastr-worker-errors"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310 - Cloudflare's API
+            data = json.load(r)
+    except urllib.error.HTTPError as e:  # Cloudflare's answer says why (bad token, missing permission)
+        raise RuntimeError(f"Cloudflare answered HTTP {e.code}: {e.read().decode(errors='replace')[:500]}") from e
     if not data.get("success", True) or "result" not in data:
         raise RuntimeError(f"Cloudflare refused the query: {str(data)[:300]}")
     return data["result"]["events"]["events"]
@@ -134,7 +140,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--minutes", type=int, default=WINDOW_MIN)
     args = ap.parse_args()
-    events, full = fetch(os.environ["CF_LOGS_TOKEN"], args.minutes)
+    try:
+        events, full = fetch(os.environ["CF_LOGS_TOKEN"], args.minutes)
+    except RuntimeError as e:  # fail the run, so a broken token shows as a red run instead of silence
+        sys.exit(f"Couldn't read the Worker's logs: {e}")
     text, failed, tripped = report(group(events), args.minutes, full)
     print(text)
     if out := os.environ.get("GITHUB_OUTPUT"):

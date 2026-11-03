@@ -49,3 +49,20 @@ def test_the_report_masks_personal_data():
     r = we.group([ev("p", "KeyError: friend@example.com", trigger="GET /pub/abc123.sig/tracks/5?x=secret")])
     text, _, _ = we.report(r, 60, False)
     assert "friend@example.com" not in text and "abc123" not in text and "secret" not in text
+
+
+def test_a_refused_query_says_why(monkeypatch):
+    import io
+    import urllib.error
+
+    def refuse(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {},
+                                     io.BytesIO(b'{"errors":[{"code":10000,"message":"Authentication error"}]}'))
+
+    monkeypatch.setattr(we.urllib.request, "urlopen", refuse)
+    try:
+        we.query("t", 0, 1)
+    except RuntimeError as e:
+        assert "HTTP 403" in str(e) and "Authentication error" in str(e)
+    else:
+        raise AssertionError("a refused query must raise")

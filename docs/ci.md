@@ -134,6 +134,8 @@ is public, so the report masks emails, upload names and link tokens.
 - **Secrets:** `CF_LOGS_TOKEN`, a Cloudflare API token with only Account > Workers Observability > Read (My
   Profile > API Tokens > Create Token > Custom token), and the same Claude secret as slow tests. Without
   `CF_LOGS_TOKEN` the check only says so in the run summary.
+  If Cloudflare refuses the token, the check fails (a red run) and shows Cloudflare's reason in its log;
+  no issue is opened. Check the token's permission, account and IP filtering, and that it hasn't expired.
 - **Try it:** Actions > worker-errors > Run workflow with "force" ticked (and "minutes" to look further back).
 - **Cost:** a 15-second job every 30 minutes, free on a public repository. Claude runs only when the check trips,
   for up to 45 minutes and 80 turns.

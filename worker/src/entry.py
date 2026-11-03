@@ -100,6 +100,7 @@ def quiet_unraisable(hook=sys.unraisablehook):
 sys.unraisablehook = quiet_unraisable()
 http.use(fetch_request)
 blobs.keep_copies = False  # the file system is memory: drop local copies of uploads once read
+blobs.copy_limit = 1  # and read back one at a time
 RUNNER = runner.Loop(sleep=sleep)
 runner.use(RUNNER)  # before the app is built: its job queues take their lanes from it
 

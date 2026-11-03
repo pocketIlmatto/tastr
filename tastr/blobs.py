@@ -28,10 +28,11 @@ import mimetypes
 import os
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from . import s3
+from . import runner, s3
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +42,11 @@ UPLOAD_SECONDS = 3600  # signed links a page uploads through (TASTR_DIRECT_UPLOA
 # Where the disk is memory (the Cloudflare Worker sets this False, worker/src/entry.py), a local copy is dropped as
 # soon as what needed it has read it, so a batch of uploads waiting for their analysis doesn't fill the memory.
 keep_copies = True
+# How many requests and jobs may hold a local copy at once (`copy_slot()`); None is no limit. The Worker sets 1:
+# three uploads checked together, each read back whole, ran it out of memory (T31).
+copy_limit: int | None = None
+_copies = [0]
+_copies_lock = threading.Lock()
 LISTING_SECONDS = 60  # how long a bucket listing is reused (the storage cap, the admin view)
 # Types the stdlib doesn't know everywhere; browsers need them to decode the stream.
 AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".opus": "audio/ogg",
@@ -337,3 +343,23 @@ def evict(older_than: float = 3600, now: float | None = None) -> int:
                 log.debug("can't remove %s: %s", d, e)
     return gone
 
+
+@contextmanager
+def copy_slot():
+    """Hold one of the `copy_limit` places for work that brings a file down and reads it; wait for one first.
+    The wait is the runner's sleep, so on the Worker other requests and jobs run meanwhile (no lock is held
+    across it)."""
+    if copy_limit is None:
+        yield
+        return
+    while True:
+        with _copies_lock:
+            if _copies[0] < copy_limit:
+                _copies[0] += 1
+                break
+        runner.current().sleep(0.2)
+    try:
+        yield
+    finally:
+        with _copies_lock:
+            _copies[0] -= 1

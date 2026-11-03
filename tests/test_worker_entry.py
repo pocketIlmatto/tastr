@@ -46,7 +46,8 @@ def entry(monkeypatch):
     monkeypatch.setitem(sys.modules, "pyodide", types.ModuleType("pyodide"))
     monkeypatch.setitem(sys.modules, "pyodide.ffi", ffi)
     before = runner.current()
-    monkeypatch.setattr(blobs, "keep_copies", True)  # loading the entry sets it False; put back after
+    monkeypatch.setattr(blobs, "keep_copies", True)  # loading the entry sets them; put back after
+    monkeypatch.setattr(blobs, "copy_limit", None)
     monkeypatch.setattr(sys, "unraisablehook", sys.unraisablehook)
     spec = importlib.util.spec_from_file_location("tastr_worker_entry", ENTRY)
     mod = importlib.util.module_from_spec(spec)

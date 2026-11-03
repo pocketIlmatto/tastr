@@ -1,4 +1,4 @@
-"""Every file the server needs ships in the installed package (the Fly image does `pip install .`, not editable).
+"""Every file the server needs ships in the installed package (`pip install .`, not editable).
 
 A new folder under tastr/web/static/ needs its own glob in pyproject's package-data, or it is missing on the
 live site while local runs from the checkout still work (TAS-69: static/app/ 404'd after the ES module split).

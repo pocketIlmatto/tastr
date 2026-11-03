@@ -1,9 +1,8 @@
-"""The hosted server's background work: deleting expired audio, logging GitHub Actions runs and R2 backups
-(watch.py), and the admin log lines a restart writes."""
+"""The hosted server's background work: deleting expired audio, logging GitHub Actions runs (watch.py), and the
+admin log lines a restart writes."""
 
 from __future__ import annotations
 
-import os
 from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -11,7 +10,7 @@ from typing import Any, Callable
 from .. import backfill, blobs, db, runner
 from . import watch
 from .analysis_jobs import ref
-from .context import AppContext, log, tastr_home, upload_dir
+from .context import AppContext, log, upload_dir
 from ..markers import Markers
 from .hosted import expire_audio, names, orphan_uploads
 from .routes.analyze import UPLOAD_MARKERS, prune_uploads
@@ -25,9 +24,8 @@ def start(ctx: AppContext) -> list[Callable[[], None]]:
     settings, every, stops = ctx.settings, runner.current().every, []
     if settings.audio_days > 0:
         stops.append(every("expiry", EXPIRY_EVERY, lambda: expire_once(ctx)))
-    if settings.watch_minutes > 0 and ((settings.github_repo and settings.github_workflows)
-                                       or os.environ.get("LITESTREAM_BUCKET")):
-        # The first check waits for the server to finish starting (and Litestream its first sync).
+    if settings.watch_minutes > 0 and settings.github_repo and settings.github_workflows:
+        # The first check waits for the server to finish starting.
         stops.append(every("watch", settings.watch_minutes * 60, lambda: watch_once(ctx), delay=60))
     return stops
 
@@ -60,15 +58,15 @@ def expire_once(ctx: AppContext) -> None:
         log.exception("Deleting expired audio failed")
 
 
-def watch_once(ctx: AppContext, fetch_runs=watch.fetch_runs, snapshots=watch.litestream_snapshots) -> None:
-    """Log GitHub Actions runs on main and Litestream snapshots that are new since the last check."""
+def watch_once(ctx: AppContext, fetch_runs=watch.fetch_runs) -> None:
+    """Log GitHub Actions runs on main that are new since the last check."""
     try:
-        _watch(ctx, fetch_runs, snapshots)
+        _watch(ctx, fetch_runs)
     except Exception:  # noqa: BLE001 - try again next time
-        log.exception("Checking GitHub and the R2 backup failed")
+        log.exception("Checking GitHub failed")
 
 
-def _watch(ctx: AppContext, fetch_runs, snapshots) -> None:
+def _watch(ctx: AppContext, fetch_runs) -> None:
     settings = ctx.settings
     now = datetime.now(timezone.utc)
     with closing(ctx.conn()) as c:
@@ -84,38 +82,20 @@ def _watch(ctx: AppContext, fetch_runs, snapshots) -> None:
                     db.add_event(c, **e)
                 if newest:
                     db.set_meta(c, watch.LAST_RUN, str(newest))
-        if os.environ.get("LITESTREAM_BUCKET"):
-            snaps, error = None, None
-            try:
-                snaps = snapshots(str(ctx.db_path or db.default_db_path()))
-            except Exception as e:  # noqa: BLE001 - logged as a problem line, once a day
-                error = str(e) or type(e).__name__
-            lines, newest, day = watch.backup_events(snaps, error, db.get_meta(c, watch.LAST_SNAPSHOT),
-                                                     db.get_meta(c, watch.PROBLEM_DAY), now)
-            for e in lines:
-                db.add_event(c, **e)
-            db.set_meta(c, watch.LAST_SNAPSHOT, newest)
-            db.set_meta(c, watch.PROBLEM_DAY, day)
 
 
-SERVER_VERSION = "server_version"  # meta: the commit (or Fly image) that last started
+SERVER_VERSION = "server_version"  # meta: the commit that last started
 
 
 def log_start(ctx: AppContext, cut: list[dict[str, Any]]) -> None:
     """Admin log lines when the server starts: a new version deployed, and each analysis a restart cut off.
-    A plain wake-up after an idle stop (Fly's machine, the Worker's Durable Object) logs nothing."""
+    A plain wake-up after an idle stop (the Worker's Durable Object) logs nothing."""
     settings = ctx.settings
-    version = settings.fly_image or settings.commit
-    host = "cloudflare" if settings.worker_name else "flyio" if settings.fly_app else "app"
-    # The version that last started, in the database: it outlives a restart on every host (the Worker's files
-    # don't). Before that it was a file in TASTR_HOME, read once so the first start after the change logs nothing.
+    version = settings.commit
+    host = "cloudflare" if settings.worker_name else "app"
+    # The version that last started, in the database: it outlives a restart (the Worker's files don't).
     with closing(ctx.conn()) as c:
         before = db.get_meta(c, SERVER_VERSION)
-        if before is None:
-            try:
-                before = (tastr_home() / "server-version").read_text().strip()
-            except OSError:
-                pass
         if version and before != version:
             db.set_meta(c, SERVER_VERSION, version)
     deployed = bool(version) and before is not None and before != version

@@ -1,4 +1,4 @@
-"""Where background work runs: in threads (the default: a laptop, Fly) or, on the Cloudflare Worker (worker/,
+"""Where background work runs: in threads (the default: `tastr serve` on a laptop) or, on the Cloudflare Worker (worker/,
 TAS-84), as tasks on its one event loop with the repeating work driven by the Durable Object's alarm.
 
 Two kinds of work use it:

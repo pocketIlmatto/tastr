@@ -44,15 +44,6 @@ def test_every_analysis_image_has_the_rust_engine():
         assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), name
 
 
-def test_docker_image_has_no_dsp_libraries():
-    """The web server analyzes nothing itself (Modal or the browser does), so its image leaves out the engine
-    extra; it keeps the Modal images' numpy pin."""
-    docker = (ROOT / "Dockerfile").read_text()
-    pins = _consts("modal_app.py")["PINS"]
-    assert '".[hosted,cloud]"' in docker and all(f'"{p}"' in docker for p in pins if p.startswith("numpy"))
-    assert not any(lib in docker for lib in ("librosa", "scipy", "numba", "llvmlite", "engine]"))
-
-
 @pytest.mark.audio
 def test_run_bench_resolves_path_under_root(tmp_path):
     report = jobs.run_bench("synth", None, tmp_path, limit=2)

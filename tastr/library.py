@@ -1,9 +1,9 @@
-"""Move a library, with its audio and stems, from your machine to a hosted server (docs/deploy.md).
+"""Move a library, with its audio and stems, from your machine to a hosted `tastr serve` (docs/hosting.md).
 
 `tastr pack OUT.tar --owner EMAIL` writes one archive: a copy of the database with every track given to
 EMAIL, each track's audio file (wherever it is on disk) and its stems. `tastr unpack OUT.tar` on the server
 puts the files under TASTR_HOME and copies the database into the server's, which must have no tracks yet.
-The copy goes through SQLite, so Litestream backs it up like any other change.
+The copy goes through SQLite, like any other change.
 """
 
 from __future__ import annotations

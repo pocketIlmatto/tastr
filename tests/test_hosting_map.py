@@ -1,28 +1,29 @@
-"""docs/hosting-map.md names every setting, secret and Modal function the deploy files use, so it can't fall behind."""
+"""docs/hosting-map.md names every setting, secret and Modal function the deploy files use (worker/wrangler.jsonc,
+the deploy workflows, tastr/web/hosted.py, tastr/blobs.py, tastr/cloud/modal_web.py), so it can't fall behind."""
 
 import ast
+import json
 import re
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 MAP = (ROOT / "docs/hosting-map.md").read_text()
 
 
-def _fly() -> dict:
-    tomllib = pytest.importorskip("tomllib")  # Python 3.11+
-    return tomllib.loads((ROOT / "fly.toml").read_text())
+def _wrangler() -> dict:
+    """worker/wrangler.jsonc, without its // comments."""
+    text = re.sub(r"(^|\s)//[^\n]*", r"\1", (ROOT / "worker/wrangler.jsonc").read_text())
+    return json.loads(text)
 
 
 def _missing(names) -> list[str]:
     return sorted(n for n in set(names) if not re.search(rf"(?<![\w-]){re.escape(n)}(?![\w-])", MAP))
 
 
-def test_map_names_fly_settings():
-    fly = _fly()
-    names = [fly["app"], fly["primary_region"], *fly["env"]]
-    names += [m["source"] for m in fly["mounts"]] + [fly["http_service"]["checks"][0]["path"]]
+def test_map_names_worker_settings():
+    w = _wrangler()
+    names = [w["name"], *w["vars"], w["durable_objects"]["bindings"][0]["class_name"]]
     assert _missing(names) == []
 
 
@@ -32,11 +33,10 @@ def test_map_names_hosted_settings():
     assert names and _missing(names) == []
 
 
-def test_map_names_backup_and_deploy_secrets():
-    litestream = re.findall(r"\$\{([A-Z_]+)\}", (ROOT / "deploy/litestream.yml").read_text())
-    deploy = re.findall(r"secrets\.([A-Z_]+)", (ROOT / ".github/workflows/deploy.yml").read_text())
-    start = re.findall(r"\$((?:TASTR|LITESTREAM|MODAL)_[A-Z_]+)", (ROOT / "deploy/start.sh").read_text())
-    assert litestream and deploy and _missing(litestream + deploy + start) == []
+def test_map_names_deploy_secrets():
+    workflows = [ROOT / ".github/workflows/deploy.yml", ROOT / ".github/workflows/deploy-worker.yml"]
+    names = [n for f in workflows for n in re.findall(r"secrets\.([A-Z_]+)", f.read_text())]
+    assert "CLOUDFLARE_API_TOKEN" in names and _missing(names) == []
 
 
 def test_map_names_modal_functions():
@@ -51,10 +51,3 @@ def test_map_names_modal_functions():
 def test_map_names_audio_bucket_settings():
     names = re.findall(r'environ\.get\("(TASTR_AUDIO_[A-Z_]+)"', (ROOT / "tastr/blobs.py").read_text())
     assert names and _missing(names) == []
-
-
-def test_map_names_the_images_settings():
-    """The Dockerfile's own settings (TASTR_ENGINE_WASM, TASTR_SQLJS_DIR, ...)."""
-    names = re.findall(r"\b(TASTR_[A-Z_]+)=", (ROOT / "Dockerfile").read_text())
-    names = [n for n in names if not n.startswith(("TASTR_COMMIT", "TASTR_DEPLOY_RUN", "TASTR_HOME"))]
-    assert "TASTR_SQLJS_DIR" in names and _missing(names) == []

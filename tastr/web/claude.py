@@ -3,7 +3,7 @@
 The page sends the code it shows, the ask and a short summary of the track; Claude sends back the whole new code
 and a short explanation, and the page shows the diff. Tastr never runs the code: it only opens in strudel.cc.
 
-Which key: the server's own environment. On a hosted server that's Tastr's ANTHROPIC_API_KEY (a Fly secret, with a
+Which key: the server's own environment. On a hosted server that's Tastr's ANTHROPIC_API_KEY (a Worker secret, with a
 daily limit per person, routes/strudel.py); on your own machine (`tastr serve`) it's yours. The key is never logged,
 echoed or sent to the page.
 """

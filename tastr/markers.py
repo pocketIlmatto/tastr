@@ -1,8 +1,8 @@
 """Unfinished background jobs, kept in the database so a restarted server picks them up.
 
 Stem separations, drum model runs and background analyses each leave a marker while they are queued or
-running. These used to be small files under $TASTR_HOME; in the database they travel with it (Litestream on a
-hosted server), so a server that comes back on a fresh machine with no disk of its own still finds them.
+running. These used to be small files under $TASTR_HOME; in the database they travel with it (the Durable Object's
+storage on the Worker), so a server that comes back on a fresh machine with no disk of its own still finds them.
 
 `Markers(db_path, kind)` is one kind's set: `put(key, data)`, `get(key)`, `remove(key)`, `items()`.
 """

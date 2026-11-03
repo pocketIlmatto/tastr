@@ -6,7 +6,7 @@
   "compatibility_flags": ["python_workers"],
   "account_id": "1c793218966f05bb509e1e76f4ba0b67",  // not a secret: it names the account, it can't open it
   // No *.workers.dev or preview addresses: Cloudflare Access sits in front of the custom domain only, so the Worker
-  // is reachable only there (docs/hosting-map.md, "Before the switch").
+  // is reachable only there (docs/hosting-map.md).
   "workers_dev": false,
   "preview_urls": false,
   // The browser files (python worker/build.py puts them here). The Worker answers first, so it decides which paths
@@ -14,13 +14,13 @@
   "assets": {"directory": "./public", "binding": "ASSETS", "run_worker_first": true},
   // Logs and errors in the dashboard (Workers > tastr > Observability). A deploy sets this from here, so it stays on.
   "observability": {"enabled": true},
-  // CPU time per request (Workers Paid allows up to 5 minutes; the default is 30 s). The one-time library import
-  // from Fly (tastr/library_move.py) needs more than 30 s.
+  // CPU time per request (Workers Paid allows up to 5 minutes; the default is 30 s). Raised for the one-time import
+  // of the library from Fly (TAS-51), and kept so a heavy request (a big zip, the six-hourly sweep) isn't cut off.
   "limits": {"cpu_ms": 300000},
   // The library: one SQLite-backed Durable Object holds the database and runs the app.
   "durable_objects": {"bindings": [{"name": "LIB", "class_name": "Library"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["Library"]}],
-  // Settings as on Fly (docs/hosting.md); secrets go in with `pywrangler secret put NAME`. A deploy resets these
+  // Settings (docs/hosting.md); secrets go in with `pywrangler secret put NAME`. A deploy resets these
   // to what's here, so a setting changed in the dashboard must be a Secret.
   // TASTR_MODAL_URL (the tastr-web app's api endpoint), TASTR_MODAL_KEY and TASTR_MODAL_SECRET are secrets.
   // The rest is for the Admin tab: its log links (this Worker's logs, the Modal app, the Access dashboard) and the

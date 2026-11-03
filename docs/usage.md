@@ -128,8 +128,8 @@ Tastr can also run as a small shared web app. Hosted mode (`TASTR_HOSTED=1`, the
 - admins get an **Admin** tab with usage per person and an activity log.
 
 [docs/hosting.md](hosting.md) lists everything hosted mode changes.
-[docs/deploy.md](deploy.md) puts it on Fly.io, with analysis and stems on
-Modal and the library backed up to R2, and [docs/hosting-map.md](hosting-map.md)
+[docs/deploy.md](deploy.md) puts it on a Cloudflare Worker, with analysis and stems on
+Modal and audio in R2, and [docs/hosting-map.md](hosting-map.md)
 shows how those pieces fit together. Uploads use the built-in drum detector;
 "Detect drums with the model" runs the optional drum model on one track at a time.
 

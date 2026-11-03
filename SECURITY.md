@@ -16,6 +16,6 @@ Please report security problems privately through GitHub: on this repository's
 Tastr never needs secrets in the repository. API keys for catalog lookups
 (`GETSONGBPM_API_KEY`, `FREQBLOG_API_KEY`) and cloud credentials (the Modal secret
 `tastr-r2`, `TASTR_R2_ENDPOINT`) come from environment variables or the provider's own
-secret store; see docs/lookup.md and docs/cloud.md. A hosted server's keys (Modal token, R2 keys for the
-Litestream backup, `TASTR_LINK_SECRET`) are Fly secrets, and the deploy workflow's are GitHub secrets;
+secret store; see docs/lookup.md and docs/cloud.md. A hosted server's keys (Modal proxy token, the audio
+bucket's R2 keys, `TASTR_LINK_SECRET`) are Worker secrets, and the deploy workflow's are GitHub secrets;
 see docs/deploy.md.

@@ -579,19 +579,19 @@ def test_restart_logs_cut_off_analyses_and_deploys(db_path, home):
     (folder / "abc123ff00.json").write_text(json.dumps({"id": "abc123ff00", "owner": "friend@example.com", "state": "running",
                                                         "stage": "sections", "files": ["mix.mp3"]}))
     s = dict(hosted=True, access_team_domain=TEAM, access_aud=AUD)
-    with TestClient(create_app(db_path, Settings(**s, fly_image="img:1"), verifier=stub_verifier)):
+    with TestClient(create_app(db_path, Settings(**s, commit="aaaaaaa1"), verifier=stub_verifier)):
         pass
     conn = db.connect(db_path)
     log = [(e["kind"], e["ok"], e["detail"], e["user"]) for e in db.recent_events(conn)]
     assert log == [("failed", False, "Cut off by the restart: mix.mp3, while at step sections (ref abc123ff)", "friend@example.com"),
                    ("restart", False, "The server restarted in the middle of an analysis (it crashed or its machine was stopped)", None)]
-    for image in ("img:1", "img:2"):  # a wake-up with the same version logs nothing; a new one logs the deploy
-        with TestClient(create_app(db_path, Settings(**s, fly_image=image), verifier=stub_verifier)):
+    for commit in ("aaaaaaa1", "bbbbbbb2"):  # a wake-up with the same version logs nothing; a new one logs the deploy
+        with TestClient(create_app(db_path, Settings(**s, commit=commit), verifier=stub_verifier)):
             pass
-    assert [e["detail"] for e in db.recent_events(conn)][0] == "Deployed a new version (the server restarted)"
+    assert [e["detail"] for e in db.recent_events(conn)][0] == "Deployed bbbbbbb (the server restarted)"
     assert len(db.recent_events(conn)) == 3
     run = "https://github.com/o/r/actions/runs/42"
-    with TestClient(create_app(db_path, Settings(**s, fly_image="img:3", commit="49eeecf0123", commit_subject="Rust engine P0",
+    with TestClient(create_app(db_path, Settings(**s, commit="49eeecf0123", commit_subject="Rust engine P0",
                                                  deploy_run=run), verifier=stub_verifier)):
         pass
     e = db.recent_events(conn)[0]
@@ -611,16 +611,6 @@ def test_deploys_are_logged_on_the_worker_too(db_path, home):
     assert log == [("deploy", "Deployed bbbbbbb: Ship it (the server restarted)", "cloudflare")]
 
 
-def test_the_old_version_file_counts_once(db_path, home):
-    """A server that kept the version in a file before: its first start after the change isn't a new deploy."""
-    home.mkdir(parents=True, exist_ok=True)
-    (home / "server-version").write_text("img:1")
-    s = dict(hosted=True, access_team_domain=TEAM, access_aud=AUD)
-    with TestClient(create_app(db_path, Settings(**s, fly_image="img:1"), verifier=stub_verifier)):
-        pass
-    assert db.recent_events(db.connect(db_path)) == []
-
-
 def test_events_table_gains_link_column(tmp_path):
     import sqlite3
 
@@ -637,9 +627,8 @@ def test_events_table_gains_link_column(tmp_path):
 
 
 def test_log_links():
-    s = Settings(fly_app="tastr-x", modal_env="friends", modal_workspace="me")
-    assert s.log_links("tastr-web") == {"fly": "https://fly.io/apps/tastr-x/monitoring",
-                                        "modal": "https://modal.com/apps/me/friends/deployed/tastr-web"}
+    s = Settings(modal_env="friends", modal_workspace="me")
+    assert s.log_links("tastr-web") == {"modal": "https://modal.com/apps/me/friends/deployed/tastr-web"}
     assert Settings().log_links("tastr-web") == {"modal": "https://modal.com/apps"}
     acct = "0123456789abcdef0123456789abcdef"
     w = Settings(worker_name="tastr", cf_account_id=acct).log_links("tastr-web")
@@ -823,7 +812,6 @@ def _run(i, conclusion="success", ago_h=1, name="tests", msg="Admin upgrades (#5
 
 
 def test_github_runs_become_log_lines(db_path, home, monkeypatch):
-    monkeypatch.delenv("LITESTREAM_BUCKET", raising=False)
     c = make_client(db_path, admins=("friend@example.com",), github_repo="o/r", github_workflows=("tests", "deploy.yml"))
     runs = [_run(1, ago_h=48), _run(2), _run(3, "failure", name="deploy"), _run(5, name="readme-shots")]
     runs[2]["path"] = ".github/workflows/deploy.yml"
@@ -841,39 +829,6 @@ def test_github_runs_become_log_lines(db_path, home, monkeypatch):
         raise OSError("no network")
     c.app.state.watch_once(fetch_runs=offline)  # logged to the server log, not the activity log
     assert c.get("/api/admin/events?source=github", headers=GOOD).json()["matched"] == 3
-
-
-def test_litestream_snapshots_become_log_lines(db_path, home, monkeypatch):
-    from datetime import datetime, timedelta, timezone
-    monkeypatch.setenv("LITESTREAM_BUCKET", "tastr-app")
-    c = make_client(db_path, admins=("friend@example.com",))
-    iso = lambda h: (datetime.now(timezone.utc) - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
-    snaps = [{"replica": "s3", "generation": "a295b16a796689f3", "index": "1", "size": "2097152", "created": iso(30)},
-             {"replica": "s3", "generation": "a295b16a796689f3", "index": "9", "size": "3145728", "created": iso(5)}]
-    c.app.state.watch_once(snapshots=lambda path: snaps)
-    events = lambda: c.get("/api/admin/events?type=backup", headers=GOOD).json()["events"]  # noqa: E731
-    assert [(e["detail"], e["source"]) for e in events()] == [("Litestream snapshot to R2 (3.0 MB, generation a295b16a)", "r2")]
-    c.app.state.watch_once(snapshots=lambda path: snaps)
-    assert len(events()) == 1  # nothing new
-
-    def broken(path):
-        raise RuntimeError("access denied")
-    c.app.state.watch_once(snapshots=broken)
-    c.app.state.watch_once(snapshots=broken)  # one problem line a day
-    assert [(e["detail"], e["ok"]) for e in events()][0] == ("Couldn't check the R2 backup: access denied", False)
-    assert len(events()) == 2
-
-
-def test_backup_goes_stale():
-    from datetime import datetime, timezone
-    from tastr.web import watch
-    now = datetime(2026, 11, 2, 12, tzinfo=timezone.utc)
-    old = [{"generation": "g", "size": "10", "created": "2026-11-01T00:00:00Z"}]
-    lines, newest, day = watch.backup_events(old, None, "2026-11-01T00:00:00Z", None, now)
-    assert [e["detail"] for e in lines] == ["No Litestream snapshot in R2 for 36 hours"] and day == "2026-11-02"
-    assert watch.backup_events(old, None, newest, day, now)[0] == []
-    assert watch._table("replica  generation  index  size  created\ns3  g  1  5  2026-11-01T00:00:00Z\n") == [
-        {"replica": "s3", "generation": "g", "index": "1", "size": "5", "created": "2026-11-01T00:00:00Z"}]
 
 
 def _snapshot(resp):

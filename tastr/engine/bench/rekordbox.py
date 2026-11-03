@@ -155,11 +155,23 @@ def _keys(name: str) -> list[str]:
 
 def match(tracks: list[RbTrack], paths: list[str | None]) -> dict[int, RbTrack]:
     """Index into `paths` -> the Rekordbox track for that file, matched by file name (the folders differ between
-    the machine that ran Rekordbox and the bench). A name two Rekordbox tracks share is left unmatched."""
+    the machine that ran Rekordbox and the bench). Two Rekordbox tracks with the same name count as one when
+    Rekordbox gave them the same BPM and key (one file imported twice, e.g. a track in two datasets' folders);
+    otherwise that name is left unmatched."""
+    def same(a: RbTrack, b: RbTrack) -> bool:
+        return (a.bpm, a.tonic, a.mode) == (b.bpm, b.tonic, b.mode)
+
     by_name: dict[str, RbTrack | None] = {}
+    clashed: set[str] = set()
     for t in tracks:
         for k in dict.fromkeys(_keys(t.filename)):
-            by_name[k] = None if k in by_name else t
+            if k in clashed:
+                continue
+            if k in by_name and not same(by_name[k], t):
+                by_name[k] = None
+                clashed.add(k)
+            else:
+                by_name.setdefault(k, t)
     out = {}
     for i, p in enumerate(paths):
         if not p:

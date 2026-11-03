@@ -208,8 +208,8 @@ Four layers, each assuming the one before it might be bypassed.
 2. **Tastr checks Cloudflare's signature.** The Worker has no `*.workers.dev` or preview address
    (`workers_dev` and `preview_urls` are off in `worker/wrangler.jsonc`), so the custom domain behind Access is
    the only way in. Even so, the server trusts only a token signed by your team (`TASTR_ACCESS_TEAM_DOMAIN`) for
-   this application (`TASTR_ACCESS_AUD`). No valid token means 401, except `/api/health` and signed `/pub/`
-   links. Without both settings the server won't start.
+   this application (`TASTR_ACCESS_AUD`). No valid token means 401, except `/api/health`, signed `/pub/`
+   links and short `/pub/s/` share links. Without both settings the server won't start.
 3. **Per-person libraries and limits.** Each track belongs to the email that uploaded it; anyone else gets
    404. Uploads (size and length), stems, drum model runs, Claude asks, storage and concurrent analyses are
    capped; link downloads and API docs are off; searches run in the browser on a copy of the person's own
@@ -221,6 +221,10 @@ Four layers, each assuming the one before it might be bypassed.
    Bypass application lets them through Cloudflare. Tastr checks each link itself: an HMAC with
    `TASTR_LINK_SECRET` over one track id and an expiry 7 days out. Changing the secret ends every outstanding
    link. The playlist zip (`playlist.zip`) holds the audio itself, so it needs no link.
+   Short Strudel share links (`/pub/s/<id>`, TAS-100) go through the same Bypass. Each is a random 10-character
+   id for code someone saved with `POST /api/strudel/share` (after signing in), kept in the `strudel_shares`
+   table. Opening one serves a small page that sends the browser on to strudel.cc with the code, after signing
+   the code's `/pub/` audio and stem links again, only for tracks the person who made it still has.
 
 Keys are split so a leak stays small. The audio bucket's R2 token is scoped to `tastr-audio`, not the benchmark
 bucket `tastr-data`. The Worker reaches Modal with a proxy auth token that can only call the `api` endpoint, and

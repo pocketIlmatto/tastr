@@ -161,6 +161,14 @@ body.chart-open { overflow: hidden; }
 .key-box { display: inline-block; width: 12px; height: 10px; background: var(--accent); opacity: .25; border-radius: 2px; vertical-align: middle; }
 .strudel .st-intro { margin: 0 0 10px; font-size: 14px; }
 .st-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.st-short { margin: -4px 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font-size: 13px; display: grid; gap: 6px; }
+.st-short[hidden] { display: none; }
+.st-short.err { color: var(--warn); border-color: var(--warn); }
+.st-short-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.st-short-head b { color: var(--ok, #2f8f4e); }
+.st-short-head button.linklike { font-size: 16px; line-height: 1; text-decoration: none; }
+.st-short input { width: 100%; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
+.st-short p { margin: 0; font-size: 12px; }
 .btn-link { display: inline-block; background: var(--accent); color: var(--bg); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 12px; text-decoration: none; font-size: 14px; }
 .btn-link:hover { filter: brightness(1.08); }
 .btn-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

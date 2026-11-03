@@ -143,3 +143,59 @@ def test_ask_refuses_oversized_input(db_path, monkeypatch):
     c = local_client(db_path)
     assert c.post("/api/strudel/ask", json={"code": "x" * 60_001, "ask": "y"}).status_code == 413
     assert c.post("/api/strudel/ask", json={"code": "x", "ask": "y" * 501}).status_code == 422
+
+
+# ---------- Short share links (TAS-100) ----------
+
+def _opened(page: str) -> str:
+    """The code a share page sends strudel.cc."""
+    import base64, html as h, re
+    from urllib.parse import unquote
+    url = h.unescape(re.search(r'url=([^"]+)"', page)[1])
+    assert url.startswith("https://strudel.cc/#")
+    return base64.b64decode(unquote(url.split("#", 1)[1])).decode()
+
+
+def test_share_link_opens_the_code_in_strudel(db_path):
+    c = local_client(db_path)
+    code = "// Mash-up: A <with> B\nsetcpm(32) // ünïcode\n"
+    r = c.post("/api/strudel/share", json={"code": code}).json()
+    assert r["url"] == f"/pub/s/{r['id']}" and len(r["id"]) == routes.SHARE_ID_LEN and r["id"].isalnum()
+    assert c.post("/api/strudel/share", json={"code": code}).json() == r  # same code, same link
+    assert c.post("/api/strudel/share", json={"code": code + " "}).json()["id"] != r["id"]
+    page = c.get(r["url"])
+    assert page.status_code == 200 and page.headers["cache-control"] == "no-store"
+    assert "<title>Strudel: Mash-up: A &lt;with&gt; B</title>" in page.text
+    assert _opened(page.text) == code
+    assert c.get("/pub/s/nothere1234").status_code == 404
+    assert c.get("/pub/s/bad..id").status_code == 404
+    assert c.post("/api/strudel/share", json={"code": "x" * (routes.MAX_CODE_BYTES + 1)}).status_code == 413
+    assert c.post("/api/strudel/share", json={"code": ""}).status_code == 422
+
+
+def test_share_links_are_capped_per_person(db_path, monkeypatch):
+    monkeypatch.setattr(routes, "MAX_SHARES", 1)
+    c = local_client(db_path)
+    assert c.post("/api/strudel/share", json={"code": "a"}).status_code == 200
+    assert c.post("/api/strudel/share", json={"code": "a"}).status_code == 200  # the same one again is fine
+    assert c.post("/api/strudel/share", json={"code": "b"}).status_code == 409
+
+
+def test_share_link_signs_stem_links_again(db_path, monkeypatch):
+    from test_hosted import save
+    mine, theirs = save(db_path, "friend@example.com"), save(db_path, "other@example.com")
+    c = hosted_client(db_path, link_secret="s3cret")
+    base = "https://tastr.example"
+    a = base + c.get(f"/api/tracks/{mine}/strudel-link", headers=GOOD).json()["audio"]
+    stale = f"{base}/pub/1.oldsig/tracks/{theirs}/stems/bass"
+    code = f"samples({{ a: '{a.removesuffix('/audio')}/stems/drums', b: '{stale}' }})"
+    assert c.post("/api/strudel/share", json={"code": code}).status_code == 401  # making one needs the login
+    r = c.post("/api/strudel/share", json={"code": code}, headers=GOOD).json()
+    monkeypatch.setattr(hosted.time, "time", lambda: 2_000_000_000.0)  # later: the old token would have expired
+    page = c.get(r["url"])  # no login, like whoever gets the link
+    assert page.status_code == 200
+    opened = _opened(page.text)
+    tok = opened.split("/pub/", 1)[1].split("/", 1)[0]
+    assert tok.startswith("2000604800.")  # signed again, LINK_DAYS from now
+    assert f"/tracks/{mine}/stems/drums'" in opened
+    assert stale in opened  # someone else's track is left alone

@@ -288,6 +288,18 @@ CREATE TABLE IF NOT EXISTS strudel_templates (
 );
 CREATE INDEX IF NOT EXISTS idx_strudel_templates_owner ON strudel_templates(owner);
 
+-- Short share links for Strudel code (TAS-100): /pub/s/<id> opens strudel.cc with `code`, its /pub/ audio and stem
+-- links signed again on each visit (tastr/web/routes/strudel.py). owner as in saved_searches; sha256 of the code
+-- gives the same link for the same code.
+CREATE TABLE IF NOT EXISTS strudel_shares (
+    id         TEXT PRIMARY KEY,
+    owner      TEXT,
+    sha256     TEXT NOT NULL,
+    code       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_strudel_shares_code ON strudel_shares(owner, sha256);
+
 -- Cue points people mark on a track's chart (GitHub #3), per person (owner as in saved_searches), at most 9
 -- per track (tastr/web/routes/edits.py). t is seconds; color indexes the page's 9 cue colors. Re-analyzing keeps
 -- them; deleting the track deletes them.
@@ -817,6 +829,28 @@ def add_template(conn: sqlite3.Connection, owner: str | None, name: str, text: s
         tid = conn.execute("INSERT INTO strudel_templates (owner, name, text, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
                            (owner, name, text, now, now)).lastrowid
     return {"id": tid, "name": name, "text": text, "updated_at": now}
+
+
+def find_share(conn: sqlite3.Connection, owner: str | None, sha256: str) -> str | None:
+    """The id of `owner`'s share link for the code with this hash, if there is one."""
+    r = conn.execute("SELECT id FROM strudel_shares WHERE owner IS ? AND sha256 = ?", (owner, sha256)).fetchone()
+    return r[0] if r else None
+
+
+def count_shares(conn: sqlite3.Connection, owner: str | None) -> int:
+    return conn.execute("SELECT COUNT(*) FROM strudel_shares WHERE owner IS ?", (owner,)).fetchone()[0]
+
+
+def add_share(conn: sqlite3.Connection, share_id: str, owner: str | None, sha256: str, code: str) -> None:
+    with conn:
+        conn.execute("INSERT INTO strudel_shares (id, owner, sha256, code, created_at) VALUES (?, ?, ?, ?, ?)",
+                     (share_id, owner, sha256, code, _now()))
+
+
+def get_share(conn: sqlite3.Connection, share_id: str) -> tuple[str | None, str] | None:
+    """(owner, code) for one share link."""
+    r = conn.execute("SELECT owner, code FROM strudel_shares WHERE id = ?", (share_id,)).fetchone()
+    return (r[0], r[1]) if r else None
 
 
 def update_template(conn: sqlite3.Connection, owner: str | None, template_id: int, name: str, text: str) -> dict[str, Any] | None:

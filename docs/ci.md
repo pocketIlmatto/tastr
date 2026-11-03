@@ -114,6 +114,32 @@ pull request runs the usual `tests` and waits for the owner to merge it.
   45 minutes and 60 turns.
 - **Change the limit:** `LIMIT_MIN` and `RUNS` in `.github/scripts/slow_tests.py`.
 
+## Worker errors
+
+`.github/workflows/worker-errors.yml` watches the live app without anyone watching. Every 30 minutes
+`.github/scripts/worker_errors.py` reads the last hour of the `tastr` Worker's error logs (Workers Observability),
+groups the lines by request (a Python traceback arrives as one log line per traceback line) and leaves out the
+known harmless ZipFile noise (TAS-98). When 5 or more requests failed, or the Durable Object was reset (out of
+memory or CPU time), which fails every request in flight:
+
+1. it opens an issue labeled `worker-errors` with the grouped errors and one example of each, and
+2. starts Claude Code in Actions, which traces the cause and, when the fix is clear, opens a pull request on a
+   `claude/worker-errors-<issue>` branch that closes the issue. When it needs a setting or a secret, or the cause
+   came from outside and has passed, it comments on the issue with what to do instead. It never changes
+   settings or secrets, deploys or merges.
+
+While a `worker-errors` issue is open, nothing new starts; each new report is added to it as a comment. The repo
+is public, so the report masks emails, upload names and link tokens.
+
+- **Secrets:** `CF_LOGS_TOKEN`, a Cloudflare API token with only Account > Workers Observability > Read (My
+  Profile > API Tokens > Create Token > Custom token), and the same Claude secret as slow tests. Without
+  `CF_LOGS_TOKEN` the check only says so in the run summary.
+- **Try it:** Actions > worker-errors > Run workflow with "force" ticked (and "minutes" to look further back).
+- **Cost:** a 15-second job every 30 minutes, free on a public repository. Claude runs only when the check trips,
+  for up to 45 minutes and 80 turns.
+- **Change the limit:** `FAILED_LIMIT` and `WINDOW_MIN` in `.github/scripts/worker_errors.py`; add known noise to
+  `NOISE` there.
+
 ## Deploy workflow
 
 `.github/workflows/deploy.yml` ships the hosted app (Modal, then the Cloudflare Worker through `deploy-worker.yml`; [deploy.md](deploy.md#updating)). It

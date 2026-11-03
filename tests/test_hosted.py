@@ -915,6 +915,7 @@ def test_admin_copies_tracks_to_someone(db_path, home):
     other = save(db_path, "other@example.com", sha="o1")
     conn = db.connect(db_path)
     db.save_lookup(conn, mine[0], {"provider": "freqblog", "status": "found", "bpm": 120.0})
+    db.save_lookup(conn, mine[0], {"provider": "rekordbox", "status": "found", "bpm": 121.0})  # the admin's own
     conn.close()
     plain = make_client(db_path)
     assert plain.get("/api/admin/copy-tracks?to=t@example.com", headers=GOOD).status_code == 404
@@ -934,7 +935,8 @@ def test_admin_copies_tracks_to_someone(db_path, home):
     row = conn.execute("SELECT owner, local_path, sha256 FROM tracks WHERE id = ?", (new,)).fetchone()
     assert tuple(row) == ("t@example.com", str(path), "s0")
     assert db.load_card(conn, new).core.bpm == db.load_card(conn, mine[0]).core.bpm
-    assert conn.execute("SELECT count(*) FROM lookups WHERE track_id = ?", (new,)).fetchone()[0] == 1
+    assert [r["provider"] for r in db.get_lookups(conn, new)] == ["freqblog"]  # not the admin's Rekordbox listing
+    assert len(db.get_lookups(conn, mine[0])) == 2
     assert conn.execute("SELECT owner FROM tracks WHERE id = ?", (mine[0],)).fetchone()[0] == "friend@example.com"
     assert "Copied 2 tracks to t" in [e["detail"] for e in db.find_events(conn, "", "", "", "", "", False, 50)["events"]]
     conn.close()

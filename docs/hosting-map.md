@@ -133,7 +133,7 @@ sequenceDiagram
     W->>A: is it there, and how big?
     W->>W: read it back into the cache, check its length from the header
     opt on the Worker (its files are memory)
-      W->>W: drop the local copy; the analysis reads it back on its turn
+      W->>W: drop the local copy (one upload read back at a time); the analysis reads it back on its turn
     end
     B->>W: POST /api/analyze/uploaded, on its turn: the id (+ its card)
   else the upload goes through the server
@@ -345,7 +345,9 @@ flowchart LR
   `tastr/http.py` sends it with the Worker's fetch. Uploads, stems, signed links and zips (streamed from the
   bucket) all go through it. The Worker's own files are in memory and gone after a restart, so on the Worker
   the audio bucket is required, not optional. Its memory (128 MB for the Durable Object) is why it keeps no
-  local copies (`blobs.keep_copies`): a checked upload's copy is dropped until its analysis reads it back.
+  local copies (`blobs.keep_copies`): a checked upload's copy is dropped until its analysis reads it back, and
+  only one request or job holds a copy at a time (`blobs.copy_limit`); the analysis drops it again once it has the
+  tags and the hash, before Modal reads the bucket's copy.
   A card's waveform data goes to the bucket after the card's transaction, never inside it (`transactionSync` is
   a synchronous call, so a fetch can't wait in it); the six-hourly sweep moves any that a card had to keep.
 - CI builds the Worker whenever the app or `worker/` changes (`worker/check.sh`, the last steps of

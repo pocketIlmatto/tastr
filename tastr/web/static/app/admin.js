@@ -15,7 +15,7 @@ const askCost = (tin, tout) => (tin * admClaude.price_in + tout * admClaude.pric
 // The activity log's filters: event types and where they come from (db.EVENT_TYPES and db.EVENT_SOURCES on the server).
 const ACT_TYPES = { upload: "Uploads", analysis: "Analysis", stems: "Stem jobs", limit: "Limits hit", error: "Errors", signin: "Sign-ins",
   blocked: "Blocked requests", deploy: "Deploys and CI", backup: "Backups", admin: "Admin changes" };
-const ACT_SRC = { app: "Tastr", modal: "Modal", flyio: "Fly.io", github: "GitHub", cloudflare: "Cloudflare", r2: "R2 (Litestream)" };
+const ACT_SRC = { app: "Tastr", modal: "Modal", flyio: "Fly.io" /* lines from before the move off Fly */, github: "GitHub", cloudflare: "Cloudflare", r2: "R2 (Litestream)" };
 const actF = { type: "", who: "", src: "", when: "", from: "", to: "" };
 let admData = null, admEvents = null, admKind = "tracks", admRange = "30", admLog = "all", admFocus = null, admEdit = null;
 const admColor = (i) => `var(--sec${i % 5})`;
@@ -229,11 +229,10 @@ function renderActivity() {
   const E = admEvents, A = admData;
   if (!E) return;
   const links = (A && A.log_links) || {};
-  // Worker logs · Modal · Fly logs, each only when the server sent its URL (the Fly one goes when Fly does).
+  // Worker logs · Modal, each only when the server sent its URL.
   const linkEls = () => [links.worker && h("a", { href: links.worker, target: "_blank", rel: "noopener", title: "The Cloudflare Worker's logs, in the Cloudflare dashboard" }, "Worker logs"),
-    links.modal && h("a", { href: links.modal, target: "_blank", rel: "noopener" }, "Modal"),
-    links.fly && h("a", { href: links.fly, target: "_blank", rel: "noopener" }, "Fly logs")].filter(Boolean);
-  // A deploy links to its GitHub Actions run; a problem links to the server's (Worker or Fly) and Modal logs.
+    links.modal && h("a", { href: links.modal, target: "_blank", rel: "noopener" }, "Modal")].filter(Boolean);
+  // A deploy links to its GitHub Actions run; a problem links to the Worker's and Modal's logs.
   const own = (e) => e.link && /^https:\/\//.test(e.link) ? [h("a", { href: e.link, target: "_blank", rel: "noopener" }, /github\.com/.test(e.link) ? "Deploy run on GitHub" : "Details")] : [];
   const dig = (e) => { const as = [...own(e), ...(e.ok || e.type === "blocked" ? [] : linkEls())]; return as.length ? h("span", { class: "adm-dig" }, ...as.flatMap((a, i) => (i ? [" · ", a] : [a]))) : null; };
   const active = Boolean(actF.type || actF.who || actF.src || (actF.when && (actF.when !== "range" || actF.from || actF.to)));

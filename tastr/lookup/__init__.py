@@ -19,7 +19,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from . import acousticbrainz, freqblog, getsongbpm  # noqa: F401  registers the built-in providers
+from . import acousticbrainz, freqblog, getsongbpm, rekordbox  # noqa: F401  registers the built-in providers
 from .base import PROVIDERS, LookupResult, Provider, ProviderError, TrackQuery, parse_listed_key, register  # noqa: F401
 from .guard import Limited, usage_conn
 

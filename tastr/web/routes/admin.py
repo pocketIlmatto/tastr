@@ -214,10 +214,12 @@ def router(ctx: AppContext) -> APIRouter:
 
     @api.get("/api/admin/rekordbox-compare")
     def rekordbox(request: Request, key: str = REKORDBOX_KEY, format: Literal["json", "text"] = "json",
-                  show: int = Query(25, ge=0, le=500)):
+                  show: int = Query(25, ge=0, le=500), save: bool = False):
         """Your tracks' stored BPM, key and beat grid next to Rekordbox's, for tracks in both libraries
         (tastr/rekordbox_compare.py, docs/rekordbox.md). Reads the Rekordbox collection XML you put in the audio
-        bucket at `key`. `format=text` for the readable summary. Admins only."""
+        bucket at `key`. `format=text` for the readable summary. `save=1` also stores Rekordbox's BPM and key on
+        each of those tracks, so its card's "Listed elsewhere" line and the review list show where Tastr disagrees
+        (replacing the last export's). Admins only."""
         admin = ctx.require_admin(request)
         if not key.startswith("rekordbox/") or not key.endswith(".xml") or ".." in key:
             raise HTTPException(400, "key is an .xml file under rekordbox/ in the audio bucket.")
@@ -232,10 +234,16 @@ def router(ctx: AppContext) -> APIRouter:
         try:
             with closing(ctx.conn()) as c:
                 rep = rekordbox_compare.compare(c, data, owner=admin)
+                if save:
+                    rep["saved"] = rekordbox_compare.save_listings(c, data, owner=admin)
         except ParseError as e:
             raise HTTPException(400, f"{key} isn't a Rekordbox XML export: {e}") from None
         if format == "text":
-            return PlainTextResponse(rekordbox_compare.format_report(rep, show))
+            text = rekordbox_compare.format_report(rep, show)
+            if save:
+                text += (f"\nSaved Rekordbox's BPM and key on {rep['saved']['saved']} tracks: their cards show it under "
+                         "Listed elsewhere, and disagreements are in the review list.")
+            return PlainTextResponse(text)
         rep["disagreements"] = rep["disagreements"][:show]
         return rep
 

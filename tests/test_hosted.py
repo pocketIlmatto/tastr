@@ -1000,6 +1000,9 @@ def test_admin_rekordbox_compare_reads_the_export_from_the_bucket(db_path, home,
                 raise s3.S3Error(404, "NoSuchKey", key)
             return type("R", (), {"read": lambda self: store[key]})()
 
+        def list(self, prefix):
+            return iter(())
+
     monkeypatch.setattr(blobs, "enabled", lambda: True)
     monkeypatch.setattr(blobs, "client", lambda: Bucket())
     assert make_client(db_path).get("/api/admin/rekordbox-compare", headers=GOOD).status_code == 404  # admins only
@@ -1010,6 +1013,12 @@ def test_admin_rekordbox_compare_reads_the_export_from_the_bucket(db_path, home,
     assert rep["disagreements"][0]["track_id"] == mine
     text = c.get("/api/admin/rekordbox-compare?format=text", headers=GOOD).text
     assert "1 tracks in both" in text
+    assert db.get_lookups(db.connect(db_path), mine) == []  # comparing alone saves nothing
+    saved = c.get("/api/admin/rekordbox-compare?save=1", headers=GOOD).json()["saved"]
+    assert saved == {"saved": 1, "cleared": 0}
+    card = c.get(f"/api/tracks/{mine}", headers=GOOD).json()
+    rb = next(x for x in card["lookups"] if x["provider"] == "rekordbox")
+    assert rb["label"] == "Rekordbox" and rb["bpm"] == 60.0 and rb["compare"]["bpm"] == "half"
     assert c.get("/api/admin/rekordbox-compare?key=rekordbox/missing.xml", headers=GOOD).status_code == 404
     assert c.get("/api/admin/rekordbox-compare?key=uploads/x.xml", headers=GOOD).status_code == 400
     store["rekordbox/bad.xml"] = b"<not xml"

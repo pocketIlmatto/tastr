@@ -125,7 +125,7 @@ sequenceDiagram
     end
     B->>W: POST /api/uploads/{id}/check
     W->>A: is it there, and how big?
-    W->>W: read the header, check its length, drop the copy
+    W->>W: read it back (one upload at a time), check its length from the header, drop the copy
     B->>W: POST /api/analyze/uploaded, on its turn: the id (+ its card)
   else the upload goes through the server
     B->>C: upload a track (+ its card)
@@ -320,7 +320,9 @@ flowchart LR
   The catalog lookups' per-provider guard waits with the runner's `sleep`, which lets other requests run,
   instead of holding the event loop.
 - Its memory (128 MB for the Durable Object) is why it keeps no local copies (`blobs.keep_copies`): a checked
-  upload's copy is dropped until its analysis reads it back, and zips stream from the bucket. A restart that
+  upload's copy is dropped until its analysis reads it back, only one request or job holds a copy at a time
+  (`blobs.copy_limit`), the analysis drops it again once it has the tags and the hash, before Modal reads the
+  bucket's copy, and zips stream from the bucket. A restart that
   hits the limit rolls back a transaction that wasn't committed.
 - A card's waveform data goes to the bucket after the card's transaction, never inside it (`transactionSync` is
   a synchronous call, so a fetch can't wait in it); the six-hourly sweep moves any that a card had to keep.

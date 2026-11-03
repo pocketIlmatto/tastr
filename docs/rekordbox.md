@@ -124,4 +124,35 @@ results for their tracks too, so quote scores, not per-track answers.
 
 ## Results
 
-None yet. Add each run here with the date, dataset, track count, Rekordbox version and settings.
+Add each run here with the date, dataset, track count, Rekordbox version and settings.
+
+### 2026-11-03: GiantSteps, Rekordbox 7.2.19
+
+Rekordbox 7.2.19 on macOS: Normal analysis, BPM range 70-180, high precision beat grid on, cloud analysis off,
+no hand edits. Tastr: Rust engine 0.1.0, `core,sections` stages, on Modal. Both scored against the datasets' labels
+on the tracks both analyzed.
+
+| Set | Score | Rekordbox | Tastr | Tracks |
+|---|---|---|---|---|
+| GiantSteps Key, first 100 | key exactly right | 0.515 | 0.484 | 97 |
+| | MIREX weighted | 0.581 | 0.573 | 97 |
+| GiantSteps Tempo, the 43 with audio | BPM within 4% | 0.825 | 0.750 | 40 |
+| | BPM incl. x2 / half | 0.950 | 0.900 | 40 |
+
+Key errors: Rekordbox correct 50, fifth 9, relative 3, parallel 5, other 30; Tastr correct 47, fifth 13, relative 3,
+parallel 6, other 28. BPM octave errors: Rekordbox half 2, double 3; Tastr half 3, double 3.
+
+- **About even.** Rekordbox is ahead by 3 tracks on key and 3 on tempo. On samples this small that's within
+  noise: a share right on 97 tracks is known to about ±10 points, on 40 to about ±13.
+- **Different misses.** The two disagree on 31 of the 97 key tracks: Rekordbox is right on 8 of those, Tastr on 5,
+  neither on 18. Where they agree (66), both are right on 42. So a vote of the two wouldn't fix much, but the 24
+  tracks both get wrong in the same way are worth a look at their labels.
+- **Fifths.** Tastr's extra misses are mostly a fifth off (13 vs 9), the error the engine report already lists
+  as open ([engine-report.md](engine-report.md#key)).
+- **Drum & bass tempo.** Both read some 174 BPM tracks at 86 and some 85 BPM tracks at 172; Rekordbox's 70-180
+  range doesn't stop either error.
+- 3 tracks are in both GiantSteps sets and were imported twice, so they went unmatched in this run. The matcher now
+  counts two copies with the same answers as one (next runs).
+
+A full run (all 600 key tracks, which Rekordbox would have to analyze too) would narrow the margins; GiantSteps
+Tempo has no more tracks with audio.

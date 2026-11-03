@@ -141,3 +141,13 @@ def test_rekordbox_compare_cli(tmp_path, xml, capsys):
     _library(tmp_path).close()
     assert cli.main(["--db", str(tmp_path / "lib.db"), "rekordbox-compare", str(xml), "--out", str(tmp_path / "r.json")]) == 0
     assert "tracks in both" in capsys.readouterr().out and (tmp_path / "r.json").is_file()
+
+
+def test_one_file_imported_twice_still_matches():
+    a = rekordbox.RbTrack(location="/m/key/1.LOFI.mp3", bpm=128.0, tonic=0, mode="minor")
+    b = rekordbox.RbTrack(location="/m/tempo/1.LOFI.mp3", bpm=128.0, tonic=0, mode="minor")
+    c = rekordbox.RbTrack(location="/m/x/2.mp3", bpm=120.0)
+    d = rekordbox.RbTrack(location="/m/y/2.mp3", bpm=60.0)  # same name, different answers: ambiguous
+    e = rekordbox.RbTrack(location="/m/z/2.mp3", bpm=120.0)
+    found = rekordbox.match([a, b, c, d, e], ["/d/1.LOFI.mp3", "/d/2.mp3"])
+    assert found[0] is a and 1 not in found

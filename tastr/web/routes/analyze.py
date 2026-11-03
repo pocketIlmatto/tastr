@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from ... import blobs, db, service
 from ...engine import browser_card
-from ...ingest import AUDIO_EXTENSIONS, IngestError, is_url, resolve_inputs
+from ...ingest import AUDIO_EXTENSIONS, IngestError, file_sha256, is_url, resolve_inputs
 from ...markers import Markers
 from ..analysis_jobs import JobError, new_id, ref
 from ..context import AppContext, _failure_reason, _results, log, tastr_home, upload_dir
@@ -207,20 +207,21 @@ def router(ctx: AppContext) -> APIRouter:
             if size > ctx.settings.max_upload_bytes:
                 give_up(ids, paths)
                 raise too_big(user, path.name)
-            try:
-                blobs.ensure(path)  # tags, length and the file's hash are read from a local copy (the disk is a cache)
-            except Exception:
-                log.exception("couldn't read back the upload %s", upload_id)
-                give_up(ids, paths)
-                raise HTTPException(503, f"Couldn't read {path.name} back from storage. Upload it again.") from None
-            kept.append(str(path))
-            try:
-                check_minutes(request, kept, path)
-            except HTTPException:
-                give_up(ids, paths)
-                raise
-            if not blobs.keep_copies:
-                release([path])  # the analysis brings it back when its turn comes
+            with blobs.copy_slot():  # one file at a time where memory is the disk (the Worker)
+                try:
+                    blobs.ensure(path)  # tags, length and the file's hash are read from a local copy (a cache)
+                except Exception:
+                    log.exception("couldn't read back the upload %s", upload_id)
+                    give_up(ids, paths)
+                    raise HTTPException(503, f"Couldn't read {path.name} back from storage. Upload it again.") from None
+                kept.append(str(path))
+                try:
+                    check_minutes(request, kept, path)
+                except HTTPException:
+                    give_up(ids, paths)
+                    raise
+                if not blobs.keep_copies:
+                    release([path])  # the analysis brings it back when its turn comes
         return kept
 
     def give_up(ids: list[str], paths: list[Path]) -> None:
@@ -263,9 +264,9 @@ def router(ctx: AppContext) -> APIRouter:
                                 status_code=202)
         with closing(ctx.conn()) as c:
             try:
-                for p in paths:  # a stored upload whose local copy was dropped (blobs.keep_copies)
-                    blobs.ensure(p)
-                with ctx.analysis_slot():
+                with blobs.copy_slot(), ctx.analysis_slot():
+                    for p in paths:  # a stored upload whose local copy was dropped (blobs.keep_copies)
+                        blobs.ensure(p)
                     rs = service.analyze_inputs(c, paths, owner=ctx.owner_of(request), cards=sig, skip_known=True)
             except TimeoutError:
                 raise HTTPException(503, "The server is busy analyzing other tracks. Try again in a few minutes.") from None
@@ -384,10 +385,15 @@ def router(ctx: AppContext) -> APIRouter:
                 if link:
                     progress.stage("fetch")
                 try:
-                    if not link:
-                        for p in inputs:  # a stored upload whose local copy was dropped (blobs.keep_copies)
-                            blobs.ensure(p)
-                    sources = resolve_inputs(inputs)
+                    with blobs.copy_slot():
+                        if not link:
+                            for p in inputs:  # a stored upload whose local copy was dropped (blobs.keep_copies)
+                                blobs.ensure(p)
+                        sources = resolve_inputs(inputs)  # reads the tags
+                        if not link and not blobs.keep_copies:
+                            for s in sources:  # all the analysis needs of the copy; Modal reads the bucket's
+                                s.sha256 = s.sha256 or file_sha256(s.local_path)
+                            release(inputs)
                 except IngestError as e:
                     raise JobError(str(e)) from e
                 progress.stage("waiting")

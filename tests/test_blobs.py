@@ -499,6 +499,52 @@ def test_direct_upload_drops_the_checked_copy_where_the_disk_is_memory(bucket, h
     assert r.json()["results"][0]["track_id"] is not None  # brought back for its analysis
 
 
+def test_copy_slot_lets_one_at_a_time_hold_a_copy(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(blobs, "copy_limit", 1)
+    inside, most = [0], [0]
+
+    def work():
+        with blobs.copy_slot():
+            inside[0] += 1
+            most[0] = max(most[0], inside[0])
+            time.sleep(0.05)
+            inside[0] -= 1
+
+    threads = [threading.Thread(target=work) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert most[0] == 1 and blobs._copies[0] == 0
+
+
+def test_a_background_analysis_lets_go_of_the_copy_before_analyzing(bucket, home, db_path, monkeypatch):
+    # The Worker: the job reads the tags and the hash, then drops the copy; Modal reads the bucket's (T31).
+    monkeypatch.setattr(blobs, "keep_copies", False)
+    monkeypatch.setattr(blobs, "copy_limit", 1)
+    c = direct_client(db_path, monkeypatch)
+    seen = []
+    fake = service._analyze
+
+    def analyze(source, options, on_stage=None, browser=None):
+        seen.append((source.sha256, (home / "uploads").exists() and any(p.is_file() for p in (home / "uploads").rglob("*"))))
+        return fake(source, options, on_stage, browser)
+
+    monkeypatch.setattr(service, "_analyze", analyze)
+    (up,) = c.post("/api/uploads", json={"files": [{"name": "a.wav", "size": 8}]}, headers=GOOD).json()["uploads"]
+    browser_put(up, b"RIFFsong")
+    job = c.post("/api/analyze/uploaded?background=1", data={"ids": [up["id"]]}, headers=GOOD).json()
+    for _ in range(100):
+        job = c.get(f"/api/analyze/jobs/{job['id']}", headers=GOOD).json()
+        if job["state"] in ("done", "error"):
+            break
+        time.sleep(0.05)
+    assert job["state"] == "done" and job["results"][0]["track_id"] is not None, job
+    assert seen and seen[0][0] and seen[0][1] is False  # hashed, and no local copy left while analyzing
+
+
 def test_a_dropped_copy_still_takes_the_pages_card(bucket, home, db_path, monkeypatch):
     # The page's own card is saved next to the upload, whose folder went with the dropped copy (T31).
     monkeypatch.setattr(blobs, "keep_copies", False)

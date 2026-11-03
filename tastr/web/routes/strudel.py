@@ -1,24 +1,58 @@
-"""Try this in > Strudel (TAS-67): each person's own templates, and "Ask Claude to change it"."""
+"""Try this in > Strudel (TAS-67): each person's own templates, "Ask Claude to change it", and short share links
+(TAS-100)."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import html
+import re
+import secrets
+import string
 from contextlib import closing
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from ... import db
 from .. import claude
 from ..context import AppContext
-from ..hosted import today
+from ..hosted import PUBLIC_PREFIX, today
 
 MAX_TEMPLATES, MAX_TEMPLATE_BYTES = 50, 20_000  # templates per person, and the size of one
 MAX_CODE_BYTES, MAX_ASK_CHARS, MAX_SUMMARY_CHARS = 60_000, 500, 2_000
+MAX_SHARES, SHARE_ID_LEN = 1000, 10  # share links per person; 10 letters and digits is about 59 bits, too many to guess
+SHARE_PREFIX = PUBLIC_PREFIX + "s/"  # under /pub/, so Cloudflare Access lets it through like the audio links
+SIGNED = re.compile(r"/pub/(\d+\.[A-Za-z0-9_-]+)/tracks/(\d+)/")  # a /pub/ audio or stem link in the code
 
 
 class TemplateBody(BaseModel):
     name: str = Field(min_length=1, max_length=40)
     text: str = Field(min_length=1)
+
+
+class ShareBody(BaseModel):
+    code: str = Field(min_length=1)
+
+
+def strudel_url(code: str) -> str:
+    """The strudel.cc link that opens `code`: the same encoding as strudelLink in static/strudel.js."""
+    return "https://strudel.cc/#" + quote(base64.b64encode(code.encode()).decode(), safe="")
+
+
+def share_page(code: str) -> str:
+    """A page that goes straight on to strudel.cc (a meta refresh: the link is too long for a safe redirect header,
+    and the page's CSP allows no script). Its title is the code's first comment, for link previews."""
+    url = html.escape(strudel_url(code))
+    first = next((ln.strip()[2:].strip() for ln in code.splitlines() if ln.strip().startswith("//")), "")
+    title = html.escape(f"Strudel: {first}" if first else "Strudel code from Tastr")
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{title}</title>'
+            f'<meta name="robots" content="noindex"><meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<meta http-equiv="refresh" content="0; url={url}"></head>'
+            f'<body style="font-family: system-ui, sans-serif; padding: 2rem"><p>Opening strudel.cc&hellip; '
+            f'<a href="{url}">Open it yourself</a> if nothing happens.</p></body></html>')
 
 
 class AskBody(BaseModel):
@@ -68,6 +102,47 @@ def router(ctx: AppContext) -> APIRouter:
             if not db.delete_template(c, ctx.owner_of(request), template_id):
                 raise HTTPException(404, "no such template")
         return Response(status_code=204)
+
+    # Short share links (TAS-100).
+    @api.post("/api/strudel/share")
+    def share(body: ShareBody, request: Request):
+        """Save this code and return a short link to it ({id, url}). The same code from the same person gets the
+        same link."""
+        if len(body.code.encode()) > MAX_CODE_BYTES:
+            raise HTTPException(413, f"That code is too long to share (the most is {MAX_CODE_BYTES // 1000} KB).")
+        owner, sha = ctx.owner_of(request), hashlib.sha256(body.code.encode()).hexdigest()
+        with closing(ctx.conn()) as c:
+            sid = db.find_share(c, owner, sha)
+            if sid is None:
+                if db.count_shares(c, owner) >= MAX_SHARES:
+                    raise HTTPException(409, f"You have {MAX_SHARES} short links, the most there can be.")
+                while sid is None or db.get_share(c, sid) is not None:
+                    sid = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(SHARE_ID_LEN))
+                db.add_share(c, sid, owner, sha, body.code)
+        return {"id": sid, "url": SHARE_PREFIX + sid}
+
+    def fresh_links(c, owner: str | None, code: str) -> str:
+        """The code with its signed audio and stem links signed again, so they work for another LINK_DAYS days.
+        Only for tracks the person who made the link still has; the rest are left as they were (and expire)."""
+        if ctx.signer is None:
+            return code  # on your own machine the links aren't signed
+
+        def sign(m: re.Match) -> str:
+            tid = int(m[2])
+            if db.track_owner(c, tid) != (True, owner):
+                return m[0]
+            return f"/pub/{ctx.signer.token(tid)}/tracks/{tid}/"
+        return SIGNED.sub(sign, code)
+
+    @api.get(SHARE_PREFIX + "{share_id}", include_in_schema=False)
+    def open_share(share_id: str):
+        """Anyone with the link: on to strudel.cc with the code. No login (strudel.cc links get passed around)."""
+        with closing(ctx.conn()) as c:
+            got = db.get_share(c, share_id) if share_id.isalnum() and len(share_id) <= 32 else None
+            if got is None:
+                raise HTTPException(404, "There's no Strudel code at this link.")
+            code = fresh_links(c, *got)
+        return HTMLResponse(share_page(code), headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 
     # Ask Claude.
     def status(request: Request) -> dict:

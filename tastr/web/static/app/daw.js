@@ -75,6 +75,8 @@ export function strudelView(c) {
   const pre = h("pre", { class: "st-code", tabindex: "0", "aria-label": "Generated Strudel code" });
   const open = h("a", { class: "btn-link", target: "_blank", rel: "noopener" }, "Open in Strudel ↗");
   const note = h("p", { class: "muted st-note" });
+  const shortBox = h("div", { class: "st-short", hidden: "", role: "status", "aria-live": "polite" });
+  let shortFor = null; // the code the short link in shortBox was made for
   const stemsRow = h("div", { class: "st-stems" });
   const srcRow = h("div", { class: "st-src", role: "radiogroup", "aria-label": "Which patterns to use" });
   const tplBox = h("div", { class: "st-tpl-box" }), edBox = h("div", { class: "st-ed-box" }), mashBox = h("div", { class: "st-mash" });
@@ -135,6 +137,7 @@ export function strudelView(c) {
     pre.textContent = code;
     pre.classList.toggle("claude", changed != null);
     open.href = strudelLink(code);
+    if (shortFor !== null && shortFor !== code) { shortFor = null; shortBox.hidden = true; } // the code changed: that link is for the old code
     tplBox.replaceChildren(templatesBar((id) => { tplState.pick = id; edBox.replaceChildren(); paint(); }, editor));
     audioOpt.hidden = !full || !c.has_audio;
     startRow.hidden = startSel.options.length < 2 || !(full || tpl.text.includes("{song}"));
@@ -198,6 +201,33 @@ export function strudelView(c) {
   const box = h("input", { type: "checkbox", id: "st-audio", ...(strudelAudio ? { checked: "" } : {}) });
   box.addEventListener("change", () => { strudelAudio = box.checked; paint(); });
   const audioOpt = h("label", { class: "st-opt", for: "st-audio" }, box, " Include the original audio, cut into bars");
+  // A short share link (TAS-100): the server keeps the code and /pub/s/<id> opens it in strudel.cc with fresh stem links.
+  // The same code gives the same link.
+  const short = h("button", { type: "button", class: "st-short-btn", title: "Copy a short link to this sketch that you can share" }, "Copy short link");
+  short.onclick = async () => {
+    const forCode = code;
+    short.disabled = true; short.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), "Making link…");
+    let url, err = null;
+    try {
+      const r = await api("/api/strudel/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: forCode }) });
+      url = location.origin + r.url;
+    } catch (e) {
+      err = e.status ? e.message : "Couldn't make a link: you're offline. Try again when you're back online.";
+    }
+    short.disabled = false; short.textContent = "Copy short link";
+    if (err) { shortFor = null; shortBox.hidden = false; shortBox.className = "st-short err"; shortBox.replaceChildren(err); return; }
+    let copied = true;
+    try { await navigator.clipboard.writeText(url); } catch (_) { copied = false; }
+    shortFor = forCode;
+    const inp = h("input", { type: "text", readonly: "", value: url, "aria-label": "Short link", spellcheck: "false", onfocus: (e) => e.target.select() });
+    shortBox.hidden = false; shortBox.className = "st-short";
+    shortBox.replaceChildren(
+      h("div", { class: "st-short-head" }, h("b", {}, copied ? "✓ Short link copied" : "Short link ready: copy it from here"),
+        h("button", { type: "button", class: "linklike", "aria-label": "Close", onclick: () => { shortBox.hidden = true; } }, "×")),
+      inp,
+      h("p", { class: "muted" }, "Works for anyone with the link: it opens this code in Strudel. The audio stays playable while the track is in your library."));
+    if (!copied) inp.focus();
+  };
   const copy = h("button", { type: "button", onclick: async () => {
     try { await navigator.clipboard.writeText(code); say.textContent = "Copied"; } catch (_) { say.textContent = "Couldn't copy here"; }
     setTimeout(() => (say.textContent = ""), 2500);
@@ -208,7 +238,7 @@ export function strudelView(c) {
       " live-code. Pick a template, or make your own with fill-ins from the track, then open it in Strudel to play and change it.",
       c.has_audio ? " Templates can use the original audio, cut into bars, to remix the real thing." : ""),
     tplBox, edBox, tplWarn, srcRow, audioOpt, stemsRow, mashBox, startRow,
-    h("div", { class: "st-actions" }, open, copy, say), pre, ask.el, note);
+    h("div", { class: "st-actions" }, open, short, copy, say), shortBox, pre, ask.el, note);
 }
 
 // Key names as musicians spell them (the Camelot wheel's spellings: B♭ not A#), with real ♭ and ♯ signs. Display only;

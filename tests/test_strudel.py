@@ -197,7 +197,8 @@ def test_ui_offers_strudel_in_the_picker():
     static = STRUDEL_JS.parent
     js = app_js()
     assert 'strudel: { name: "Strudel", code: true }' in js
-    assert "Open in Strudel" in js and "Copy code" in js
+    assert "Open in Strudel" in js and "Copy short link" in js and "Copy code" in js
+    assert '"/api/strudel/share"' in js  # the short share link (TAS-100)
     assert "Include the original audio, cut into bars" in js and "c.has_audio" in js
     html = (static / "index.html").read_text()
     assert html.index("/static/strudel.js") < html.index("/static/app/main.js")

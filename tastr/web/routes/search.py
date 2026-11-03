@@ -54,8 +54,9 @@ def router(ctx: AppContext) -> APIRouter:
 
     @api.get("/sqljs/{name}", include_in_schema=False)
     def sqljs(name: str):
-        """sql.js (SQLite as WebAssembly, MIT) for the browser's searches on a hosted server. The image puts it in
-        TASTR_SQLJS_DIR (Dockerfile); the URL carries its version, so it caches."""
+        """sql.js (SQLite as WebAssembly, MIT) for the browser's searches on a hosted server run
+        with `tastr serve`, from TASTR_SQLJS_DIR (the Worker serves it as a static file instead, worker/build.py); the
+        URL carries its version, so it caches."""
         folder = os.environ.get("TASTR_SQLJS_DIR")
         if name not in SQLJS_FILES or not folder or not (Path(folder) / name).is_file():
             raise HTTPException(404, "Not Found")

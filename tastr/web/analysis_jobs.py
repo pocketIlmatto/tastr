@@ -137,7 +137,7 @@ def new_id() -> str:
 
 
 def ref(job_id: str) -> str:
-    """The short id the admin log and the server log both show, to find one upload's lines in Fly's logs."""
+    """The short id the admin log and the server log both show, to find one upload's lines in the Worker's logs."""
     return job_id[:8]
 
 

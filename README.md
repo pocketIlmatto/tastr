@@ -79,7 +79,7 @@ Then open http://127.0.0.1:8000 and drop in your audio files. Run the tests with
 |---|---|
 | [features.md](docs/features.md) | everything a track card shows and what you can do with it |
 | [usage.md](docs/usage.md) | the `tastr` command, links, stems, the drum model, tests, cloud jobs |
-| [hosting.md](docs/hosting.md), [deploy.md](docs/deploy.md), [hosting-map.md](docs/hosting-map.md) | hosting for a few invited people (Cloudflare Access, Fly.io, Modal, R2) |
+| [hosting.md](docs/hosting.md), [deploy.md](docs/deploy.md), [hosting-map.md](docs/hosting-map.md) | hosting for a few invited people (Cloudflare Workers and Access, Modal, R2) |
 | [bench.md](docs/bench.md), [engine-report.md](docs/engine-report.md) | accuracy benchmarks and what they changed |
 | [audio-terms.md](docs/audio-terms.md) | audio analysis terms (STFT, chroma, HPSS, onsets...) explained, with diagrams |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md), [modules/](docs/modules/) | data flow, card fields, DB tables, code layout |

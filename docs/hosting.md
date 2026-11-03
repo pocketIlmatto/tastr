@@ -7,7 +7,7 @@ Cloudflare's signed token on every request, so a request that reaches the server
 Cloudflare gets nothing.
 
 This page covers what hosted mode changes and how to configure it. [deploy.md](deploy.md) sets it up on
-Fly.io, with analysis on Modal and the library backed up to R2. [hosting-map.md](hosting-map.md) shows how the
+a Cloudflare Worker, with analysis on Modal and audio in R2. [hosting-map.md](hosting-map.md) shows how the
 pieces fit together.
 
 ## What hosted mode changes
@@ -63,17 +63,17 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
 | `TASTR_CF_ACCOUNT_ID` | none | your Cloudflare account id (32 hex characters, from the dashboard URL); the Admin tab then links to Access's applications and its log of blocked requests (and, with `TASTR_WORKER_NAME`, to the Worker's logs). Not secret; `worker/wrangler.jsonc` sets it |
 | `TASTR_WORKER_NAME` | none | the Cloudflare Worker this server runs as (`worker/wrangler.jsonc` sets `tastr`): the Admin log's source and its link to the Worker's logs |
-| `TASTR_GITHUB_REPO` | none | `owner/name` of the repository whose GitHub Actions runs on main the Admin log shows (fly.toml and `worker/wrangler.jsonc` set it) |
-| `TASTR_GITHUB_WORKFLOWS` | none | which workflows' runs the Admin log shows, comma-separated names or file names (fly.toml: `tests,deploy`); none logs no runs |
+| `TASTR_GITHUB_REPO` | none | `owner/name` of the repository whose GitHub Actions runs on main the Admin log shows (`worker/wrangler.jsonc` sets it) |
+| `TASTR_GITHUB_WORKFLOWS` | none | which workflows' runs the Admin log shows, comma-separated names or file names (`worker/wrangler.jsonc`: `tests,deploy`); none logs no runs |
 | `TASTR_GITHUB_TOKEN` | none | a fine-grained token with read-only Actions access, needed while that repository is private, and on the Cloudflare Worker (GitHub's limit without one is per IP address, which Cloudflare shares) |
-| `TASTR_WATCH_MINUTES` | 15 | how often the server checks GitHub Actions and the R2 backup for the Admin log; `0` turns it off |
+| `TASTR_WATCH_MINUTES` | 15 | how often the server checks GitHub Actions for the Admin log; `0` turns it off |
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
 | `TASTR_AUDIO_BUCKET` | none | keep uploads and stems in this S3-compatible bucket (R2), with the disk as a cache; see [Audio in a bucket](#audio-in-a-bucket) |
 | `TASTR_AUDIO_ENDPOINT` | none | the bucket's S3 endpoint, for R2 `https://<account id>.r2.cloudflarestorage.com` |
 | `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | none | a token that can read and write that bucket only. Keep them secret |
 | `TASTR_AUDIO_REGION` | `auto` | the region to sign for; R2 takes `auto` |
-| `TASTR_DIRECT_UPLOAD` | off | `1` has the page upload each file straight to the audio bucket on a signed link instead of through the server; see [Audio in a bucket](#audio-in-a-bucket). Needs `TASTR_AUDIO_BUCKET` and a CORS rule that lets your hostname PUT ([deploy.md](deploy.md#2b-r2-bucket-for-audio-optional)) |
+| `TASTR_DIRECT_UPLOAD` | off | `1` has the page upload each file straight to the audio bucket on a signed link instead of through the server; see [Audio in a bucket](#audio-in-a-bucket). Needs `TASTR_AUDIO_BUCKET` and a CORS rule that lets your hostname PUT ([deploy.md](deploy.md#2-r2-bucket-for-audio)) |
 | `TASTR_BROWSER_ENGINE` | off | `1` has each visitor's browser make the whole card with the Rust engine's WebAssembly build; the server checks it and skips analysis ([ARCHITECTURE.md](ARCHITECTURE.md#browser-engine)). Needs the image's `TASTR_ENGINE_WASM` |
 | `TASTR_SQLJS_DIR` | none | where sql.js (`sql-wasm.js`, `sql-wasm.wasm`) is, for searches in the browser; the image sets `/app/sqljs`. Without it a hosted page says search couldn't start |
 
@@ -113,7 +113,7 @@ and visits (page loads), plus 30 days of daily counts, the limits, total storage
 the stem jobs and analyses running or waiting. Everyone else gets 404. `/api/config` says `"admin": true` for admins.
 
 It also returns `recent`, the last 20 lines of the activity log, `problems`, the last 20 that weren't OK,
-`log_links`, where to read the Fly and Modal logs, and `blocked_today`, how many requests
+`log_links`, where to read the Worker's and Modal's logs, and `blocked_today`, how many requests
 were refused today (UTC) for a missing or invalid Access token. The log (`events` table) records uploads,
 stem jobs started, re-analyses, first sign-ins, limits hit, failed analyses, deploys and restarts. A failure keeps only the file
 name and a short reason, never the error text, which can name server paths. Rows older than 90 days are
@@ -127,16 +127,14 @@ of each UTC day, every 6 hours and whenever the Admin tab opens; the day keeps i
 
 `GET /api/admin/events?type=&who=&source=&from=&to=&problems=&limit=` filters the activity log on the server:
 `type` is one of upload, analysis, stems, limit, error, signin, blocked, deploy, backup or admin; `who` an email
-or `-` for lines with no person; `source` one of app, modal, flyio, github, cloudflare or r2; `from` and `to`
+or `-` for lines with no person; `source` one of app, modal, github, cloudflare or r2 (or flyio, on lines from before the move off Fly); `from` and `to`
 UTC days, both included. Blocked requests come back as one Cloudflare line per day. Deploys are logged by the
-server when it starts on Fly.
+server when a new `TASTR_COMMIT` first starts.
 
 Every `TASTR_WATCH_MINUTES` the server also logs (tastr/web/watch.py): each GitHub Actions run that finished on
 main ("tests passed on main (3 min): ..."), linked to the run, for the workflows in `TASTR_GITHUB_WORKFLOWS`
-when `TASTR_GITHUB_REPO` is set; and each new
-Litestream snapshot in R2, when `LITESTREAM_BUCKET` is set. A failed check of the backup, or no snapshot for 30
-hours, logs one problem line a day. The first check logs only the last day of runs and the newest snapshot. A
-machine Fly stopped for being idle catches up when it wakes.
+when `TASTR_GITHUB_REPO` is set. The first check logs only the last day of runs. A server that was idle
+catches up when it wakes.
 
 `PUT /api/admin/limits/{email}` with `{"daily_tracks": 45, "daily_stems": null, "scope": "today"}` changes
 one person's daily caps (`null` = the server default; `scope` `today` ends at 00:00 UTC, `standing` lasts until
@@ -176,11 +174,10 @@ To find out what happened to an upload:
   it ran out of memory on Modal (ref 1a2b3c4d)". A restart that cut analyses off logs "The server restarted
   in the middle of an analysis" and "Cut off by the restart: <file>, while at step <step>"; a deploy logs
   "Deployed 49eeecf: <commit message>" with a link to its GitHub Actions run (logged when the new version first
-  starts, so after a deploy to a stopped machine, at its next wake-up). Each problem line links to the Fly and
-  Modal logs.
-- **Fly**: `fly logs -a <app>` streams the server's log live; failed analyses log
-  `analysis failed for <file> (ref <ref>): <error>` with the full error, so search for the ref. Older lines are in the Fly dashboard's
-  **Monitoring** page for the app. `fly status -a <app>` shows restarts.
+  starts). Each problem line links to the Worker's and Modal's logs.
+- **The Worker**: Cloudflare **Workers & Pages > tastr > Observability** keeps the server's log (on in
+  `worker/wrangler.jsonc`); failed analyses log `analysis failed for <file> (ref <ref>): <error>` with the full
+  error, so search for the ref. `npx wrangler tail tastr` in `worker/` streams it live.
 - **Modal**: `modal app logs tastr-web --env friends` streams the functions' logs, and the dashboard
   (modal.com > the `friends` environment > `tastr-web` > `analyze_stream`) lists each call with its
   duration, memory and how it ended (an out-of-memory or timeout stop is shown there).
@@ -204,8 +201,8 @@ With the audio bucket on, the bucket's copy goes too, and the age is counted fro
 ## Audio in a bucket
 
 With `TASTR_AUDIO_BUCKET` set (`tastr/blobs.py`, which talks to the bucket through its own small S3 client, `tastr/s3.py`), uploads and stems
-live in an S3-compatible bucket and the server's disk only caches them, so a lost volume loses no audio and
-the server could later run without one:
+live in an S3-compatible bucket and the server's disk only caches them. On the Cloudflare Worker, whose files
+live in memory, the bucket is required:
 
 - Each upload is copied to the bucket, under the same path it has under `TASTR_HOME` (`uploads/ab12cd34/song.mp3`),
   before it is analyzed. If the copy fails the upload is refused (503) and nothing is kept.
@@ -238,23 +235,25 @@ the server could later run without one:
 - The Files view reads sizes from the bucket's listing; single downloads redirect to a signed link that names the
   file, and zips stream each file from the bucket.
 
-Files uploaded before the bucket was turned on stay on the disk, and keep working from there, until
-`tastr bucket-backfill` copies them up (`fly ssh console -C "tastr bucket-backfill --dry-run"` first to see what it
-would move). It also moves older cards' inline waveform data to the bucket, so the database shrinks without
+On a server you run with `tastr serve`, files uploaded before the bucket was turned on stay on the disk, and keep
+working from there, until `tastr bucket-backfill` copies them up (`tastr bucket-backfill --dry-run` first to see
+what it would move). It also moves older cards' inline waveform data to the bucket, so the database shrinks without
 re-analyzing anything. It skips what the bucket already has, so it is safe to run again; the next sweep deletes
 the local copies.
 
 The bucket needs a CORS rule so pages can fetch from it (the app fetches audio to draw and play it, and strudel.cc
 follows the redirect): allow `GET` and `HEAD` from any origin (`*`), with the `Range` header. A signed link is
-what grants access, and it expires; the bucket stays private. [deploy.md](deploy.md#2b-r2-bucket-for-audio-optional)
+what grants access, and it expires; the bucket stays private. [deploy.md](deploy.md#2-r2-bucket-for-audio)
 has the steps.
 
 ## Moving your own library to a hosted server
 
-`tastr pack` and `tastr unpack` move a whole library with its audio and stems; [deploy.md](deploy.md#9-move-your-own-library-optional)
-has the steps. If only the database is on the server already, give its tracks with no owner to your Access
-email:
+`tastr pack` and `tastr unpack` move a whole library with its audio and stems onto a hosted server you run
+yourself with `tastr serve` (`tastr unpack` only goes into an empty library). If only the database is on the
+server already, give its tracks with no owner to your Access email:
 
 ```
 tastr set-owner you@example.com
 ```
+
+Both need a shell on the server, which the Cloudflare Worker doesn't have ([hosting-map.md](hosting-map.md)).

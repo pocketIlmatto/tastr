@@ -11,7 +11,7 @@
 - public/engine/tastr_engine.wasm: the Rust engine's WebAssembly build, for cards made in the browser
   (TASTR_BROWSER_ENGINE), when it has been built (`cargo build --release --lib --target wasm32-unknown-unknown`
   in engine-rs/; the deploy workflow does). src/tastr_build.py records its hash for `rust.wasm_id()`.
-  On Fly the server hands out these files itself (Dockerfile); here Static Assets do.
+  Static Assets serve them (`tastr serve` on your own machine hands them out itself).
 
     python worker/build.py
 """

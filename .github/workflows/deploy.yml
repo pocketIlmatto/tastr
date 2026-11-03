@@ -1,7 +1,7 @@
 name: deploy
 # Deploys the hosted Tastr (docs/hosting-map.md): the Modal functions (analysis and stems) first, then the web
 # server on the Cloudflare Worker (deploy-worker.yml), so both run the same engine. Needs the MODAL_TOKEN_ID,
-# MODAL_TOKEN_SECRET and CLOUDFLARE_API_TOKEN repository secrets. (Fly served the app until the switch, TAS-51.)
+# MODAL_TOKEN_SECRET and CLOUDFLARE_API_TOKEN repository secrets.
 #
 # Runs on its own after the tests workflow passes on a push to main, but only when something that ships changed
 # since the last successful deploy (the app, the engine, the Worker or these files; see the scope step). A merge
@@ -52,13 +52,12 @@ jobs:
           if [ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]; then
             echo "main has moved on; the run for its newer commit deploys."; echo "ship=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          # The newest run whose web server step actually ran (runs that skipped it also count as successful): the
-          # Worker's, or Fly's before the switch.
+          # The newest run whose Worker step actually ran (runs that skipped it also count as successful).
           last=""
           for run in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/deploy.yml/runs?branch=main&status=success&per_page=30" \
                          -q '.workflow_runs[] | "\(.id):\(.head_sha)"' || true); do
             if gh api "repos/$GITHUB_REPOSITORY/actions/runs/${run%%:*}/jobs" \
-                 -q '.jobs[].steps[] | select((.name == "Deploy the Worker" or .name == "Deploy the web server to Fly.io") and .conclusion == "success") | .name' \
+                 -q '.jobs[].steps[] | select(.name == "Deploy the Worker" and .conclusion == "success") | .name' \
                  | grep -q .; then last=${run#*:}; break; fi
           done
           if [ -z "$last" ] || ! git merge-base --is-ancestor "$last" HEAD 2>/dev/null; then

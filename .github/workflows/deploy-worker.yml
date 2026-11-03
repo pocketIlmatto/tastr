@@ -35,8 +35,8 @@ jobs:
         with:
           node-version: "22"
       - uses: astral-sh/setup-uv@v6
-      # The engine's WebAssembly build, for cards made in the browser (TASTR_BROWSER_ENGINE); the same Rust as the
-      # Dockerfile. build.py puts it in public/engine/.
+      # The engine's WebAssembly build, for cards made in the browser (TASTR_BROWSER_ENGINE); the same Rust as
+      # Modal's images. build.py puts it in public/engine/.
       - name: Build the engine for the browser
         working-directory: engine-rs
         run: |

@@ -1,4 +1,4 @@
-"""The library database on a Cloudflare Durable Object (TAS-84, option D of docs/fly-exit): a `sqlite3.Connection`
+"""The library database on a Cloudflare Durable Object (TAS-84): a `sqlite3.Connection`
 look-alike over the Durable Object's SQL storage, so db.py runs unchanged there.
 
 What it bridges (Durable Object SQL vs Python's sqlite3):

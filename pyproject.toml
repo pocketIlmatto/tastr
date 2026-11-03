@@ -10,7 +10,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 # The Rust engine (engine-rs/, built separately) makes the cards, so the base install has no DSP libraries: the
-# hosted web server's image (Dockerfile) is this plus `hosted` and `cloud`.
+# hosted server is this plus `hosted` and `cloud` (the Cloudflare Worker has its own list, worker/pyproject.toml).
 dependencies = [
     "numpy>=1.24",
     "soundfile>=0.12",

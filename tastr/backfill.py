@@ -48,7 +48,7 @@ def backfill(db_path=None, dry_run: bool = False, log_each=None) -> dict[str, in
         for k in ("views", "view_bytes", "failed"):
             out[k] += moved[k]
         if not dry_run and out["views"]:
-            conn.execute("VACUUM")  # give the freed pages back, so the database file (and Litestream) shrinks
+            conn.execute("VACUUM")  # give the freed pages back, so the database file shrinks
     return out
 
 

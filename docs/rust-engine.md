@@ -243,9 +243,9 @@ Two flags, both off by default:
   for a subset of stages (re-analysis of one part), with browser signals, with the drum model, and when the
   library can't decode the file (Opus). The Modal images build the library with Rust 1.97.0 in one step and
   drop the toolchain (`tastr/cloud/rust_image.py`); the server passes its `TASTR_ENGINE` to Modal with each job.
-- **`TASTR_BROWSER_ENGINE=1`** (Fly): the page runs the WebAssembly build on the upload and sends the card; the
-  server stores it after the checks in `browser_card.py` and skips Modal. The Docker image builds the wasm in a
-  Rust stage and serves it at `/engine/tastr_engine.wasm` (cached forever; the URL carries its hash).
+- **`TASTR_BROWSER_ENGINE=1`** (hosted): the page runs the WebAssembly build on the upload and sends the card; the
+  server stores it after the checks in `browser_card.py` and skips Modal. The deploy workflow builds the wasm and
+  the Worker serves it at `/engine/tastr_engine.wasm` (cached forever; the URL carries its hash).
 
 Benchmarks: `tastr bench <name> --engine rust` (locally or `--remote` on Modal) runs every stage in Rust,
 decoding the file itself; synthetic audio goes in as samples. The downbeat and Harmonix section benches work
@@ -271,7 +271,7 @@ P3 showed those stages give identical results on the same input.
 ## P5: Rust makes every card (2026-10-31)
 
 `analyze_file` now hands every analysis to the Rust engine; `TASTR_ENGINE` defaults to `rust`, on your own
-machine, the Fly server and Modal alike.
+machine, the hosted server and Modal alike.
 
 - **Formats Rust can't decode** (Opus): Python decodes the file (librosa, else ffmpeg) and Rust makes the card
   from those samples (`tastr_card_f32`). The card says `extras["decoded_by"] = "python"`.
@@ -290,7 +290,7 @@ machine, the Fly server and Modal alike.
   and `tests/test_rust_engine.py` checks that they agree.
 - **No DSP libraries in the base install** (TAS-47, part 3): scipy and librosa moved to the `engine` extra (the
   Python reference engine, the benchmarks, Opus decoding, and the audio the drum model and stems read), which
-  `dev`, `drums` and `stems` pull in. The Fly image (`.[hosted,cloud]`) drops them with numba and llvmlite,
+  `dev`, `drums` and `stems` pull in. The old Fly server image (`.[hosted,cloud]`) dropped them with numba and llvmlite,
   about 370 MB of installed packages; the Modal images keep them, pinned.
 - **Browser signals are gone** (`TASTR_BROWSER_SIGNALS`, `signals.js`, `browser_signals.py`): they fed HPSS into
   the Python engine; the browser card (`TASTR_BROWSER_ENGINE`) replaces them. The upload's form field for the

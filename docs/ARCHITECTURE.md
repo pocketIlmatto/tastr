@@ -157,7 +157,7 @@ tastr/web/                  FastAPI app and UI; hosted.py is the shared-server m
   routes/                   the API by area: tracks, media (audio, stems, drum model), edits, analyze, search, admin
 tastr/cloud/                Modal apps: benchmarks and stems (modal_app.py), a hosted server's analysis (modal_web.py)
 engine-rs/                  the Rust engine that makes every card, on the server and in the browser (docs/rust-engine.md)
-Dockerfile, fly.toml, deploy/   the hosted server's image, Fly.io config and Litestream backup (docs/deploy.md)
+worker/                     the hosted server: a Cloudflare Python Worker and its Durable Object (docs/deploy.md)
 ```
 
 The engine is kept self-contained so it can be split into its own library
@@ -165,4 +165,4 @@ later; `tests/test_engine.py` fails if it starts importing app code. Use it
 directly with `from tastr.engine import analyze_file`.
 
 See `docs/modules/` for per-module specs, and `docs/hosting-map.md` for how the
-hosted setup (Cloudflare, Fly.io, Modal, R2) fits together.
+hosted setup (Cloudflare Workers and Access, Modal, R2) fits together.

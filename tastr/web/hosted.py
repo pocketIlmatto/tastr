@@ -69,10 +69,8 @@ class Settings:
     admins: tuple[str, ...] = ()  # emails that may open the admin view
     audio_days: float = 30  # uploaded audio and stems are deleted after this; 0 keeps them
     link_secret: str = ""  # signs the /pub/ links; without it they stop working when the server restarts
-    # For the admin view's links to the logs and to tell a deploy from a restart. Fly sets FLY_APP_NAME and
-    # FLY_IMAGE_REF itself; TASTR_MODAL_WORKSPACE (your Modal workspace name) makes the Modal link go to the app.
-    fly_app: str = ""
-    fly_image: str = ""
+    # For the admin view's links to the logs. TASTR_MODAL_WORKSPACE (your Modal workspace name) makes the Modal
+    # link go to the app.
     worker_name: str = ""  # TASTR_WORKER_NAME: the Cloudflare Worker this runs as (worker/wrangler.jsonc sets it)
     modal_env: str = ""
     modal_workspace: str = ""
@@ -115,8 +113,6 @@ class Settings:
             admins=tuple(e.strip().lower() for e in env.get("TASTR_ADMIN_EMAILS", "").split(",") if e.strip()),
             audio_days=float(env.get("TASTR_AUDIO_DAYS", cls.audio_days)),
             link_secret=env.get("TASTR_LINK_SECRET", "").strip(),
-            fly_app=env.get("FLY_APP_NAME", "").strip(),
-            fly_image=env.get("FLY_IMAGE_REF", "").strip(),
             worker_name=env.get("TASTR_WORKER_NAME", "").strip(),
             modal_env=env.get("MODAL_ENVIRONMENT", "").strip(),
             modal_workspace=env.get("TASTR_MODAL_WORKSPACE", "").strip(),
@@ -162,10 +158,8 @@ class Settings:
         return {"apps": f"{base}/access/apps", "access_logs": f"{base}/logs/access"}
 
     def log_links(self, modal_app: str) -> dict[str, str]:
-        """Where an admin can dig into the logs: the Worker's (or Fly's) logs, and the Modal app."""
+        """Where an admin can dig into the logs: the Worker's logs, and the Modal app."""
         out = {}
-        if self.fly_app:
-            out["fly"] = f"https://fly.io/apps/{self.fly_app}/monitoring"
         if self.worker_name and re.fullmatch(r"[0-9a-f]{32}", self.cf_account_id):
             out["worker"] = (f"https://dash.cloudflare.com/{self.cf_account_id}/workers/services/view/"
                              f"{self.worker_name}/production/observability/events")

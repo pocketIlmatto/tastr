@@ -122,7 +122,7 @@ deploys when that run passed on a push (not a PR). So a merge that breaks the te
 
 - **What counts as a change that ships:** files under `tastr/`, `engine-rs/` or `worker/`, `pyproject.toml`,
   `deploy.yml` and `deploy-worker.yml`, compared with the commit of the last run whose web server step succeeded
-  ("Deploy the Worker", or Fly's step before the switch). A merge of only docs, tests, Markdown or other workflows is tested and not deployed.
+  ("Deploy the Worker"). A merge of only docs, tests, Markdown or other workflows is tested and not deployed.
   An allowlist rather than `paths-ignore`, because `workflow_run` has no path filter and the Worker and the Modal
   images are built from exactly these paths.
 - **Out-of-order runs:** if `main` moved on by the time the run starts, it skips; the newer commit's run deploys,

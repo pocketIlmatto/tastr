@@ -1,4 +1,4 @@
-"""Background work (tastr/runner.py): threads on a laptop and on Fly, the event loop on the Cloudflare Worker."""
+"""Background work (tastr/runner.py): threads on a laptop, the event loop on the Cloudflare Worker."""
 
 import asyncio
 import threading

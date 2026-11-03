@@ -162,8 +162,7 @@ _wasm_ids: dict[tuple[str, float], str] = {}
 
 
 def wasm_path() -> Path | None:
-    """The WebAssembly build the page loads: TASTR_ENGINE_WASM, else next to this file (the hosted image puts
-    it there), else engine-rs's build folder (`cargo build --release --lib --target wasm32-unknown-unknown`)."""
+    """The WebAssembly build the page loads: TASTR_ENGINE_WASM, else next to this file, else engine-rs's build folder (`cargo build --release --lib --target wasm32-unknown-unknown`)."""
     env = os.environ.get("TASTR_ENGINE_WASM")
     if env:
         return Path(env) if Path(env).is_file() else None

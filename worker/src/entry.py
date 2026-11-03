@@ -1,11 +1,11 @@
-"""Tastr on a Cloudflare Python Worker (TAS-84, option D of the Fly exit plan; see docs/hosting-map.md).
+"""Tastr on a Cloudflare Python Worker (TAS-84; see docs/hosting-map.md).
 
 Two parts:
 - `Default`, the Worker: /static/*, /sqljs/* (sql.js) and /engine/* (the engine's WebAssembly build) come from
   Workers Static Assets (the files `build.py` copies to public/);
   everything else goes to the one Durable Object.
 - `Library`, a SQLite-backed Durable Object: the library database lives in its SQL storage (tastr/do_sqlite.py)
-  and it runs the same FastAPI app as Fly does, one request at a time.
+  and it runs the FastAPI app (tastr/web/server.py), one request at a time.
 
 Background work runs on the event loop (tastr/runner.py `Loop`): jobs as asyncio tasks, the repeating work
 (expiry, the watch) from the Durable Object's alarm, which `arm()` sets after each request and each alarm.
@@ -18,7 +18,6 @@ import errno
 import os
 import sys
 import time
-from contextlib import closing
 from urllib.parse import urlparse
 
 os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: a cache, nothing kept
@@ -31,7 +30,7 @@ if ENGINE_WASM_ID:
 
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
-from tastr import blobs, db, http, library_move, runner  # noqa: E402
+from tastr import blobs, db, http, runner  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
 
@@ -179,8 +178,6 @@ def load_env(env) -> None:
 
 APP = None
 SETTINGS: Settings | None = None
-IMPORT_AT = 0.0  # when to look for the library from Fly next (tastr/library_move.py); inf once there's no need
-IMPORT_RETRY = 120  # seconds: the copy may reach the bucket after the Worker starts
 KEYS = AccessKeys()
 
 
@@ -199,23 +196,6 @@ class Library(DurableObject):
             APP.state.startup()
 
     async def fetch(self, request):
-        global IMPORT_AT
-        if time.time() >= IMPORT_AT:  # the library from Fly (tastr/library_move.py); here, where run_sync works
-            IMPORT_AT = float("inf")
-            try:
-                with closing(db.connect(DB_PATH)) as conn:
-                    counts = library_move.import_from_bucket(conn)
-                    if counts is not None:
-                        print(f"imported the library from {library_move.KEY}: {counts}")
-                    elif library_move.waiting(conn):  # no copy in the bucket yet: look again in a while
-                        IMPORT_AT = time.time() + IMPORT_RETRY
-                    elif library_move.tries(conn) >= library_move.MAX_TRIES and not db.get_meta(conn, library_move.DONE):
-                        print(f"not importing the library: {library_move.MAX_TRIES} tries were cut off")
-                    if moved := library_move.rehome(conn):  # the imported tracks' audio, by Fly's paths
-                        print(f"moved {moved} tracks' audio paths from {library_move.FLY_HOME} to this server's")
-            except Exception as e:  # noqa: BLE001 - the app still serves; it tries again in a while
-                print(f"couldn't import the library: {type(e).__name__}: {e}")
-                IMPORT_AT = time.time() + IMPORT_RETRY
         if SETTINGS.hosted:
             try:
                 await KEYS.refresh(SETTINGS.access_team_domain)

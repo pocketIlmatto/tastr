@@ -1,8 +1,9 @@
-# Tastr on Cloudflare Workers (not live yet, TAS-84)
+# Tastr on Cloudflare Workers (TAS-84)
 
 The hosted server as a Cloudflare Python Worker: the FastAPI app runs inside one SQLite-backed Durable Object
-that also holds the library database. Fly still serves the live site; see the "Coming next" section of
-[docs/hosting-map.md](../docs/hosting-map.md) for what works so far.
+that also holds the library database. It serves the live site since 2026-11-02 (TAS-51); see
+[docs/hosting-map.md](../docs/hosting-map.md) for how it fits with Cloudflare Access, R2 and Modal, and
+[docs/deploy.md](../docs/deploy.md) for setting one up.
 
 | File | What it is |
 | --- | --- |

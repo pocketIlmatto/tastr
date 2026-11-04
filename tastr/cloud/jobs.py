@@ -78,11 +78,24 @@ def run_bench(dataset: str, path: str | None, root: str | Path, stages: list[str
     return report
 
 
+def _use_engine(engine: str | None) -> str:
+    """Sets TASTR_ENGINE (which worker processes inherit) when `engine` is given; returns the engine in use."""
+    import os
+
+    from ..engine import rust
+
+    if engine:
+        os.environ["TASTR_ENGINE"] = engine
+    return rust.chosen()
+
+
 def run_key_profiles(dataset: str, path: str, root: str | Path, limit: int | None = None, jobs: int = 1,
-                     progress=None) -> dict:
-    """Key profiles and labels for `train_key` (`tastr key-profiles`), with `path` relative to `root`."""
+                     progress=None, engine: str | None = None) -> dict:
+    """Key profiles and labels for `train_key` (`tastr key-profiles`), with `path` relative to `root`.
+    `engine`: "rust" (the default) or "python", the reference engine, to compare against."""
     from ..engine.bench import key_features
 
+    used = _use_engine(engine)
     t0 = time.time()
     folder = Path(root) / path
     items = load_items(dataset, folder)
@@ -91,7 +104,7 @@ def run_key_profiles(dataset: str, path: str, root: str | Path, limit: int | Non
     load_seconds = round(time.time() - t0, 1)
     rows, failed = key_features.profiles(dataset, items, folder, jobs=jobs, limit=limit, progress=progress)
     return {"tracks": [dict(r, profile=[float(v) for v in r["profile"]]) for r in rows], "failed": failed,
-            "timing": {"load_seconds": load_seconds, "seconds": round(time.time() - t0 - load_seconds, 1), "jobs": jobs}}
+            "engine": used, "timing": {"load_seconds": load_seconds, "seconds": round(time.time() - t0 - load_seconds, 1), "jobs": jobs}}
 
 
 def run_vibe_bench(dataset: str, path: str, root: str | Path, limit: int | None = None, jobs: int = 1,
@@ -121,26 +134,33 @@ def spec_module(bench: str):
     return importlib.import_module(f"tastr.engine.bench.{SPEC_BENCHES[bench]}")
 
 
-def run_spec_bench(bench: str, dataset: str, folder: str | Path, limit: int | None = None) -> dict:
-    """A Beat This! spectrogram bench (`python -m tastr.engine.bench.<module>`) on `folder`; returns its report."""
+def run_spec_bench(bench: str, dataset: str, folder: str | Path, limit: int | None = None,
+                   engine: str | None = None) -> dict:
+    """A Beat This! spectrogram bench (`python -m tastr.engine.bench.<module>`) on `folder`; returns its report.
+    `engine`: "rust" (the default) or "python", the reference engine, to compare against."""
+    used = _use_engine(engine)
     mod = spec_module(bench)
     t0 = time.time()
     items = mod.load(folder, dataset, limit)
     load_seconds = round(time.time() - t0, 1)
     report = mod.run(items)
+    report["engine"] = used
     report["timing"] = {"load_seconds": load_seconds, "seconds": round(time.time() - t0 - load_seconds, 1)}
     return report
 
 
 def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = None, jobs: int = 1,
-                   drums_only: bool = False, kits: str = "all") -> dict:
-    """A drum lane suite (`python -m tastr.engine.bench.drums`) on `folder`; returns its report."""
+                   drums_only: bool = False, kits: str = "all", engine: str | None = None) -> dict:
+    """A drum lane suite (`python -m tastr.engine.bench.drums`) on `folder`; returns its report.
+    `engine`: "rust" (the default) or "python", the reference engine, to compare against."""
     from ..engine.bench import drums
 
+    used = _use_engine(engine)
     if suite not in drums.SUITES:
         raise ValueError(f"unknown drum suite {suite!r}; choose from {', '.join(drums.SUITES)}")
     t0 = time.time()
     report = drums.run(suite, folder, limit, jobs, drums_only, kits)
+    report["engine"] = used
     report["timing"] = {"seconds": round(time.time() - t0, 1), "jobs": jobs}
     return report
 

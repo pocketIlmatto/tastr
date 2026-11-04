@@ -33,7 +33,7 @@ jobs:
       ship: ${{ steps.scope.outputs.ship }}
       ref: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The commit the tests passed on, not whatever main is by the time this starts.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -71,7 +71,7 @@ jobs:
           else
             echo "Changed since ${last:0:7}:"; echo "$ship"; echo "ship=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.scope.outputs.ship != 'false'
         with:
           python-version: "3.12"

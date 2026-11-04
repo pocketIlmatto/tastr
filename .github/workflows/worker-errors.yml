@@ -33,7 +33,7 @@ jobs:
     outputs:
       issue: ${{ steps.issue.outputs.number }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: errors
         env:
           CF_LOGS_TOKEN: ${{ secrets.CF_LOGS_TOKEN }}
@@ -89,7 +89,7 @@ jobs:
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.auth.outputs.ok == 'true'
         with:
           fetch-depth: 0

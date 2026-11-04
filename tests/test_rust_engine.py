@@ -406,3 +406,101 @@ def test_card_meter_option_and_wasm_card(stereo_44k, tmp_path):
     assert (tmp_path / "n.json").read_bytes() == (tmp_path / "w.json").read_bytes()
     three = rust_card(wav, tmp_path / "3.json", "3")["core"]
     assert three["beats_per_bar"] == 3 and three["meter_set"]
+
+
+# --- The benchmark entry points (engine-rs/src/bench.rs) give what the Python reference engine gives ---------
+
+
+def _beat_this_spectrogram(seed: int, frames: int = 1500) -> tuple[np.ndarray, np.ndarray]:
+    """A 128-band log-mel spectrogram at 50 fps with a kick on every beat, a backbeat and eighth-note hats, and its
+    beat frames."""
+    rng = np.random.default_rng(seed)
+    log_mel = (rng.random((128, frames)) * 0.3).astype(np.float32)
+    per = 50 * 60 / rng.uniform(80, 175)
+    beats = np.round(np.arange(rng.uniform(0, per), frames - 2, per)).astype(int)
+    log_mel[:15, beats] += 3
+    log_mel[40:80, beats[1::2]] += 2
+    log_mel[100:, np.round(np.arange(per / 2, frames - 2, per / 2)).astype(int)] += 1
+    return log_mel, beats
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_bench_downbeat_meter_and_tempo_match_the_python_engine(seed):
+    from tastr.engine import rust
+    from tastr.engine.bench import tempo_spec
+    from tastr.engine.bench.downbeats import FPS, mel_freqs
+    from tastr.engine.stages.core import _downbeat_phase, _meter_score
+
+    log_mel, beats = _beat_this_spectrogram(seed)
+    log_mel[:20, beats[seed % 4::4]] += 2  # a heavier kick on one beat in four
+    freqs, shape = mel_freqs(), dict(bands=128, frames=log_mel.shape[1], beats=beats.size)
+    assert rust.bench("downbeat_phase", log_mel, beats, m=4, **shape)["phase"] == _downbeat_phase(beats, log_mel, freqs)
+    m = rust.bench("meter", log_mel, beats, **shape)
+    assert m["score"] == pytest.approx(_meter_score(beats, log_mel, freqs), abs=1e-5)
+    assert m["phase3"] == _downbeat_phase(beats, log_mel, freqs, 3)
+    onset, low_flux = tempo_spec.envelopes(log_mel)
+    rs = rust.bench("tempo", onset, low_flux, log_mel, n=onset.size, bands=128, frames=log_mel.shape[1], fps=FPS)
+    bpm, conf = tempo_spec._python_tempo(log_mel)
+    assert rs["bpm"] == pytest.approx(bpm, abs=1e-6) and rs["confidence"] == pytest.approx(conf, abs=1e-6)
+
+
+def test_bench_sections_match_the_python_engine():
+    from itertools import product
+
+    from tastr.engine.bench import sections_spec as ss
+
+    rng = np.random.default_rng(2)
+    info = {"sr": 22050.0, "hop": 1024, "fmin": 0.0, "fmax": 11025.0}
+    configs = list(product(ss.SECONDS, ss.PHRASES, ss.CAPS))
+    for frames in (3000, 5200):
+        part = np.searchsorted(np.sort(rng.choice(np.arange(100, frames - 100), 6, replace=False)), np.arange(frames))
+        mel = ((rng.random((8, 80)) * 10)[part].T + rng.random((80, frames))) ** 2
+        duration = frames * info["hop"] / info["sr"]
+        downbeats = list(np.arange(0.3, duration, 2.0))
+        sig = ss.signals_from_mel(mel, info)
+        bar_times, rs, current = ss._starts_rust(sig, downbeats, duration, info, configs)
+        py_bars, py, py_current = ss._starts_python(sig, downbeats, duration, info, configs)
+        assert np.allclose(bar_times, py_bars) and current == py_current and rs == py
+
+
+def test_bench_key_profile_matches_the_python_engine(monkeypatch):
+    from tastr.engine.bench import key_features
+    from tastr.engine.bench.synth import make_track
+
+    y, _ = make_track(bpm=118, tonic=9, mode="minor")
+    rs = key_features.features(y, matrices=True)
+    monkeypatch.setenv("TASTR_ENGINE", "python")
+    py = key_features.features(y, matrices=True)
+    assert np.allclose(rs["profile"], py["profile"], atol=1e-5) and rs["silent"] == py["silent"] is False
+    # within the resampler's small differences, as in test_chroma_and_bass_cqt_match_librosa
+    assert np.abs(rs["chroma"] - py["chroma"]).max() < 1e-3
+    assert np.abs(rs["bass"] - py["bass"]).max() < 2e-3 * py["bass"].max()
+    assert np.allclose(key_features.profile_of(rs["chroma"]), py["profile"], atol=1e-5)
+
+
+def test_bench_drum_lanes_match_the_python_engine(monkeypatch):
+    from tastr.engine.bench import drums as bench_drums
+    from tastr.engine.bench.synth import DRUM_PATTERNS, make_drum_track
+
+    for name in list(DRUM_PATTERNS)[:3]:
+        y, _ = make_drum_track(DRUM_PATTERNS[name], bpm=128)
+        monkeypatch.setenv("TASTR_ENGINE", "rust")
+        acts, hop = bench_drums._activations(y, name)
+        grid = bench_drums._synth_grid(y, 128)
+        monkeypatch.setenv("TASTR_ENGINE", "python")
+        py_acts, py_hop = bench_drums._activations(y, name)
+        py_grid = bench_drums._synth_grid(y, 128)
+        assert hop == py_hop and set(acts) == set(py_acts)
+        for lane, a in acts.items():
+            assert np.allclose(a, py_acts[lane], rtol=1e-5, atol=1e-4), (name, lane)
+        assert {k: (g["pattern"], g["detected"]) for k, g in grid.items()} == \
+            {k: (g["pattern"], g["detected"]) for k, g in py_grid.items()}, name
+
+
+def test_bench_reports_bad_calls():
+    from tastr.engine import rust
+
+    with pytest.raises(rust.RustEngineError, match="unknown op"):
+        rust.bench("nope")
+    with pytest.raises(rust.RustEngineError, match="cut short"):
+        rust.bench("downbeat_phase", np.zeros(10), bands=128, frames=100, beats=0)

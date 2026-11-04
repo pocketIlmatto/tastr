@@ -2,6 +2,7 @@
 //! card stage (core, sections, tags, suggestions, views), built both natively and for WebAssembly, so the two
 //! builds can be checked for identical output.
 
+pub mod bench;
 pub mod card;
 pub mod consts;
 pub mod cqt;
@@ -213,6 +214,27 @@ pub mod ffi {
         drop(bytes);
         match unsafe { read_hits(hits, hits_n) } {
             Ok(h) => finish(card_json(y, meter(beats_per_bar), h)),
+            Err(e) => {
+                let len = e.len() as i32;
+                CARD.with(|c| *c.borrow_mut() = e);
+                -(len + 1)
+            }
+        }
+    }
+
+    /// One benchmark step (bench.rs): `line_len` bytes of UTF-8 at `line` (`<op> key=value ...`) and `n` float64
+    /// values at `data`, both kept by the caller. Returns the answer's JSON length (read it from
+    /// `tastr_card_ptr`), or -(n + 1) with an n-byte error message there.
+    ///
+    /// # Safety
+    /// `line` must point at `line_len` readable bytes and `data` at `n` readable float64 values (or `n` be 0).
+    #[no_mangle]
+    pub unsafe extern "C" fn tastr_bench(line: *const u8, line_len: usize, data: *const f64, n: usize) -> i32 {
+        let line = unsafe { std::slice::from_raw_parts(line, line_len) };
+        let data: &[f64] = if n == 0 || data.is_null() { &[] } else { unsafe { std::slice::from_raw_parts(data, n) } };
+        let res = std::str::from_utf8(line).map_err(|e| e.to_string()).and_then(|l| bench::call(l, data));
+        match res {
+            Ok(j) => finish(j.to_string()),
             Err(e) => {
                 let len = e.len() as i32;
                 CARD.with(|c| *c.borrow_mut() = e);

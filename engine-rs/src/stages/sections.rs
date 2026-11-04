@@ -9,7 +9,7 @@ use crate::segment;
 
 const FALLBACK_BAR_SECONDS: f64 = 8.0;
 const PHRASE_BARS: usize = 2;
-const MIN_BARS_FOR_SPLIT: usize = 8;
+pub const MIN_BARS_FOR_SPLIT: usize = 8;
 const SECONDS_PER_SECTION: f64 = 18.0;
 const MIN_SECTIONS: f64 = 3.0;
 const MAX_SECTIONS: f64 = 12.0;
@@ -70,7 +70,7 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     Ok(())
 }
 
-fn bar_times(downbeats: &[f64], duration: f64) -> Vec<f64> {
+pub fn bar_times(downbeats: &[f64], duration: f64) -> Vec<f64> {
     let t: Vec<f64> = downbeats.iter().cloned().filter(|&d| (0.0..duration).contains(&d)).collect();
     if t.len() >= 2 {
         return t;
@@ -81,11 +81,11 @@ fn bar_times(downbeats: &[f64], duration: f64) -> Vec<f64> {
 }
 
 /// Frame range [a, b) per bar; the first bar is stretched back to frame 0 and the last to the end.
-fn bar_spans(sr: f64, bar_times: &[f64], duration: f64, n_frames: usize) -> Vec<(usize, usize)> {
+fn bar_spans(sr: f64, hop: usize, bar_times: &[f64], duration: f64, n_frames: usize) -> Vec<(usize, usize)> {
     let mut frames: Vec<usize> = bar_times
         .iter()
         .chain(std::iter::once(&duration))
-        .map(|&t| clip(round_half_even(t * sr / HOP as f64), 0.0, n_frames as f64) as usize)
+        .map(|&t| clip(round_half_even(t * sr / hop as f64), 0.0, n_frames as f64) as usize)
         .collect();
     frames[0] = 0;
     let last = frames.len() - 1;
@@ -124,7 +124,7 @@ fn bar_energy(ctx: &Ctx, card: &Card, bar_times: &[f64], duration: f64) -> Vec<f
     }
     let db = amplitude_db(&ctx.rms);
     let onset = &ctx.onset;
-    let raw: Vec<f64> = bar_spans(ctx.sr, bar_times, duration, db.len())
+    let raw: Vec<f64> = bar_spans(ctx.sr, HOP, bar_times, duration, db.len())
         .into_iter()
         .map(|(a, b)| {
             let d = np::mean_f32(&db[a..b.min(db.len())]);
@@ -135,14 +135,27 @@ fn bar_energy(ctx: &Ctx, card: &Card, bar_times: &[f64], duration: f64) -> Vec<f
     scale01(&raw)
 }
 
-/// Z-scored per-bar features (chroma 12 + MFCC 2-13 + loudness), features x bars, in float32.
 fn bar_vectors(ctx: &Ctx, bar_times: &[f64], duration: f64) -> Matrix {
-    let db = amplitude_db(&ctx.rms);
-    let n = ctx.chroma.cols.min(ctx.mfcc.cols).min(db.len());
-    let mut rows: Vec<&[f32]> = (0..12).map(|r| &ctx.chroma.row(r)[..n]).collect();
-    rows.extend((1..ctx.mfcc.rows).map(|r| &ctx.mfcc.row(r)[..n]));
+    bar_features(&ctx.chroma, &ctx.mfcc, &ctx.rms, ctx.sr, HOP, bar_times, duration)
+}
+
+/// Z-scored per-bar features (chroma 12 + MFCC 2-13 + loudness), features x bars, in float32, from per-frame
+/// chroma, MFCC and RMS on a grid of `hop` samples at `sr`.
+pub fn bar_features(
+    chroma: &Matrix,
+    mfcc: &Matrix,
+    rms: &[f32],
+    sr: f64,
+    hop: usize,
+    bar_times: &[f64],
+    duration: f64,
+) -> Matrix {
+    let db = amplitude_db(rms);
+    let n = chroma.cols.min(mfcc.cols).min(db.len());
+    let mut rows: Vec<&[f32]> = (0..12).map(|r| &chroma.row(r)[..n]).collect();
+    rows.extend((1..mfcc.rows).map(|r| &mfcc.row(r)[..n]));
     rows.push(&db[..n]);
-    let spans = bar_spans(ctx.sr, bar_times, duration, n);
+    let spans = bar_spans(sr, hop, bar_times, duration, n);
     let nb = spans.len();
     let mut data = Vec::with_capacity(rows.len() * nb);
     for row in &rows {
@@ -161,9 +174,19 @@ fn bar_vectors(ctx: &Ctx, bar_times: &[f64], duration: f64) -> Matrix {
     Matrix { rows: rows.len(), cols: nb, data }
 }
 
-fn target(duration: f64, n_bars: usize) -> usize {
-    let k = clip(round_half_even(duration / SECONDS_PER_SECTION), MIN_SECTIONS, MAX_SECTIONS) as usize;
-    k.min(2.max(n_bars / PHRASE_BARS))
+/// How the clustering is asked: seconds per section, phrase length in bars, and the cap on the section count.
+#[derive(Clone, Copy)]
+pub struct Settings {
+    pub seconds: f64,
+    pub phrase: usize,
+    pub cap: f64,
+}
+
+pub const SETTINGS: Settings = Settings { seconds: SECONDS_PER_SECTION, phrase: PHRASE_BARS, cap: MAX_SECTIONS };
+
+fn target(duration: f64, n_bars: usize, s: Settings) -> usize {
+    let k = clip(round_half_even(duration / s.seconds), MIN_SECTIONS, s.cap) as usize;
+    k.min(2.max(n_bars / s.phrase))
 }
 
 fn boundaries(z: &Matrix, k: usize) -> Vec<usize> {
@@ -176,13 +199,18 @@ fn boundaries(z: &Matrix, k: usize) -> Vec<usize> {
 }
 
 fn segment_bars(z: &Matrix, duration: f64, n_bars: usize) -> Vec<usize> {
-    let target = target(duration, n_bars);
-    let mut best = snap(&boundaries(z, target), n_bars);
+    segment_with(z, duration, n_bars, SETTINGS)
+}
+
+/// _segment: snapped section starts (bar indices, 0 first) for these settings.
+pub fn segment_with(z: &Matrix, duration: f64, n_bars: usize, s: Settings) -> Vec<usize> {
+    let target = target(duration, n_bars, s);
+    let mut best = snap(&boundaries(z, target), n_bars, s.phrase);
     for extra in 1..4 {
         if best.len() >= target || target + extra > n_bars {
             break;
         }
-        let cand = snap(&boundaries(z, target + extra), n_bars);
+        let cand = snap(&boundaries(z, target + extra), n_bars, s.phrase);
         if cand.len() > best.len() {
             best = cand;
         }
@@ -190,19 +218,19 @@ fn segment_bars(z: &Matrix, duration: f64, n_bars: usize) -> Vec<usize> {
     best
 }
 
-fn snap(starts: &[usize], n_bars: usize) -> Vec<usize> {
-    let p = PHRASE_BARS as f64;
+fn snap(starts: &[usize], n_bars: usize, phrase: usize) -> Vec<usize> {
+    let p = phrase as f64;
     let mut snapped: Vec<usize> = starts[1..].iter().map(|&s| (round_half_even(s as f64 / p) * p) as usize).collect();
     snapped.push(0);
     snapped.sort_unstable();
     snapped.dedup();
     let mut merged = vec![0usize];
     for &s in &snapped[1..] {
-        if s < n_bars && s - merged[merged.len() - 1] >= PHRASE_BARS {
+        if s < n_bars && s - merged[merged.len() - 1] >= phrase {
             merged.push(s);
         }
     }
-    if n_bars - merged[merged.len() - 1] < PHRASE_BARS && merged.len() > 1 {
+    if n_bars - merged[merged.len() - 1] < phrase && merged.len() > 1 {
         merged.pop();
     }
     merged

@@ -24,7 +24,7 @@ from .. import blobs, db
 from ..engine import rust
 from . import background
 from .context import STATIC_DIR, AppContext, _failure_reason, _hosted_error, log  # noqa: F401 - tests import these
-from .hosted import HEALTH_PATH, PUBLIC_PREFIX, TOKEN_HEADER, Settings, today
+from .hosted import HEALTH_PATH, PUBLIC_PREFIX, TOKEN_HEADER, VIEW_AS_COOKIE, VIEW_AS_PATH, VIEW_AS_READS, Settings, today
 from .routes import admin, analyze, edits, files, lists, media, search, strudel, tracks
 
 # Every route about one track; on a hosted server only its owner gets past the login middleware.
@@ -165,6 +165,13 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                 if ctx.snapshot_day != today():
                     ctx.snapshot_day = today()
                     await run_in_threadpool(ctx.snapshot_storage)
+                viewed = _view_as(request, user)
+                if viewed:
+                    # An admin looking at the app as someone else: everything below runs as them, read-only.
+                    if request.method not in ("GET", "HEAD", "OPTIONS") and request.url.path not in VIEW_AS_READS:
+                        return JSONResponse({"detail": f"Read-only while viewing as {viewed}. Exit to make changes."},
+                                            status_code=403, headers=ctx.extra_headers)
+                    request.state.real_user, request.state.user, user = user, viewed, viewed
                 m = TRACK_PATH.match(request.url.path)
                 if m and not await run_in_threadpool(ctx.owns, user, int(m[1])):
                     # 404, not 403: someone else's track looks the same as one that doesn't exist.
@@ -172,6 +179,14 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             response = await call_next(request)
             response.headers.update(ctx.extra_headers)
             return response
+
+    def _view_as(request, user: str) -> str | None:
+        """Whose view an admin asked to see (the VIEW_AS_COOKIE), or None. Ignored for everyone else, and at
+        VIEW_AS_PATH itself so an admin can always stop."""
+        target = (request.cookies.get(VIEW_AS_COOKIE) or "").strip().lower()
+        if not target or target == user or user not in settings.admins or request.url.path == VIEW_AS_PATH:
+            return None
+        return target
 
     @app.get("/api/config")
     def config(request: Request):
@@ -192,6 +207,9 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
                                   "daily_asks": ctx.cap(c, user, "asks")}
         if admin:
             out["cf_links"] = settings.cf_links()  # {} without TASTR_CF_ACCOUNT_ID
+        by = getattr(request.state, "real_user", None)
+        if by:  # an admin viewing as `user`; the page shows a banner with a way back
+            out["viewing_as"] = {"email": user, "by": by, "read_only": True}
         return out
 
     def browser_engine_cfg() -> dict | None:

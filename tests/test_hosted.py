@@ -1025,3 +1025,48 @@ def test_admin_rekordbox_compare_reads_the_export_from_the_bucket(db_path, home,
     assert c.get("/api/admin/rekordbox-compare?key=uploads/x.xml", headers=GOOD).status_code == 400
     store["rekordbox/bad.xml"] = b"<not xml"
     assert c.get("/api/admin/rekordbox-compare?key=rekordbox/bad.xml", headers=GOOD).status_code == 400
+
+
+def test_admin_views_the_app_as_someone_else_read_only(db_path, home):
+    mine = save(db_path, "friend@example.com")
+    theirs = save(db_path, "other@example.com", sha="def")
+    admin = make_client(db_path, admins=("friend@example.com",))
+    # only someone who has used the server, and not yourself
+    assert admin.post("/api/admin/view-as", json={"email": "nobody@example.com"}, headers=GOOD).status_code == 404
+    assert admin.post("/api/admin/view-as", json={"email": "friend@example.com"}, headers=GOOD).status_code == 400
+    r = admin.post("/api/admin/view-as", json={"email": "Other@example.com"}, headers=GOOD)
+    assert r.status_code == 200 and 'tastr_view_as="other@example.com"' in r.headers["set-cookie"]
+    assert "HttpOnly" in r.headers["set-cookie"] and "Secure" in r.headers["set-cookie"]
+    admin.cookies.set("tastr_view_as", "other@example.com")  # TestClient's http:// won't resend a Secure cookie
+    cfg = admin.get("/api/config", headers=GOOD).json()
+    assert cfg["user"] == "other@example.com" and cfg["admin"] is False
+    assert cfg["viewing_as"] == {"email": "other@example.com", "by": "friend@example.com", "read_only": True}
+    assert [t["id"] for t in admin.get("/api/tracks", headers=GOOD).json()] == [theirs]
+    assert admin.get(f"/api/tracks/{mine}", headers=GOOD).status_code == 404
+    assert admin.get("/api/admin/usage", headers=GOOD).status_code == 404  # they aren't an admin
+    # nothing changes in their name
+    r = admin.delete(f"/api/tracks/{theirs}", headers=GOOD)
+    assert r.status_code == 403 and "Read-only while viewing as other@example.com" in r.json()["detail"]
+    assert admin.put(f"/api/tracks/{theirs}/edits", json={}, headers=GOOD).status_code == 403
+    assert admin.post("/api/tracks/known", json={"items": []}, headers=GOOD).status_code != 403  # reads still work
+    # switching to someone else and stopping both work while viewing
+    assert admin.post("/api/admin/view-as", json={"email": "other@example.com"}, headers=GOOD).status_code == 200
+    r = admin.delete("/api/admin/view-as", headers=GOOD)
+    assert r.status_code == 200 and 'tastr_view_as=""' in r.headers["set-cookie"]
+    admin.cookies.delete("tastr_view_as")
+    assert admin.get("/api/config", headers=GOOD).json()["user"] == "friend@example.com"
+    conn = db.connect(db_path)
+    assert db.track_owner(conn, theirs) == (True, "other@example.com")
+    assert any("Viewed the app as other" in e["detail"] for e in db.recent_events(conn))
+    conn.close()
+
+
+def test_view_as_cookie_is_ignored_for_non_admins(db_path, home):
+    save(db_path, "friend@example.com")
+    theirs = save(db_path, "other@example.com", sha="def")
+    c = make_client(db_path)
+    c.cookies.set("tastr_view_as", "other@example.com")
+    cfg = c.get("/api/config", headers=GOOD).json()
+    assert cfg["user"] == "friend@example.com" and "viewing_as" not in cfg
+    assert c.get(f"/api/tracks/{theirs}", headers=GOOD).status_code == 404
+    assert c.post("/api/admin/view-as", json={"email": "other@example.com"}, headers=GOOD).status_code == 404

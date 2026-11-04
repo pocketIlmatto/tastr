@@ -154,6 +154,18 @@ storage, analyses running and an estimated 30-day Modal cost, a per-person chart
 the people table with today's quotas, the activity log, the limits and the blocked count. Nobody else
 gets the tab, and on your own machine there is none.
 
+### View as someone else
+
+An admin can see the app exactly as another person sees it: their library, limits and screens.
+`POST /api/admin/view-as {"email": ...}` (someone who has used the server, not yourself) sets an
+HttpOnly `tastr_view_as` cookie for 2 hours; while it's set, every request from that admin runs as
+that person, so `/api/config` reports their email, their limits and `"admin": false`, plus
+`"viewing_as": {"email", "by", "read_only": true}` for the page's banner. It is read-only: anything
+but a GET (and the read-only POSTs `/api/query`, `/api/files/zip`, `/api/tracks/known`) answers 403
+"Read-only while viewing as …". `DELETE /api/admin/view-as` stops. The cookie is ignored for anyone
+who isn't in `TASTR_ADMIN_EMAILS`, visits still count for the admin, and each start is an admin line
+in the log.
+
 ## When an upload fails
 
 The page checks a file's size and length against the limits before it uploads it, and the server checks

@@ -299,6 +299,7 @@ on Modal) or `TASTR_HOME` (the Worker's is `/tmp/tastr`, in memory).
 | Login method | **Zero Trust > Settings > Authentication** (One-time PIN) |
 | AUD tag | The Tastr Access application's **Overview** |
 | `/pub` bypass | A second Access application, same hostname, path `pub`, Bypass policy |
+| Health check's service token | **Zero Trust > Access > Service credentials > Service Tokens**; the Tastr application has a Service Auth policy for it. GitHub secrets `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` (`.github/workflows/health.yml`, docs/ci.md) |
 | Audio bucket, its CORS rule and token | Cloudflare **R2 Object Storage** > `tastr-audio` > **Settings** > CORS Policy; **Manage API tokens** |
 | Workers plan | **Workers & Pages > Plans**: Workers Paid ($5 a month), since the bundle (about 7.7 MiB gzipped) is over the Free plan's 3 MiB |
 | Modal usage and spend cap | Modal dashboard, environment `friends`; **Settings > Usage** |

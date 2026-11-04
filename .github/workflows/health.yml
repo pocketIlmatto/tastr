@@ -1,0 +1,69 @@
+name: health
+# Checks every hour that the live app answers (docs/ci.md#live-health-check). It asks
+# https://tastr.pocketknows.com/api/health through Cloudflare Access with a service token, three tries a minute
+# apart. When it fails, it opens a `site-down` issue (or adds to the open one); when the site answers again, it
+# says so on that issue and closes it. No Claude: an outage needs a person, and worker-errors.yml already
+# investigates failing requests.
+# Needs repository secrets CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET: an Access service token that the
+# Tastr Access application lets in with a Service Auth policy. Without them the run only says so.
+on:
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: health
+  cancel-in-progress: false
+permissions: {}
+env:
+  URL: https://tastr.pocketknows.com/api/health
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - id: probe
+        env:
+          ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          if [ -z "$ID" ] || [ -z "$SECRET" ]; then
+            echo "The secrets CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET aren't set (docs/ci.md#live-health-check)." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "state=unset" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          for try in 1 2 3; do
+            code=$(curl -sS -o body.txt -w '%{http_code}' --max-time 30 \
+              -H "CF-Access-Client-Id: $ID" -H "CF-Access-Client-Secret: $SECRET" "$URL" 2>err.txt) || code="error: $(head -c 200 err.txt)"
+            if [ "$code" = 200 ] && grep -q '"ok": *true' body.txt; then
+              echo "Try $try: up." | tee -a "$GITHUB_STEP_SUMMARY"; echo "state=up" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            echo "Try $try: HTTP $code, $(head -c 200 body.txt | tr -d '\n')" | tee -a "$GITHUB_STEP_SUMMARY"
+            [ "$try" = 3 ] || sleep 60
+          done
+          { echo "state=down"; echo "code=$code"; } >> "$GITHUB_OUTPUT"
+      - if: steps.probe.outputs.state == 'down' || steps.probe.outputs.state == 'up'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ steps.probe.outputs.state }}
+          CODE: ${{ steps.probe.outputs.code }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --label site-down --state open --json number --jq '.[0].number // empty')
+          now=$(date -u +'%Y-%m-%d %H:%M UTC')
+          if [ "$STATE" = up ]; then
+            [ -z "$open" ] && exit 0
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Up again at $now ($RUN_URL)."
+            gh issue close "$open" --repo "$GITHUB_REPOSITORY"
+            exit 0
+          fi
+          body="The live app didn't answer at $now: $URL gave HTTP $CODE three times, a minute apart ($RUN_URL).
+          A 302 or 403 usually means Cloudflare Access refused the service token (expired, or not in the app's Service Auth policy); a 5xx means the Worker failed (see the worker-errors issues and the Worker's logs)."
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --repo "$GITHUB_REPOSITORY" --body "Still down: HTTP $CODE at $now ($RUN_URL)."
+          else
+            gh label create site-down --repo "$GITHUB_REPOSITORY" --color B60205 --description "The live app isn't answering (health.yml)" --force
+            gh issue create --repo "$GITHUB_REPOSITORY" --label site-down --assignee "$GITHUB_REPOSITORY_OWNER" \
+              --title "The live app is down (HTTP $CODE)" --body "$body"
+          fi
+          exit 1  # a red run, so GitHub's failed-run email reaches the owner too

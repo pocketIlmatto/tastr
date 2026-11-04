@@ -142,6 +142,52 @@ is public, so the report masks emails, upload names and link tokens.
 - **Change the limit:** `FAILED_LIMIT` and `WINDOW_MIN` in `.github/scripts/worker_errors.py`; add known noise to
   `NOISE` there.
 
+## Live health check
+
+`.github/workflows/health.yml` asks the live app's `/api/health` every hour, at 41 past, through Cloudflare Access
+with a service token. It tries three times, a minute apart. When all three fail it opens a `site-down` issue
+assigned to the owner (or adds to the open one) and the run goes red, so GitHub's failed-run email arrives too.
+When the site answers again it comments and closes the issue. No Claude runs: an outage needs a person, and
+`worker-errors` already investigates failing requests.
+
+- **Secrets:** `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`. Make a service token in Cloudflare
+  **Zero Trust > Access > Service credentials > Service Tokens** (name it `github-health`, pick a long duration),
+  then open the Tastr application in **Access > Applications**, add a policy with action **Service Auth** that
+  includes that service token, and save. The token carries no email, so it reaches only `/api/health`; every other
+  page still answers 401. Without the secrets, the run only says so.
+- **Try it:** Actions > health > Run workflow.
+- **Cost:** a few seconds an hour, free on a public repository.
+
+## Claude on issues and PRs
+
+`.github/workflows/claude.yml` runs Claude Code when the owner writes `@claude` in an issue, an issue or PR
+comment, a review comment or a review. Comments from anyone else are ignored, so strangers can't start it on
+this public repo. Claude works on a branch and opens or updates a pull request; it doesn't merge, deploy or change
+settings. Be careful with `@claude` on someone else's pull request: Claude then reads and runs their code.
+
+- **Secret:** the same Claude secret as slow tests.
+- **Cost:** up to 45 minutes and 60 turns per mention, on the owner's Claude plan.
+
+## Dependency updates
+
+`.github/dependabot.yml` asks for updates once a month, in one grouped pull request per ecosystem: Python
+(`pyproject.toml`), Rust (`engine-rs/`), the Worker's npm packages (`worker/`), the Strudel test packages and the
+GitHub Actions. Python requirements that are lower bounds are left alone unless a newer release falls outside
+them. `sql.js` is skipped, because `tastr/web/routes/search.py` and the Dockerfile name its version; bump those
+together by hand.
+
+When an update fails `tests`, `.github/workflows/dependabot-fix.yml` (which runs from main, after the failed run)
+starts Claude Code on the same branch. Claude adapts the code to the new version, runs the checks, pushes one
+commit and explains it on the pull request. If the new version looks broken, it comments instead of forcing a fix.
+It never skips tests or pins a dependency back. When the tests still fail after Claude's commit, it doesn't try
+again; it says so on the pull request.
+
+- **Secret:** the same Claude secret as slow tests. If the run says the secret isn't available, add
+  `CLAUDE_CODE_OAUTH_TOKEN` under **Settings > Secrets and variables > Dependabot** as well.
+- **Cost:** at most five update PRs a month, each with a normal `tests` run (free on a public repository); Claude
+  runs only on a failure, for up to 45 minutes and 60 turns.
+- **Skip a package:** add an `ignore` entry under its ecosystem in `.github/dependabot.yml`.
+
 ## Deploy workflow
 
 `.github/workflows/deploy.yml` ships the hosted app (Modal, then the Cloudflare Worker through `deploy-worker.yml`; [deploy.md](deploy.md#updating)). It

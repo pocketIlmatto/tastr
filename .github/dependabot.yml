@@ -1,0 +1,40 @@
+# Monthly dependency updates (docs/ci.md#dependency-updates). One grouped pull request per ecosystem, so a month
+# brings at most five. When an update's tests fail, dependabot-fix.yml has Claude fix it on the same branch.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule: {interval: monthly}
+    # Most requirements are lower bounds (`numpy>=1.24`) that pip already resolves to the newest release; only
+    # touch them when a newer release falls outside them. Exact pins (ruff) get bumped.
+    versioning-strategy: increase-if-necessary
+    groups:
+      python: {patterns: ["*"]}
+    open-pull-requests-limit: 2
+  - package-ecosystem: cargo
+    directory: /engine-rs
+    schedule: {interval: monthly}
+    groups:
+      rust: {patterns: ["*"]}
+    open-pull-requests-limit: 2
+  - package-ecosystem: npm
+    directory: /worker
+    schedule: {interval: monthly}
+    ignore:
+      # tastr/web/routes/search.py (SQLJS_VERSION) and the Dockerfile name this version; bump them together by hand.
+      - dependency-name: sql.js
+    groups:
+      worker: {patterns: ["*"]}
+    open-pull-requests-limit: 2
+  - package-ecosystem: npm
+    directory: /tests/strudel-runtime
+    schedule: {interval: monthly}
+    groups:
+      strudel-tests: {patterns: ["*"]}
+    open-pull-requests-limit: 2
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: monthly}
+    groups:
+      actions: {patterns: ["*"]}
+    open-pull-requests-limit: 2

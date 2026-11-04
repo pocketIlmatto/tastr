@@ -1070,3 +1070,55 @@ def test_view_as_cookie_is_ignored_for_non_admins(db_path, home):
     assert cfg["user"] == "friend@example.com" and "viewing_as" not in cfg
     assert c.get(f"/api/tracks/{theirs}", headers=GOOD).status_code == 404
     assert c.post("/api/admin/view-as", json={"email": "other@example.com"}, headers=GOOD).status_code == 404
+
+
+def test_admin_rekordbox_upload_previews_then_load_saves(db_path, home, monkeypatch):
+    """Admin › Rekordbox export (sandbox v203): upload stores the XML and previews; only load writes listings."""
+    from tastr import blobs, s3
+
+    mine = save(db_path, "friend@example.com", path="/up/ab/Night Shift.mp3")
+    conn = db.connect(db_path)
+    conn.execute("UPDATE tracks SET bpm = 120, key_tonic = 9, key_mode = 'minor', key_name = 'A minor'")
+    conn.commit()
+    conn.close()
+    xml = (b'<DJ_PLAYLISTS><COLLECTION><TRACK Name="Night Shift" AverageBpm="60.00" Tonality="Am" '
+           b'Location="file://localhost/Users/pam/Music/Night%20Shift.mp3"/>'
+           b'<TRACK Name="Elsewhere" AverageBpm="128.00" Tonality="Cm" Location="file://localhost/m/x.mp3"/>'
+           b'</COLLECTION></DJ_PLAYLISTS>')
+    store: dict[str, bytes] = {}
+
+    class Bucket:
+        def get(self, key):
+            if key not in store:
+                raise s3.S3Error(404, "NoSuchKey", key)
+            return type("R", (), {"read": lambda self: store[key]})()
+
+        def put(self, key, body, content_type, content_encoding=None):
+            store[key] = body
+
+        def list(self, prefix):
+            return iter(())
+
+    monkeypatch.setattr(blobs, "enabled", lambda: True)
+    monkeypatch.setattr(blobs, "client", lambda: Bucket())
+    up = "/api/admin/rekordbox/upload?name=collection.xml"
+    assert make_client(db_path).post(up, content=xml, headers=GOOD).status_code == 404  # admins only
+    c = make_client(db_path, admins=("friend@example.com",))
+    assert c.get("/api/admin/rekordbox/status", headers=GOOD).json()["tracks"] == 0
+    assert c.post("/api/admin/rekordbox/load", headers=GOOD).status_code == 404  # nothing uploaded yet
+    bad = c.post(up, content=b"<html>not it</html>", headers=GOOD)
+    assert bad.status_code == 400 and "isn't a Rekordbox collection export" in bad.json()["detail"]
+    big = c.post(up, content=b"x", headers={**GOOD, "content-length": str(51 * 1024 * 1024)})
+    assert big.status_code == 413
+    rep = c.post(up, content=xml, headers=GOOD).json()
+    assert (rep["rekordbox_tracks"], rep["matched"], rep["disagree"], rep["file"]) == (2, 1, 1, "collection.xml")
+    assert rep["rows"][0]["track_id"] == mine and rep["status"]["tracks"] == 0
+    assert store["rekordbox/collection.xml"] == xml
+    assert db.get_lookups(db.connect(db_path), mine) == []  # the preview saves nothing
+    out = c.post("/api/admin/rekordbox/load?name=collection.xml", headers=GOOD).json()
+    assert out == {"saved": 1, "cleared": 0, "disagree": 1}
+    rb = next(x for x in db.get_lookups(db.connect(db_path), mine) if x["provider"] == "rekordbox")
+    assert rb["bpm"] == 60.0
+    st = c.get("/api/admin/rekordbox/status", headers=GOOD).json()
+    assert st["tracks"] == 1 and st["file"] == "collection.xml" and st["loaded_at"]
+    assert c.post("/api/admin/rekordbox/load?name=collection.xml", headers=GOOD).json()["cleared"] == 1  # replaces

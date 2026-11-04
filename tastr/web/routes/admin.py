@@ -22,6 +22,8 @@ from ..hosted import VIEW_AS_COOKIE, VIEW_AS_HOURS, VIEW_AS_PATH, stored_bytes, 
 EMAIL = re.compile(r"^[^@\s/]{1,64}@[^@\s/]{1,190}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 REKORDBOX_KEY = "rekordbox/collection.xml"  # where /api/admin/rekordbox-compare looks in the audio bucket by default
+REKORDBOX_MAX_MB = 50  # an export is about 1 KB a track; the XML is parsed in memory, so keep well under the Worker's limits
+REKORDBOX_LOADED = "Loaded Rekordbox values onto "  # the admin event a load logs; the panel's status line reads it back
 USAGE_RANGES = {"1": 1, "7": 7, "30": 30, "all": 365}  # the admin chart's ranges in days; "all" stops at a year
 
 
@@ -276,6 +278,74 @@ def router(ctx: AppContext) -> APIRouter:
             return PlainTextResponse(text)
         rep["disagreements"] = rep["disagreements"][:show]
         return rep
+
+    def _rekordbox_status(c: sqlite3.Connection, admin: str) -> dict[str, Any]:
+        """The last load from the Admin panel, and how many of your tracks have a Rekordbox listing now."""
+        row = c.execute("SELECT at, detail FROM events WHERE user = ? AND kind = 'admin' AND detail LIKE ? "
+                        "ORDER BY at DESC, id DESC LIMIT 1", (admin, REKORDBOX_LOADED + "%")).fetchone()
+        n = c.execute("SELECT count(*) FROM lookups l JOIN tracks t ON t.id = l.track_id "
+                      "WHERE l.provider = ? AND t.owner IS ?", (rekordbox_compare.PROVIDER, admin)).fetchone()[0]
+        m = re.search(r" from (.+?)(?: \(\d+ disagree\))?$", row[1]) if row else None
+        return {"tracks": n, "loaded_at": row[0] if row else None, "file": m.group(1) if m else None,
+                "max_mb": REKORDBOX_MAX_MB}
+
+    @api.get("/api/admin/rekordbox/status")
+    def rekordbox_status(request: Request):
+        """For Admin › Rekordbox export: when you last loaded an export, from which file, onto how many tracks."""
+        admin = ctx.require_admin(request)
+        with closing(ctx.conn()) as c:
+            return _rekordbox_status(c, admin)
+
+    @api.post("/api/admin/rekordbox/upload")
+    async def rekordbox_upload(request: Request, name: str = Query("collection.xml", max_length=200)):
+        """Admin › Rekordbox export, step 1: the collection XML as the request body. Stored in the audio bucket as
+        rekordbox/collection.xml (replacing the last one) and compared with your library. Nothing is saved on your
+        tracks until /api/admin/rekordbox/load. Admins only."""
+        admin = ctx.require_admin(request)
+        if not blobs.enabled():
+            raise HTTPException(409, "This server has no audio bucket.")
+        limit = REKORDBOX_MAX_MB * 1024 * 1024
+        size = request.headers.get("content-length")
+        if size and size.isdigit() and int(size) > limit:
+            raise HTTPException(413, f"{name} is {int(size) / 1024 ** 2:.0f} MB. The limit is {REKORDBOX_MAX_MB} MB: "
+                                     "export a playlist or a smaller collection.")
+        data = await request.body()
+        if len(data) > limit:
+            raise HTTPException(413, f"{name} is over {REKORDBOX_MAX_MB} MB: export a playlist or a smaller collection.")
+        if not rekordbox_compare.is_export(data):
+            raise HTTPException(400, f"{name} isn't a Rekordbox collection export. In Rekordbox use File › Export "
+                                     "Collection in xml format, then pick that file.")
+        with closing(ctx.conn()) as c:
+            rep = rekordbox_compare.compare(c, data, owner=admin)
+            rep["status"] = _rekordbox_status(c, admin)
+        blobs.client().put(REKORDBOX_KEY, data, "application/xml")
+        rep["file"] = name
+        rep["disagree"] = len(rep["disagreements"])
+        rep.pop("disagreements")
+        return rep
+
+    @api.post("/api/admin/rekordbox/load")
+    def rekordbox_load(request: Request, name: str = Query("collection.xml", max_length=200)):
+        """Admin › Rekordbox export, step 2: store the uploaded export's BPM and key on your tracks in both libraries
+        (replacing the last load's), so cards show it under Listed elsewhere and disagreements reach the review
+        list. Logged as an admin change. Admins only."""
+        admin = ctx.require_admin(request)
+        if not blobs.enabled():
+            raise HTTPException(409, "This server has no audio bucket.")
+        try:
+            data = blobs.client().get(REKORDBOX_KEY).read()
+        except s3.S3Error as e:
+            if e.status == 404:
+                raise HTTPException(404, "Upload your Rekordbox export first.") from None
+            raise
+        try:
+            with closing(ctx.conn()) as c:
+                out = rekordbox_compare.save_listings(c, data, owner=admin)
+                out["disagree"] = len(rekordbox_compare.compare(c, data, owner=admin)["disagreements"])
+        except ParseError as e:
+            raise HTTPException(400, f"The stored export isn't a Rekordbox XML export: {e}") from None
+        ctx.event(admin, "admin", f"{REKORDBOX_LOADED}{out['saved']} tracks from {name} ({out['disagree']} disagree)")
+        return out
 
     @api.put("/api/admin/limits/{email}")
     def set_limits(email: str, body: LimitsBody, request: Request):

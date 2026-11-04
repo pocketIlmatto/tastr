@@ -1243,6 +1243,23 @@ h1 { white-space: nowrap; }
 .lk-err { color: var(--warn); }
 .lk-ours { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); padding-inline: 6px; border-radius: 4px; }
 @media (max-width: 560px) { .lk-row { grid-template-columns: 1fr; } }
+/* Admin › Rekordbox export (sandbox v203) */
+.rb-now { font-size: 14px; }
+.rb-how { font-size: 13px; }
+.rb-drop { margin-top: 10px; padding: 18px 12px; border: 2px dashed var(--line); border-radius: 8px; text-align: center; cursor: pointer; font-size: 14px; }
+.rb-drop:hover, .rb-drop:focus-visible, .rb-drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.rb-drop .link { color: var(--accent); text-decoration: underline; }
+.rb-err { color: var(--warn); }
+.rb-busy { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.rb-pre { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.rb-pre h3 { margin: 0 0 6px; font-size: 15px; text-transform: none; letter-spacing: normal; display: flex; align-items: center; gap: 8px; }
+.rb-sum { margin: 0; padding-left: 18px; font-size: 13px; display: grid; gap: 3px; }
+.rb-list { margin-top: 8px; font-size: 13px; }
+.rb-list table { width: 100%; font-size: 12px; border-collapse: collapse; }
+.rb-list td, .rb-list th { padding: 3px 6px; text-align: left; border-top: 1px solid var(--line); }
+.rb-list .table-wrap { max-height: 260px; overflow: auto; }
+.rb-list tr.rb-dis td { background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.rb-done .rb-tick { color: var(--ok, #2f8f4e); }
 
 /* Searches in the browser on a hosted server (TAS-49, query-lib.js): the library copy's status line under the query */
 .q-lib { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; margin: 8px 0 0; min-height: 0; }

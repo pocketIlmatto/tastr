@@ -25,8 +25,10 @@
   // TASTR_MODAL_URL (the tastr-web app's api endpoint), TASTR_MODAL_KEY and TASTR_MODAL_SECRET are secrets.
   // The rest is for the Admin tab: its log links (this Worker's logs, the Modal app, the Access dashboard) and the
   // GitHub Actions runs it shows. deploy-worker.yml adds TASTR_COMMIT, TASTR_COMMIT_SUBJECT and TASTR_DEPLOY_RUN.
+  // TASTR_ML_TAGS=on offers ML tags (Modal ml_tags; MTG's weights are non-commercial only, docs/essentia.md).
   "vars": {"TASTR_HOSTED": "1", "TASTR_ANALYSIS_BACKEND": "modal", "TASTR_STEMS_BACKEND": "modal",
            "TASTR_WORKER_NAME": "tastr", "TASTR_CF_ACCOUNT_ID": "1c793218966f05bb509e1e76f4ba0b67",
            "TASTR_MODAL_APP": "tastr-web", "MODAL_ENVIRONMENT": "friends",
-           "TASTR_GITHUB_REPO": "pocketIlmatto/tastr", "TASTR_GITHUB_WORKFLOWS": "tests,deploy"}
+           "TASTR_GITHUB_REPO": "pocketIlmatto/tastr", "TASTR_GITHUB_WORKFLOWS": "tests,deploy",
+           "TASTR_ML_TAGS": "on"}
 }

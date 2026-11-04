@@ -43,6 +43,20 @@ def enabled() -> list[Provider]:
     return out
 
 
+SOURCE_ORDER = ("rekordbox", "getsongbpm", "freqblog", "acousticbrainz")  # the card's "Listed elsewhere" table
+
+
+def sources(on: list[Provider] | None = None) -> list[dict[str, Any]]:
+    """Every registered provider for the card's "Listed elsewhere" table, set up or not. `configured`: this server
+    asks it (named in TASTR_LOOKUP and set up). Rekordbox is never asked; its rows come from your export, so it
+    always counts as configured and a missing row means the track isn't in that export. `on`: enabled(), if known."""
+    names = {p.name for p in (enabled() if on is None else on)}
+    order = {n: i for i, n in enumerate(SOURCE_ORDER)}
+    ps = sorted(PROVIDERS.values(), key=lambda p: order.get(p.name, len(order)))
+    return [{"provider": p.name, "label": p.label, "homepage": p.homepage,
+             "configured": p.name == "rekordbox" or p.name in names} for p in ps]
+
+
 def query_for(card) -> TrackQuery | None:
     """Artist and title from the card's tags; None when either is missing (a filename isn't enough)."""
     s = card.source

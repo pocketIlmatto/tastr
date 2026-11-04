@@ -94,7 +94,8 @@ instead of on request; `TASTR_DRUM_MODEL=off` switches it off.
 
 MTG's pre-trained Essentia classifiers can add style tags (Discogs styles such as Deep House), mood tags and
 vocal/instrumental to a track. They beat the engine's own mood measures on listener labels
-([essentia.md](essentia.md)). They are off unless `TASTR_ML_TAGS=on`, and run only on the tracks you ask for.
+([essentia.md](essentia.md)). They are off unless `TASTR_ML_TAGS` is set: `on` runs them only on the tracks you ask for; `auto` runs them on
+every new upload, and once, when the server starts, on every track that has none.
 
 ```bash
 python -m pip install -e '.[ml-tags]'  # Essentia with TensorFlow (AGPL-3.0)

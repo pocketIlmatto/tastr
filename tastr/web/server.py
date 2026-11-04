@@ -117,6 +117,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
             background.log_start(ctx, cut)
         ctx.drum_runs.resume()  # and drum model runs
         ctx.ml_runs.resume()  # and ML tag runs
+        ctx.backfill_ml_tags()  # TASTR_ML_TAGS=auto: once, for the tracks from before it
         return background.start(ctx) if hosted else []
 
     @asynccontextmanager

@@ -12,7 +12,7 @@ tastr bench manifest ~/music/labels.csv             # your own tracks
 ```
 
 Every track gets the whole Rust card, as in the app; the scores read its core and sections.
-Danceability, energy and vibe tags have their own benchmark, `tastr vibe-bench` ([vibes.md](vibes.md)).
+Danceability, energy and vibe tags have their own benchmark, `tastr vibe-bench` ([vibes.md](vibes.md)). MTG's pre-trained Essentia classifiers are scored against the same labels in [essentia.md](essentia.md).
 `--rekordbox XML` scores Rekordbox's exported analysis of the same tracks next to Tastr's ([rekordbox.md](rekordbox.md)).
 `--limit N` takes the first N tracks for a quick check. `--remote` runs it on Modal
 with the datasets in an R2 bucket instead of on this machine (see [cloud.md](cloud.md)).

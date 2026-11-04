@@ -21,8 +21,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The Python reference engine the benchmarks score (tastr/engine/stages/), decoding the formats the Rust engine
-# can't read (Opus), and the audio the drum model and stem separation read. The Modal images install these
+# The benchmarks' dataset readers and fitting scripts, decoding the formats the Rust engine can't read (Opus),
+# and the audio the drum model and stem separation read. The Modal images install these
 # with the pins in tastr/cloud/modal_web.py.
 engine = ["scipy>=1.10", "librosa>=0.10"]
 links = ["yt-dlp"]

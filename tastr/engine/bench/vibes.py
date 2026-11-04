@@ -265,7 +265,7 @@ def format_report(report: dict) -> str:
 
 # --- Refitting -------------------------------------------------------------------------------------
 
-# The engine's current formulas (tastr/engine/stages/core.py), rebuilt from a row's raw inputs.
+# The engine's current formulas (engine-rs/src/stages/core.rs), rebuilt from a row's raw inputs.
 ENERGY_INPUTS = ["loudness", "onset_rate", "brightness", "percussiveness"]
 ENERGY_WEIGHTS = (0.35, 0.25, 0.20, 0.20)
 DANCE_INPUTS = ["pulse_clarity", "tempo_fit", "percussiveness"]

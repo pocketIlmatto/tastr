@@ -1,4 +1,4 @@
-//! The core stage (tastr/engine/stages/core.py): BPM, beats and downbeats, meter, key, energy, loudness and the
+//! The core stage: BPM, beats and downbeats, meter, key, energy, loudness and the
 //! shared scalar features.
 
 use super::{Ctx, HOP};
@@ -575,7 +575,7 @@ pub fn meter_score(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], cues:
     total
 }
 
-/// _swing: where the off-beat 16th lands inside each beat, as (percent, confidence).
+/// Where the off-beat 16th lands inside each beat, as (percent, confidence).
 fn swing(onset: &[f32], beats: &[usize]) -> (f64, f64) {
     let (mut pos, mut w) = (Vec::new(), Vec::new());
     for p in beats.windows(2) {
@@ -637,4 +637,26 @@ fn bar_energy_series(downbeats: &[f64], rms_db: &[f32], sr: f64, duration: f64) 
         raw.iter().map(|v| clip((v - lo) / (hi - lo), 0.0, 1.0)).collect()
     };
     (downbeats.iter().map(|&t| round_dec(t, 3)).collect(), norm.iter().map(|&v| round_dec(v, 3)).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swing_measures_the_offbeat_position() {
+        let beat = 24; // frames per beat
+        let beats: Vec<usize> = (0..40).map(|i| i * beat).collect();
+        for (sixteenth, expected) in [(6, 50.0), (8, 66.7)] {
+            // 25% vs 33% of the beat
+            let mut env = vec![0.0f32; beat * 41];
+            for &b in &beats {
+                env[b] = 1.0;
+                env[b + sixteenth] = 0.8;
+            }
+            let (percent, conf) = swing(&env, &beats);
+            assert!((percent - expected).abs() <= 2.0, "{percent} vs {expected}");
+            assert!(conf > 0.8);
+        }
+    }
 }

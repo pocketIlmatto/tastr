@@ -1,4 +1,4 @@
-//! Music-theory helpers shared by the stages (tastr/engine/music.py and calibration.py).
+//! Music-theory helpers shared by the stages, the key model and the confidence calibration.
 
 use crate::consts;
 use crate::features::Matrix;

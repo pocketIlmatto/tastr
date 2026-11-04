@@ -1,4 +1,4 @@
-//! Rough section detection (tastr/engine/stages/sections.py): temporally constrained clustering of per-bar
+//! Rough section detection: temporally constrained clustering of per-bar
 //! timbre, harmony and loudness, snapped to 2-bar phrases, labelled from each section's relative energy.
 
 use super::{Ctx, HOP};

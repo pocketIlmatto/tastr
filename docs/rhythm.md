@@ -1,7 +1,7 @@
 # Downbeats: design notes and learnings
 
-How core picks which beat starts each bar (`_downbeat_phase` in
-`tastr/engine/stages/core.py`), why, and what was tried and dropped. Written
+How core picks which beat starts each bar (`downbeat_phase` in
+`engine-rs/src/stages/core.rs`, first written in Python as `_downbeat_phase`), why, and what was tried and dropped. Written
 2026-10-29.
 
 ## The problem
@@ -86,9 +86,8 @@ Chance is 0.25.
 guess is recorded as `card.extras["core.meter_guess"]` (`beats_per_bar`,
 `score`) and, since 2026-10-30, sets `core.beats_per_bar`: downbeats fall
 every 3rd beat in 3/4, the drum grid has 12 steps, and the UI, MIDI export
-(time signature 3/4) and Strudel sketch follow it. Two ways to overrule it:
-`TASTR_METER=4/4` keeps every track in 4/4, and the track menu's "Change to
-3/4 / 4/4 time" re-analyzes one track with that meter (`meter_set`, kept
+(time signature 3/4) and Strudel sketch follow it. To overrule it, the
+track menu's "Change to 3/4 / 4/4 time" re-analyzes one track with that meter (`meter_set`, kept
 on later re-analyses; "Detect the time signature again" undoes it). A
 meter change drops that track's saved edits, since every bar changes length. `_downbeat_phase(..., beats_per_bar=3)` picks
 bar 1 among 3 phases, with "backbeat" meaning beats 2 and 3 against beat 1.

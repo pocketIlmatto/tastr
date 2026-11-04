@@ -26,8 +26,8 @@ Rules for anyone changing this repository, Claude in GitHub Actions included. Th
 
 ## Engine and benchmarks
 
-- Calibration lives in two files that must agree: `tastr/engine/calibration_table.py` and
-  `engine-rs/src/consts.rs`. Change both.
+- The fitted constants (key model, calibration tables) live only in `engine-rs/src/consts.rs`. Refit them with
+  `tastr.engine.bench.train_key --write` and `calibrate --write`, which rewrite that file, rather than by hand.
 - Every benchmark must be able to run on Modal (`--remote`, [docs/cloud.md](docs/cloud.md)). Iterate on small
   subsets (`--limit N`); run the full set only before keeping a change. Write what an experiment taught you into
   the docs ([docs/bench.md](docs/bench.md) or [docs/engine-report.md](docs/engine-report.md)), not just the

@@ -32,7 +32,7 @@ pub fn load(bytes: Vec<u8>) -> Result<Vec<f32>, String> {
     Ok(resample::resample(&d.samples, d.sr, SR))
 }
 
-/// The whole card for the audio, as the Python engine's run_pipeline makes it. `beats_per_bar` (3 or 4) sets
+/// The whole card for the audio. `beats_per_bar` (3 or 4) sets
 /// the meter instead of detecting it. `drum_hits` are the optional drum model's hits (the server runs it).
 pub fn analyze(y: Vec<f32>, beats_per_bar: Option<i64>, drum_hits: Option<drums::ModelHits>) -> card::Card {
     let mut ctx = stages::Ctx::new(y, beats_per_bar);
@@ -66,7 +66,7 @@ pub fn parse_drum_hits(buf: &[f64]) -> Result<Option<drums::ModelHits>, String> 
     Ok(Some(hits))
 }
 
-/// The audio, its HPSS parts and every shared signal, by name (signals.py's names where it has one).
+/// The audio, its HPSS parts and every shared signal, by name (the names the Python engine's signals.py used).
 pub fn signals(y: Vec<f32>) -> Vec<(&'static str, Matrix)> {
     let spec = spectral::stft(&y);
     let mag = spectral::magnitude(&spec, 1);

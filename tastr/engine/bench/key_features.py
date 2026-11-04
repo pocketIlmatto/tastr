@@ -35,10 +35,9 @@ from xml.etree import ElementTree
 
 import numpy as np
 
-from .. import music
+from ..rust import SR
 from .datasets import Item, load as load_dataset
 
-SR = 22050  # the engine's sample rate
 
 
 def track_id(item: Item) -> str:
@@ -67,24 +66,13 @@ def beatport_label_confidence(root: str | Path) -> dict[str, int]:
 
 def features(y: np.ndarray, matrices: bool = False) -> dict:
     """What the key model reads from mono audio at 22,050 Hz, as the Rust engine computes it: {profile (12),
-    silent} and with `matrices` the harmonic part's chroma and bass CQT. TASTR_ENGINE=python takes them from
-    the Python reference engine instead."""
+    silent} and with `matrices` the harmonic part's chroma and bass CQT."""
     from .. import rust
 
-    if rust.chosen() == "rust":
-        r = rust.bench("key", y, n=y.size, matrices=int(matrices))
-        out = {"profile": np.asarray(r["profile"]), "silent": r["silent"]}
-        if matrices:
-            out |= {"chroma": np.asarray(r["chroma"], dtype=np.float32), "bass": np.asarray(r["bass_cqt"], dtype=np.float32)}
-        return out
-    from .. import signals
-    from ..pipeline import HOP, SR, AnalysisContext
-
-    ctx = AnalysisContext(y=y, sr=SR, card=None, hop=HOP)
-    chroma = ctx.get("chroma", signals.chroma)
-    out = {"profile": music.key_profile(chroma), "silent": bool(y.size == 0 or not np.any(np.abs(y) > 1e-4))}
+    r = rust.bench("key", y, n=y.size, matrices=int(matrices))
+    out = {"profile": np.asarray(r["profile"]), "silent": r["silent"]}
     if matrices:
-        out |= {"chroma": chroma.astype(np.float32), "bass": ctx.get("bass_cqt", signals.bass_cqt).astype(np.float32)}
+        out |= {"chroma": np.asarray(r["chroma"], dtype=np.float32), "bass": np.asarray(r["bass_cqt"], dtype=np.float32)}
     return out
 
 
@@ -92,9 +80,7 @@ def profile_of(chroma: np.ndarray) -> np.ndarray:
     """The 12-bin key profile of a 12 x frames chroma (a feature cache's), as the Rust engine computes it."""
     from .. import rust
 
-    if rust.chosen() == "rust":
-        return np.asarray(rust.bench("key_profile", chroma, frames=chroma.shape[1])["profile"])
-    return music.key_profile(chroma)
+    return np.asarray(rust.bench("key_profile", chroma, frames=chroma.shape[1])["profile"])
 
 
 def _extract(args) -> tuple[str, str | None]:

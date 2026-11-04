@@ -1,11 +1,10 @@
-"""Drum lanes on synthetic loops with known patterns (tastr.engine.drums and its step grid)."""
+"""Drum lanes on synthetic loops with known patterns (the Rust engine's drum grid, engine-rs/src/drums.rs)."""
 
 import json
 
 import pytest
 
-from tastr.engine import drums
-from tastr.engine.bench.drums import _synth_ctx, run_synth
+from tastr.engine.bench.drums import LANES, _synth_grid, run_synth
 from tastr.engine.bench.synth import make_drum_track
 
 pytestmark = pytest.mark.audio
@@ -19,14 +18,14 @@ def built_in_lanes(monkeypatch):
 
 def grid_for(patterns, bpm=120):
     y, _ = make_drum_track(patterns, bpm=bpm)
-    ctx = _synth_ctx(y, bpm)
-    return drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
+    return _synth_grid(y, bpm)
 
 
 def hits(g):
     return g["pattern"].replace("o", "x") if g["detected"] else "." * 16
 
 
+@pytest.mark.rust
 def test_hats_do_not_leak_into_snare():
     # The old band split read off-beat hats as snare hits.
     g = grid_for({"kick": "x...x...x...x...", "hat": "..x...x...x...x."})
@@ -35,6 +34,7 @@ def test_hats_do_not_leak_into_snare():
     assert not g["snare"]["detected"] and not g["clap"]["detected"]
 
 
+@pytest.mark.rust
 def test_snare_and_clap_told_apart():
     snare = grid_for({"kick": "x.......x.......", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."})
     assert hits(snare["snare"]) == "....x.......x..."
@@ -43,22 +43,21 @@ def test_snare_and_clap_told_apart():
     assert hits(clap["clap"]) == "....x.......x..."
 
 
+@pytest.mark.rust
 def test_open_and_closed_hats():
     g = grid_for({"kick": "x...x...x...x...", "hat": "x...x...x...x...", "open_hat": "..x...x...x...x."})
     assert hits(g["open_hat"]) == "..x...x...x...x."
     assert hits(g["hat"]) == "x...x...x...x..."
 
 
+@pytest.mark.rust
 def test_toms_are_not_kicks():
     g = grid_for({"kick": "x.......x.......", "snare": "....x.......x...", "tom": "..........x...x."})
     assert hits(g["kick"]) == "x.......x......."
     assert g["tom"]["detected"] and hits(g["tom"])[10] == "x"
 
 
-def test_lane_help_covers_every_lane():
-    assert set(drums.LANE_HELP) == set(drums.LANES)
-
-
+@pytest.mark.rust
 def test_synth_suite_floor():
     """Guards against regressions; the numbers in docs/bench.md are the current scores."""
     s = run_synth(bpms=(120,))["summary"]
@@ -82,7 +81,7 @@ from tastr.engine.bench.synth import drum_sounds, write_wav  # noqa: E402
 
 def test_score_track_excuses_cymbals_and_splits_toms():
     hop, sr = 512, 22050
-    acts = {lane: np.zeros(400) for lane in drums.LANES}
+    acts = {lane: np.zeros(400) for lane in LANES}
     frame = lambda t: int(round(t * sr / hop))  # noqa: E731
     for t in (1.0, 2.0, 3.0):
         acts["kick"][frame(t)] = 1.0

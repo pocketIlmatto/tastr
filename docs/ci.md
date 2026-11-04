@@ -81,8 +81,8 @@ Full runs had been 2–4 minutes, then on 2026-10-31 rose to 5–12. Step timing
 - **Rust build:** only the engine's own crate recompiles each run (the cargo cache covers the dependencies), but
   with `lto = true` and one codegen unit it took ~42 s native plus ~19 s WebAssembly. CI now sets
   `CARGO_PROFILE_RELEASE_LTO=false` and 16 codegen units: about 11 s plus 10 s locally, with the native and
-  WebAssembly cards still bit-identical. The Docker build is unchanged and keeps LTO. The perf budget times the
-  Python engine, so it isn't affected.
+  WebAssembly cards still bit-identical. The Docker build is unchanged and keeps LTO. The perf budget
+  (`tests/test_core.py`) times this non-LTO build, so it is a little pessimistic.
 - **numba JIT:** every pytest worker compiled librosa's kernels into a fresh `/tmp/numba-gw*` cache, about
   10–15 s per worker at start-up. Those folders are now cached between runs (key: `pyproject.toml`). A reinstall
   of the same librosa keeps file times, so the cached kernels stay valid.

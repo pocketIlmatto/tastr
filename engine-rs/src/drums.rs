@@ -1,4 +1,4 @@
-//! Drum lane activations (tastr/engine/drums.py): semi-adaptive NMF of the percussive mel spectrogram into low,
+//! Drum lane activations: semi-adaptive NMF of the percussive mel spectrogram into low,
 //! mid and high parts, leakage removed, and each hit sorted into a lane by a closer look at its spectrum and
 //! envelope. With the optional ADTOF drum model, the server runs the model and hands its hits in
 //! (`Drums::set_model`); they replace the kick, tom and closed-hat lanes and add a cymbal lane.

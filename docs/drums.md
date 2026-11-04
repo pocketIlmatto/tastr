@@ -1,6 +1,6 @@
 # Drum lane detection: design notes and learnings
 
-How `tastr/engine/drums.py` finds the lanes in the detected groove, why it
+How the engine's drum lanes (`engine-rs/src/drums.rs`, first written in Python as `tastr/engine/drums.py`) find the lanes in the detected groove, why it
 works this way, and what was tried and dropped. Scores and how to run the
 benchmark are in [bench.md](bench.md#drum-lanes). Written 2026-10-29
 (PR #23).

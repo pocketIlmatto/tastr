@@ -9,7 +9,7 @@ analysis and stems; see [deploy.md](deploy.md).
 tastr bench beatport-key beatport-key --remote --limit 200 --out bp-200.json
 ```
 
-With `--remote`, the dataset path is a folder in the bucket, not on disk. `--limit`, `--stages`,
+With `--remote`, the dataset path is a folder in the bucket, not on disk. `--limit`,
 `--baseline` and `--out` work as usual (see [bench.md](bench.md)); `--jobs` defaults to the container's
 8 CPUs. The report comes back to your machine; nothing is written to the bucket.
 
@@ -154,7 +154,7 @@ there, else the release's files.
 a temporary app with `modal run`, from that branch's checkout (it uploads the working tree):
 
 ```
-modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --stages core --out bp.json
+modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --out bp.json
 modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this --out hjdb.json
 ```
 
@@ -230,7 +230,7 @@ the `vibe_bench` function (8 CPUs) and `tastr vibe-fit` refits the weights local
 `tastr fetch fma-keys fma-keys --remote --archives 0` downloads FMA Keys' labels and the songs in the
 chosen zips (0 to 9; zip 0 is 4.15 GB with 695 labeled songs), checks each zip's MD5 against Zenodo and
 unpacks the mp3s to `fma-keys/audio/<folder>/<track id>.mp3`. A rerun skips songs already there, and the
-fetch writes the item index, so `tastr bench fma-keys fma-keys --remote --stages core` scores what's there.
+fetch writes the item index, so `tastr bench fma-keys fma-keys --remote` scores what's there.
 See [datasets.md](datasets.md).
 
 ### Ballroom
@@ -239,8 +239,8 @@ See [datasets.md](datasets.md).
 30 s) and tempo labels (`data2.tar.gz`) from mtg.upf.edu, plus the beat and bar labels from
 CPJKU/BallroomAnnotations on GitHub, checks each against mirdata's MD5 and unpacks to
 `ballroom/audio/<style>/<id>.wav`, `ballroom/tempo/<id>.bpm` and `ballroom/beats/<id>.beats`. mtg.upf.edu
-is refused from cloud sessions, so this runs on Modal. Then `tastr bench ballroom ballroom --remote
---stages core` scores tempo, beats, downbeats and the meter (3/4 found on the waltzes, 4/4 kept on the rest).
+is refused from cloud sessions, so this runs on Modal. Then `tastr bench ballroom ballroom --remote`
+scores tempo, beats, downbeats and the meter (3/4 found on the waltzes, 4/4 kept on the rest).
 
 ## How it fits together
 

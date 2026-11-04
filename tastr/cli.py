@@ -140,7 +140,6 @@ def main(argv: list[str] | None = None) -> int:
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
     b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, ballroom, harmonix, manifest or rekordbox")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
-    b.add_argument("--stages", help="comma-separated stage names (default: core,sections)")
     b.add_argument("--limit", type=int, help="only the first N tracks")
     b.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel")
     b.add_argument("--out", help="write the full JSON report here")
@@ -149,8 +148,6 @@ def main(argv: list[str] | None = None) -> int:
                    help="save the local folder's track list to tastr-index-DATASET.json for fast --remote runs")
     b.add_argument("--remote", action="store_true",
                    help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
-    b.add_argument("--engine", choices=["python", "rust"],
-                   help="which engine analyzes (default: TASTR_ENGINE, else rust); rust always runs every stage")
     b.add_argument("--record", action="store_true",
                    help="save the headline score to tastr/engine/bench_scores.json, quoted in the UI (full runs only)")
     b.add_argument("--rekordbox", metavar="XML",
@@ -200,12 +197,10 @@ def _bench_remote(args) -> int:
     from .engine.bench import runner
 
     print(f"running {args.dataset} on Modal...", file=sys.stderr)
-    stages = args.stages.split(",") if args.stages else None
     t0 = time.time()
     try:
-        report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
+        report = remote.bench(args.dataset, args.path, limit=args.limit,
                               jobs=args.jobs if args.jobs > 1 else None,
-                              **({"engine": args.engine} if args.engine else {}),
                               **({"rekordbox": args.rekordbox} if args.rekordbox else {}))
     except (remote.RemoteError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -250,10 +245,7 @@ def _bench_local(args) -> int:
     def progress(i, n, row):
         print(f"\r{i}/{n} {row['id'][:50]:50}", end="", file=sys.stderr, flush=True)
 
-    if args.engine:
-        os.environ["TASTR_ENGINE"] = args.engine
-    stages = args.stages.split(",") if args.stages else None
-    report = runner.run(items, stages=stages, jobs=args.jobs, limit=args.limit, progress=progress)
+    report = runner.run(items, jobs=args.jobs, limit=args.limit, progress=progress)
     print(file=sys.stderr)
     if args.rekordbox:
         from .engine.bench import rekordbox

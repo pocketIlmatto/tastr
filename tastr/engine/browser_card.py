@@ -28,7 +28,7 @@ from pathlib import Path
 
 from . import rust
 from .card import Source, TrackCard
-from .context import SR
+from .rust import SR
 
 log = logging.getLogger(__name__)
 

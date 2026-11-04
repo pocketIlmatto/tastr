@@ -225,6 +225,12 @@ def test_api_lookup_and_card_body(db_path, tmp_path, monkeypatch, fake):
     assert [s["provider"] for s in body["lookup_sources"]][:4] == ["rekordbox", "getsongbpm", "freqblog", "acousticbrainz"]
     assert sources["fake"]["configured"] and sources["rekordbox"]["configured"]
     assert not sources["getsongbpm"]["configured"] and sources["freqblog"]["homepage"]
+    assert sources["rekordbox"]["imported"] is False  # nothing loaded from an export yet
+    conn = db.connect(db_path)
+    db.save_lookup(conn, untagged, {"provider": "rekordbox", "status": "found", "bpm": 120.0})
+    conn.close()
+    body = client.get(f"/api/tracks/{tid}").json()
+    assert next(s for s in body["lookup_sources"] if s["provider"] == "rekordbox")["imported"] is True
     r = client.post(f"/api/tracks/{tid}/lookup").json()["card"]
     (row,) = r["lookups"]
     assert row["label"] == "Fake" and row["homepage"] == "https://fake.example"
@@ -640,7 +646,7 @@ def test_card_lists_every_source_in_metadata():
 
     js = app_js()
     assert "lookupTable(c)" in js and "c.lookup_sources" in js
-    for text in ("Not looked up yet.", "Not in your Rekordbox export.", "Not set up on this server.",
+    for text in ("Not looked up yet.", "Not in your Rekordbox export.", "Not imported yet.", "Not set up on this server.",
                  "Not found: it has no listing for this artist and title.", "Lookup failed: ",
                  "Can't look up: the file has no artist and title tags.", "Measured from the audio"):
         assert text in js

@@ -246,6 +246,12 @@ class AppContext:
         on = lookup.enabled()
         body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in on]
         body["lookup_sources"] = lookup.sources(on)
+        # Rekordbox has no row until /api/admin/rekordbox-compare?save=1 loads this owner's export
+        imported = c.execute("SELECT 1 FROM lookups l JOIN tracks t ON t.id = l.track_id WHERE l.provider = 'rekordbox' "
+                             "AND t.owner IS (SELECT owner FROM tracks WHERE id = ?) LIMIT 1", (track_id,)).fetchone()
+        for s in body["lookup_sources"]:
+            if s["provider"] == "rekordbox":
+                s["imported"] = imported is not None
         return body
 
     @staticmethod

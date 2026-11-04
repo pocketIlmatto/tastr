@@ -174,7 +174,8 @@ settings. Be careful with `@claude` on someone else's pull request: Claude then 
 (`pyproject.toml`), Rust (`engine-rs/`), the Worker's npm packages (`worker/`), the Strudel test packages and the
 GitHub Actions. Python requirements that are lower bounds are left alone unless a newer release falls outside
 them. `sql.js` is skipped, because `tastr/web/routes/search.py` and the Dockerfile name its version; bump those
-together by hand.
+together by hand. Symphonia stays on 0.5 (patch releases only): 0.6 rewrote the decoder API that
+`engine-rs/src/decode.rs` uses, so that move is done by hand, comparing decoded samples with 0.5's.
 
 When an update fails `tests`, `.github/workflows/dependabot-fix.yml` (which runs from main, after the failed run)
 starts Claude Code on the same branch. Claude adapts the code to the new version, runs the checks, pushes one

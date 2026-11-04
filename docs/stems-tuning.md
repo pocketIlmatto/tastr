@@ -21,7 +21,8 @@ modal run scripts/stem_ab.py --audio-dir PLAYLIST/audio --out-dir stem-ab --limi
 | ft | htdemucs_ft (one fine-tuned model per stem) | 1 | 0.25 |
 | ft-shifts2-overlap0.5 | htdemucs_ft | 2 | 0.5 |
 
-The script sends the audio from your machine and returns the stems there; nothing goes to R2. Keep the output
+Open `OUT/listen.html` to listen: it plays the FLACs next to it, switches letters in sync, and records your best
+and worst pick per track (`python scripts/stem_ab_page.py OUT` rewrites it). The script sends the audio from your machine and returns the stems there; nothing goes to R2. Keep the output
 out of the repo, since it holds your music.
 
 ## Results

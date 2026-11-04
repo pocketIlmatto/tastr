@@ -91,4 +91,6 @@ def main(audio_dir: str, out_dir: str = "stem-ab", limit: int = 5, gpu: str = "T
     stamp = max(p.stat().st_mtime for p in out.rglob("*"))
     for p in out.rglob("*"):
         os.utime(p, (stamp, stamp))
-    print(f"Stems in {out}/<track>/<letter>/. Listen before opening answers.json.")
+    from stem_ab_page import build  # noqa: PLC0415 - next to this script
+
+    print(f"Stems in {out}/<track>/<letter>/. Open {build(out)} to listen before opening answers.json.")

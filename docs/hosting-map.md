@@ -358,7 +358,7 @@ flowchart LR
 | Let someone upload more today | Admin tab > ✎ on their row > Today only. The same row raises their Claude asks. |
 | Read the server's logs | Admin tab > Worker logs, or `npx wrangler tail tastr` for a live stream. |
 | Undo a bad change to the library | Restore the Durable Object to a point in the last 30 days (see Dashboards). Audio and stems are in the bucket and aren't affected. |
-| Rotate a key | Make a new one at its source, `pywrangler secret put` it (or update the GitHub secret), then revoke the old one. |
+| Rotate a key | Make a new one at its source, `pywrangler secret put` it (or update the GitHub secret), then revoke the old one. [settings.md](settings.md) lists every secret and when each expires. |
 
 ## Why it's sometimes slow
 

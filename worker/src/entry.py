@@ -2,7 +2,7 @@
 
 Two parts:
 - `Default`, the Worker: /static/*, /sqljs/* (sql.js) and /engine/* (the engine's WebAssembly build) come from
-  Workers Static Assets (the files `build.py` copies to public/);
+  Workers Static Assets (the files `build.py` copies to public/), and so do /pub/preview.png and /pub/favicon.svg;
   everything else goes to the one Durable Object.
 - `Library`, a SQLite-backed Durable Object: the library database lives in its SQL storage (tastr/do_sqlite.py)
   and it runs the FastAPI app (tastr/web/server.py), one request at a time.
@@ -218,10 +218,16 @@ class Library(DurableObject):
 
 
 ASSET_PATHS = ("/static/", "/sqljs/", "/engine/")  # the files build.py puts in public/
+# The share pages' preview image and icon (routes/strudel.py): public, so served from public/static/ by their
+# /pub/ names, which Cloudflare Access lets through, where /static/ needs the login.
+PUBLIC_ASSETS = {"/pub/preview.png": "/static/preview.png", "/pub/favicon.svg": "/static/favicon.svg"}
 
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        if urlparse(request.url).path.startswith(ASSET_PATHS):
+        url = urlparse(request.url)
+        if url.path.startswith(ASSET_PATHS):
             return await self.env.ASSETS.fetch(request)
+        if url.path in PUBLIC_ASSETS:
+            return await self.env.ASSETS.fetch(url._replace(path=PUBLIC_ASSETS[url.path], query="").geturl())
         return await self.env.LIB.getByName("library").fetch(request)

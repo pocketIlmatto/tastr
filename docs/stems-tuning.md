@@ -26,7 +26,7 @@ out of the repo, since it holds your music.
 
 ## Results
 
-First run 2026-11-04: 5 tracks (house, drum and bass and pop remixes, 3 to 7 minutes), 20 runs on a T4,
+First run 2026-11-04: 5 tracks from one of Pam's playlists, 20 runs on a T4,
 1,463 GPU seconds in all (about $0.25 at T4 list price).
 
 | Config | Average GPU seconds per track | vs today |

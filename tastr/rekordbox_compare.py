@@ -165,6 +165,17 @@ def format_report(rep: dict, show: int = 15) -> str:
 PROVIDER = "rekordbox"  # tastr/lookup/rekordbox.py
 
 
+def is_export(data: bytes) -> bool:
+    """Whether `data` reads as a Rekordbox collection export: XML with DJ_PLAYLISTS > COLLECTION."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return False
+    return root.tag == "DJ_PLAYLISTS" and root.find("COLLECTION") is not None
+
+
 def save_listings(conn: sqlite3.Connection, xml: str | Path | bytes, owner: str | None = None) -> dict:
     """Store Rekordbox's BPM and key for each track in both libraries as a lookup, so the card's "Listed elsewhere"
     line and the review list show where Tastr disagrees with it. Earlier Rekordbox listings for `owner`'s tracks

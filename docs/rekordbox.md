@@ -87,16 +87,22 @@ Biggest disagreements (31 in all; label these to see who's right):
   #42 Artist - Title: Tastr 87.0 F minor, Rekordbox 174.0 F minor
 ```
 
-On the hosted server, upload the export to the audio bucket (`tastr-audio` in Cloudflare's dashboard, R2) as
-`rekordbox/collection.xml`, then open `/api/admin/rekordbox-compare?format=text` on the server (admins only;
-drop `format=text` for JSON, `key=rekordbox/other.xml` for another file, `show=N` for more disagreements). It
-compares your own tracks. Delete the export from the bucket when you're done: it lists your library's paths.
+On the hosted server, open **Admin › Rekordbox export** and drop the export there (or choose the file; up to
+50 MB). Tastr stores it in the audio bucket as `rekordbox/collection.xml`, replacing the last one, matches it to
+your own tracks and shows a preview: how many tracks matched, how often the two apps agree, and the matches
+themselves. Nothing changes on your tracks until you press **Load Rekordbox values**. That stores Rekordbox's BPM
+and key on each matched track. Each card then shows Rekordbox under "Listed elsewhere", marked where it
+disagrees (half, double, a fifth...), and the review list gains "rekordbox lists 103 BPM, not Tastr's 136"
+reasons, the same as for the online catalogs ([lookup.md](lookup.md)). Loading a newer export replaces them, and
+tracks that aren't in it lose theirs. The load is logged in the activity log. Rekordbox is never looked up:
+naming it in `TASTR_LOOKUP` does nothing. The export lists your library's paths, so delete it from the bucket
+when you no longer need it.
 
-Add `&save=1` to also store Rekordbox's BPM and key on each of those tracks. Each card then shows Rekordbox in
-its "Listed elsewhere" line, marked where it disagrees (half, double, a fifth...), and the review list gains
-"rekordbox lists 103 BPM, not Tastr's 136" reasons, the same as for the online catalogs ([lookup.md](lookup.md)).
-Running it again with a newer export replaces them. Rekordbox is never looked up: naming it in `TASTR_LOOKUP`
-does nothing.
+The routes behind the panel are `POST /api/admin/rekordbox/upload` (the XML as the body: stores it and answers the
+comparison), `POST /api/admin/rekordbox/load` and `GET /api/admin/rekordbox/status`. For scripts,
+`/api/admin/rekordbox-compare?format=text` still reads the stored export (drop `format=text` for JSON,
+`key=rekordbox/other.xml` for another file, `show=N` for more disagreements, `save=1` to load as the panel does).
+All are admins only and use your own tracks.
 
 Tracks are matched by file name first, then by artist and title (with lengths within 3 s), each track once.
 Where you labeled a track in Tastr ([bench.md](bench.md#your-own-tracks)), both apps are scored against your

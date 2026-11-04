@@ -182,3 +182,14 @@ def test_rekordbox_listings_show_as_listed_elsewhere(tmp_path, xml):
     assert any("rekordbox lists 100 BPM" in why for why in queue[2]["reasons"])
     assert rekordbox_compare.save_listings(conn, xml)["cleared"] == 2  # a re-import replaces them
     assert lookup.PROVIDERS["rekordbox"].configured() is False  # never looked up through TASTR_LOOKUP
+
+
+def test_admin_panel_uploads_then_loads():
+    """Admin › Rekordbox export (sandbox v203): the page previews an upload and loads only on the button."""
+    from tests.ui_src import app_js
+
+    js = app_js()
+    assert "/api/admin/rekordbox/upload" in js and "/api/admin/rekordbox/load" in js
+    for text in ("Drop your export here", "Load Rekordbox values onto", "Nothing to load from",
+                 "Nothing has been loaded before, so nothing is replaced.", "Not loaded yet. "):
+        assert text in js

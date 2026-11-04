@@ -116,7 +116,7 @@ export function switchTo(view) {
 }
 
 // "Listed elsewhere": what online catalogs say (tastr.lookup), next to ours, never instead of it.
-const LOOKUP_MARK = { agrees: ["✓", "matches ours"], double: ["×2", "double ours"], half: ["½", "half ours"],
+export const LOOKUP_MARK = { agrees: ["✓", "matches ours"], double: ["×2", "double ours"], half: ["½", "half ours"],
   relative: ["≈", "relative key of ours"], fifth: ["≈", "a fifth from ours"], parallel: ["≈", "parallel key of ours"],
   differs: ["≠", "differs from ours"] };
 function lookupLine(c) {

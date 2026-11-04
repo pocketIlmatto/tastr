@@ -2,7 +2,9 @@
 
 import { $, api, h, svg } from "./core.js";
 import { fmtUpLong } from "./library.js";
-import { stat } from "./card.js";
+import { LOOKUP_MARK, stat, switchTo } from "./card.js";
+import { fmtBytes } from "./files.js";
+import { loadReview, reviewOn } from "./labels.js";
 import { serverCfg } from "./daw.js";
 import { startViewAs } from "./viewas.js";
 
@@ -40,6 +42,7 @@ export async function loadAdmin() {
     renderAdmin();
   } catch (e) { $("adm-error").textContent = e.message; }
   loadEvents();
+  loadRb();
 }
 // "When": today and the last 7 or 30 days count back from today's UTC day; "Between dates" uses the From and To days.
 function actQuery() {
@@ -275,4 +278,100 @@ export function init() {
     try { admData = await api(`/api/admin/usage?range=${admRange}`); renderAdmin(); } catch (e) { $("adm-error").textContent = e.message; }
   }));
   window.addEventListener("resize", () => { if (!$("view-admin").hidden) renderAdmin(); });
+}
+
+/* Admin › Rekordbox export (sandbox v203, rekordbox-upload-spec.md). POST /api/admin/rekordbox/upload (the XML as the
+   body) stores it and answers the comparison without saving anything; POST /api/admin/rekordbox/load then stores
+   Rekordbox's BPM and key on the matched tracks. Both match against your own library. */
+let rbStatus = null, rbStep = { s: "idle" };
+async function loadRb() {
+  try { rbStatus = await api("/api/admin/rekordbox/status"); } catch (_) { rbStatus = null; }
+  renderRb();
+}
+const RB_FMT = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" });
+// A compare row's marks, as the card shows them: the listing (Rekordbox) relative to ours.
+const rbBpmMark = (r) => (r.acc1 === 1 ? "agrees" : r.octave === "x2" ? "half" : r.octave === "/2" ? "double" : "differs");
+const rbKeyMark = (r) => ({ correct: "agrees", other: "differs" })[r.key_category] || r.key_category || null;
+const rbMark = (cmp) => (cmp && LOOKUP_MARK[cmp] ? h("span", { class: `lk-mark lk-${cmp}`, title: LOOKUP_MARK[cmp][1] }, LOOKUP_MARK[cmp][0]) : null);
+const rbVal = (bpm, key) => [bpm != null ? `${Math.round(bpm * 10) / 10}` : "no BPM", key || "no key"];
+function renderRb() {
+  const box = $("adm-rb"); if (!box) return;
+  const st = rbStep, kids = [], maxMb = (rbStatus && rbStatus.max_mb) || 50;
+  const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
+  const idle = () => { rbStep = { s: "idle" }; renderRb(); };
+  const loaded = rbStatus && rbStatus.tracks > 0;
+  kids.push(loaded
+    ? h("p", { class: "rb-now" }, h("b", {}, "Loaded "), rbStatus.loaded_at ? `${RB_FMT.format(new Date(rbStatus.loaded_at))} UTC${rbStatus.file ? ` from ${rbStatus.file}` : ""}: ` : "", `${rbStatus.tracks} of your tracks show Rekordbox's BPM and key.`)
+    : h("p", { class: "rb-now" }, h("b", {}, "Not loaded yet. "), "No track shows Rekordbox's values until you load an export."));
+  if (st.s === "idle" || st.s === "error") {
+    const fileIn = h("input", { type: "file", accept: ".xml,application/xml,text/xml", hidden: "" });
+    const start = async (file) => {
+      if (file.size > maxMb * 1024 ** 2) { rbStep = { s: "error", msg: `${file.name} is ${fmtBytes(file.size)}. The limit is ${maxMb} MB: export a playlist or a smaller collection.` }; return renderRb(); }
+      rbStep = { s: "busy", say: `Uploading ${file.name} (${fmtBytes(file.size)})…` }; renderRb();
+      try {
+        const up = fetch(`/api/admin/rekordbox/upload?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file, headers: { "Content-Type": "application/xml" } });
+        setTimeout(() => { if (rbStep.s === "busy") { rbStep = { s: "busy", say: "Reading the export and matching it to your library…" }; renderRb(); } }, 600);
+        const r = await up;
+        if (!r.ok) { let d = null; try { d = (await r.json()).detail; } catch (_) {} throw new Error(d || `The upload failed (${r.status} ${r.statusText}).`); }
+        rbStep = { s: "preview", p: await r.json() };
+      } catch (e) { rbStep = { s: "error", msg: e.message }; }
+      renderRb();
+    };
+    fileIn.addEventListener("change", () => { if (fileIn.files[0]) start(fileIn.files[0]); });
+    const pick = h("div", { class: "rb-drop", tabindex: "0", role: "button", "aria-label": "Choose a Rekordbox export (.xml)",
+      onclick: () => fileIn.click(), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileIn.click(); } },
+      ondragenter: (e) => { e.preventDefault(); e.stopPropagation(); }, ondragover: (e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add("over"); },
+      ondragleave: (e) => e.currentTarget.classList.remove("over"),
+      ondrop: (e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) start(f); } },
+      h("b", {}, "Drop your export here"), " or ", h("span", { class: "link" }, "choose the .xml file"), fileIn);
+    kids.push(h("p", { class: "muted rb-how" }, "In Rekordbox: ", h("b", {}, "File › Export Collection in xml format"), ". Tastr reads each track's BPM and key and matches it to your library by file name, or by artist and title. Your export isn't shared with anyone."), pick);
+    if (st.s === "error") kids.push(h("p", { class: "rb-err", role: "alert" }, st.msg));
+  } else if (st.s === "busy") {
+    kids.push(h("p", { class: "rb-busy", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), st.say));
+  } else if (st.s === "preview") {
+    const p = st.p, m = p.rows, byFile = p.matched_by["file name"] || 0;
+    const okB = m.filter((x) => x.acc1 === 1).length, okK = m.filter((x) => x.key_correct === 1).length;
+    if (!m.length) {
+      kids.push(h("div", { class: "rb-pre" }, h("h3", {}, `Nothing to load from ${p.file}`),
+        h("p", {}, `None of the ${p.rekordbox_tracks.toLocaleString()} tracks in the export match a track in your Tastr library, by file name or by artist and title.`),
+        h("p", { class: "muted" }, "Check it's the right Rekordbox library, or upload those tracks to Tastr first."),
+        h("div", { class: "menu-confirm-btns" }, h("button", { type: "button", onclick: idle }, "Choose another file"))));
+    } else {
+      const list = h("details", { class: "rb-list" }, h("summary", {}, `Show the ${m.length} matches`),
+        h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, ...["Track", "Tastr", "Rekordbox", "Matched by"].map((t) => h("th", {}, t)))),
+          h("tbody", {}, ...m.map((x) => {
+            const [tb, tk] = rbVal(x.tastr_bpm, x.tastr_key), [rbb, rbk] = rbVal(x.rekordbox_bpm, x.rekordbox_key);
+            return h("tr", { class: x.acc1 === 0 || x.key_correct === 0 ? "rb-dis" : "" }, h("td", {}, x.title), h("td", {}, `${tb} · ${tk}`),
+              h("td", {}, rbb, rbMark(x.rekordbox_bpm != null ? rbBpmMark(x) : null), ` · ${rbk}`, rbMark(rbKeyMark(x))), h("td", { class: "muted" }, x.matched_by));
+          })))));
+      const load = h("button", { type: "button", class: "primary" }, `Load Rekordbox values onto ${m.length} tracks`);
+      load.onclick = async () => {
+        load.disabled = true; load.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), "Loading…");
+        try {
+          const r = await api(`/api/admin/rekordbox/load?name=${encodeURIComponent(p.file)}`, { method: "POST" });
+          rbStep = { s: "done", n: r.saved, dis: r.disagree };
+          try { rbStatus = await api("/api/admin/rekordbox/status"); } catch (_) {}
+          loadReview(); loadEvents();
+        } catch (e) { rbStep = { s: "error", msg: e.message }; }
+        renderRb();
+      };
+      const before = p.status && p.status.tracks;
+      kids.push(h("div", { class: "rb-pre" }, h("h3", {}, `Ready to load ${p.file}`),
+        h("ul", { class: "rb-sum" },
+          h("li", {}, h("b", {}, p.rekordbox_tracks.toLocaleString()), " tracks in the export"),
+          h("li", {}, h("b", {}, String(m.length)), ` are in your Tastr library (${byFile} by file name, ${m.length - byFile} by artist and title). The other ${(p.rekordbox_tracks - m.length).toLocaleString()} aren't, so they're skipped.`),
+          h("li", {}, `Rekordbox agrees with Tastr on BPM for ${okB} (${pct(okB, m.length)}%) and on key for ${okK} (${pct(okK, m.length)}%).`),
+          h("li", {}, h("b", {}, String(p.disagree)), " disagree. They'll show in your Review list with Rekordbox's values.")),
+        list,
+        h("p", { class: "muted" }, before ? `This replaces the Rekordbox values from your last load (${before} tracks). Tracks that aren't in this export lose theirs.` : "Nothing has been loaded before, so nothing is replaced."),
+        h("div", { class: "menu-confirm-btns" }, h("button", { type: "button", onclick: idle }, "Cancel"), load)));
+    }
+  } else if (st.s === "done") {
+    kids.push(h("div", { class: "rb-pre rb-done", role: "status" }, h("h3", {}, h("span", { class: "rb-tick", "aria-hidden": "true" }, "✓"), `Loaded Rekordbox values onto ${st.n} tracks`),
+      h("p", {}, "Their cards show Rekordbox under Listed elsewhere, in the line under the stats and in Metadata.", st.dis ? ` ${st.dis} that disagree are in your Review list.` : ""),
+      h("div", { class: "menu-confirm-btns" },
+        st.dis ? h("button", { type: "button", onclick: () => { switchTo("library"); if (!reviewOn) $("lib-review").click(); } }, "Open Review") : null,
+        h("button", { type: "button", class: "primary", onclick: idle }, "Done"))));
+  }
+  box.replaceChildren(...kids);
 }

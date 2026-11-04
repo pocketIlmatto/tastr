@@ -26,4 +26,14 @@ out of the repo, since it holds your music.
 
 ## Results
 
-Not run yet.
+First run 2026-11-04: 5 tracks (house, drum and bass and pop remixes, 3 to 7 minutes), 20 runs on a T4,
+1,463 GPU seconds in all (about $0.25 at T4 list price).
+
+| Config | Average GPU seconds per track | vs today |
+| --- | ---: | ---: |
+| today | 28 | 1x |
+| shifts2-overlap0.5 | 53 | 1.9x |
+| ft | 64 | 2.3x |
+| ft-shifts2-overlap0.5 | 148 | 5.3x |
+
+Listening verdict: pending.

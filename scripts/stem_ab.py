@@ -3,15 +3,18 @@
     modal run scripts/stem_ab.py --audio-dir PLAYLIST/audio --out-dir stem-ab [--limit 5] [--gpu T4]
 
 Each track is separated with every config in CONFIGS. The stems land in OUT/<track>/<letter>/, with the letters
-shuffled per track so the listening is blind; OUT/answers.json says which letter is which config, and
-OUT/timings.csv has the GPU seconds per run. The audio is sent from this machine, so nothing touches R2 and
-your tracks never leave Modal's temporary disk. Keep OUT out of the repo (it holds your music).
+shuffled per track so the listening is blind; OUT/answers.json says which letter is which config. OUT/timings.csv
+has the GPU seconds per track and config but no letters, and the output never pairs a letter with a config (the
+runs finish in shuffled order and every file gets the same date), so only answers.json gives the answers away.
+The audio goes from this machine through Modal's temporary storage and back; nothing touches R2. Keep OUT out of
+the repo (it holds your music).
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import os
 import random
 from pathlib import Path
 
@@ -70,6 +73,7 @@ def main(audio_dir: str, out_dir: str = "stem-ab", limit: int = 5, gpu: str = "T
         answers[t.stem] = dict(zip(letters, CONFIGS))
         data = t.read_bytes()
         jobs += [(t, letter, label, (data, t.suffix.lower(), *CONFIGS[label])) for letter, label in zip(letters, CONFIGS)]
+    rng.shuffle(jobs)  # so neither the output order nor file dates follow the configs
     print(f"{len(tracks)} tracks x {len(CONFIGS)} configs = {len(jobs)} runs on {gpu}")
     rows = []
     for (t, letter, label, _), (result, seconds) in zip(jobs, fn.starmap([j[3] for j in jobs])):
@@ -77,11 +81,14 @@ def main(audio_dir: str, out_dir: str = "stem-ab", limit: int = 5, gpu: str = "T
         folder.mkdir(parents=True, exist_ok=True)
         for name, flac in result.items():
             (folder / f"{name}.flac").write_bytes(flac)
-        rows.append({"track": t.stem, "letter": letter, "config": label, "gpu": gpu, "seconds": round(seconds, 1)})
-        print(f"{t.stem} {letter} {label}: {seconds:.0f} s")
+        rows.append({"track": t.stem, "config": label, "gpu": gpu, "seconds": round(seconds, 1)})
+        print(f"{len(rows)}/{len(jobs)} done")
     (out / "answers.json").write_text(json.dumps(answers, indent=2))
     with open(out / "timings.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
-        w.writerows(rows)
+        w.writerows(sorted(rows, key=lambda r: (r["track"], list(CONFIGS).index(r["config"]))))
+    stamp = max(p.stat().st_mtime for p in out.rglob("*"))
+    for p in out.rglob("*"):
+        os.utime(p, (stamp, stamp))
     print(f"Stems in {out}/<track>/<letter>/. Listen before opening answers.json.")

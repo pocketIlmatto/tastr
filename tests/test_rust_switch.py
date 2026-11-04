@@ -33,15 +33,6 @@ def song(tmp_path_factory):
     return path
 
 
-def test_engine_choice(monkeypatch):
-    monkeypatch.delenv("TASTR_ENGINE", raising=False)
-    assert rust.chosen() == "rust"
-    monkeypatch.setenv("TASTR_ENGINE", "Python")
-    assert rust.chosen() == "python" and rust.chosen({"engine": "rust"}) == "rust"
-    monkeypatch.setenv("TASTR_ENGINE", "fortran")
-    assert rust.chosen() == "rust"
-
-
 @needs_lib
 def test_rust_engine_makes_the_card_the_binary_makes(song, tmp_path):
     card = analyze_file(song)
@@ -70,9 +61,7 @@ def test_samples_in_gives_the_same_card_as_the_binary(tmp_path):
 
 @needs_lib
 def test_every_card_comes_from_rust(song, tmp_path, monkeypatch):
-    """TASTR_ENGINE only picks the benchmarks' engine: analyze_file always uses Rust, and a file nothing can
-    decode fails at the decode step."""
-    monkeypatch.setenv("TASTR_ENGINE", "python")
+    """analyze_file always uses Rust, and a file nothing can decode fails at the decode step."""
     card = analyze_file(song)
     assert card.extras["engine"] == f"rust {rust.version()}" and card.stages_run == rust.STAGES
     bad = tmp_path / "bad.wav"
@@ -128,8 +117,7 @@ def test_drum_model_cards_come_from_rust(song, monkeypatch):
 
 
 @needs_lib
-def test_rust_is_the_default(song, monkeypatch):
-    monkeypatch.delenv("TASTR_ENGINE", raising=False)
+def test_rust_is_the_default(song):
     card = analyze_file(song)
     assert card.extras["engine"] == f"rust {rust.version()}" and "decoded_by" not in card.extras
 
@@ -246,13 +234,11 @@ def test_bench_decodes_files_rust_cant(song, monkeypatch):
     from tastr.engine.bench import runner
     from tastr.engine.bench.datasets import Item, Truth
 
-    monkeypatch.setenv("TASTR_ENGINE", "rust")
-
     def refuse(path, beats_per_bar=None):
         raise rust.RustDecodeError("the Rust engine could not decode it")
 
     monkeypatch.setattr(rust, "card_from_file", refuse)
-    card = runner.analyze_item(Item(id="song", truth=Truth(), path=str(song)))
+    card = runner.rust_card(Item(id="song", truth=Truth(), path=str(song)))
     assert card.extras["decoded_by"] == "python" and abs(card.core.bpm - 124) < 1
 
 

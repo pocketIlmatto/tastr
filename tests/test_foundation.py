@@ -1,15 +1,13 @@
-"""Tests for the skeleton: card round-trip, pipeline mechanics, storage, CLI."""
+"""Tests for the skeleton: card round-trip, storage, CLI."""
 
 import json
 
-import numpy as np
 import pytest
 
 from tastr import db
 from tastr.engine.card import Core, Key, Section, Series, Source, Suggestion, Tag, TrackCard
 from tastr.cli import main
 from tastr.ingest import IngestError, resolve_inputs
-from tastr.engine.pipeline import AnalysisContext, register_stage, resolve_order, run_pipeline, unregister_stage
 
 
 def full_card() -> TrackCard:
@@ -32,48 +30,6 @@ def test_card_roundtrip():
     again = TrackCard.from_dict(json.loads(card.to_json()))
     assert again == card
     assert again.core.key.name == "A minor"
-
-
-def test_stage_order_and_requirements():
-    names = [s.name for s in resolve_order()]
-    assert names == ["core", "sections"]
-    assert [s.name for s in resolve_order(["sections"])] == ["core", "sections"]
-    with pytest.raises(KeyError):
-        resolve_order(["nope"])
-
-
-def test_failing_stage_is_recorded_and_dependents_skipped():
-    class Boom:
-        name, version, requires = "boom", "1", ("core",)
-
-        def run(self, ctx):
-            raise RuntimeError("kaboom")
-
-    class AfterBoom:
-        name, version, requires = "after_boom", "1", ("boom",)
-
-        def run(self, ctx):
-            raise AssertionError("should not run")
-
-    register_stage(Boom(), replace=True)
-    register_stage(AfterBoom(), replace=True)
-    try:
-        card = run_pipeline(np.zeros(22050 * 5, dtype=np.float32), 22050, TrackCard(Source("file", "/z")),
-                            stages=["after_boom"])
-    finally:
-        unregister_stage("boom")
-        unregister_stage("after_boom")
-    assert "core" in card.stages_run
-    assert "kaboom" in card.errors["boom"]
-    assert card.errors["after_boom"].startswith("skipped")
-
-
-def test_context_cache_computes_once():
-    calls = []
-    ctx = AnalysisContext(y=np.zeros(10), sr=22050, card=TrackCard(Source("file", "/z")))
-    for _ in range(3):
-        ctx.get("thing", lambda c: calls.append(1) or 42)
-    assert calls == [1]
 
 
 def test_db_save_load_replace(db_path):
@@ -119,17 +75,6 @@ def test_cli_end_to_end(db_path, synth_wav, capsys):
     assert card["errors"] == {}
     assert main(["--db", str(db_path), "query", "SELECT title FROM tracks"]) == 0
     assert json.loads(capsys.readouterr().out.strip()) == {"title": "synth_124_Am"}
-
-
-def test_truth_core_fixture(synth_wav, truth_core):
-    from tastr.engine import SR, load_audio, run_pipeline
-
-    path, truth = synth_wav
-    card = run_pipeline(load_audio(path, SR), SR, TrackCard(source=Source(kind="file", uri=str(path))))
-    assert not card.errors
-    assert card.core.bpm == truth["bpm"]
-    assert card.core.key.camelot == "8A"
-    assert card.sections
 
 
 def test_web_read_api(db_path):

@@ -194,37 +194,3 @@ def write_wav(path, y, sr: int = SR):
 
     sf.write(str(path), y, sr)
     return path
-
-
-class TruthCoreStage:
-    """Drop-in replacement for the `core` stage that fills core from ground truth.
-
-    Lets downstream stages (sections, tags, suggestions) be built and tested
-    before the real core estimators exist:
-
-        register_stage(TruthCoreStage(truth), replace=True)
-    """
-
-    name = "core"
-    version = "truth"
-    requires: tuple = ()
-
-    def __init__(self, truth: dict, energy: float = 0.6):
-        self.truth = truth
-        self.energy = energy
-
-    def run(self, ctx) -> None:
-        from tastr.engine.card import Key
-        from tastr.engine.music import camelot
-
-        t = self.truth
-        beat = 60.0 / t["bpm"]
-        n_beats = int(ctx.card.duration / beat)
-        core = ctx.card.core
-        core.bpm = float(t["bpm"])
-        core.bpm_confidence = 1.0
-        core.key = Key(tonic=t["tonic"], mode=t["mode"], scale="Minor" if t["mode"] == "minor" else "Major",
-                       camelot=camelot(t["tonic"], t["mode"]), confidence=1.0)
-        core.energy = self.energy
-        core.beat_times = [round(i * beat, 4) for i in range(n_beats)]
-        core.downbeat_times = core.beat_times[::4]

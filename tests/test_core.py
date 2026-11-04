@@ -4,9 +4,8 @@ import numpy as np
 import pytest
 from synth import SR, make_track
 
-from tastr.engine.card import Source, TrackCard
-from tastr.engine.pipeline import run_pipeline
-from tastr.engine.stages.core import _swing
+from tastr.engine import rust
+from tastr.engine.card import TrackCard
 
 SHORT = (4, 8, 4)  # 16 bars is plenty for tempo and key
 
@@ -23,12 +22,11 @@ RANGES = {
 }
 
 
-pytestmark = pytest.mark.audio
+pytestmark = pytest.mark.rust
 
 
-def analyze(y, sr=SR):
-    card = TrackCard(source=Source(kind="file", uri="synthetic"))
-    return run_pipeline(y, sr, card, stages=["core"])
+def analyze(y, beats_per_bar=None):
+    return TrackCard.from_dict(rust.card_from_samples(y, beats_per_bar) | {"source": {"kind": "file", "uri": "synth"}})
 
 
 @pytest.fixture(scope="module")
@@ -106,18 +104,6 @@ def test_degenerate_audio_does_not_raise(kind):
         assert card.core.bpm is None and card.core.key is None
 
 
-def test_swing_measures_offbeat_position():
-    beat = 24  # frames per beat
-    beats = np.arange(0, beat * 40, beat)
-    for sixteenth_pos, expected in ((6, 50.0), (8, 66.7)):  # 25% vs 33% of the beat
-        env = np.zeros(beat * 41)
-        env[beats] = 1.0
-        env[beats + sixteenth_pos] = 0.8
-        percent, conf = _swing(env, beats)
-        assert abs(percent - expected) <= 2.0
-        assert conf > 0.8
-
-
 @pytest.mark.perf
 def test_three_minute_track_under_30s():
     y, _ = make_track(bpm=124, bars_per_section=(12, 32, 16, 12, 16, 12))  # ~3.2 min at 124 BPM
@@ -129,21 +115,17 @@ def test_three_minute_track_under_30s():
 
 
 def test_key_profile_ignores_frame_loudness():
-    import numpy as np
-
-    from tastr.engine import music
+    from tastr.engine.bench.key_features import profile_of
 
     quiet = np.zeros((12, 10)); quiet[0] = 1.0
     loud = np.zeros((12, 10)); loud[7] = 100.0
-    profile = music.key_profile(np.concatenate([quiet, loud], axis=1))
+    profile = profile_of(np.concatenate([quiet, loud], axis=1))
     assert profile[0] == pytest.approx(profile[7])
 
 
 @pytest.mark.parametrize("mode", ["major", "minor"])
-def test_estimate_key_follows_transposition(mode):
-    import numpy as np
-
-    from tastr.engine import music
+def test_key_model_follows_transposition(mode):
+    from tastr.engine.bench import train_key
 
     # A scale profile with a strong tonic, fifth and third: transposing it must transpose the key.
     third = 4 if mode == "major" else 3
@@ -152,19 +134,17 @@ def test_estimate_key_follows_transposition(mode):
     base[scale] = 0.10
     base[[0, 7, third]] = [0.20, 0.16, 0.15]
     base /= base.sum()
+    weights, bias = train_key.model()
     for tonic in range(12):
-        est = music.estimate_key(np.roll(base, tonic))
+        est = train_key.estimate_key(np.roll(base, tonic), weights, bias)
         assert (est["tonic"], est["mode"]) == (tonic, mode)
-        assert 0 <= est["confidence"] <= est["probability"] <= 1
-        assert len(est["alternatives"]) == 3
+        assert 0 <= est["confidence"] <= 1
 
 
 def test_key_probabilities_are_a_distribution_over_24_keys():
-    import numpy as np
+    from tastr.engine.bench import train_key
 
-    from tastr.engine import music
-
-    p = music.key_probabilities(np.random.default_rng(0).random(12) / 6)
+    p = train_key.key_probabilities(np.random.default_rng(0).random(12) / 6, *train_key.model())
     assert p.shape == (24,) and p.min() >= 0 and p.sum() == pytest.approx(1.0)
 
 
@@ -180,8 +160,11 @@ FPB = 20  # spectrogram frames per beat in the synthetic bars below
 
 def _bars(meter: int, start: int, n_beats: int = 64):
     """Log-mel of `n_beats` beats in `meter`: kick on every beat, snare on the backbeats (2 and 4 in 4/4,
-    2 and 3 in 3/4), a new chord each bar; the clip starts on beat `start + 1`."""
-    freqs = np.geomspace(30, 11000, 128)
+    2 and 3 in 3/4), a new chord each bar; the clip starts on beat `start + 1`. Bands as the benchmarks' (and
+    the engine's bench entry points') 128-band log-mel."""
+    from tastr.engine.bench.downbeats import mel_freqs
+
+    freqs = mel_freqs()
     log_mel = np.full((128, FPB * n_beats), 0.1)
     rng = np.random.default_rng(0)
     chords = rng.random((n_beats // meter + 2, 128)) * (freqs > 200) * (freqs < 2000)
@@ -193,28 +176,28 @@ def _bars(meter: int, start: int, n_beats: int = 64):
         log_mel[freqs < 120, i * FPB:i * FPB + 3] += 3.0  # kick
         if pos in ((1, 3) if meter == 4 else (1, 2)):
             log_mel[(freqs > 300) & (freqs < 2500), i * FPB:i * FPB + 3] += 2.0  # snare
-    return np.arange(n_beats) * FPB, log_mel, freqs
+    return np.arange(n_beats) * FPB, log_mel
+
+
+def _bench(op, beats, log_mel, **params):
+    return rust.bench(op, log_mel, beats, bands=log_mel.shape[0], frames=log_mel.shape[1], beats=beats.size, **params)
 
 
 @pytest.mark.parametrize("start", [0, 1, 2, 3])
 def test_downbeat_phase_finds_bar_one(start):
-    from tastr.engine.stages.core import _downbeat_phase
-
-    assert _downbeat_phase(*_bars(4, start)) == (4 - start) % 4
+    assert _bench("downbeat_phase", *_bars(4, start), m=4)["phase"] == (4 - start) % 4
 
 
 @pytest.mark.parametrize("start", [0, 1, 2])
 def test_downbeat_phase_finds_bar_one_in_three(start):
-    from tastr.engine.stages.core import _downbeat_phase
-
-    assert _downbeat_phase(*_bars(3, start), beats_per_bar=3) == (3 - start) % 3
+    assert _bench("downbeat_phase", *_bars(3, start), m=3)["phase"] == (3 - start) % 3
+    assert _bench("meter", *_bars(3, start))["phase3"] == (3 - start) % 3
 
 
 @pytest.mark.parametrize("meter", [3, 4])
 def test_meter_score_tells_three_from_four(meter):
-    from tastr.engine.stages.core import METER_THRESHOLD, _meter_score
-
-    assert (_meter_score(*_bars(meter, 1)) > METER_THRESHOLD) == (meter == 3)
+    m = _bench("meter", *_bars(meter, 1))
+    assert (m["score"] > m["threshold"]) == (meter == 3) and m["guess"] == meter
 
 
 def test_core_records_a_meter_guess(default_card):
@@ -225,8 +208,7 @@ def test_core_records_a_meter_guess(default_card):
 def test_meter_can_be_set_per_analysis(default_card):
     """{"beats_per_bar": 3} puts a downbeat on every 3rd beat and marks the meter as the user's choice."""
     y, _ = make_track(bpm=124, bars_per_section=SHORT)
-    card = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="synthetic")), stages=["core"],
-                        options={"beats_per_bar": 3})
+    card = analyze(y, 3)
     beats, downs = card.core.beat_times, card.core.downbeat_times
     assert card.core.beats_per_bar == 3 and card.core.meter_set
     assert downs and all(d in beats for d in downs)
@@ -234,16 +216,6 @@ def test_meter_can_be_set_per_analysis(default_card):
     assert set(np.diff(i)) == {3}
     detected, _ = default_card
     assert detected.core.beats_per_bar == 4 and not detected.core.meter_set
-
-
-def test_tastr_meter_turns_3_4_detection_off(monkeypatch):
-    from tastr.engine.stages.core import _beats_per_bar
-
-    assert _beats_per_bar(None, 3) == (3, False)
-    assert _beats_per_bar(4, 3) == (4, True)
-    monkeypatch.setenv("TASTR_METER", "4/4")
-    assert _beats_per_bar(None, 3) == (4, False)
-    assert _beats_per_bar(3, 4) == (3, True)  # a meter the user set still wins
 
 
 def test_pulse_clarity_is_read_on_the_trackers_grid(default_card):

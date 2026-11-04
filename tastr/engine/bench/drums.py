@@ -4,7 +4,7 @@ Four suites:
 
 - `synth`: generated loops with known 16-step patterns for every lane (kick,
   snare, clap, hat, open hat, tom, perc), scored step by step on the detected
-  groove the card shows (drums.drum_grid). Exact labels, but a synthetic kit.
+  groove the card shows (its drum grid). Exact labels, but a synthetic kit.
 - `idmt`: IDMT-SMT-Drums (real, sampled and techno kits; kick, snare and hi-hat
   onsets only). Fetch it from https://zenodo.org/records/7544164 and unzip;
   pass the folder that holds `audio/` and `annotation_xml/`.
@@ -47,9 +47,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import drums
-from ..card import Source, TrackCard
-from ..pipeline import SR, AnalysisContext
+from ..rust import SR
 from .synth import DRUM_PATTERNS, _fade, drum_sounds, make_drum_track
 
 SUITES = ("synth", "idmt", "mdb", "stemgmd-mix")
@@ -89,29 +87,17 @@ def _prf(tp: int, fp: int, fn: int) -> dict:
             "r": round(tp / max(1, tp + fn), 3), "n": tp + fn}
 
 
-def _synth_ctx(y: np.ndarray, bpm: float) -> AnalysisContext:
-    card = TrackCard(source=Source(kind="file", uri="synth"))
-    card.duration = len(y) / SR
-    beat = 60.0 / bpm
-    card.core.bpm = bpm
-    card.core.beat_times = [i * beat for i in range(int(card.duration / beat))]
-    card.core.downbeat_times = card.core.beat_times[::4]
-    return AnalysisContext(y=y, sr=SR, card=card)
-
-
 def _synth_grid(y: np.ndarray, bpm: float) -> dict:
     """The drum grid the card would show for a loop at a known tempo (beats from bar 1 at 0 s, in 4/4), from the
-    Rust engine (TASTR_ENGINE=python: the Python reference engine)."""
+    Rust engine."""
     from .. import rust
 
-    ctx = _synth_ctx(y, bpm)
-    if rust.chosen() == "python":
-        return drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
-    core = ctx.card.core
+    beat = 60.0 / bpm
+    beats = [i * beat for i in range(int(len(y) / SR / beat))]
+    downbeats = beats[::4]
     hits = _model_hits(y, None)
-    return rust.bench("drum_grid", y, core.beat_times, core.downbeat_times, hits, n=y.size,
-                      beats=len(core.beat_times), downbeats=len(core.downbeat_times), bpm=bpm, beats_per_bar=4,
-                      hits=hits.size)
+    return rust.bench("drum_grid", y, beats, downbeats, hits, n=y.size, beats=len(beats), downbeats=len(downbeats),
+                      bpm=bpm, beats_per_bar=4, hits=hits.size)
 
 
 def run_synth(bpms=(100, 128, 174)) -> dict:
@@ -269,16 +255,15 @@ def _model_hits(y: np.ndarray, path: str | None) -> np.ndarray:
 
 
 def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int]:
-    """Every lane's strength at every analysis frame, from the Rust engine (TASTR_ENGINE=python: the Python
-    reference engine)."""
+    """Every lane's strength at every analysis frame, from the Rust engine. (`uri` names the track for errors.)"""
     from .. import rust
 
-    if rust.chosen() == "rust":
-        hits = _model_hits(y, path)
+    hits = _model_hits(y, path)
+    try:
         r = rust.bench("lane_activations", y, hits, n=y.size, hits=hits.size)
-        return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"]
-    ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri=uri, local_path=path)))
-    return drums.lane_activations(ctx, np.arange(1 + len(y) // ctx.hop), slop=0), ctx.hop
+    except rust.RustEngineError as e:
+        raise RuntimeError(f"{uri}: {e}") from e
+    return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"]
 
 
 def _work(job) -> dict:

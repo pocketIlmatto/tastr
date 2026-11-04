@@ -75,7 +75,7 @@ jobs:
             echo "::group::$dataset ($LIMIT tracks)"
             # A failed dataset leaves no report, which the comparison counts as a problem.
             modal run tastr/cloud/modal_app.py --kind bench --dataset "$dataset" --path "$folder" \
-              --stages core --limit "$LIMIT" --out "reports/$dataset.json" || echo "::error::$dataset failed"
+              --limit "$LIMIT" --out "reports/$dataset.json" || echo "::error::$dataset failed"
             echo "::endgroup::"
           done
       - id: compare

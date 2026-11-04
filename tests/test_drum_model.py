@@ -6,9 +6,9 @@ import importlib.util
 import numpy as np
 import pytest
 
-from tastr.engine import adt, drums
-from tastr.engine.bench.drums import _synth_ctx
-from tastr.engine.bench.synth import make_drum_track
+from tastr.engine import adt
+from tastr.engine.bench.drums import LANES, _activations, _synth_grid
+from tastr.engine.bench.synth import SR, make_drum_track
 
 
 def no_torch(monkeypatch):
@@ -49,19 +49,17 @@ def fake_model(monkeypatch, hits):
     monkeypatch.setattr(adt, "onsets", lambda y, sr: {k: (np.asarray(t, float), np.full(len(t), 1.0)) for k, t in hits.items()})
 
 
-@pytest.mark.audio
+@pytest.mark.rust
 def test_fallback_keeps_the_built_in_lanes(monkeypatch):
     no_torch(monkeypatch)
+    monkeypatch.setenv("TASTR_DRUM_MODEL", "adtof")  # asked for, but PyTorch is missing
     y, _ = make_drum_track({"kick": "x...x...x...x...", "hat": "..x...x...x...x."}, bpm=120)
-    ctx = _synth_ctx(y, 120)
-    assert drums.model_lanes(ctx) is None
-    acts = drums.lane_activations(ctx, np.arange(10))
-    assert tuple(acts) == drums.LANES  # no cymbal lane
-    grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
-    assert set(grid) == set(drums.LANES)
+    acts, _ = _activations(y, "synth")
+    assert tuple(acts) == LANES  # no cymbal lane
+    assert set(_synth_grid(y, 120)) == set(LANES)
 
 
-@pytest.mark.audio
+@pytest.mark.rust
 def test_model_onsets_map_onto_the_groove(monkeypatch):
     bpm, step = 120, 0.125
     # the pattern tests/test_drums.py checks the built-in snare on
@@ -70,11 +68,10 @@ def test_model_onsets_map_onto_the_groove(monkeypatch):
     at = lambda steps: [(b * 16 + s) * step for b in range(bars) for s in steps]  # noqa: E731
     fake_model(monkeypatch, {"kick": at([0, 8]), "snare": [], "tom": at([14]), "hat": at(range(0, 16, 2)),
                              "cymbal": at([0])})
-    ctx = _synth_ctx(y, bpm)
-    lanes = drums.model_lanes(ctx)
-    f = int(round(14 * step * ctx.sr / ctx.hop))
+    lanes, hop = _activations(y, "synth")
+    f = int(round(14 * step * SR / hop))
     assert lanes["tom"][f] > 0 and lanes["tom"][f - 3:f].max() == 0
-    grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
+    grid = _synth_grid(y, bpm)
     assert "cymbal" in grid
     hits = lambda g: g["pattern"].replace("o", "x") if g["detected"] else "." * 16  # noqa: E731
     assert hits(grid["tom"]) == "..............x."

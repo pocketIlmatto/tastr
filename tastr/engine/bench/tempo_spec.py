@@ -1,6 +1,6 @@
 """Tempo benchmark on Beat This! spectrograms, for labeled sets whose audio isn't public.
 
-Runs core's tempo logic (`_tempo_and_beats`) on onset envelopes rebuilt from the
+Runs core's tempo logic (the Rust engine's `core::tempo_from_envelopes`) on onset envelopes rebuilt from the
 128-band log-mel spectrograms in the "Beat This!" release
 (https://zenodo.org/records/13922116). The reference tempo is 60 / the median
 labeled inter-beat interval. Only the original recordings are scored, not the
@@ -36,7 +36,7 @@ RATIOS = {"x2": 2.0, "/2": 0.5, "x3/2": 1.5, "x2/3": 2 / 3, "x4/3": 4 / 3, "x3/4
 def envelopes(log_mel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(onset_env, low_flux) on core's grid from a 128 x frames Beat This! log-mel spectrogram.
 
-    Mirrors signals.onset_envelope / low_band_flux: HPSS on mel power (undoing
+    Mirrors the engine's onset envelope and low-band flux (engine-rs features.rs): HPSS on mel power (undoing
     log1p(1000 x)), percussive part to dB, positive flux averaged over bands
     (all bands for onsets, below 150 Hz for the kick).
     """
@@ -58,33 +58,13 @@ def tempo(log_mel: np.ndarray) -> float | None:
 
 
 def tempo_and_confidence(log_mel: np.ndarray) -> tuple[float | None, float]:
-    """Core's (bpm, bpm_confidence) for one spectrogram, from the Rust engine (TASTR_ENGINE=python: the Python
-    reference engine)."""
+    """Core's (bpm, bpm_confidence) for one spectrogram, from the Rust engine's tempo logic."""
     from .. import rust
 
-    if rust.chosen() == "rust":
-        onset, low_flux = envelopes(log_mel)
-        r = rust.bench("tempo", onset, low_flux, log_mel, n=onset.size, bands=log_mel.shape[0],
-                       frames=log_mel.shape[1], fps=FPS)
-        return r["bpm"], r["confidence"]
-    return _python_tempo(log_mel)
-
-
-def _python_tempo(log_mel: np.ndarray) -> tuple[float | None, float]:
-    from ..pipeline import AnalysisContext
-    from ..stages.core import _tempo_and_beats
-
     onset, low_flux = envelopes(log_mel)
-    ctx = AnalysisContext(y=np.zeros(0, dtype=np.float32), sr=SR, card=None, hop=HOP)
-    from ..stages.core import _meter_score
-
-    freqs = mel_freqs()
-
-    def meter_of(frames):  # core's 43 fps beat frames onto the spectrogram's 50 fps
-        return _meter_score(np.clip(np.round(frames * HOP / SR * FPS).astype(int), 0, log_mel.shape[1] - 1), log_mel, freqs)
-
-    bpm, _, conf, *_ = _tempo_and_beats(ctx, onset, low_flux, onset.size, meter_of)
-    return bpm, conf
+    r = rust.bench("tempo", onset, low_flux, log_mel, n=onset.size, bands=log_mel.shape[0], frames=log_mel.shape[1],
+                   fps=FPS)
+    return r["bpm"], r["confidence"]
 
 
 def ratio_name(est: float | None, ref: float) -> str:

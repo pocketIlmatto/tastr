@@ -19,8 +19,8 @@ __version__ = "0.1.0"
 
 from .audio import AUDIO_EXTENSIONS, DecodeError, load_audio  # noqa: E402,F401
 from .card import Source, TrackCard  # noqa: E402,F401
-from .pipeline import SR, register_stage, registered_stages, run_pipeline  # noqa: E402,F401
 from . import rust  # noqa: E402
+from .rust import SR  # noqa: E402,F401
 
 log = logging.getLogger(__name__)
 
@@ -34,8 +34,7 @@ def analyze_file(path: str | os.PathLike, source: Source | None = None, options:
 
     Rust decodes the file itself, or, for formats it can't read (Opus), takes the audio decoded here. With the
     optional drum model (options["drum_model"], adt.py), the model runs here and Rust puts its hits into the
-    drum lanes. extras["engine"] names the engine build. The Python engine (run_pipeline over the stages in
-    stages/) stays only as the reference the benchmarks compare against."""
+    drum lanes. extras["engine"] names the engine build."""
     from dataclasses import asdict
     from pathlib import Path
 

@@ -1,4 +1,4 @@
-"""Run the analysis pipeline over a labeled dataset and score it.
+"""Run the engine over a labeled dataset and score it.
 
     report = run(datasets.load("giantsteps-key", "~/data/giantsteps-key"), jobs=4)
     print(format_summary(report))
@@ -18,28 +18,10 @@ from pathlib import Path
 
 from .. import __version__
 from ..card import Source, TrackCard
-from ..pipeline import SR, registered_stages, run_pipeline
+from ..rust import SR
 from . import metrics
 from .datasets import Item
 
-DEFAULT_STAGES = ["core", "sections"]
-
-
-def analyze_item(item: Item, stages: list[str] | None = None) -> TrackCard:
-    """The card for one bench track. With TASTR_ENGINE=rust (the default), the Rust engine makes the whole card
-    (every stage; rust_card); with python, the reference engine runs `stages` (default core and sections)."""
-    from .. import rust
-
-    if rust.chosen() == "rust":
-        return rust_card(item)
-    if item.synth is not None:
-        y = item.synth()
-    else:
-        from ..audio import load_audio
-
-        y = load_audio(item.path, SR)
-    card = TrackCard(source=Source(kind="file", uri=item.path or item.id, local_path=item.path, title=item.id))
-    return run_pipeline(y, SR, card, stages=stages or DEFAULT_STAGES)
 
 
 def rust_card(item: Item) -> TrackCard:
@@ -92,11 +74,10 @@ def score_item(item: Item, card: TrackCard) -> dict:
     return row
 
 
-def _work(args) -> dict:
-    item, stages = args
+def _work(item: Item) -> dict:
     t0 = time.time()
     try:
-        row = score_item(item, analyze_item(item, stages))
+        row = score_item(item, rust_card(item))
     except Exception as e:  # one unreadable file shouldn't sink a 600-track run
         row = {"id": item.id, "path": item.path, "errors": {"bench": f"{type(e).__name__}: {e}"}}
     row["seconds"] = round(time.time() - t0, 2)
@@ -147,16 +128,12 @@ def review_queue(rows: list[dict], n: int = 20) -> list[dict]:
             for r in (bad + unsure)[:n]]
 
 
-def _engine_name() -> str:
+def run(items: list[Item], jobs: int = 1, limit: int | None = None, progress=None) -> dict:
+    """Every item's card from the Rust engine (every stage), scored."""
     from .. import rust
 
-    return f"rust {rust.version()}" if rust.chosen() == "rust" else "python"
-
-
-def run(items: list[Item], stages: list[str] | None = None, jobs: int = 1, limit: int | None = None,
-        progress=None) -> dict:
     items = items[:limit] if limit else items
-    work = [(it, stages) for it in items]
+    work = list(items)
     rows: list[dict] = []
     t0 = time.time()
     if jobs > 1 and work:
@@ -175,12 +152,10 @@ def run(items: list[Item], stages: list[str] | None = None, jobs: int = 1, limit
             rows.append(_work(w))
             if progress:
                 progress(len(rows), len(items), rows[-1])
-    versions = {name: st.version for name, st in registered_stages().items()}
     return {
         "engine_version": __version__,
-        "engine": _engine_name(),
-        "stage_versions": versions,
-        "stages": stages or DEFAULT_STAGES,
+        "engine": f"rust {rust.version()}",
+        "stage_versions": dict(rust.STAGES),
         "seconds": round(time.time() - t0, 1),
         "summary": summarize(rows),
         "review": review_queue(rows),

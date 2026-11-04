@@ -284,8 +284,7 @@ These have defaults and change only if you set a secret of the same name ([hosti
 off). `TASTR_BROWSER_ENGINE=1` (off by default) has the browser make the whole card with the Rust engine.
 `TASTR_DIRECT_UPLOAD=1` (off by default; needs the bucket's PUT rule) has the page upload straight to the
 bucket. `deploy-worker.yml` passes `TASTR_COMMIT`, `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` on each deploy, so
-the Admin tab's deploy line names the commit and links to its GitHub Actions run. Not `TASTR_ENGINE` (analysis is
-on Modal) or `TASTR_HOME` (the Worker's is `/tmp/tastr`, in memory).
+the Admin tab's deploy line names the commit and links to its GitHub Actions run. Not `TASTR_HOME` (the Worker's is `/tmp/tastr`, in memory).
 
 ### Dashboards
 

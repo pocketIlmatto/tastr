@@ -92,13 +92,13 @@ Then open http://127.0.0.1:8000 and drop in your audio files. Run the tests with
 Tastr's code is under the MIT License ([LICENSE](LICENSE)). Security reports: see
 [SECURITY.md](SECURITY.md).
 
-Two generated files hold numbers fitted on public datasets, so they also carry the
-datasets' terms:
+Two generated tables in `engine-rs/src/consts.rs` hold numbers fitted on public datasets, so they
+also carry the datasets' terms:
 
-- `tastr/engine/key_model.py` (the learned key model) was fitted on GiantSteps Key and
+- `KEY_WEIGHTS` and `KEY_BIAS` (the learned key model) were fitted on GiantSteps Key and
   the Beatport EDM Key dataset (Zenodo 1101082), both CC BY-SA 4.0. Treat these weights
   as derived from that data: credit the datasets and share changes to the weights alike.
-- `tastr/engine/calibration_table.py` (the "N% likely right" tables) was fitted on
+- `BPM_KNOTS` and `KEY_KNOTS` (the "N% likely right" tables) were fitted on
   GiantSteps and Beatport tempo/key results and HJDB from the Beat This! release
   (Zenodo 13922116, CC BY 4.0).
 

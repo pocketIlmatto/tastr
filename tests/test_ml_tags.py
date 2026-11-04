@@ -162,3 +162,43 @@ def test_cli(db_path, track, stub, capsys, monkeypatch):
     monkeypatch.delenv("TASTR_ML_TAGS")
     assert cli.main(["--db", str(db_path), "ml-tags", "status"]) == 0
     assert "TASTR_ML_TAGS=on" in capsys.readouterr().out
+
+
+def test_auto_tags_new_uploads_and_the_library_once(db_path, track, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setenv("TASTR_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TASTR_LOOKUP", "")
+    monkeypatch.delenv("TASTR_ANALYSIS_BACKEND", raising=False)
+    monkeypatch.setattr(ml_tags, "installed", lambda: True)
+    monkeypatch.setattr(ml_tags, "analyze", lambda path: calls.append(path) or dict(RESULT))
+
+    def fake_analyze(source, options, on_stage=None, browser=None):
+        card = full_card()
+        card.source = source
+        return card
+
+    monkeypatch.setattr(service, "_analyze", fake_analyze)
+
+    monkeypatch.setenv("TASTR_ML_TAGS", "on")  # on: offered, but only on request
+    assert ml_tags.switched_on() and not ml_tags.automatic() and not ml_jobs.automatic()
+    with TestClient(create_app(db_path)) as client:
+        r = client.post("/api/analyze", files=[("files", ("one.wav", b"RIFF" + bytes(100), "audio/wav"))])
+        first = r.json()["results"][0]["track_id"]
+        assert first and client.get(f"/api/tracks/{first}/ml-tags").json()["state"] == "none"
+    assert not calls
+
+    monkeypatch.setenv("TASTR_ML_TAGS", "auto")
+    with TestClient(create_app(db_path)) as client:  # the start-up pass tags the library once
+        wait_for(client, track, "done")
+        wait_for(client, first, "done")
+        r = client.post("/api/analyze", files=[("files", ("two.wav", b"RIFF" + bytes(101), "audio/wav"))])
+        second = r.json()["results"][0]["track_id"]
+        wait_for(client, second, "done")  # and every new upload gets them
+    with db.connect(db_path) as conn:
+        assert all(db.get_ml_tags(conn, t) for t in (track, first, second)) and not ml_jobs.untagged(conn)
+        conn.execute("DELETE FROM ml_tags")
+    n = len(calls)
+    assert n == 3
+    with TestClient(create_app(db_path)) as client:  # the pass ran once: a restart doesn't tag the library again
+        assert client.get(f"/api/tracks/{track}/ml-tags").json()["state"] == "none"
+    assert len(calls) == n

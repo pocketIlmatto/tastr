@@ -133,7 +133,7 @@ Third-party pieces it uses or links to:
   [ADTOF](https://github.com/MZehren/ADTOF): M. Zehren, M. Alunno, P. Bientinesi,
   "High-Quality and Reproducible Automatic Drum Transcription from Crowdsourced
   Data", Signals 4(4), 2023.
-- **Essentia classifier models** (optional ML tags, off unless `TASTR_ML_TAGS=on`;
+- **Essentia classifier models** (optional ML tags, off unless `TASTR_ML_TAGS` is `on` or `auto`;
   [docs/essentia.md](docs/essentia.md)): MTG's weights are **non-commercial only** (CC BY-NC-SA
   4.0 per the models page, CC BY-NC-ND 4.0 per their LICENSE file) and Essentia is AGPL-3.0.
   Tastr includes neither: Essentia is an optional install (`tastr[ml-tags]`), and the weights

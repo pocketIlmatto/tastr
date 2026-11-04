@@ -22,6 +22,7 @@ from .hosted import (AccessVerifier, AnalysisSlots, LinkSigner, Settings, file_b
                      security_headers, today)
 
 log = logging.getLogger("tastr.web.server")  # the name these lines had before the routes moved out of server.py
+ML_BACKFILL_KEY = "ml_tags_backfill"  # meta: the day the one-time ML tags pass over the library was queued
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -145,6 +146,37 @@ class AppContext:
                 raise RuntimeError(f"Couldn't add ML tags: {e}") from e
         if result is None:
             raise LookupError("The track was deleted.")
+
+    def auto_ml_tags(self, rs) -> None:
+        """With TASTR_ML_TAGS=auto, queue ML tags for each track these analysis results added. Never fails an upload."""
+        try:
+            if ml_jobs.automatic():
+                for r in rs:
+                    if r.track_id is not None and not r.error and not r.already:
+                        self.ml_runs.start(r.track_id)
+        except Exception:  # noqa: BLE001 - the upload itself went fine; the log has the rest
+            log.exception("couldn't queue ML tags for new tracks")
+
+    def backfill_ml_tags(self) -> int:
+        """With TASTR_ML_TAGS=auto, queue ML tags once for every track that has none (the library from before it
+        was switched on). Queued runs survive restarts (their markers), so this happens once per database."""
+        try:
+            if not ml_jobs.automatic():
+                return 0
+            with closing(self.conn()) as c:
+                if db.get_meta(c, ML_BACKFILL_KEY):
+                    return 0
+                ids = ml_jobs.untagged(c)
+                for tid in ids:
+                    self.ml_runs.start(tid)
+                db.set_meta(c, ML_BACKFILL_KEY, today())
+            if ids:
+                self.event(None, "ml_tags", f"Started adding ML tags to {len(ids)} tracks (one-time pass over the library)",
+                           source=analysis_source())
+            return len(ids)
+        except Exception:  # noqa: BLE001 - the server still starts; the next start tries again
+            log.exception("couldn't queue ML tags for the library")
+            return 0
 
     def analysis_slot(self):
         return self.slots or nullcontext()

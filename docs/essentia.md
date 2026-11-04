@@ -25,7 +25,10 @@ yes/no annotations cover only its split-0 test set, so only tracks with a yes/no
 
 ## In the app (optional, off by default)
 
-With `TASTR_ML_TAGS=on`, a server offers ML tags for one track at a time. A hosted server runs them on Modal's
+With `TASTR_ML_TAGS=on`, a server offers ML tags for one track at a time. With `TASTR_ML_TAGS=auto` (the hosted site's
+setting) every new upload gets them after its analysis, and the first start with it queues every track that has
+none, once (`meta` key `ml_tags_backfill`). On Modal's 2-CPU container a track costs about $0.001, so about $1 per
+1,000 tracks. A hosted server runs them on Modal's
 `ml_tags` function (docs/hosting-map.md); a local one needs `pip install 'tastr[ml-tags]'` and downloads the
 weights (about 40 MB) into `~/.tastr/essentia-models` on first use (`TASTR_ESSENTIA_MODELS` moves them).
 

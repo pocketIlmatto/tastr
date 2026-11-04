@@ -5,7 +5,7 @@ MTG-Jamendo mood/theme tags and instruments, voice/instrumental, tonal/atonal; o
 the emoMusic arousal/valence head. `analyze(path)` returns every head's output averaged over the track, and
 `tags(result)` turns that into the tags the card can show.
 
-Off unless TASTR_ML_TAGS=on, because of the licenses: MTG's weights are for non-commercial use only
+Off unless TASTR_ML_TAGS is on (on request) or auto (every new track), because of the licenses: MTG's weights are for non-commercial use only
 (CC BY-NC-SA 4.0 per the models page, CC BY-NC-ND 4.0 per its LICENSE file) and Essentia is AGPL-3.0. Neither
 is part of Tastr: Essentia is an optional install (`pip install 'tastr[ml-tags]'`), and the weights (about
 40 MB) download on first use into TASTR_ESSENTIA_MODELS (default ~/.tastr/essentia-models), or are baked into
@@ -61,9 +61,18 @@ def download_command(root: str) -> str:
     return " && ".join(parts)
 
 
+def _setting() -> str:
+    return os.environ.get("TASTR_ML_TAGS", "").strip().lower()
+
+
 def switched_on() -> bool:
-    """TASTR_ML_TAGS=on: this server offers ML tags. Off by default (the weights are non-commercial only)."""
-    return os.environ.get("TASTR_ML_TAGS", "").strip().lower() in ("on", "1", "true", "yes")
+    """TASTR_ML_TAGS=on (or auto): this server offers ML tags. Off by default (the weights are non-commercial only)."""
+    return _setting() in ("on", "auto", "1", "true", "yes")
+
+
+def automatic() -> bool:
+    """TASTR_ML_TAGS=auto: every new analysis gets ML tags, and the tracks that have none get them once."""
+    return _setting() == "auto"
 
 
 def installed() -> bool:

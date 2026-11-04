@@ -1,6 +1,7 @@
 """Optional ML tags for the web server and CLI: "Add ML tags" runs MTG's Essentia classifiers
 (engine/ml_tags.py, docs/essentia.md) on one stored track's audio in the background and stores the result in the
-`ml_tags` table, which re-analysis leaves alone. Off unless TASTR_ML_TAGS=on, because MTG's weights are licensed
+`ml_tags` table, which re-analysis leaves alone. With TASTR_ML_TAGS=auto every new upload gets them, and the
+library's untagged tracks get them once. Off unless TASTR_ML_TAGS is on or auto, because MTG's weights are licensed
 for non-commercial use only. A hosted server runs them on Modal (`ml_tags` in tastr/cloud/modal_web.py); a local
 one needs Essentia installed (`pip install 'tastr[ml-tags]'`). Jobs run one at a time, like drum model runs
 (drum_jobs.Jobs).
@@ -32,6 +33,18 @@ def available() -> bool:
 
         return remote.available()
     return ml_tags.installed()
+
+
+def automatic() -> bool:
+    """Whether every new analysis gets ML tags (TASTR_ML_TAGS=auto) and they can run here."""
+    from .engine import ml_tags
+
+    return ml_tags.automatic() and available()
+
+
+def untagged(conn: sqlite3.Connection) -> list[int]:
+    """The tracks with no ML tags yet, oldest first."""
+    return [r[0] for r in conn.execute("SELECT id FROM tracks WHERE id NOT IN (SELECT track_id FROM ml_tags) ORDER BY id")]
 
 
 def why_not() -> str:

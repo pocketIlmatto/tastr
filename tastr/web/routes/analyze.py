@@ -274,6 +274,7 @@ def router(ctx: AppContext) -> APIRouter:
                 drop_cards(sig)
                 release(paths)
             drop_known(rs)
+            ctx.auto_ml_tags(rs)
             if ctx.hosted:  # only tracks that analyzed count toward the daily limit, so a failed try can be retried
                 db.add_usage(c, request.state.user, "tracks", today(), analyzed(rs))
             return ctx.results(rs, ctx.owner_of(request))
@@ -412,6 +413,7 @@ def router(ctx: AppContext) -> APIRouter:
                             failed_at.append(progress.last_stage if r.error else None)
                 except TimeoutError:
                     raise JobError("The server is busy analyzing other tracks. Try again in a few minutes.") from None
+                ctx.auto_ml_tags(rs)
                 if ctx.hosted:  # as for a plain upload: only tracks that analyzed count toward the daily limit
                     db.add_usage(c, user, "tracks", today(), analyzed(rs))
             out = ctx.results(rs, user, job_id, failed_at)

@@ -179,9 +179,9 @@ Stems work the same way through Modal's `stems` function, which uploads each ste
 so stems never pass through the server. "Detect drums with the model" in a track's menu re-analyzes it through
 `analyze_drums`, which is `analyze` plus PyTorch and the pretrained drum model's weights, kept in its own image
 so everyday uploads don't wait for PyTorch to load. A queued or running separation or drum model run leaves a
-marker in the database (`job_markers`), so it resumes after a restart. "Add ML tags" (only with
-`TASTR_ML_TAGS=on`) sends the track's audio link to `ml_tags`, which runs MTG's Essentia classifiers and returns
-the tags; the server keeps them in the `ml_tags` table, apart from the card, so re-analysis keeps them.
+marker in the database (`job_markers`), so it resumes after a restart. ML tags (with `TASTR_ML_TAGS=auto`, after
+each new upload is analyzed, and once for every track from before) send the track's audio link to `ml_tags`, which runs MTG's Essentia classifiers and returns
+the tags. They queue one at a time and leave markers too. The server keeps them in the `ml_tags` table, apart from the card, so re-analysis keeps them.
 
 ## Which service handles which step
 
@@ -198,7 +198,7 @@ the tags; the server keeps them in the `ml_tags` table, apart from the card, so 
 | Whole analysis (optional) | The visitor's browser | With `TASTR_BROWSER_ENGINE` on, `tastr/web/static/engine.js` runs the Rust engine's WebAssembly build in a worker and the upload carries the card. `deploy-worker.yml` builds the `.wasm` and `worker/build.py` puts it with the static assets. |
 | Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. Cards always come from the Rust engine, whose library the image builds (`tastr/cloud/rust_image.py`). |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. The model runs in Python and the Rust library, built into this image too, makes the card. |
-| ML tags (on request, optional) | Modal `ml_tags` | When the Worker's `TASTR_ML_TAGS` is `on`, as it is in `worker/wrangler.jsonc` (MTG's weights are non-commercial only, docs/essentia.md). Essentia (AGPL-3.0) and the weights are installed into its own image at deploy time; no Rust engine. One track at a time, about 6 s for a 5-minute track. |
+| ML tags (optional) | Modal `ml_tags` | With the Worker's `TASTR_ML_TAGS` set to `auto`, as it is in `worker/wrangler.jsonc`, every new upload gets them after its analysis, and the tracks from before got them once (`on`: only on request) (MTG's weights are non-commercial only, docs/essentia.md). Essentia (AGPL-3.0) and the weights are installed into its own image at deploy time; no Rust engine. One track at a time, about 6 s of embedding for a 5-minute track; about $1 of Modal time per 1,000 tracks. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. Reads the upload from a signed link and uploads each stem to a signed link of its own. |
 | The way in to Modal | Modal `api` | A small web endpoint in front of the functions above, since the Worker can't run the Modal client. Only callers with a Modal proxy auth token get in. Every answer streams lines of JSON, with a blank line every 20 seconds so a long call stays open. The Worker calls it at `TASTR_MODAL_URL`, with the token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET` (`tastr/cloud/remote.py`). |
 | Background work | The Durable Object | `tastr/runner.py`: jobs (analyses, stems, drum model runs, ML tags) are asyncio tasks in lanes that queue them, and the repeating work (the expiry sweep every 6 hours, the GitHub watch) runs from the object's alarm, which wakes it when it is due. |
@@ -262,7 +262,7 @@ A deploy resets these to what's in the file, so change them there, not in the da
 | `TASTR_WORKER_NAME` | `tastr` | The Admin tab's Worker logs link, and the source of its deploy and restart lines |
 | `TASTR_CF_ACCOUNT_ID` | the account id (not a secret) | The Admin tab's links to the Worker's logs, Access's applications and its log of blocked requests |
 | `TASTR_GITHUB_REPO`, `TASTR_GITHUB_WORKFLOWS` | `pocketIlmatto/tastr`, `tests,deploy` | Whose GitHub Actions runs the Admin log shows, and which workflows |
-| `TASTR_ML_TAGS` | `on` | Offers ML tags, run on Modal's `ml_tags`. MTG's weights are licensed for non-commercial use only ([essentia.md](essentia.md)); remove it to switch them off |
+| `TASTR_ML_TAGS` | `auto` | ML tags on every new upload, and once on the tracks from before (`on`: only on request), run on Modal's `ml_tags`. MTG's weights are licensed for non-commercial use only ([essentia.md](essentia.md)); remove it to switch them off |
 
 ### Worker secrets
 

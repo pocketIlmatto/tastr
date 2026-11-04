@@ -139,12 +139,12 @@ function lookupLine(c) {
 
 // Metadata › Listed elsewhere: every source, filled in or not (sandbox v201, listed-elsewhere-spec.md). The server
 // lists the sources (lookup_sources, with `configured`); a source with no stored row reads "none".
-const LOOKUP_HOW = { rekordbox: "Your Rekordbox export, matched by file name", acousticbrainz: "Open data, by artist and title" };
+const LOOKUP_HOW = { rekordbox: "Your Rekordbox export, matched by file name or artist and title", acousticbrainz: "Open data, by artist and title" };
 const LOOKUP_SAY = {
   none: "Not looked up yet.", not_found: "Not found: it has no listing for this artist and title.",
   pending: "Asked: the catalog is adding this song. Check back later.", no_tags: "Can't look up: the file has no artist and title tags.",
   limited: "Paused: the catalog's limit was reached. It will be asked again later.",
-  rb_none: "Not in your Rekordbox export.", off: "Not set up on this server." };
+  rb_none: "Not in your Rekordbox export.", rb_new: "Not imported yet.", off: "Not set up on this server." };
 export function lookupsFor(c) {
   const stored = Object.fromEntries((c.lookups || []).map((x) => [x.provider, x]));
   return (c.lookup_sources || []).map((src) => ({ ...src, status: "none", ...(stored[src.provider] || {}),
@@ -171,6 +171,7 @@ function lookupTable(c) {
           x.url && x.url !== x.homepage ? h("a", { class: "lk-open", href: x.url, target: "_blank", rel: "noopener" }, "See the listing ↗") : null].filter(Boolean));
         if (!x.configured) return row(name, x.how, [h("span", { class: "muted" }, LOOKUP_SAY.off), h("small", { class: "muted" }, "An admin turns it on with TASTR_LOOKUP (docs/lookup.md).")], "lk-off");
         if (x.status === "error") return row(name, x.how, [h("span", { class: "lk-err" }, `Lookup failed: ${(x.error || "the service didn't answer").replace(/\.$/, "")}.`)], "lk-off");
+        if (x.provider === "rekordbox" && x.status === "none" && x.imported === false) return row(name, x.how, [h("span", { class: "muted" }, LOOKUP_SAY.rb_new), h("small", { class: "muted" }, "An admin loads it from your export (docs/rekordbox.md).")], "lk-off");
         const say = x.provider === "rekordbox" && x.status === "none" ? LOOKUP_SAY.rb_none : LOOKUP_SAY[x.status] || x.status;
         return row(name, x.how, [h("span", { class: "muted" }, say)], "lk-off");
       })),

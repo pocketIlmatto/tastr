@@ -7,7 +7,7 @@ related key, or different. The catalogs never replace the engine's numbers.
 The line under the card's numbers shows only the sources that found the track. The card's **Metadata**
 section ends with a "Listed elsewhere" table that always lists every source: what it found, or why it has
 nothing yet (not looked up yet, not found, no artist and title tags, the lookup failed, not set up on this
-server, or for Rekordbox, not in your export).
+server, or for Rekordbox, not imported yet or not in your export).
 
 Lookups are **off by default**. When on, they send the track's **artist and title** (from its tags)
 to each provider you enabled; no audio and nothing else leaves the machine. Tracks without artist and

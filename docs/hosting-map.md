@@ -225,6 +225,9 @@ Four layers, each assuming the one before it might be bypassed.
    id for code someone saved with `POST /api/strudel/share` (after signing in), kept in the `strudel_shares`
    table. Opening one serves a small page that sends the browser on to strudel.cc with the code, after signing
    the code's `/pub/` audio and stem links again, only for tracks the person who made it still has.
+   The page carries OpenGraph and Twitter tags, so chat apps show a preview card; their crawlers can't sign in,
+   so its image and icon are public too: `/pub/preview.png` and `/pub/favicon.svg`, which the Worker serves from
+   Static Assets (`PUBLIC_ASSETS` in `worker/src/entry.py`). Any other link shows the Access login in a preview.
 
 Keys are split so a leak stays small. The audio bucket's R2 token is scoped to `tastr-audio`, not the benchmark
 bucket `tastr-data`. The Worker reaches Modal with a proxy auth token that can only call the `api` endpoint, and
@@ -309,7 +312,7 @@ on Modal) or `TASTR_HOME` (the Worker's is `/tmp/tastr`, in memory).
 flowchart LR
     B[Browser] -->|HTTPS, Access login| CF[Cloudflare edge]
     CF --> W["Worker tastr<br/>(worker/src/entry.py)"]
-    W -->|"/static/*, /sqljs/*, /engine/*"| SA["Workers Static Assets<br/>worker/public: page files, sql.js,<br/>the engine's WebAssembly build"]
+    W -->|"/static/*, /sqljs/*, /engine/*,<br/>/pub/preview.png, /pub/favicon.svg"| SA["Workers Static Assets<br/>worker/public: page files, sql.js,<br/>the engine's WebAssembly build"]
     W -->|everything else| DO["Durable Object Library<br/>FastAPI app + the library database<br/>in its SQLite storage"]
     DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
     AL[Durable Object alarm] -->|expiry sweep, watch| DO

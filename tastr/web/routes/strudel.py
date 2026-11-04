@@ -18,13 +18,14 @@ from pydantic import BaseModel, Field
 
 from ... import db
 from .. import claude
-from ..context import AppContext
+from ..context import STATIC_DIR, AppContext
 from ..hosted import PUBLIC_PREFIX, today
 
 MAX_TEMPLATES, MAX_TEMPLATE_BYTES = 50, 20_000  # templates per person, and the size of one
 MAX_CODE_BYTES, MAX_ASK_CHARS, MAX_SUMMARY_CHARS = 60_000, 500, 2_000
 MAX_SHARES, SHARE_ID_LEN = 1000, 10  # share links per person; 10 letters and digits is about 59 bits, too many to guess
 SHARE_PREFIX = PUBLIC_PREFIX + "s/"  # under /pub/, so Cloudflare Access lets it through like the audio links
+PREVIEW_PATH = PUBLIC_PREFIX + "preview.png"  # the link-preview image; crawlers can't get past Access to /static/
 SIGNED = re.compile(r"/pub/(\d+\.[A-Za-z0-9_-]+)/tracks/(\d+)/")  # a /pub/ audio or stem link in the code
 
 
@@ -42,14 +43,26 @@ def strudel_url(code: str) -> str:
     return "https://strudel.cc/#" + quote(base64.b64encode(code.encode()).decode(), safe="")
 
 
-def share_page(code: str) -> str:
+def share_page(code: str, origin: str = "") -> str:
     """A page that goes straight on to strudel.cc (a meta refresh: the link is too long for a safe redirect header,
-    and the page's CSP allows no script). Its title is the code's first comment, for link previews."""
+    and the page's CSP allows no script). Its title is the code's first comment, and its OpenGraph and Twitter tags
+    give chat apps a preview card: their crawlers read the tags and don't follow the refresh. `origin` (like
+    https://host) makes the image's address absolute, which the tags need."""
     url = html.escape(strudel_url(code))
     first = next((ln.strip()[2:].strip() for ln in code.splitlines() if ln.strip().startswith("//")), "")
     title = html.escape(f"Strudel: {first}" if first else "Strudel code from Tastr")
+    desc = "Live code from Tastr. Opens in strudel.cc, ready to play."
+    image = html.escape(origin + PREVIEW_PATH)
+    meta = "".join(f'<meta property="{k}" content="{v}">' for k, v in [
+        ("og:type", "website"), ("og:site_name", "Tastr"), ("og:title", title), ("og:description", desc),
+        ("og:image", image), ("og:image:width", "1200"), ("og:image:height", "630"),
+        ("og:image:alt", "Tastr: track cards with BPM, key, sections and Strudel ideas")])
+    meta += "".join(f'<meta name="{k}" content="{v}">' for k, v in [
+        ("description", desc), ("twitter:card", "summary_large_image"), ("twitter:title", title),
+        ("twitter:description", desc), ("twitter:image", image)])
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>{title}</title>'
             f'<meta name="robots" content="noindex"><meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'{meta}<link rel="icon" href="{PUBLIC_PREFIX}favicon.svg" type="image/svg+xml">'
             f'<meta http-equiv="refresh" content="0; url={url}"></head>'
             f'<body style="font-family: system-ui, sans-serif; padding: 2rem"><p>Opening strudel.cc&hellip; '
             f'<a href="{url}">Open it yourself</a> if nothing happens.</p></body></html>')
@@ -134,15 +147,26 @@ def router(ctx: AppContext) -> APIRouter:
             return f"/pub/{ctx.signer.token(tid)}/tracks/{tid}/"
         return SIGNED.sub(sign, code)
 
+    @api.get(PREVIEW_PATH, include_in_schema=False)
+    @api.get(PUBLIC_PREFIX + "favicon.svg", include_in_schema=False)
+    def public_image(request: Request):
+        """The share page's preview image and icon, under /pub/ so a crawler or a signed-out browser can get them
+        (on the Worker, worker/src/entry.py serves these two from Static Assets before they reach here)."""
+        name = request.url.path.removeprefix(PUBLIC_PREFIX)
+        kind = "image/png" if name.endswith(".png") else "image/svg+xml"
+        return Response((STATIC_DIR / name).read_bytes(), media_type=kind,
+                        headers={"Cache-Control": "public, max-age=86400"})
+
     @api.get(SHARE_PREFIX + "{share_id}", include_in_schema=False)
-    def open_share(share_id: str):
+    def open_share(share_id: str, request: Request):
         """Anyone with the link: on to strudel.cc with the code. No login (strudel.cc links get passed around)."""
         with closing(ctx.conn()) as c:
             got = db.get_share(c, share_id) if share_id.isalnum() and len(share_id) <= 32 else None
             if got is None:
                 raise HTTPException(404, "There's no Strudel code at this link.")
             code = fresh_links(c, *got)
-        return HTMLResponse(share_page(code), headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
+        origin = f"{'https' if ctx.hosted else request.url.scheme}://{request.url.netloc}"
+        return HTMLResponse(share_page(code, origin), headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 
     # Ask Claude.
     def status(request: Request) -> dict:

@@ -199,3 +199,24 @@ def test_share_link_signs_stem_links_again(db_path, monkeypatch):
     assert tok.startswith("2000604800.")  # signed again, LINK_DAYS from now
     assert f"/tracks/{mine}/stems/drums'" in opened
     assert stale in opened  # someone else's track is left alone
+
+
+def test_share_page_has_a_link_preview(db_path):
+    import re
+    c = local_client(db_path)
+    page = c.get(c.post("/api/strudel/share", json={"code": "// Night drive\ns('bd*4')"}).json()["url"]).text
+    tags = dict(re.findall(r'<meta (?:property|name)="([\w:]+)" content="([^"]*)"', page))
+    assert tags["og:title"] == tags["twitter:title"] == "Strudel: Night drive"
+    assert tags["og:image"] == tags["twitter:image"] == "http://testserver/pub/preview.png"
+    assert tags["twitter:card"] == "summary_large_image" and tags["og:description"]
+    img = c.get("/pub/preview.png")
+    assert img.status_code == 200 and img.headers["content-type"] == "image/png"
+    assert img.content.startswith(b"\x89PNG")
+    assert c.get("/pub/favicon.svg").headers["content-type"].startswith("image/svg+xml")
+
+
+def test_preview_image_needs_no_login(db_path):
+    c = hosted_client(db_path, link_secret="s3cret")
+    assert c.get("/pub/preview.png").status_code == 200  # a chat app's crawler has no Access login
+    assert c.get("/pub/favicon.svg").status_code == 200
+    assert c.get("/static/favicon.svg").status_code == 401

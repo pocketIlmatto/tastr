@@ -75,8 +75,12 @@ def remove(folder: Path) -> None:
     blobs.remove_tree(folder)
 
 
-def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None) -> None:
-    """Split one file into STEM_NAMES FLAC files in `out_dir` with Demucs. Tests replace this."""
+def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None, *,
+             model_name: str = MODEL, shifts: int = 1, overlap: float = 0.25) -> None:
+    """Split one file into STEM_NAMES FLAC files in `out_dir` with Demucs. Tests replace this.
+
+    `model_name`, `shifts` and `overlap` default to what the app uses; scripts/stem_ab.py tries others
+    (docs/stems-tuning.md). They apply to the local Demucs only, not to the Modal backend."""
     if backend() == "modal":
         from .cloud import remote
 
@@ -98,8 +102,8 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
 
     from .engine.audio import load_audio
 
-    with _hub_offline_if_cached():
-        model = get_model(MODEL)  # downloads the weights (about 80 MB) the first time
+    with _hub_offline_if_cached(model_name):
+        model = get_model(model_name)  # downloads the weights (about 80 MB) the first time
     model.eval()
     wav = load_audio(blobs.ensure(audio_path) or audio_path, model.samplerate, mono=False)  # (channels, n); m4a/aac go through ffmpeg
     if wav.shape[0] < model.audio_channels:
@@ -121,7 +125,8 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
         demucs_apply.tqdm = types.SimpleNamespace(tqdm=counting)
     try:
         with torch.no_grad():
-            sources = demucs_apply.apply_model(model, mix[None], device=device, progress=progress is not None)[0]
+            sources = demucs_apply.apply_model(model, mix[None], shifts=shifts, overlap=overlap, device=device,
+                                               progress=progress is not None)[0]
     finally:
         demucs_apply.tqdm = real_tqdm
     sources = sources * ref.std() + ref.mean()
@@ -136,7 +141,7 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
 
 
 @contextlib.contextmanager
-def _hub_offline_if_cached():
+def _hub_offline_if_cached(model_name: str = MODEL):
     """Keep Hugging Face offline while Demucs loads a model that is already in its cache.
 
     Demucs 4.1 loads `htdemucs` from the Hugging Face Hub (adefossez/HTDemucs). Even with the files
@@ -147,6 +152,9 @@ def _hub_offline_if_cached():
         import yaml
         from huggingface_hub import constants, try_to_load_from_cache
     except ImportError:  # Demucs 4.0 downloads from Meta's server and doesn't use the Hub
+        yield
+        return
+    if model_name != MODEL:  # only MODEL's Hub repo is known; others load online as usual
         yield
         return
     bag = try_to_load_from_cache(HF_REPO, f"{MODEL}.yaml")

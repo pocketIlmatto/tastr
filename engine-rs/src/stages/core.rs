@@ -22,7 +22,7 @@ const THREE_TWO_MAX_METER: f64 = 0.0;
 const PULSE_SCALE: f64 = 4.0;
 const METER_CUE_SCALES: [(&str, f64); 6] =
     [("timbre_lag", 0.1), ("bass_lag", 0.27), ("kick", 0.3), ("snare", 0.25), ("change", 0.17), ("bass_change", 0.22)];
-const METER_THRESHOLD: f64 = 1.0;
+pub const METER_THRESHOLD: f64 = 1.0;
 
 pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     let sr = ctx.sr;
@@ -172,29 +172,45 @@ fn diffs(x: &[f64]) -> Vec<f64> {
     x.windows(2).map(|w| w[1] - w[0]).collect()
 }
 
-fn beat_index(frames: &[f64], n_frames: usize) -> Vec<usize> {
+pub fn beat_index(frames: &[f64], n_frames: usize) -> Vec<usize> {
     frames.iter().map(|&f| clip(round_half_even(f), 0.0, n_frames as f64 - 1.0) as usize).collect()
 }
 
 /// _tempo_and_beats: (bpm, beat frames, confidence, stability, pulse clarity).
 fn tempo_and_beats(ctx: &mut Ctx, n_frames: usize) -> (Option<f64>, Vec<f64>, f64, f64, f64) {
-    let (sr, hop) = (ctx.sr, HOP as f64);
-    let onset = ctx.onset.clone();
+    let Ctx { onset, low_flux, tempogram, log_mel, log_mel_freqs, sr, .. } = ctx;
+    let meter_of = |frames: &[f64]| meter_score(&beat_index(frames, n_frames), log_mel, log_mel_freqs, None);
+    tempo_from_envelopes(onset, low_flux, *sr, n_frames, tempogram, &meter_of)
+}
+
+/// The tempo logic on its own: an onset envelope and low-band flux on core's frame grid (`sr` / HOP), the
+/// 384-lag tempogram mean when already computed (filled in on first use), and `meter_of`, the meter score of a
+/// beat grid in those frames (the 1.5x switch is skipped when the faster beats group in 3s). The spectrogram
+/// benchmarks call it on envelopes rebuilt from a log-mel spectrogram (bench.rs).
+pub fn tempo_from_envelopes(
+    onset: &[f32],
+    low_flux: &[f32],
+    sr: f64,
+    n_frames: usize,
+    tempogram: &mut Option<Vec<f64>>,
+    meter_of: &dyn Fn(&[f64]) -> f64,
+) -> (Option<f64>, Vec<f64>, f64, f64, f64) {
+    let hop = HOP as f64;
     let max = onset.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    if n_frames < 2 || max <= 1e-6 || std_f32(&onset) < 1e-6 {
+    if n_frames < 2 || max <= 1e-6 || std_f32(onset) < 1e-6 {
         return (None, Vec::new(), 0.0, 0.0, 0.0);
     }
-    let frames = tracked_beats(&onset, sr, n_frames);
+    let frames = tracked_beats(onset, sr, n_frames);
     let bpm = 60.0 / (median(&diffs(&frames)) * hop / sr);
-    let (bpm, frames) = three_over_two(ctx, &onset, bpm, frames, n_frames);
+    let (bpm, frames) = three_over_two(onset, sr, tempogram, meter_of, bpm, frames);
     let (mut bpm, frames) = fold_into_range(bpm, frames);
     let ibis: Vec<f64> = diffs(&frames).iter().map(|d| d * hop / sr).collect();
     let stability = if ibis.is_empty() { 0.0 } else { clip(1.0 - std(&ibis) / (mean(&ibis) + 1e-9) * 4.0, 0.0, 1.0) };
     let frames = regularize(&frames, n_frames);
     let picked: Vec<f32> = beat_index(&frames, n_frames).into_iter().map(|i| onset[i]).collect();
-    let ratio = mean_f32(&picked) / (mean_f32(&onset) + 1e-9);
+    let ratio = mean_f32(&picked) / (mean_f32(onset) + 1e-9);
     let pulse = clip(((ratio - 1.0) as f64) / PULSE_SCALE, 0.0, 1.0);
-    let frames = align_to_kick(&frames, &ctx.low_flux);
+    let frames = align_to_kick(&frames, low_flux);
     if frames.len() > 1 {
         bpm = 60.0 * sr / (hop * median(&diffs(&frames)));
     }
@@ -217,16 +233,22 @@ fn tracked_beats(onset: &[f32], sr: f64, n_frames: usize) -> Vec<f64> {
 
 /// Try 1.5x the tempo (a 3:2 error): taken when its periodicity is nearly as strong and its beats don't read as
 /// triple meter.
-fn three_over_two(ctx: &mut Ctx, onset: &[f32], bpm: f64, frames: Vec<f64>, n_frames: usize) -> (f64, Vec<f64>) {
-    if !(bpm * 1.5 < MAX_BPM && periodicity(ctx, bpm * 1.5) >= THREE_TWO_RATIO * periodicity(ctx, bpm)) {
+fn three_over_two(
+    onset: &[f32],
+    sr: f64,
+    tempogram: &mut Option<Vec<f64>>,
+    meter_of: &dyn Fn(&[f64]) -> f64,
+    bpm: f64,
+    frames: Vec<f64>,
+) -> (f64, Vec<f64>) {
+    if !(bpm * 1.5 < MAX_BPM
+        && periodicity(onset, sr, tempogram, bpm * 1.5) >= THREE_TWO_RATIO * periodicity(onset, sr, tempogram, bpm))
+    {
         return (bpm, frames);
     }
-    let faster: Vec<f64> =
-        rhythm::beat_track(onset, ctx.sr, HOP, Some(bpm * 1.5)).1.iter().map(|&b| b as f64).collect();
-    if faster.len() >= MIN_BEATS
-        && meter_score(&beat_index(&faster, n_frames), &ctx.log_mel, &ctx.log_mel_freqs, None) <= THREE_TWO_MAX_METER
-    {
-        return (60.0 / (median(&diffs(&faster)) * HOP as f64 / ctx.sr), faster);
+    let faster: Vec<f64> = rhythm::beat_track(onset, sr, HOP, Some(bpm * 1.5)).1.iter().map(|&b| b as f64).collect();
+    if faster.len() >= MIN_BEATS && meter_of(&faster) <= THREE_TWO_MAX_METER {
+        return (60.0 / (median(&diffs(&faster)) * HOP as f64 / sr), faster);
     }
     (bpm, frames)
 }
@@ -247,11 +269,11 @@ fn fold_into_range(mut bpm: f64, mut frames: Vec<f64>) -> (f64, Vec<f64>) {
     (bpm, frames)
 }
 
-/// _periodicity: the 384-lag tempogram's mean strength at `bpm`, best of the nearest three lags.
-fn periodicity(ctx: &mut Ctx, bpm: f64) -> f64 {
-    let (sr, hop) = (ctx.sr, HOP);
-    let ac = ctx.tempogram().to_vec();
-    let bpms = rhythm::tempo_frequencies(ac.len(), sr, hop);
+/// _periodicity: the 384-lag tempogram's mean strength at `bpm`, best of the nearest three lags. The
+/// tempogram is computed on first use and kept in `tempogram`.
+fn periodicity(onset: &[f32], sr: f64, tempogram: &mut Option<Vec<f64>>, bpm: f64) -> f64 {
+    let ac = tempogram.get_or_insert_with(|| rhythm::tempogram_mean(&rhythm::tempogram(onset, 384), 384, onset.len()));
+    let bpms = rhythm::tempo_frequencies(ac.len(), sr, HOP);
     let d: Vec<f64> = bpms[1..].iter().map(|b| (b - bpm).abs()).collect();
     let mut i = 0;
     for (j, &v) in d.iter().enumerate() {
@@ -377,7 +399,7 @@ fn norm_f32(v: &[f32]) -> f32 {
     pairwise_sum(&v.iter().map(|x| x * x).collect::<Vec<f32>>()).sqrt()
 }
 
-fn beat_cues(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64]) -> Cues {
+pub fn beat_cues(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64]) -> Cues {
     let n_frames = log_mel.cols;
     let frames: Vec<usize> = beat_frames.iter().map(|&f| f.min(n_frames - 1)).collect();
     let spectra = |lo: f64, hi: f64| -> Vec<Vec<f32>> {
@@ -440,7 +462,7 @@ fn per_phase(v: &[f64], m: usize) -> Vec<f64> {
     (0..m).map(|p| strided_mean(v, p, m)).collect()
 }
 
-fn downbeat_phase(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], m: usize, cues: Option<&Cues>) -> usize {
+pub fn downbeat_phase(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], m: usize, cues: Option<&Cues>) -> usize {
     if beat_frames.len() < MIN_BEATS || log_mel.cols < 2 {
         return 0;
     }
@@ -510,7 +532,7 @@ fn downbeat_phase(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], m: usi
     }
 }
 
-fn meter_score(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], cues: Option<&Cues>) -> f64 {
+pub fn meter_score(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], cues: Option<&Cues>) -> f64 {
     if beat_frames.len() < 2 * MIN_BEATS || log_mel.cols < 2 {
         return 0.0;
     }

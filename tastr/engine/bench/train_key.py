@@ -58,8 +58,7 @@ def usable(tracks: list[dict]) -> list[dict]:
 
 def synthetic_tracks() -> list[dict]:
     """Key profiles of synthetic triad progressions (tonics C and A, two tempos each), weighted SYNTH_WEIGHT."""
-    from .. import signals
-    from ..pipeline import SR, AnalysisContext
+    from .key_features import features
     from .synth import make_track
 
     out = []
@@ -67,8 +66,7 @@ def synthetic_tracks() -> list[dict]:
         for tonic in (0, 9):
             for bpm, layout in SYNTH_RENDERS:
                 y, _ = make_track(bpm=bpm, tonic=tonic, mode=mode, bars_per_section=layout, progression=prog)
-                chroma = AnalysisContext(y=y, sr=SR, card=None).get("chroma", signals.chroma)
-                out.append({"id": f"synth-{name}-{tonic}-{bpm}", "dataset": "synth", "profile": music.key_profile(chroma),
+                out.append({"id": f"synth-{name}-{tonic}-{bpm}", "dataset": "synth", "profile": features(y)["profile"],
                             "silent": False, "tonic": tonic, "mode": mode, "label_conf": -1, "weight": SYNTH_WEIGHT})
     return out
 

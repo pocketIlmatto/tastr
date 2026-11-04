@@ -4,8 +4,8 @@ Analyzing a track takes seconds; scoring a key-estimation variant on cached chro
 `cache` decodes each labeled track of a key dataset exactly like the bench does and writes
 <out>/<track id>.npz with:
 
-    chroma      12 x frames float32  signals.chroma (chroma_cqt of the harmonic part)
-    bass        36 x frames float32  signals.bass_cqt
+    chroma      12 x frames float32  the engine's chroma (chroma_cqt of the harmonic part)
+    bass        36 x frames float32  the engine's bass CQT
     tonic, mode reference key
     label_conf  annotator confidence (0-2) where the dataset has one (Beatport EDM Key), else -1
     silent      True when the core stage would skip key estimation
@@ -38,6 +38,8 @@ import numpy as np
 from .. import music
 from .datasets import Item, load as load_dataset
 
+SR = 22050  # the engine's sample rate
+
 
 def track_id(item: Item) -> str:
     """"bp-key-1234" -> "1234": the dataset's own id, used as the cache file name."""
@@ -63,24 +65,51 @@ def beatport_label_confidence(root: str | Path) -> dict[str, int]:
     return out
 
 
+def features(y: np.ndarray, matrices: bool = False) -> dict:
+    """What the key model reads from mono audio at 22,050 Hz, as the Rust engine computes it: {profile (12),
+    silent} and with `matrices` the harmonic part's chroma and bass CQT. TASTR_ENGINE=python takes them from
+    the Python reference engine instead."""
+    from .. import rust
+
+    if rust.chosen() == "rust":
+        r = rust.bench("key", y, n=y.size, matrices=int(matrices))
+        out = {"profile": np.asarray(r["profile"]), "silent": r["silent"]}
+        if matrices:
+            out |= {"chroma": np.asarray(r["chroma"], dtype=np.float32), "bass": np.asarray(r["bass_cqt"], dtype=np.float32)}
+        return out
+    from .. import signals
+    from ..pipeline import HOP, SR, AnalysisContext
+
+    ctx = AnalysisContext(y=y, sr=SR, card=None, hop=HOP)
+    chroma = ctx.get("chroma", signals.chroma)
+    out = {"profile": music.key_profile(chroma), "silent": bool(y.size == 0 or not np.any(np.abs(y) > 1e-4))}
+    if matrices:
+        out |= {"chroma": chroma.astype(np.float32), "bass": ctx.get("bass_cqt", signals.bass_cqt).astype(np.float32)}
+    return out
+
+
+def profile_of(chroma: np.ndarray) -> np.ndarray:
+    """The 12-bin key profile of a 12 x frames chroma (a feature cache's), as the Rust engine computes it."""
+    from .. import rust
+
+    if rust.chosen() == "rust":
+        return np.asarray(rust.bench("key_profile", chroma, frames=chroma.shape[1])["profile"])
+    return music.key_profile(chroma)
+
+
 def _extract(args) -> tuple[str, str | None]:
     item, out_dir, conf = args
-    from .. import signals
     from ..audio import load_audio
-    from ..pipeline import HOP, SR, AnalysisContext
 
     sid = track_id(item)
     dest = Path(out_dir) / f"{sid}.npz"
     if dest.exists():
         return sid, None
     try:
-        y = load_audio(item.path, SR)
-        ctx = AnalysisContext(y=y, sr=SR, card=None, hop=HOP)
-        silent = y.size == 0 or not np.any(np.abs(y) > 1e-4)
+        f = features(load_audio(item.path, SR), matrices=True)
         tmp = dest.with_name(dest.stem + ".tmp.npz")
-        np.savez(tmp, chroma=ctx.get("chroma", signals.chroma).astype(np.float32),
-                 bass=ctx.get("bass_cqt", signals.bass_cqt).astype(np.float32),
-                 tonic=item.truth.tonic, mode=item.truth.mode, label_conf=conf.get(sid, -1), silent=silent)
+        np.savez(tmp, chroma=f["chroma"], bass=f["bass"],
+                 tonic=item.truth.tonic, mode=item.truth.mode, label_conf=conf.get(sid, -1), silent=f["silent"])
         os.replace(tmp, dest)  # only complete files count as done
         return sid, None
     except Exception as e:
@@ -113,16 +142,12 @@ def cache(dataset: str, root: str | Path, out_dir: str | Path, jobs: int = 1, pr
 
 def _profile(args) -> dict:
     item, dataset, conf = args
-    from .. import signals
     from ..audio import load_audio
-    from ..pipeline import HOP, SR, AnalysisContext
 
     sid = track_id(item)
     try:
-        y = load_audio(item.path, SR)
-        chroma = AnalysisContext(y=y, sr=SR, card=None, hop=HOP).get("chroma", signals.chroma)
-        silent = y.size == 0 or not np.any(np.abs(y) > 1e-4)
-        return {"id": sid, "dataset": dataset, "profile": music.key_profile(chroma), "silent": bool(silent),
+        f = features(load_audio(item.path, SR))
+        return {"id": sid, "dataset": dataset, "profile": f["profile"], "silent": bool(f["silent"]),
                 "tonic": item.truth.tonic, "mode": item.truth.mode, "label_conf": conf.get(sid, -1)}
     except Exception as e:
         return {"id": sid, "error": f"{type(e).__name__}: {e}"}
@@ -178,7 +203,7 @@ def load(dataset: str, root: str | Path, feat_dir: str | Path) -> list[dict]:
         if not f.exists():
             continue
         d = np.load(f)
-        tracks.append({"id": track_id(it), "dataset": dataset, "profile": music.key_profile(d["chroma"]),
+        tracks.append({"id": track_id(it), "dataset": dataset, "profile": profile_of(d["chroma"]),
                        "silent": bool(d["silent"]), "tonic": int(d["tonic"]), "mode": str(d["mode"]),
                        "label_conf": int(d["label_conf"])})
     return tracks

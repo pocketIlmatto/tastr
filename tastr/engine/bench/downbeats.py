@@ -129,15 +129,25 @@ def load(root: str | Path, dataset: str = "gtzan", limit: int | None = None, see
     return [(name, specs[key].astype(np.float32).T, t, pos) for name, key, t, pos in picked[:limit or None]]
 
 
-def run(items) -> dict:
+def downbeat_phase(frames: np.ndarray, log_mel: np.ndarray, beats_per_bar: int = 4) -> int:
+    """Core's choice of bar 1 for these beat frames, from the Rust engine (TASTR_ENGINE=python: the Python
+    reference engine)."""
+    from .. import rust
+
+    if rust.chosen() == "rust":
+        return rust.bench("downbeat_phase", log_mel, frames, bands=log_mel.shape[0], frames=log_mel.shape[1],
+                          beats=frames.size, m=beats_per_bar)["phase"]
     from ..stages.core import _downbeat_phase
 
-    freqs = mel_freqs()
+    return _downbeat_phase(frames, log_mel, mel_freqs(), beats_per_bar)
+
+
+def run(items) -> dict:
     right = half = 0
     by_group: Counter = Counter()
     n_group: Counter = Counter()
     for name, log_mel, beats, pos in items:
-        p = _downbeat_phase(np.round(beats * FPS).astype(int), log_mel, freqs)
+        p = downbeat_phase(np.round(beats * FPS).astype(int), log_mel)
         ok = (pos[p::4] == 1).mean() > 0.5
         right += ok
         half += (pos[(p + 2) % 4::4] == 1).mean() > 0.5

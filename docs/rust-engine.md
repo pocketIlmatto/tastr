@@ -18,6 +18,7 @@ someone re-analyzes them; Opus files, which symphonia can't decode, fall back to
 | P3 | The stages, and cards from Rust | Done (below) |
 | P4 | Switch-over behind a flag, full benchmarks | Done (below) |
 | P5 | Retire the Python engine from the analysis path | Done (below) |
+| P6 | The remaining benches score Rust; then retire the Python engine | In progress (below) |
 
 ## Layout
 
@@ -309,3 +310,23 @@ machine, the hosted server and Modal alike.
 - **Local installs** need the library built once (`cd engine-rs && cargo build --release --lib`); without it
   analysis fails and says how to build it.
 
+## P6: every bench scores Rust (2026-11-04)
+
+The benches that still called the Python stage code now call the Rust engine through `tastr_bench` (one text
+line naming the step plus a float64 buffer in, JSON out; `engine-rs/src/bench.rs` lists the steps, and
+`rust.bench` wraps it):
+
+- **Spectrogram benches** (Beat This! tempo, downbeats and meter; Harmonix sections): `tempo` takes the onset
+  envelope and low-band flux rebuilt from the log-mel (still `tempo_spec.envelopes`, the bench's own adapter)
+  and runs core's whole tempo logic (`core::tempo_from_envelopes`, which the card's core stage calls too);
+  `downbeat_phase` and `meter` read core's beat cues from the log-mel; `sections` takes per-frame chroma,
+  MFCC and RMS on the dataset's own hop and runs the stage's clustering and phrase snapping for each setting.
+- **Key profiles** (`key_features`, `train_key`'s synthetic tracks): `key` gives the 12-bin profile from the
+  harmonic part's chroma, and with `matrices=1` the chroma and bass CQT for the feature cache;
+  `key_profile` gives the profile of a cached chroma.
+- **Drum lanes** (`bench.drums`): `lane_activations` gives every lane at every frame (with the drum model's hits
+  when it is on), and `drum_grid` the card's groove for loops at a known tempo.
+
+`TASTR_ENGINE=python` (or `--engine python` on `modal run tastr/cloud/modal_app.py`) still runs the Python
+stages, for comparing the two on real data before the Python engine is deleted; `tests/test_rust_engine.py`
+checks they agree on synthetic inputs.

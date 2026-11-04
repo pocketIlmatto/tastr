@@ -184,6 +184,18 @@ def run_analyze(audio: bytes | str, suffix: str, stages: list[str] | None = None
         return analyze_file(src, options=options).to_dict()
 
 
+def run_ml_tags(audio: bytes | str, suffix: str) -> dict:
+    """ML tags (engine/ml_tags.py) for one file (its bytes or a signed link to it)."""
+    import tempfile
+
+    from ..engine import ml_tags
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / f"track{suffix}"
+        _write_audio(audio, src)
+        return ml_tags.analyze(src)
+
+
 def run_analyze_stream(audio: bytes | str, suffix: str, stages: list[str] | None = None, options: dict | None = None):
     """run_analyze, yielding {"stage", "i", "n"} as each stage starts and then {"card": ...}, for progress bars."""
     import queue

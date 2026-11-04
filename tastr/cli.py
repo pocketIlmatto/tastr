@@ -100,6 +100,12 @@ def main(argv: list[str] | None = None) -> int:
     dm.add_argument("action", choices=["status", "fetch", "run"])
     dm.add_argument("track_id", type=int, nargs="?", help="run: the track to re-analyze with the model")
 
+    ml = sub.add_parser("ml-tags", help="optional ML tags from MTG's Essentia classifiers (non-commercial weights, "
+                                        "TASTR_ML_TAGS=on): status, or run on tracks")
+    ml.add_argument("action", choices=["status", "run"])
+    ml.add_argument("track_ids", type=int, nargs="*", help="run: the tracks to tag (see `tastr list`)")
+    ml.add_argument("--all", action="store_true", help="run: every track that has no ML tags yet")
+
     db_ = sub.add_parser("drum-bench", help="drum lane benches (synth, idmt, mdb, stemgmd-mix), locally or on Modal")
     db_.add_argument("suite", choices=["synth", "idmt", "mdb", "stemgmd-mix"])
     db_.add_argument("path", nargs="?", help="dataset folder (a bucket folder with --remote); not for synth")
@@ -618,6 +624,41 @@ def _drum_model(args) -> int:
     return 0
 
 
+def _ml_tags(args) -> int:
+    from . import ml_jobs
+
+    print("ML tags use MTG's Essentia models (https://essentia.upf.edu/models.html): weights for non-commercial use "
+          "only; Essentia is AGPL-3.0. Neither is part of Tastr (docs/essentia.md).")
+    if not ml_jobs.available():
+        print(f"ML tags: unavailable here. {ml_jobs.why_not()}", file=sys.stderr if args.action == "run" else sys.stdout)
+        return 2 if args.action == "run" else 0
+    if args.action == "status":
+        print("ML tags: on (`tastr ml-tags run ID...` or --all)")
+        return 0
+    conn = db.connect(args.db)
+    ids = list(args.track_ids)
+    if args.all:
+        ids += [r[0] for r in conn.execute("SELECT id FROM tracks WHERE id NOT IN (SELECT track_id FROM ml_tags) "
+                                           "ORDER BY id")]
+    if not ids:
+        print("error: run needs track ids or --all", file=sys.stderr)
+        return 2
+    failed = 0
+    for tid in ids:
+        try:
+            result = ml_jobs.tag_track(conn, tid)
+        except Exception as e:  # noqa: BLE001 - one bad track shouldn't stop the rest
+            print(f"{tid}: error: {e}", file=sys.stderr)
+            failed += 1
+            continue
+        if result is None:
+            print(f"{tid}: no such track", file=sys.stderr)
+            failed += 1
+        else:
+            print(f"{tid}: {', '.join(t['tag'] for t in result['tags']) or '(no tags)'}")
+    return 1 if failed else 0
+
+
 def _drum_model_run(args) -> int:
     from . import drum_jobs, service
 
@@ -778,7 +819,7 @@ COMMANDS = {
 "retag": _retag,
     "set-owner": _set_owner, "pack": _pack, "unpack": _unpack, "lookup": _lookup, "labels": _labels,
     "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
-    "key-profiles": _key_profiles, "drum-model": _drum_model, "drum-bench": _drum_bench,
+    "key-profiles": _key_profiles, "drum-model": _drum_model, "ml-tags": _ml_tags, "drum-bench": _drum_bench,
     "vibe-bench": _vibe_bench, "vibe-fit": _vibe_fit, "fetch": _fetch, "bench": _bench,
     "rekordbox-compare": _rekordbox_compare,
 }

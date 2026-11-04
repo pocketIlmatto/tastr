@@ -189,3 +189,11 @@ def stems(audio_path: str | Path, put_urls: dict[str, str] | None = None) -> dic
     if put_urls:
         return _call("stems", _audio(audio_path), audio_path.suffix, put_urls)
     return _call("stems", _audio(audio_path), audio_path.suffix)
+
+
+def ml_tags(audio_path: str | Path) -> dict:
+    """ML tags (engine/ml_tags.py) for one file, from the Modal `ml_tags` function."""
+    audio_path = Path(audio_path)
+    if http_enabled():
+        return _http_result("ml_tags", _payload(_audio(audio_path), audio_path.suffix))
+    return _call("ml_tags", _audio(audio_path), audio_path.suffix)

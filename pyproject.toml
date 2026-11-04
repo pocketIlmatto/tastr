@@ -31,6 +31,9 @@ stems = ["demucs>=4.0.1", "tastr[engine]"]
 # The pretrained drum model for the kick, hat, tom and cymbal lanes (docs/drums.md). PyTorch, shared with
 # `stems`; the weights (CC BY-NC-SA 4.0, about 5 MB) download on first use.
 drums = ["torch>=2.1", "tastr[engine]"]
+# Optional ML tags (docs/essentia.md): Essentia is AGPL-3.0 and MTG's weights (downloaded on first use) are
+# non-commercial only, so neither is part of Tastr.
+ml-tags = ["essentia-tensorflow>=2.1b6.dev1389"]
 # Hosted mode: checks Cloudflare Access logins (docs/hosting.md), and keeps uploads and stems in an
 # S3-compatible bucket such as R2 when TASTR_AUDIO_BUCKET is set (tastr/blobs.py, through tastr/s3.py).
 hosted = ["pyjwt[crypto]>=2.8", "tastr[claude]"]

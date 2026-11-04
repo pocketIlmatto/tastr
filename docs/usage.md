@@ -90,6 +90,20 @@ them (about 5 MB, from a pinned commit of ADTOF's GitHub repository, checked by 
 into `~/.tastr/models/`. `TASTR_DRUM_MODEL=adtof` runs the model on every analysis
 instead of on request; `TASTR_DRUM_MODEL=off` switches it off.
 
+## ML tags (optional)
+
+MTG's pre-trained Essentia classifiers can add style tags (Discogs styles such as Deep House), mood tags and
+vocal/instrumental to a track. They beat the engine's own mood measures on listener labels
+([essentia.md](essentia.md)). They are off unless `TASTR_ML_TAGS=on`, and run only on the tracks you ask for.
+
+```bash
+python -m pip install -e '.[ml-tags]'  # Essentia with TensorFlow (AGPL-3.0)
+TASTR_ML_TAGS=on tastr ml-tags run 1   # tag track 1; --all tags every track that has none yet
+```
+
+**MTG's weights are for non-commercial use only.** They aren't part of Tastr: the first run downloads them (about
+40 MB) into `~/.tastr/essentia-models/`. Results are kept apart from the card, so re-analysis keeps them.
+
 ## Tests
 
 To run the tests:

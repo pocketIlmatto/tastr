@@ -8,8 +8,11 @@ name: automerge
 #
 # The merge is made with this workflow's token, and GitHub starts no workflows for pushes made with it: the tests
 # don't rerun on main (they already passed on the PR head) and nothing deploys (docs and tests never ship).
+#
+# pull_request_target, so the rules always come from main: a PR that edits this file can't loosen them for
+# itself. The job never checks out or runs the PR's code; it only reads its file list.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review]
     branches: [main]
 concurrency:

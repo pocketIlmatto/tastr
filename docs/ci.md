@@ -214,7 +214,7 @@ closes the issue. No Claude runs: a drop needs a person to decide whether it is 
 
 ## Auto-merge for docs and tests
 
-`.github/workflows/automerge.yml` turns on auto-merge (squash) for pull requests that only touch docs and tests.
+`.github/workflows/automerge.yml` (run from main, so a PR can't change its rules) turns on auto-merge (squash) for pull requests that only touch docs and tests.
 GitHub then merges them by itself once the required `test` check passes. A PR qualifies when all of these hold:
 
 - it comes from a branch in this repository;

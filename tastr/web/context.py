@@ -243,7 +243,9 @@ class AppContext:
         body["drum_model_available"] = drum_jobs.available()
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]
         body["lookups"] = lookup.describe(card, db.get_lookups(c, track_id))
-        body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in lookup.enabled()]
+        on = lookup.enabled()
+        body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in on]
+        body["lookup_sources"] = lookup.sources(on)
         return body
 
     @staticmethod

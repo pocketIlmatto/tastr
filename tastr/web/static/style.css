@@ -1214,6 +1214,22 @@ h1 { white-space: nowrap; }
 .lk-mark { font-weight: 600; margin-left: 3px; }
 .lk-agrees { color: var(--accent); }
 .lk-differs { color: var(--warn); }
+/* Metadata › Listed elsewhere (sandbox v201) */
+.meta-lookups { margin-top: 6px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.meta-lookups h4 { margin: 0 0 2px; font-size: 14px; }
+.lk-intro, .lk-key { font-size: 12px; margin: 0 0 8px; }
+.lk-key { margin: 8px 0 0; }
+.lk-table { display: grid; }
+.lk-row { display: grid; grid-template-columns: minmax(150px, 230px) 1fr; gap: 2px 16px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; align-items: baseline; }
+.lk-row:first-child { border-top: none; }
+.lk-name { display: grid; }
+.lk-name small, .lk-val small { font-size: 11px; }
+.lk-val { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; min-width: 0; }
+.meta-lookups .lk-src, .lk-open { color: var(--accent); }
+.lk-open { font-size: 12px; }
+.lk-err { color: var(--warn); }
+.lk-ours { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); padding-inline: 6px; border-radius: 4px; }
+@media (max-width: 560px) { .lk-row { grid-template-columns: 1fr; } }
 
 /* Searches in the browser on a hosted server (TAS-49, query-lib.js): the library copy's status line under the query */
 .q-lib { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; margin: 8px 0 0; min-height: 0; }

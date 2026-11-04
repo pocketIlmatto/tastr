@@ -220,6 +220,11 @@ def test_api_lookup_and_card_body(db_path, tmp_path, monkeypatch, fake):
     conn.close()
     body = client.get(f"/api/tracks/{tid}").json()
     assert body["lookups"] == [] and body["lookup_providers"] == [{"name": "fake", "label": "Fake"}]
+    # Metadata › Listed elsewhere lists every source, set up or not; Rekordbox first and always "configured"
+    sources = {s["provider"]: s for s in body["lookup_sources"]}
+    assert [s["provider"] for s in body["lookup_sources"]][:4] == ["rekordbox", "getsongbpm", "freqblog", "acousticbrainz"]
+    assert sources["fake"]["configured"] and sources["rekordbox"]["configured"]
+    assert not sources["getsongbpm"]["configured"] and sources["freqblog"]["homepage"]
     r = client.post(f"/api/tracks/{tid}/lookup").json()["card"]
     (row,) = r["lookups"]
     assert row["label"] == "Fake" and row["homepage"] == "https://fake.example"
@@ -627,3 +632,15 @@ def test_guard_ignores_musicbrainz_global_rate_headers():
     g.before_request()
     g.after_response(503, {"retry-after": "0"})
     assert g.paused_until <= time.time()  # Retry-After: 0 means no pause
+
+
+def test_card_lists_every_source_in_metadata():
+    """Metadata › Listed elsewhere (sandbox v201): a row per source with its state, even with nothing stored."""
+    from tests.ui_src import app_js
+
+    js = app_js()
+    assert "lookupTable(c)" in js and "c.lookup_sources" in js
+    for text in ("Not looked up yet.", "Not in your Rekordbox export.", "Not set up on this server.",
+                 "Not found: it has no listing for this artist and title.", "Lookup failed: ",
+                 "Can't look up: the file has no artist and title tags.", "Measured from the audio"):
+        assert text in js

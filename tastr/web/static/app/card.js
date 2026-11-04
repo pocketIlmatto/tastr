@@ -137,6 +137,46 @@ function lookupLine(c) {
       x.key ? h("span", {}, x.key, mark("Key", x.compare && x.compare.key)) : null].filter((n) => n !== null)));
 }
 
+// Metadata › Listed elsewhere: every source, filled in or not (sandbox v201, listed-elsewhere-spec.md). The server
+// lists the sources (lookup_sources, with `configured`); a source with no stored row reads "none".
+const LOOKUP_HOW = { rekordbox: "Your Rekordbox export, matched by file name", acousticbrainz: "Open data, by artist and title" };
+const LOOKUP_SAY = {
+  none: "Not looked up yet.", not_found: "Not found: it has no listing for this artist and title.",
+  pending: "Asked: the catalog is adding this song. Check back later.", no_tags: "Can't look up: the file has no artist and title tags.",
+  limited: "Paused: the catalog's limit was reached. It will be asked again later.",
+  rb_none: "Not in your Rekordbox export.", off: "Not set up on this server." };
+export function lookupsFor(c) {
+  const stored = Object.fromEntries((c.lookups || []).map((x) => [x.provider, x]));
+  return (c.lookup_sources || []).map((src) => ({ ...src, status: "none", ...(stored[src.provider] || {}),
+    label: src.label, homepage: src.homepage, configured: src.configured,
+    how: LOOKUP_HOW[src.provider] || "Online catalog, by artist and title" }));
+}
+function lookupTable(c) {
+  const core = c.core || {};
+  const mark = (what, cmp) => { const m = cmp && LOOKUP_MARK[cmp]; return m ? h("span", { class: `lk-mark lk-${cmp}`, title: `${what} ${m[1]}` }, m[0]) : null; };
+  const row = (name, how, val, cls) => h("div", { class: "lk-row" + (cls ? " " + cls : ""), role: "row" },
+    h("div", { class: "lk-name", role: "rowheader" }, name, how ? h("small", { class: "muted" }, how) : null),
+    h("div", { class: "lk-val", role: "cell" }, ...val));
+  const ours = [isNum(core.bpm) ? `${core.bpm.toFixed(1)} BPM` : "no BPM",
+    core.key ? `${keyName(core.key)}${core.key.camelot ? ` (${core.key.camelot})` : ""}` : "no key"].join(" · ");
+  return h("div", { class: "meta-lookups" }, h("h4", {}, "Listed elsewhere"),
+    h("p", { class: "muted lk-intro" }, "What other sources list for this track's BPM and key, next to what Tastr measured. They never change Tastr's values."),
+    h("div", { class: "lk-table", role: "table", "aria-label": "BPM and key from other sources" },
+      row(h("b", {}, "Tastr"), "Measured from the audio", [h("span", { class: "lk-v" }, ours)], "lk-ours"),
+      ...lookupsFor(c).map((x) => {
+        const name = h("a", { href: x.homepage, target: "_blank", rel: "noopener", class: "lk-src" }, x.label);
+        if (x.status === "found") return row(name, x.how, [
+          h("span", { class: "lk-v" }, isNum(x.bpm) ? h("span", {}, `${Math.round(x.bpm * 10) / 10} BPM`, mark("BPM", x.compare && x.compare.bpm)) : "no BPM", " · ",
+            x.key ? h("span", {}, `${x.key}${x.camelot ? ` (${x.camelot})` : ""}`, mark("Key", x.compare && x.compare.key)) : "no key"),
+          x.url && x.url !== x.homepage ? h("a", { class: "lk-open", href: x.url, target: "_blank", rel: "noopener" }, "See the listing ↗") : null].filter(Boolean));
+        if (!x.configured) return row(name, x.how, [h("span", { class: "muted" }, LOOKUP_SAY.off), h("small", { class: "muted" }, "An admin turns it on with TASTR_LOOKUP (docs/lookup.md).")], "lk-off");
+        if (x.status === "error") return row(name, x.how, [h("span", { class: "lk-err" }, `Lookup failed: ${(x.error || "the service didn't answer").replace(/\.$/, "")}.`)], "lk-off");
+        const say = x.provider === "rekordbox" && x.status === "none" ? LOOKUP_SAY.rb_none : LOOKUP_SAY[x.status] || x.status;
+        return row(name, x.how, [h("span", { class: "muted" }, say)], "lk-off");
+      })),
+    h("p", { class: "muted lk-key" }, "✓ matches Tastr · ×2 / ½ double or half · ≈ a related key (relative, fifth or parallel) · ≠ differs"));
+}
+
 export function stat(value, label, title) {
   return h("div", { class: "stat", ...(title ? { title } : {}) }, h("b", {}, value), h("span", {}, label));
 }
@@ -248,7 +288,7 @@ export function renderCard(c) {
   root.replaceChildren();
   root.dataset.id = c.id;
   root.append(cardHead(c));
-  if (c.metadata) root.append(metadataSection(c.metadata));
+  if (c.metadata) root.append(metadataSection(c.metadata, c));
   const energy = c.series && c.series.energy;
   if (energy && energy.times && energy.times.length > 1 || (c.sections || []).length) {
     root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration, c)]));
@@ -325,7 +365,7 @@ function dropSection(from, onto, after) {
   o.splice(at, 0, from); secOrder = o; saveSecOrder(); placeSections(); secFlash(from);
 }
 
-function metadataSection(meta) {
+function metadataSection(meta, c) {
   const body = [];
   for (const [group, kv] of Object.entries(meta)) {
     const rows = Object.entries(kv).filter(([, v]) => v != null && v !== "");
@@ -333,7 +373,7 @@ function metadataSection(meta) {
       ? h("dl", { class: "kv" }, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))]))
       : h("p", { class: "muted meta-empty" }, "None found. The title above came from the file name.")));
   }
-  return section("meta", "Metadata", [h("div", { class: "meta-cols" }, body)], false);
+  return section("meta", "Metadata", [h("div", { class: "meta-cols" }, body), lookupTable(c)], false);
 }
 
 export function setHearDrums(v) { return (hearDrums = v); }

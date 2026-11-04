@@ -1,4 +1,4 @@
-//! The pipeline stages (tastr/engine/stages/): core, sections, tags, suggestions and views, run in that order
+//! The pipeline stages: core, sections, tags, suggestions and views, run in that order
 //! over one shared set of signals, each writing its part of the card.
 
 pub mod core;
@@ -13,7 +13,7 @@ use crate::{cqt, spectral};
 
 pub const HOP: usize = spectral::HOP;
 
-/// Everything the stages read, computed once (the Python engine's ctx.cache).
+/// Everything the stages read, computed once.
 pub struct Ctx {
     pub y: Vec<f32>,
     pub sr: f64,
@@ -109,7 +109,7 @@ const STAGES: [(&str, &str, &[&str], StageFn); 5] = [
     ("views", "0.2.0", &[], views::run),
 ];
 
-/// run_pipeline: every stage over the audio; a failing stage is recorded in card.errors and the stages that
+/// Every stage over the audio; a failing stage is recorded in card.errors and the stages that
 /// need it are skipped.
 pub fn run(ctx: &mut Ctx) -> Card {
     let mut card = Card {

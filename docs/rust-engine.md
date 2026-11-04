@@ -3,10 +3,11 @@
 A rewrite of the analysis engine in Rust (`engine-rs/`), so the server and the browser run the same code and
 get the same numbers. The plan, its phases and the decisions behind it are in the plan doc (2026-10-31):
 one crate built two ways (a native library for the server, WebAssembly for the page), phases P0 to P5 with a
-gate at the end of each, and the Python engine kept as the reference until P5.
+gate at the end of each, and the Python engine kept as the reference until P5. Since P6 (2026-11-04) the Rust
+engine is the only one: the Python engine is deleted, and the benchmarks and fitting scripts call Rust.
 
-Decided so far: the Python engine stays as the reference until P5; existing cards are left alone until
-someone re-analyzes them; Opus files, which symphonia can't decode, fall back to the server.
+Decided so far: existing cards are left alone until someone re-analyzes them; Opus files, which symphonia
+can't decode, are decoded by the server and analyzed by Rust from the samples.
 
 ## Status
 
@@ -18,7 +19,7 @@ someone re-analyzes them; Opus files, which symphonia can't decode, fall back to
 | P3 | The stages, and cards from Rust | Done (below) |
 | P4 | Switch-over behind a flag, full benchmarks | Done (below) |
 | P5 | Retire the Python engine from the analysis path | Done (below) |
-| P6 | The remaining benches score Rust; then retire the Python engine | In progress (below) |
+| P6 | The remaining benches score Rust; the Python engine deleted | Done (below) |
 
 ## Layout
 
@@ -30,34 +31,36 @@ engine-rs/
   src/resample.rs    our own rational-ratio Kaiser-sinc resampler, shaped like soxr HQ
   src/spectral.rs    STFT, inverse STFT and HPSS, step by step as librosa 1.0 does them
   src/features.rs    mel filter banks, power_to_db, MFCC, RMS, onset strength, spectral centroid, the kick- and
-                     air-band flux, log mel, and drums.py's band envelopes (Butterworth + sosfiltfilt)
+                     air-band flux, log mel, and the drum lanes' band envelopes (Butterworth + sosfiltfilt)
   src/cqt.rs         librosa's CQT (wavelet filters, one octave at a time), tuning estimate and CQT chroma; the
                      bass CQT
   src/rhythm.rs      the onset tempogram, librosa's tempo estimate, its dynamic-programming beat tracker and
                      onset peak picking
   src/segment.rs     librosa.segment.agglomerative: Ward clustering where only neighbouring bars may merge
-  src/stages/        the card stages, one file each as in tastr/engine/stages/: core, sections, tags,
-                     suggestions, views; mod.rs holds the shared signals (Ctx) and runs them as run_pipeline does
-  src/drums.rs       drums.py's lanes: semi-adaptive NMF, unmixing, kick/tom, snare/clap/perc and closed/open
+  src/stages/        the card stages, one file each: core, sections, tags, suggestions, views; mod.rs holds
+                     the shared signals (Ctx) and runs the stages in order
+  src/drums.rs       the drum lanes: semi-adaptive NMF, unmixing, kick/tom, snare/clap/perc and closed/open
                      hat; with the optional ADTOF drum model, the hits the server hands in (set_model)
-  src/music.rs       music.py and calibration.py: key model, modes, chord matching, roman numerals
+  src/music.rs       key model, confidence calibration, modes, chord matching, roman numerals
   src/card.rs        the card, written as the same JSON as TrackCard.to_dict(); src/json.rs is its writer
-  src/consts.rs      the key model's weights and the calibration tables, copied from Python (a test checks)
+  src/consts.rs      the key model's weights and the calibration tables, the only copy; written by
+                     tastr.engine.bench.train_key and calibrate (bench/consts_rs.py)
   src/np.rs          numpy's pairwise float sums, round-half-even, percentiles and friends, where results
                      depend on them
   src/detmath.rs     sin, cos, pow, ... for the whole binary, from the pure-Rust libm crate
   src/lib.rs         load(bytes), signals(y), analyze(y) and card_json(y); a small C interface for the
-                     WebAssembly build (tastr_signals, tastr_card)
+                     WebAssembly build (tastr_signals, tastr_card) and the benchmarks (tastr_bench)
+  src/bench.rs       the steps the benchmarks call on their own inputs (spectrograms, chroma, drum loops)
   src/main.rs        `tastr-engine <file> [out dir]`: the native build as a command; writes every output as
                      <name>.f32 plus manifest.json ({name: [rows, cols]}). `rhythm`, `chroma` and `ward`
                      subcommands run one step on a .f32 input, to compare it with librosa on the same input;
                      `card <file> <out.json> [beats per bar]` writes the whole card
   run-wasm.mjs       the same through the WebAssembly build, under Node
   .cargo/config.toml WebAssembly SIMD on (same bits, faster)
-tests/test_rust_engine.py   native vs WebAssembly bit for bit; every signal, beats, chroma and Ward vs librosa;
-                            cards vs the Python engine; the copied constants
-tastr/engine/rust.py        the native library through ctypes (tastr_card, tastr_card_f32), STAGES, TASTR_ENGINE, and
-                            where the WebAssembly build is and its id
+tests/test_rust_engine.py   native vs WebAssembly bit for bit; every signal, beats, chroma and Ward vs librosa
+                            (tests/librosa_ref.py); cards vs tests/golden/; the bench steps on synthetic inputs
+tastr/engine/rust.py        the native library through ctypes (tastr_card, tastr_card_f32, tastr_bench), STAGES,
+                            and where the WebAssembly build is and its id
 tastr/engine/browser_card.py  checks a card the browser made (TASTR_BROWSER_ENGINE)
 tastr/web/static/engine.js  the worker that runs the WebAssembly card in the page
 tastr/cloud/rust_image.py   builds the native library into the Modal images
@@ -224,8 +227,10 @@ Same machine and the same 30 Beatport previews as P2, plus the synthetic tracks.
 - **The ADTOF drum model** (optional, server only, needs PyTorch) isn't ported: the server runs it on the file
   (`engine/__init__.py` `_drum_model_hits`) and passes its hits to `tastr_card_hits` / `tastr_card_f32_hits`.
   Rust then puts them into the kick, tom and closed-hat lanes and adds the cymbal lane, as `drums.model_lanes`
-  does (`tests/test_rust_engine.py` checks the two cards match). The browser never runs it.
-  `TASTR_METER` isn't read: the caller passes the meter (`beats_per_bar`), as the browser will.
+  does (P3 checked the two cards matched; tests/golden/ holds the card with model hits now). The browser never
+  runs it.
+  `TASTR_METER` isn't read: the caller passes the meter (`beats_per_bar`), as the browser will. (Since P5 no
+  card reads it, so the setting is gone.)
 
 How it was matched: the same precision choices as in P2, carried through the stages (numpy's float32 means
 and pairwise sums where the Python arrays are float32, its float32 percentile, which keeps the index in
@@ -276,7 +281,7 @@ machine, the hosted server and Modal alike.
 
 - **Formats Rust can't decode** (Opus): Python decodes the file (librosa, else ffmpeg) and Rust makes the card
   from those samples (`tastr_card_f32`). The card says `extras["decoded_by"] = "python"`.
-- **The Python engine** (`tastr/engine/stages/`, `run_pipeline`) stays as the reference: the benchmarks score
+- **The Python engine** (`tastr/engine/stages/`, `run_pipeline`; deleted in P6) stayed as the reference: the benchmarks score
   it with `--engine python`, and the spectrogram benches (downbeats, Harmonix sections), the fitting scripts and
   the stage tests call its stage code directly. Since TAS-47 (2026-11-01) it never makes an app card:
   `analyze_file` has no fallback and no stage subset (`tastr analyze --stages` is gone), `TASTR_ENGINE` only
@@ -287,8 +292,7 @@ machine, the hosted server and Modal alike.
   The Python tags, suggestions and views stages are gone too (TAS-47, part 2): the Rust card is checked
   against stored cards in `tests/golden/` (rewrite them with `TASTR_UPDATE_GOLDEN=1` after a deliberate
   change and review the diff), the vibe rules have Rust unit tests (`cargo test --lib`, run in CI), and the
-  vibe bench always runs on Rust. A change to core, sections or the drum lanes still goes in both engines,
-  and `tests/test_rust_engine.py` checks that they agree.
+  vibe bench always runs on Rust. Until P6, a change to core, sections or the drum lanes went in both engines.
 - **No DSP libraries in the base install** (TAS-47, part 3): scipy and librosa moved to the `engine` extra (the
   Python reference engine, the benchmarks, Opus decoding, and the audio the drum model and stems read), which
   `dev`, `drums` and `stems` pull in. The old Fly server image (`.[hosted,cloud]`) dropped them with numba and llvmlite,
@@ -327,6 +331,27 @@ line naming the step plus a float64 buffer in, JSON out; `engine-rs/src/bench.rs
 - **Drum lanes** (`bench.drums`): `lane_activations` gives every lane at every frame (with the drum model's hits
   when it is on), and `drum_grid` the card's groove for loops at a known tempo.
 
-`TASTR_ENGINE=python` (or `--engine python` on `modal run tastr/cloud/modal_app.py`) still runs the Python
-stages, for comparing the two on real data before the Python engine is deleted; `tests/test_rust_engine.py`
-checks they agree on synthetic inputs.
+Before the deletion, both engines ran each bench on a small subset on Modal (`modal run
+tastr/cloud/modal_app.py --kind ... --engine python|rust --limit N` from the branch, 2026-11-04). On synthetic
+inputs the two already agreed exactly for tempo, downbeats, meter and all 504 section settings, within 2e-7
+for key profiles and 1.5e-5 for drum activations, with identical drum grids. On real data:
+
+| Bench | Tracks | Python | Rust |
+|---|---|---|---|
+| Beat This! tempo (`hjdb`), Acc1 / Acc2 | 50 | 0.94 / 0.96 | 0.94 / 0.96 |
+| Beat This! downbeats (`gtzan`), bar one right | 50 | 0.70 | 0.70 |
+| Meter (Beat This! sets) | 50 | same guesses | same guesses |
+| Harmonix sections, check F@3 s | 50 | 0.544 | 0.544 |
+| IDMT-SMT-Drums, kick / snare / hat F | 10 | 0.989 / 0.957 / 0.991 | 0.989 / 0.957 / 0.991 |
+| Key profiles (GiantSteps) | 20 | | within 6e-8; one track 3.7e-4, same key ranking |
+
+So the Python engine went (P6, part 2): `tastr/engine/stages/`, `signals.py`, `drums.py`, `pipeline.py`,
+`context.py`, `calibration.py`, the engine parts of `music.py` (the names and Camelot helpers stay, for
+Strudel and the UI) and the second copies of the fitted constants (`key_model.py`, `calibration_table.py`).
+`TASTR_ENGINE` and the benches' `--engine` and `--stages` options are gone with it. The fitted constants live
+only in `engine-rs/src/consts.rs`: `train_key --write` and `calibrate --write` rewrite them there
+(`bench/consts_rs.py`, which also reads the current key model back for `train_key`), then rebuild the engine.
+The tests that checked Rust against the Python stages now check Rust against librosa (`tests/librosa_ref.py`,
+the recipes the shared signals follow), against stored cards (`tests/golden/`) or against what synthetic
+inputs hold (`tests/test_core.py`, `test_sections.py`, `test_drums.py`). Changing core, sections or the drum
+lanes is now a change to Rust only.

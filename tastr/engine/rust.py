@@ -2,8 +2,7 @@
 
 analyze_file hands every analysis to the Rust library, which decodes the file and makes the card itself; for
 formats it can't decode (Opus), Python decodes and passes it the audio. The card says which build made it in
-extras["engine"]. The Python engine (tastr/engine/stages/) is only the benchmarks' reference: they pick it with
-TASTR_ENGINE=python (`chosen`).
+extras["engine"]. The benchmarks call it too, for whole cards and, through `bench`, for single steps.
 
 The library is engine-rs's cdylib, loaded with ctypes through its small C interface (the same one the
 WebAssembly build exports). It is found at TASTR_ENGINE_LIB, else next to this file, else in engine-rs's
@@ -21,11 +20,11 @@ from pathlib import Path
 
 import numpy as np
 
-ENGINES = ("python", "rust")
 # The stages every Rust card runs, with their versions (engine-rs/src/stages/mod.rs), as card.stages_run lists
 # them. Kept here so a server without the native library (the hosted web server checks browser cards against
 # it) knows them; tests/test_rust_switch.py checks them against the library.
 STAGES = {"core": "0.4.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.2.0"}
+SR = 22050  # the engine's sample rate (engine-rs SR): audio handed to it must be at this rate
 _LIB_NAMES = {"darwin": "libtastr_engine.dylib", "win32": "tastr_engine.dll"}
 _lock = threading.Lock()
 _lib: ctypes.CDLL | None = None
@@ -97,14 +96,6 @@ def available() -> bool:
 def version() -> str:
     lib = _load()
     return ctypes.string_at(lib.tastr_version(), lib.tastr_version_len()).decode()
-
-
-def chosen(options: dict | None = None) -> str:
-    """Which engine a benchmark run asks for: options["engine"], else TASTR_ENGINE, else rust. "python" picks
-    the reference engine (tastr/engine/stages/), which the benchmarks compare against. Cards for the app always
-    come from Rust (analyze_file)."""
-    name = str((options or {}).get("engine") or os.environ.get("TASTR_ENGINE") or "rust").strip().lower()
-    return name if name in ENGINES else "rust"
 
 
 def _meter(beats_per_bar) -> int:

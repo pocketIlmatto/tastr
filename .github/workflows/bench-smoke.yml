@@ -45,8 +45,8 @@ jobs:
             echo "Not run: add the MODAL_TOKEN_ID and MODAL_TOKEN_SECRET repository secrets (docs/ci.md#benchmark-smoke-run)." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       # Just the Modal client and the tastr source, which the Modal image uploads; the engine installs there.
@@ -75,7 +75,7 @@ jobs:
             echo "::group::$dataset ($LIMIT tracks)"
             # A failed dataset leaves no report, which the comparison counts as a problem.
             modal run tastr/cloud/modal_app.py --kind bench --dataset "$dataset" --path "$folder" \
-              --stages core --limit "$LIMIT" --out "reports/$dataset.json" || echo "::error::$dataset failed"
+              --limit "$LIMIT" --out "reports/$dataset.json" || echo "::error::$dataset failed"
             echo "::endgroup::"
           done
       - id: compare
@@ -83,7 +83,7 @@ jobs:
           python3 .github/scripts/bench_smoke.py reports previous \
             --datasets "$(for p in $DATASETS; do printf '%s,' "${p%%:*}"; done)" | tee report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: bench-smoke-reports

@@ -99,7 +99,7 @@ jobs:
             engine-rs/target
           key: rust-nolto-${{ hashFiles('engine-rs/Cargo.lock') }}
       # CI builds without LTO: the engine's own crate compiles in ~20 s instead of ~60 s, and the cards come out
-      # bit-identical (tests/test_rust_engine.py). The perf budget times the Python engine, and the shipped build
+      # bit-identical (tests/test_rust_engine.py). The perf budget times this build, and the shipped build
       # (Modal's images and the Worker's WebAssembly) keeps the full [profile.release] from Cargo.toml.
       - name: Build the Rust engine
         if: steps.scope.outputs.rust == 'true' || steps.scope.outputs.audio == 'true'

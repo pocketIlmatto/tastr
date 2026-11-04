@@ -1,6 +1,6 @@
-//! Picture data for the UI's Waveform and Spectrogram views (tastr/engine/stages/views.py).
+//! Picture data for the UI's Waveform and Spectrogram views.
 //!
-//! The PNG is deflated with miniz_oxide rather than zlib, so its bytes differ from the Python engine's; the
+//! The PNG is deflated with miniz_oxide rather than zlib, so its bytes differ from the old Python engine's; the
 //! decoded pixels are the same.
 
 use super::Ctx;

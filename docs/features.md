@@ -13,7 +13,7 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   half or two thirds of it.
 - **Time signature.** Bars of 4 beats (4/4) or 3 (3/4, waltz time), detected
   from how the beats group. Grids, MIDI and Strudel follow it. When it's wrong,
-  change it from the track's ⋯ menu; `TASTR_METER=4/4` turns 3/4 detection off.
+  change it from the track's ⋯ menu.
   6/8 and songs that change meter are read as 4/4 or 3/4.
 - **Energy and sections.** An energy curve with rough section boundaries
   (intro, build, drop, chorus, outro...). Sections that sound alike share a

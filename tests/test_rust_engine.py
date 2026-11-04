@@ -1,13 +1,13 @@
 """The Rust engine (engine-rs/, docs/rust-engine.md): its native and WebAssembly builds give identical output,
-its HPSS, shared signals, beats, chroma and section clustering match the Python engine's, and so do its core,
-sections and drum grid; the whole card is checked against stored ones (tests/golden/). Skips unless both builds exist:
+its HPSS, shared signals, beats, chroma and section clustering match librosa's (tests/librosa_ref.py), the whole
+card is checked against stored ones (tests/golden/), and the benchmarks' entry points (engine-rs/src/bench.rs)
+find what synthetic inputs hold. Skips unless both builds exist:
 
     cd engine-rs && cargo build --release && cargo build --release --lib --target wasm32-unknown-unknown
 """
 
 import base64
 import json
-import re
 import shutil
 import struct
 import subprocess
@@ -16,11 +16,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import librosa_ref as ref
 from synth import make_track
 
-from tastr.engine import SR, signals
-from tastr.engine.card import Source, TrackCard
-from tastr.engine.pipeline import AnalysisContext
+from tastr.engine import SR
 
 ROOT = Path(__file__).parent.parent / "engine-rs"
 NATIVE = ROOT / "target" / "release" / "tastr-engine"
@@ -89,42 +88,28 @@ def test_native_and_wasm_give_identical_bits(stereo_44k, tmp_path):
             assert a[name].tobytes() == b[name].tobytes(), f"{path.name}: {name} differs"
 
 
-def test_hpss_matches_the_python_engine(tmp_path):
+def test_hpss_matches_librosa(tmp_path):
     rng = np.random.default_rng(1)
     for y in (make_track(bpm=124, bars_per_section=(4, 4))[0].astype(np.float32),
               (0.3 * rng.standard_normal(SR * 3 + 77)).astype(np.float32)):
         raw = tmp_path / "y.f32"
         y.astype("<f4").tofile(raw)  # raw audio at 22,050 Hz: the binary skips decoding
         ours = native(raw, tmp_path / "out")
-        h, p = signals.hpss(AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri="x"))))
+        h, p = ref.hpss(y)
         assert np.array_equal(ours["y"], y)
         for got, want in ((ours["harmonic"], h), (ours["percussive"], p)):
             assert got.shape == want.shape
             assert np.abs(got - want).max() < 1e-5 * np.abs(want).max()
 
 
-def python_signals(y: np.ndarray) -> dict[str, np.ndarray]:
-    import librosa
-
-    from tastr.engine import drums
-
-    ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri="x")))
-    env = drums._envelopes(ctx)
-    return {"onset_envelope": signals.onset_envelope(ctx), "rms": signals.rms(ctx), "mfcc": signals.mfcc(ctx),
-            "centroid": librosa.feature.spectral_centroid(S=np.abs(librosa.stft(y)), sr=SR)[0],
-            "mel_percussive": signals.mel_percussive(ctx)[0], "low_band_flux": signals.low_band_flux(ctx),
-            "air_flux": drums._air_flux(ctx), "log_mel": signals.log_mel(ctx)[0],
-            "envelope_mid": env["mid"], "envelope_air": env["air"]}
-
-
-def test_shared_signals_match_the_python_engine(tmp_path):
+def test_shared_signals_match_librosa(tmp_path):
     rng = np.random.default_rng(2)
     y = make_track(bpm=124, bars_per_section=(4, 4))[0]
     y = (y + 1e-3 * rng.standard_normal(y.size)).astype(np.float32)
     raw = tmp_path / "y.f32"
     y.astype("<f4").tofile(raw)
     ours = native(raw, tmp_path / "out")
-    for name, want in python_signals(y).items():
+    for name, want in ref.signals(y).items():
         got = ours[name]
         assert got.shape == want.shape, name
         err = np.abs(got - want).max()
@@ -145,7 +130,7 @@ def test_tempo_beats_and_onsets_match_librosa(tmp_path):
     import librosa
 
     y = noisy_track(3)
-    env = signals.onset_envelope(AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri="x"))))
+    env = ref.onset_envelope(ref.hpss(y)[1])
     tempo, beats = librosa.beat.beat_track(onset_envelope=env, sr=SR, hop_length=512)
     tempo = float(np.atleast_1d(tempo)[0])
     _, faster = librosa.beat.beat_track(onset_envelope=env, sr=SR, hop_length=512, bpm=tempo * 1.5)
@@ -165,7 +150,7 @@ def test_chroma_and_bass_cqt_match_librosa(tmp_path):
     import librosa
 
     y = noisy_track(4)
-    h, _ = signals.hpss(AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri="x"))))
+    h, _ = ref.hpss(y)
     raw = tmp_path / "h.f32"
     h.astype("<f4").tofile(raw)
     ours = run([str(NATIVE), "chroma", str(raw)], tmp_path / "out")
@@ -193,7 +178,8 @@ def test_ward_boundaries_match_librosa(tmp_path):
 
 
 def test_butterworth_tables_are_scipys():
-    """engine-rs/src/features.rs holds drums._envelopes' filters as numbers; they must still be what scipy designs."""
+    """engine-rs/src/features.rs holds the drum envelopes' filters (librosa_ref._envelopes) as numbers; they must
+    still be what scipy designs."""
     import re
 
     from scipy import signal
@@ -264,22 +250,6 @@ def test_binary_reports_a_fingerprint(tmp_path):
     assert len(out["fingerprint"]) == 16 and out["seconds"] == 1.0
 
 
-def test_constants_match_the_python_engine():
-    """engine-rs/src/consts.rs is copied from the key model and the calibration tables; refits must update it."""
-    from tastr.engine import calibration_table, key_model
-
-    src = (ROOT / "src" / "consts.rs").read_text()
-
-    def const(name):
-        body = re.search(rf"pub const {name}: [^=]+=\s*(.*?);\n", src, re.DOTALL).group(1)
-        return np.array([float(x) for x in re.findall(r"-?\d+\.?\d*(?:e-?\d+)?", body)])
-
-    assert np.array_equal(const("KEY_WEIGHTS"), np.asarray(key_model.WEIGHTS).ravel())
-    assert np.array_equal(const("KEY_BIAS"), np.asarray(key_model.BIAS).ravel())
-    assert np.array_equal(const("BPM_KNOTS"), np.array([k[:2] for k in calibration_table.BPM]).ravel())
-    assert np.array_equal(const("KEY_KNOTS"), np.array([k[:2] for k in calibration_table.KEY]).ravel())
-
-
 def png_pixels(url: str) -> np.ndarray:
     raw = base64.b64decode(url.split(",", 1)[1])
     pos, idat = 8, b""
@@ -329,8 +299,7 @@ def check_golden(name: str, card: dict) -> None:
 
 
 def test_card_matches_the_golden_card():
-    """Every stage of the Rust card, checked against a stored card, since the Python engine no longer has the
-    tags, suggestions and views stages to compare against."""
+    """Every stage of the Rust card, checked against a stored card."""
     from tastr.engine import rust
 
     card = rust.card_from_samples(golden_track())
@@ -352,51 +321,6 @@ def test_drum_model_card_matches_the_golden_card(monkeypatch):
     assert "drum_model" not in no_model["extras"] and "cymbal" not in no_model["extras"]["suggestions.drum_grid"]
 
 
-def test_core_and_sections_match_the_python_engine(tmp_path):
-    """The benchmarks still score the Python core and sections stages, so they must stay the Rust ones. (Section
-    confidences are rounded from a vector norm numpy takes from BLAS, so on some CPUs one can land a 0.001 step
-    away.)"""
-    from tastr.engine.pipeline import run_pipeline
-
-    y = golden_track()
-    py = json.loads(json.dumps(run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x"))).to_dict()))
-    rs = rust_card_of(y, tmp_path)
-    assert py["errors"] == {} and set(py["stages_run"]) == {"core", "sections"}
-    assert {k: rs["stages_run"][k] for k in py["stages_run"]} == py["stages_run"]
-    for key in ("duration", "sample_rate", "core"):
-        assert rs[key] == py[key], key
-    for key in ("features", "series", "extras"):
-        assert {k: rs[key][k] for k in py[key]} == py[key], key
-    assert len(rs["sections"]) == len(py["sections"])
-    for a, b in zip(rs["sections"], py["sections"]):
-        assert abs(a.pop("confidence") - b.pop("confidence")) <= 0.0011 and a == b
-
-
-def rust_card_of(y: np.ndarray, tmp_path: Path) -> dict:
-    raw = tmp_path / "y.f32"
-    y.tofile(raw)
-    return rust_card(raw, tmp_path / "card.json")
-
-
-@pytest.mark.parametrize("model", [False, True])
-def test_drum_grid_matches_the_python_engine(model, monkeypatch):
-    """The drum benchmarks score the Python drum grid (drums.drum_grid), so it must stay the Rust card's, with and
-    without the drum model's hits."""
-    from tastr.engine import adt, drums, rust
-    from tastr.engine.pipeline import AnalysisContext, run_pipeline
-
-    y = golden_track()
-    hits = golden_hits() if model else None
-    monkeypatch.setattr(adt, "wanted", lambda options: model)
-    monkeypatch.setattr(adt, "onsets", lambda y, sr: hits)
-    card = run_pipeline(y, SR, TrackCard(source=Source(kind="file", uri="x")))
-    ctx = AnalysisContext(y=y, sr=SR, card=card)
-    grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + y.size // ctx.hop))
-    py = {lane: {k: v for k, v in g.items() if not k.startswith("_")} for lane, g in grid.items()}
-    assert ("cymbal" in py) == model
-    assert rust.card_from_samples(y, None, hits)["extras"]["suggestions.drum_grid"] == py
-
-
 def test_card_meter_option_and_wasm_card(stereo_44k, tmp_path):
     """The WebAssembly build's card is byte for byte the native one, and a given meter is used as is."""
     wav = stereo_44k[0]
@@ -408,7 +332,7 @@ def test_card_meter_option_and_wasm_card(stereo_44k, tmp_path):
     assert three["beats_per_bar"] == 3 and three["meter_set"]
 
 
-# --- The benchmark entry points (engine-rs/src/bench.rs) give what the Python reference engine gives ---------
+# --- The benchmark entry points (engine-rs/src/bench.rs) find what synthetic inputs hold ---------------------
 
 
 def _beat_this_spectrogram(seed: int, frames: int = 1500) -> tuple[np.ndarray, np.ndarray]:
@@ -425,26 +349,29 @@ def _beat_this_spectrogram(seed: int, frames: int = 1500) -> tuple[np.ndarray, n
 
 
 @pytest.mark.parametrize("seed", range(4))
-def test_bench_downbeat_meter_and_tempo_match_the_python_engine(seed):
+def test_bench_downbeat_meter_and_tempo(seed):
+    """A heavier kick on one beat in four (one without the backbeat) is bar one; the meter reads 4/4; the tempo is
+    the spectrogram's, or a metrical neighbour of it (the eighth-note hats allow a 3:2 reading)."""
     from tastr.engine import rust
     from tastr.engine.bench import tempo_spec
-    from tastr.engine.bench.downbeats import FPS, mel_freqs
-    from tastr.engine.stages.core import _downbeat_phase, _meter_score
+    from tastr.engine.bench.downbeats import FPS
 
     log_mel, beats = _beat_this_spectrogram(seed)
-    log_mel[:20, beats[seed % 4::4]] += 2  # a heavier kick on one beat in four
-    freqs, shape = mel_freqs(), dict(bands=128, frames=log_mel.shape[1], beats=beats.size)
-    assert rust.bench("downbeat_phase", log_mel, beats, m=4, **shape)["phase"] == _downbeat_phase(beats, log_mel, freqs)
+    one = 2 * seed % 4
+    log_mel[:20, beats[one::4]] += 2
+    shape = dict(bands=128, frames=log_mel.shape[1], beats=beats.size)
+    assert rust.bench("downbeat_phase", log_mel, beats, m=4, **shape)["phase"] == one
     m = rust.bench("meter", log_mel, beats, **shape)
-    assert m["score"] == pytest.approx(_meter_score(beats, log_mel, freqs), abs=1e-5)
-    assert m["phase3"] == _downbeat_phase(beats, log_mel, freqs, 3)
+    assert m["guess"] == 4 and m["score"] <= m["threshold"]
     onset, low_flux = tempo_spec.envelopes(log_mel)
     rs = rust.bench("tempo", onset, low_flux, log_mel, n=onset.size, bands=128, frames=log_mel.shape[1], fps=FPS)
-    bpm, conf = tempo_spec._python_tempo(log_mel)
-    assert rs["bpm"] == pytest.approx(bpm, abs=1e-6) and rs["confidence"] == pytest.approx(conf, abs=1e-6)
+    truth = 60 * FPS / np.diff(beats).mean()
+    assert any(abs(rs["bpm"] - truth * k) <= 0.03 * truth * k for k in (0.5, 2 / 3, 1, 1.5, 2)), (rs["bpm"], truth)
+    assert 0 <= rs["confidence"] <= 1
 
 
-def test_bench_sections_match_the_python_engine():
+def test_bench_sections_find_the_parts():
+    """Bar-aligned parts with their own timbre come back as section starts, for every config."""
     from itertools import product
 
     from tastr.engine.bench import sections_spec as ss
@@ -452,49 +379,42 @@ def test_bench_sections_match_the_python_engine():
     rng = np.random.default_rng(2)
     info = {"sr": 22050.0, "hop": 1024, "fmin": 0.0, "fmax": 11025.0}
     configs = list(product(ss.SECONDS, ss.PHRASES, ss.CAPS))
-    for frames in (3000, 5200):
-        part = np.searchsorted(np.sort(rng.choice(np.arange(100, frames - 100), 6, replace=False)), np.arange(frames))
-        mel = ((rng.random((8, 80)) * 10)[part].T + rng.random((80, frames))) ** 2
-        duration = frames * info["hop"] / info["sr"]
-        downbeats = list(np.arange(0.3, duration, 2.0))
-        sig = ss.signals_from_mel(mel, info)
-        bar_times, rs, current = ss._starts_rust(sig, downbeats, duration, info, configs)
-        py_bars, py, py_current = ss._starts_python(sig, downbeats, duration, info, configs)
-        assert np.allclose(bar_times, py_bars) and current == py_current and rs == py
+    bar = 2.0
+    frames = 5200
+    duration = frames * info["hop"] / info["sr"]
+    edges = [0, 16, 32, 48, 64]  # bars
+    part = np.searchsorted([e * bar * info["sr"] / info["hop"] for e in edges[1:-1]], np.arange(frames), side="right")
+    mel = ((rng.random((len(edges), 80)) * 10)[part].T + rng.random((80, frames))) ** 2
+    sig = ss.signals_from_mel(mel, info)
+    bar_times, starts, current = ss._starts(sig, list(np.arange(0, duration, bar)), duration, info, configs)
+    assert current in configs and np.allclose(bar_times[:5], np.arange(5) * bar)
+    for c, s in starts.items():
+        for e in edges[1:-1]:
+            assert min(abs(b - e) for b in s) <= 1, (c, s)  # starts are bar numbers
 
 
-def test_bench_key_profile_matches_the_python_engine(monkeypatch):
+def test_bench_key_profile_is_the_chromas():
     from tastr.engine.bench import key_features
     from tastr.engine.bench.synth import make_track
 
     y, _ = make_track(bpm=118, tonic=9, mode="minor")
     rs = key_features.features(y, matrices=True)
-    monkeypatch.setenv("TASTR_ENGINE", "python")
-    py = key_features.features(y, matrices=True)
-    assert np.allclose(rs["profile"], py["profile"], atol=1e-5) and rs["silent"] == py["silent"] is False
-    # within the resampler's small differences, as in test_chroma_and_bass_cqt_match_librosa
-    assert np.abs(rs["chroma"] - py["chroma"]).max() < 1e-3
-    assert np.abs(rs["bass"] - py["bass"]).max() < 2e-3 * py["bass"].max()
-    assert np.allclose(key_features.profile_of(rs["chroma"]), py["profile"], atol=1e-5)
+    assert not rs["silent"] and rs["profile"].shape == (12,) and rs["profile"].sum() == pytest.approx(1, abs=1e-6)
+    assert rs["chroma"].shape[0] == 12 and rs["bass"].shape[0] == 36
+    assert np.allclose(key_features.profile_of(rs["chroma"]), rs["profile"], atol=1e-6)
+    assert key_features.features(np.zeros(SR, np.float32))["silent"]
 
 
-def test_bench_drum_lanes_match_the_python_engine(monkeypatch):
+def test_bench_drum_lanes():
     from tastr.engine.bench import drums as bench_drums
-    from tastr.engine.bench.synth import DRUM_PATTERNS, make_drum_track
+    from tastr.engine.bench.synth import make_drum_track
 
-    for name in list(DRUM_PATTERNS)[:3]:
-        y, _ = make_drum_track(DRUM_PATTERNS[name], bpm=128)
-        monkeypatch.setenv("TASTR_ENGINE", "rust")
-        acts, hop = bench_drums._activations(y, name)
-        grid = bench_drums._synth_grid(y, 128)
-        monkeypatch.setenv("TASTR_ENGINE", "python")
-        py_acts, py_hop = bench_drums._activations(y, name)
-        py_grid = bench_drums._synth_grid(y, 128)
-        assert hop == py_hop and set(acts) == set(py_acts)
-        for lane, a in acts.items():
-            assert np.allclose(a, py_acts[lane], rtol=1e-5, atol=1e-4), (name, lane)
-        assert {k: (g["pattern"], g["detected"]) for k, g in grid.items()} == \
-            {k: (g["pattern"], g["detected"]) for k, g in py_grid.items()}, name
+    y, _ = make_drum_track({"kick": "x...x...x...x...", "hat": "..x...x...x...x."}, bpm=128)
+    acts, hop = bench_drums._activations(y, "synth")
+    assert hop == 512 and tuple(acts) == bench_drums.LANES
+    assert all(a.size == 1 + y.size // hop for a in acts.values())
+    beat = int(round(60 / 128 * SR / hop))
+    assert acts["kick"][:beat * 8].argmax() % beat <= 1
 
 
 def test_bench_reports_bad_calls():

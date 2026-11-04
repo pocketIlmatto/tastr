@@ -1,6 +1,6 @@
 """Meter benchmark: does core tell 3/4 from 4/4, and find bar 1 in 3/4?
 
-Scores core's `_meter_score` and the 3-beat `_downbeat_phase` on the labeled beats of a "Beat This!"
+Scores core's meter score and 3-beat downbeat phase (Rust engine) on the labeled beats of a "Beat This!"
 dataset (see `bench.downbeats` for the files), so beat-tracking errors don't blur it. Tracks whose bars
 are steadily 3 or 4 beats long are scored; meter changes, 2/4, 6/8 and the rest are left out.
 
@@ -15,26 +15,18 @@ from functools import partial
 
 import numpy as np
 
-from .downbeats import FPS, bar_length, mel_freqs
+from .downbeats import FPS, bar_length
 from .downbeats import load as _load
 
 load = partial(_load, meters=(3, 4))
 
 
 def meter(frames: np.ndarray, log_mel: np.ndarray) -> dict:
-    """Core's meter read of these beat frames, from the Rust engine (TASTR_ENGINE=python: the Python reference
-    engine): {score, guess (3 or 4), threshold, phase3 (bar 1's phase if the meter is 3/4)}."""
+    """Core's meter read of these beat frames, from the Rust engine: {score, guess (3 or 4), threshold, phase3
+    (bar 1's phase if the meter is 3/4)}."""
     from .. import rust
 
-    if rust.chosen() == "rust":
-        return rust.bench("meter", log_mel, frames, bands=log_mel.shape[0], frames=log_mel.shape[1], beats=frames.size)
-    from ..stages.core import METER_THRESHOLD, _beat_cues, _downbeat_phase, _meter_score
-
-    freqs = mel_freqs()
-    cues = _beat_cues(frames, log_mel, freqs)
-    score = _meter_score(frames, log_mel, freqs, cues=cues)
-    return {"score": score, "guess": 3 if score > METER_THRESHOLD else 4, "threshold": METER_THRESHOLD,
-            "phase3": _downbeat_phase(frames, log_mel, freqs, 3, cues=cues)}
+    return rust.bench("meter", log_mel, frames, bands=log_mel.shape[0], frames=log_mel.shape[1], beats=frames.size)
 
 
 def run(items) -> dict:

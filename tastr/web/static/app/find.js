@@ -14,7 +14,7 @@ import { showViewAs } from "./viewas.js";
 // "Edit as SQL" carries a Simple search over, so people can learn from it.
 const Q_CAM = { "1A": "A♭m", "2A": "E♭m", "3A": "B♭m", "4A": "Fm", "5A": "Cm", "6A": "Gm", "7A": "Dm", "8A": "Am", "9A": "Em", "10A": "Bm", "11A": "F♯m", "12A": "C♯m",
   "1B": "B", "2B": "F♯", "3B": "D♭", "4B": "A♭", "5B": "E♭", "6B": "B♭", "7B": "F", "8B": "C", "9B": "G", "10B": "D", "11B": "A", "12B": "E" };
-const Q_SECTIONS = ["intro", "verse", "build", "chorus", "drop", "breakdown", "outro"]; // the labels tastr/engine/stages/sections.py gives
+const Q_SECTIONS = ["intro", "verse", "build", "chorus", "drop", "breakdown", "outro"]; // the labels engine-rs/src/stages/sections.rs gives
 const qMixes = (code) => { const n = parseInt(code), l = code.slice(-1), w = (k) => ((k + 11) % 12) + 1; return [code, `${w(n - 1)}${l}`, `${w(n + 1)}${l}`, `${n}${l === "A" ? "B" : "A"}`]; };
 const qTags = () => [...new Set(tracks.flatMap((t) => t.tags || []))].sort();
 const qEsc = (v) => String(v).replace(/'/g, "''");

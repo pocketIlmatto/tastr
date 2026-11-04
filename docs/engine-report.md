@@ -112,7 +112,7 @@ nothing measures full tracks from their start. Details: [rhythm.md](rhythm.md).
 
 Core guesses whether the beats group in 3s or 4s from six cues (timbre and bass repeating every 3 vs 4
 beats, kick and snare patterns, change cues). A 3/4 track gets 3-beat bars, a 12-step groove, and 3/4 MIDI
-and Strudel. It can be overruled per track, or turned off with `TASTR_METER=4/4`.
+and Strudel. It can be overruled per track.
 
 - **Checked on:** meter labels in the Beat This! annotations for GTZAN (49 in 3/4, 925 in 4/4). The cues
   were tuned on GTZAN, so these are not held-out numbers.

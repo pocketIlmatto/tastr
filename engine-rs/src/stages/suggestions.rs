@@ -1,5 +1,5 @@
-//! "Try this in Ableton" suggestions (tastr/engine/stages/suggestions.py): drum lanes, bass and chords on the
-//! bar grid, stored in extras, then turned into Suggestion entries with the Python engine's exact wording.
+//! "Try this in Ableton" suggestions: drum lanes, bass and chords on the
+//! bar grid, stored in extras, then turned into Suggestion entries with the wording the Python engine used.
 
 use super::{Ctx, HOP};
 use crate::card::{Card, Section, Suggestion};

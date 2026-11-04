@@ -185,6 +185,16 @@ CREATE TABLE IF NOT EXISTS lookups (
     PRIMARY KEY (track_id, provider)
 );
 
+-- Optional ML tags (tastr/engine/ml_tags.py, TASTR_ML_TAGS=on): MTG's Essentia classifiers on the track's audio,
+-- kept across re-analysis. tags is the shown tags, comma-separated, for searches; result_json is the full result.
+CREATE TABLE IF NOT EXISTS ml_tags (
+    track_id    INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    tags        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    result_json TEXT NOT NULL
+);
+
 -- Requests sent to each lookup provider per UTC day, for the guardrails in tastr/lookup/guard.py.
 CREATE TABLE IF NOT EXISTS lookup_usage (
     provider TEXT NOT NULL,
@@ -619,6 +629,19 @@ def save_lookup(conn: sqlite3.Connection, track_id: int, result: dict[str, Any])
                       result.get("tonic"), result.get("mode"), result.get("camelot"), _now(), json.dumps(result)))
 
 
+def save_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:
+    """Store a track's ML tags result (tastr/engine/ml_tags.analyze), replacing an earlier one."""
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO ml_tags VALUES (?, ?, ?, ?, ?)",
+                     (track_id, result.get("version", 0), ",".join(t["tag"] for t in result.get("tags", [])), _now(),
+                      json.dumps(result)))
+
+
+def get_ml_tags(conn: sqlite3.Connection, track_id: int) -> dict[str, Any] | None:
+    r = conn.execute("SELECT result_json, created_at FROM ml_tags WHERE track_id = ?", (track_id,)).fetchone()
+    return json.loads(r[0]) | {"created_at": r[1]} if r else None
+
+
 def get_lookups(conn: sqlite3.Connection, track_id: int) -> list[dict[str, Any]]:
     rows = conn.execute("SELECT result_json, fetched_at FROM lookups WHERE track_id = ? ORDER BY provider", (track_id,))
     return [json.loads(r[0]) | {"fetched_at": r[1]} for r in rows]
@@ -1051,7 +1074,7 @@ _QUERY_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUN
 # What a friend's search on a hosted server sees (library_snapshot): these tables, their own rows only, without the
 # columns that name people or server paths.
 LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups", "track_labels",
-                  "review_flags", "pattern_reviews")
+                  "review_flags", "pattern_reviews", "ml_tags")
 _PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_json"}
 
 
@@ -1195,7 +1218,7 @@ def first_storage_day(conn: sqlite3.Connection) -> str | None:
 
 EVENT_DAYS = 90
 # The admin log's filter groups (type) for each kind of event, and where events come from (source).
-EVENT_TYPE_OF = {"upload": "upload", "reanalyze": "analysis", "drums": "analysis", "stems": "stems", "limit": "limit",
+EVENT_TYPE_OF = {"upload": "upload", "reanalyze": "analysis", "drums": "analysis", "ml_tags": "analysis", "stems": "stems", "limit": "limit",
                  "failed": "error", "restart": "error", "signin": "signin", "deploy": "deploy", "ci": "deploy",
                  "backup": "backup", "admin": "admin"}
 EVENT_TYPES = ("upload", "analysis", "stems", "limit", "error", "signin", "blocked", "deploy", "backup", "admin")

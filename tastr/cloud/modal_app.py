@@ -15,6 +15,7 @@ import time
 import modal
 
 from tastr.cloud.rust_image import with_rust_engine
+from tastr.engine.bench.essentia_heads import download_command
 
 _IMPORTED = time.time()  # in the container: when it finished starting and imported this module
 
@@ -32,11 +33,19 @@ STEMS_DEPS = ["demucs>=4.0.1"]  # the `stems` extra
 # Versions known to work together (docs/bench.md): librosa 1.0 with numba 0.68 and numpy 2.5 segfaults.
 PINS = ["numpy<2.3", "numba==0.61.2", "llvmlite==0.44.0", "librosa==0.11.0", "scipy<1.16"]
 
-# With the Rust engine's library (tastr/cloud/rust_image.py), so `tastr bench --remote --engine rust` works.
-image = (
+# With the Rust engine's library (tastr/cloud/rust_image.py), which makes every card and runs every bench step.
+_engine_base = (
     with_rust_engine(modal.Image.debian_slim(python_version="3.12").apt_install("ffmpeg", "libsndfile1"))
     .pip_install(*ENGINE_DEPS, *PINS, "zstandard")  # zstandard: `fetch acousticbrainz` reads .tar.zst dumps
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
+)
+image = _engine_base.add_local_python_source("tastr")
+# Research only (docs/essentia.md): Essentia (AGPL-3.0) and MTG's classifier weights (non-commercial only),
+# downloaded at build time and never committed.
+ESSENTIA_PIN = "essentia-tensorflow==2.1b6.dev1389"  # the last build with a Python 3.12 Linux wheel
+essentia_image = (
+    _engine_base.pip_install(ESSENTIA_PIN)
+    .run_commands(download_command())
     .add_local_python_source("tastr")
 )
 # The same plus Demucs, with the htdemucs weights baked in so a cold start does not download them.
@@ -64,38 +73,36 @@ BENCH_CPUS = 8
 
 
 @app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3 * 3600, volumes={DATA: datasets})
-def bench(dataset: str, path: str | None = None, stages: list[str] | None = None, limit: int | None = None,
-          jobs: int | None = None, engine: str | None = None, rekordbox: str | None = None) -> dict:
+def bench(dataset: str, path: str | None = None, limit: int | None = None, jobs: int | None = None,
+          rekordbox: str | None = None) -> dict:
     called = time.time()
     from tastr.cloud.jobs import run_bench
 
-    report = run_bench(dataset, path, DATA, stages=stages, limit=limit, jobs=jobs or BENCH_CPUS, engine=engine,
-                       rekordbox=rekordbox)
+    report = run_bench(dataset, path, DATA, limit=limit, jobs=jobs or BENCH_CPUS, rekordbox=rekordbox)
     report["timing"] |= {"container_started": _IMPORTED, "called": called, "import_seconds": round(time.time() - called - report["timing"]["load_seconds"] - report["seconds"], 1)}
     return report
 
 
 @app.function(image=image, cpu=2, memory=4096, timeout=3600, volumes={DATA: datasets})
-def spec_bench(bench: str, dataset: str, path: str, limit: int | None = None, engine: str | None = None) -> dict:
+def spec_bench(bench: str, dataset: str, path: str, limit: int | None = None) -> dict:
     from tastr.cloud.jobs import run_spec_bench
 
-    return run_spec_bench(bench, dataset, f"{DATA}/{path}", limit, engine=engine)
+    return run_spec_bench(bench, dataset, f"{DATA}/{path}", limit)
 
 
 @app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3600, volumes={DATA: datasets})
-def key_profiles(dataset: str, path: str, limit: int | None = None, engine: str | None = None) -> dict:
+def key_profiles(dataset: str, path: str, limit: int | None = None) -> dict:
     from tastr.cloud.jobs import run_key_profiles
 
-    return run_key_profiles(dataset, path, DATA, limit=limit, jobs=BENCH_CPUS, engine=engine)
+    return run_key_profiles(dataset, path, DATA, limit=limit, jobs=BENCH_CPUS)
 
 
 @app.function(image=image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
 def drum_bench(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False,
-               kits: str = "all", engine: str | None = None) -> dict:
+               kits: str = "all") -> dict:
     from tastr.cloud.jobs import run_drum_bench
 
-    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits,
-                          engine=engine)
+    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits)
 
 
 # The drum bench with the pretrained drum model (tastr[drums]).
@@ -112,6 +119,19 @@ def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:
     from tastr.cloud.jobs import run_vibe_bench
 
     return run_vibe_bench(dataset, path, DATA, limit=limit, jobs=BENCH_CPUS)
+
+
+@app.function(image=essentia_image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
+def essentia_bench(dataset: str, path: str, limit: int | None, shard: int = 0, shards: int = 1) -> list[dict]:
+    """One shard of the Essentia classifier bench: engine row + head predictions per clip."""
+    from pathlib import Path
+
+    from tastr.cloud.jobs import load_items
+    from tastr.engine.bench import essentia_heads as eh
+
+    folder = Path(DATA) / path
+    items = eh.pick(eh.held_out(load_items(dataset, folder), dataset), limit)
+    return eh.analyze(items[shard::shards], eh.extra_labels(folder))
 
 
 @app.function(image=image, cpu=2, memory=4096, timeout=6 * 3600, volumes={DATA: datasets_rw})
@@ -133,30 +153,38 @@ def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = Non
 
 
 @app.local_entrypoint()
-def run_branch(kind: str, dataset: str, path: str, stages: str = "", limit: int = 0, out: str = "",
-               engine: str = ""):
+def run_branch(kind: str, dataset: str, path: str, limit: int = 0, out: str = ""):
     """Bench a branch's code without deploying it, so the shared app stays as is:
 
-        modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --stages core
+        modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key
         modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this   # any spec-bench
-        modal run tastr/cloud/modal_app.py --kind bench --dataset giantsteps-key --path giantsteps-key --engine rust
-        modal run tastr/cloud/modal_app.py --kind drums --dataset idmt --path idmt --limit 10 --engine python
+        modal run tastr/cloud/modal_app.py --kind drums --dataset idmt --path idmt-smt-drums --limit 10
         modal run tastr/cloud/modal_app.py --kind key-profiles --dataset giantsteps-key --path giantsteps-key
 
-    `modal run` uploads the working tree to a temporary app that stops when the run ends. `--engine python`
-    scores the Python reference engine instead of Rust.
+    `modal run` uploads the working tree to a temporary app that stops when the run ends.
     """
     import json
 
+    if kind == "essentia":  # modal run tastr/cloud/modal_app.py --kind essentia --dataset deam --path deam --limit 200
+        from tastr.engine.bench import essentia_heads as eh
+
+        shards = 8
+        rows = [r for part in essentia_bench.starmap([(dataset, path, limit or None, i, shards) for i in range(shards)])
+                for r in part]
+        report = {"dataset": dataset, "report": eh.score(rows), "rows": rows}
+        if out:
+            with open(out, "w") as f:
+                f.write(json.dumps(report, indent=1))
+        print(eh.format_report(report["report"]))
+        return
     if kind == "bench":
-        report = bench.remote(dataset, path, [s for s in stages.split(",") if s] or None, limit or None,
-                              engine=engine or None)
+        report = bench.remote(dataset, path, limit or None)
     elif kind == "drums":
-        report = drum_bench.remote(dataset, path if path != "-" else None, limit or None, engine=engine or None)
+        report = drum_bench.remote(dataset, path if path != "-" else None, limit or None)
     elif kind == "key-profiles":
-        report = key_profiles.remote(dataset, path, limit or None, engine=engine or None)
+        report = key_profiles.remote(dataset, path, limit or None)
     else:
-        report = spec_bench.remote(kind, dataset, path, limit or None, engine=engine or None)
+        report = spec_bench.remote(kind, dataset, path, limit or None)
     text = json.dumps(report, indent=1)
     if out:
         with open(out, "w") as f:

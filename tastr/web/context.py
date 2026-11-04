@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from .. import blobs, db, drum_jobs, lookup, runner, service, stems
+from .. import blobs, db, drum_jobs, lookup, ml_jobs, runner, service, stems
 from ..engine import browser_card
 from ..filemeta import describe, legacy_upload_prefix
 from .analysis_jobs import AnalysisJobs, ref
@@ -111,6 +111,7 @@ class AppContext:
         self.analyses = AnalysisJobs(db_path, legacy_folder=tastr_home() / "analysis-jobs",
                                      limit=None if blocking or not hosted else settings.max_analyses)
         self.drum_runs = drum_jobs.Jobs(self.run_drum_model, db_path)
+        self.ml_runs = drum_jobs.Jobs(self.run_ml_tags, db_path, kind="ml-tags", label="ML tags")
         self.last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
         self.snapshot_day = ""  # the UTC day storage was last recorded for (storage_days)
 
@@ -129,6 +130,21 @@ class AppContext:
                 log.warning("drum model run for track %s failed: %s", track_id, result.error)
                 raise RuntimeError("Couldn't analyze the file with the drum model.")
             raise RuntimeError(f"Couldn't analyze the file with the drum model: {result.error}")
+
+    def run_ml_tags(self, track_id: int) -> None:
+        """Add ML tags to one track (an ml_runs job); raises with a message for the UI."""
+        with closing(self.conn()) as c:
+            try:
+                result = ml_jobs.tag_track(c, track_id)
+            except FileNotFoundError as e:
+                raise RuntimeError("The original audio file is no longer on disk.") from e
+            except Exception as e:
+                if self.hosted:
+                    log.warning("ML tags for track %s failed: %s", track_id, e)
+                    raise RuntimeError("Couldn't add ML tags to this track.") from e
+                raise RuntimeError(f"Couldn't add ML tags: {e}") from e
+        if result is None:
+            raise LookupError("The track was deleted.")
 
     def analysis_slot(self):
         return self.slots or nullcontext()
@@ -242,6 +258,9 @@ class AppContext:
         body["stems_state"] = self.stem_jobs.status(self.stems_dir(card, track_id))["state"]
         body["drum_model_available"] = drum_jobs.available()
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]
+        body["ml_tags"] = db.get_ml_tags(c, track_id)
+        body["ml_tags_available"] = ml_jobs.available()
+        body["ml_tags_state"] = self.ml_runs.status(track_id)["state"]
         body["lookups"] = lookup.describe(card, db.get_lookups(c, track_id))
         on = lookup.enabled()
         body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in on]

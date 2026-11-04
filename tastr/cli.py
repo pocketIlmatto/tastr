@@ -100,6 +100,12 @@ def main(argv: list[str] | None = None) -> int:
     dm.add_argument("action", choices=["status", "fetch", "run"])
     dm.add_argument("track_id", type=int, nargs="?", help="run: the track to re-analyze with the model")
 
+    ml = sub.add_parser("ml-tags", help="optional ML tags from MTG's Essentia classifiers (non-commercial weights, "
+                                        "TASTR_ML_TAGS=on): status, or run on tracks")
+    ml.add_argument("action", choices=["status", "run"])
+    ml.add_argument("track_ids", type=int, nargs="*", help="run: the tracks to tag (see `tastr list`)")
+    ml.add_argument("--all", action="store_true", help="run: every track that has no ML tags yet")
+
     db_ = sub.add_parser("drum-bench", help="drum lane benches (synth, idmt, mdb, stemgmd-mix), locally or on Modal")
     db_.add_argument("suite", choices=["synth", "idmt", "mdb", "stemgmd-mix"])
     db_.add_argument("path", nargs="?", help="dataset folder (a bucket folder with --remote); not for synth")
@@ -140,7 +146,6 @@ def main(argv: list[str] | None = None) -> int:
     b = sub.add_parser("bench", help="score the engine against labeled tracks (see docs/bench.md)")
     b.add_argument("dataset", help="synth, giantsteps-key, giantsteps-tempo, beatport-key, beatport-tempo, fma-keys, ballroom, harmonix, manifest or rekordbox")
     b.add_argument("path", nargs="?", help="dataset folder, or the CSV/JSON file for `manifest`")
-    b.add_argument("--stages", help="comma-separated stage names (default: core,sections)")
     b.add_argument("--limit", type=int, help="only the first N tracks")
     b.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel")
     b.add_argument("--out", help="write the full JSON report here")
@@ -149,8 +154,6 @@ def main(argv: list[str] | None = None) -> int:
                    help="save the local folder's track list to tastr-index-DATASET.json for fast --remote runs")
     b.add_argument("--remote", action="store_true",
                    help="run on Modal; path is then a folder in the R2 dataset bucket (see docs/cloud.md)")
-    b.add_argument("--engine", choices=["python", "rust"],
-                   help="which engine analyzes (default: TASTR_ENGINE, else rust); rust always runs every stage")
     b.add_argument("--record", action="store_true",
                    help="save the headline score to tastr/engine/bench_scores.json, quoted in the UI (full runs only)")
     b.add_argument("--rekordbox", metavar="XML",
@@ -200,12 +203,10 @@ def _bench_remote(args) -> int:
     from .engine.bench import runner
 
     print(f"running {args.dataset} on Modal...", file=sys.stderr)
-    stages = args.stages.split(",") if args.stages else None
     t0 = time.time()
     try:
-        report = remote.bench(args.dataset, args.path, stages=stages, limit=args.limit,
+        report = remote.bench(args.dataset, args.path, limit=args.limit,
                               jobs=args.jobs if args.jobs > 1 else None,
-                              **({"engine": args.engine} if args.engine else {}),
                               **({"rekordbox": args.rekordbox} if args.rekordbox else {}))
     except (remote.RemoteError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -250,10 +251,7 @@ def _bench_local(args) -> int:
     def progress(i, n, row):
         print(f"\r{i}/{n} {row['id'][:50]:50}", end="", file=sys.stderr, flush=True)
 
-    if args.engine:
-        os.environ["TASTR_ENGINE"] = args.engine
-    stages = args.stages.split(",") if args.stages else None
-    report = runner.run(items, stages=stages, jobs=args.jobs, limit=args.limit, progress=progress)
+    report = runner.run(items, jobs=args.jobs, limit=args.limit, progress=progress)
     print(file=sys.stderr)
     if args.rekordbox:
         from .engine.bench import rekordbox
@@ -626,6 +624,41 @@ def _drum_model(args) -> int:
     return 0
 
 
+def _ml_tags(args) -> int:
+    from . import ml_jobs
+
+    print("ML tags use MTG's Essentia models (https://essentia.upf.edu/models.html): weights for non-commercial use "
+          "only; Essentia is AGPL-3.0. Neither is part of Tastr (docs/essentia.md).")
+    if not ml_jobs.available():
+        print(f"ML tags: unavailable here. {ml_jobs.why_not()}", file=sys.stderr if args.action == "run" else sys.stdout)
+        return 2 if args.action == "run" else 0
+    if args.action == "status":
+        print("ML tags: on (`tastr ml-tags run ID...` or --all)")
+        return 0
+    conn = db.connect(args.db)
+    ids = list(args.track_ids)
+    if args.all:
+        ids += [r[0] for r in conn.execute("SELECT id FROM tracks WHERE id NOT IN (SELECT track_id FROM ml_tags) "
+                                           "ORDER BY id")]
+    if not ids:
+        print("error: run needs track ids or --all", file=sys.stderr)
+        return 2
+    failed = 0
+    for tid in ids:
+        try:
+            result = ml_jobs.tag_track(conn, tid)
+        except Exception as e:  # noqa: BLE001 - one bad track shouldn't stop the rest
+            print(f"{tid}: error: {e}", file=sys.stderr)
+            failed += 1
+            continue
+        if result is None:
+            print(f"{tid}: no such track", file=sys.stderr)
+            failed += 1
+        else:
+            print(f"{tid}: {', '.join(t['tag'] for t in result['tags']) or '(no tags)'}")
+    return 1 if failed else 0
+
+
 def _drum_model_run(args) -> int:
     from . import drum_jobs, service
 
@@ -786,7 +819,7 @@ COMMANDS = {
 "retag": _retag,
     "set-owner": _set_owner, "pack": _pack, "unpack": _unpack, "lookup": _lookup, "labels": _labels,
     "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
-    "key-profiles": _key_profiles, "drum-model": _drum_model, "drum-bench": _drum_bench,
+    "key-profiles": _key_profiles, "drum-model": _drum_model, "ml-tags": _ml_tags, "drum-bench": _drum_bench,
     "vibe-bench": _vibe_bench, "vibe-fit": _vibe_fit, "fetch": _fetch, "bench": _bench,
     "rekordbox-compare": _rekordbox_compare,
 }

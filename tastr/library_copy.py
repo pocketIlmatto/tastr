@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 
 # The tables the analysis fills, copied with each track. track_edits, track_labels, review_flags, pattern_reviews,
 # track_cues and list_tracks are someone's own work, so they stay behind.
-ANALYSIS_TABLES = ("sections", "tags", "suggestions", "features", "series", "cards", "lookups")
+ANALYSIS_TABLES = ("sections", "tags", "suggestions", "features", "series", "cards", "lookups", "ml_tags")
 # Rows of these tables that belong to the person, not the track: left out of a copy.
 PERSONAL_ROWS = {"lookups": "provider = 'rekordbox'"}  # from their own Rekordbox export (rekordbox_compare.py)
 

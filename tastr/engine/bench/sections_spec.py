@@ -83,16 +83,6 @@ def load(folder: str | Path, dataset: str = "harmonix", limit: int | None = None
     return items, _info(folder)
 
 
-class _Ctx:
-    """Just enough of an AnalysisContext for the Python stage's bar helpers: precomputed signals and the frame grid."""
-
-    def __init__(self, sr: float, hop: int, signals: dict):
-        self.sr, self.hop, self._signals = sr, hop, signals
-
-    def get(self, name, fn=None):
-        return self._signals[name]
-
-
 def signals_from_mel(mel: np.ndarray, info: dict) -> dict:
     """chroma (12), mfcc (13) and rms per frame from a bands x frames mel spectrogram (power, magnitude or dB)."""
     import librosa
@@ -116,7 +106,7 @@ def signals_from_mel(mel: np.ndarray, info: dict) -> dict:
             "rms": np.sqrt(power.mean(axis=0))}
 
 
-def _starts_rust(sig: dict, downbeats, duration: float, info: dict, configs) -> tuple:
+def _starts(sig: dict, downbeats, duration: float, info: dict, configs) -> tuple:
     """(bar times, {config: snapped starts}, the stage's own config) from the Rust engine's sections stage."""
     from .. import rust
 
@@ -128,24 +118,7 @@ def _starts_rust(sig: dict, downbeats, duration: float, info: dict, configs) -> 
     return np.asarray(r["bar_times"]), dict(zip(configs, r["starts"])) if r["starts"] else None, current
 
 
-def _starts_python(sig: dict, downbeats, duration: float, info: dict, configs) -> tuple:
-    """The same from the Python reference engine (TASTR_ENGINE=python)."""
-    from ..stages import sections
-
-    bar_times = sections._bar_times(downbeats, duration)
-    n_bars = len(bar_times)
-    current = (sections.SECONDS_PER_SECTION, sections.PHRASE_BARS, sections.MAX_SECTIONS)
-    if n_bars < sections.MIN_BARS_FOR_SPLIT:
-        return bar_times, None, current
-    z = sections._bar_vectors(_Ctx(info["sr"], info["hop"], sig), bar_times, duration)
-    return bar_times, {c: sections._segment(z, duration, n_bars, seconds=c[0], phrase=c[1], cap=c[2])
-                       for c in configs}, current
-
-
 def run(items_info) -> dict:
-    from .. import rust
-
-    starts_of = _starts_rust if rust.chosen() == "rust" else _starts_python
     items, info = items_info
     configs = list(product(SECONDS, PHRASES, CAPS))
     scores = {c: {"tune": [], "check": []} for c in configs}
@@ -155,7 +128,7 @@ def run(items_info) -> dict:
         sig = signals_from_mel(mel, info)
         n_frames = sig["mfcc"].shape[1]
         duration = n_frames * info["hop"] / info["sr"]
-        bar_times, starts, current = starts_of(sig, downbeats, duration, info, configs)
+        bar_times, starts, current = _starts(sig, downbeats, duration, info, configs)
         if starts is None:
             continue
         row = {"id": sid, "split": split, "duration": round(duration, 1), "n_ref": len(bounds)}

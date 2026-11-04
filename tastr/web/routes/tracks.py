@@ -160,6 +160,7 @@ def router(ctx: AppContext) -> APIRouter:
             shared = card is not None and c.execute(
                 "SELECT 1 FROM tracks WHERE sha256 = ?", (card.source.sha256,)).fetchone() is not None
         ctx.drum_runs.forget(track_id)
+        ctx.ml_runs.forget(track_id)
         if card is not None and not shared:
             folder = ctx.stems_dir(card, track_id)
             ctx.stem_jobs.forget(folder)

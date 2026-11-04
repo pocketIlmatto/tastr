@@ -55,7 +55,8 @@ def share_page(code: str, origin: str = "") -> str:
     image = html.escape(origin + PREVIEW_PATH)
     meta = "".join(f'<meta property="{k}" content="{v}">' for k, v in [
         ("og:type", "website"), ("og:site_name", "Tastr"), ("og:title", title), ("og:description", desc),
-        ("og:image", image), ("og:image:width", "1200"), ("og:image:height", "630")])
+        ("og:image", image), ("og:image:width", "1200"), ("og:image:height", "630"),
+        ("og:image:alt", "Tastr: track cards with BPM, key, sections and Strudel ideas")])
     meta += "".join(f'<meta name="{k}" content="{v}">' for k, v in [
         ("description", desc), ("twitter:card", "summary_large_image"), ("twitter:title", title),
         ("twitter:description", desc), ("twitter:image", image)])

@@ -4,6 +4,7 @@ import { $, api, h, svg } from "./core.js";
 import { fmtUpLong } from "./library.js";
 import { stat } from "./card.js";
 import { serverCfg } from "./daw.js";
+import { startViewAs } from "./viewas.js";
 
 // GET /api/admin/usage?range= and /api/admin/events, fetched each time the tab opens (no polling). Days are UTC days, like the limits.
 // Cloud cost is an estimate: Modal bills about $0.001 per analysis and $0.008 per stem job (T4, ~50 s), against the
@@ -181,8 +182,11 @@ function renderPeople(A, all, P) {
         h("td", {}, quota(p, "tracks", p.today.tracks)), h("td", {}, quota(p, "stems", p.today.stems)), h("td", {}, quota(p, "asks", p.today.asks || 0)),
         h("td", { class: "num" }, String(p.tracks30)), h("td", { class: "num" }, String(p.tracks)),
         h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", { class: "num", title: p.claude ? `$${p.claude.toFixed(2)} of it Ask Claude` : null }, `$${p.cost.toFixed(2)}`),
-        h("td", {}, h("button", { type: "button", class: "adm-lim-btn", "aria-expanded": String(admEdit === p.email), title: `Change ${p.email}'s daily limits`,
-          "aria-label": `Change ${p.email}'s daily limits`, onclick: (e) => { e.stopPropagation(); admEdit = admEdit === p.email ? null : p.email; renderAdmin(); } }, "✎")));
+        h("td", {}, h("div", { class: "adm-acts" }, p.email !== serverCfg.user ? h("button", { type: "button", class: "adm-va-btn",
+          title: `See Tastr exactly as ${p.email.split("@")[0]} sees it. Read-only: you can't change anything while viewing.`,
+          onclick: (e) => { e.stopPropagation(); startViewAs(p.email).catch((err) => { $("adm-error").textContent = err.message; }); } }, "View as") : null,
+          h("button", { type: "button", class: "adm-lim-btn", "aria-expanded": String(admEdit === p.email), title: `Change ${p.email}'s daily limits`,
+          "aria-label": `Change ${p.email}'s daily limits`, onclick: (e) => { e.stopPropagation(); admEdit = admEdit === p.email ? null : p.email; renderAdmin(); } }, "✎"))));
       return admEdit === p.email ? [tr, limitRow(p, L)] : [tr];
     })));
 }

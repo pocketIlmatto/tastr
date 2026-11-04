@@ -11,13 +11,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from ... import blobs, db, library_copy, rekordbox_compare, s3
 from .. import claude
 from ..context import AppContext, tastr_home
-from ..hosted import stored_bytes, today
+from ..hosted import VIEW_AS_COOKIE, VIEW_AS_HOURS, VIEW_AS_PATH, stored_bytes, today
 
 EMAIL = re.compile(r"^[^@\s/]{1,64}@[^@\s/]{1,190}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -28,6 +28,10 @@ USAGE_RANGES = {"1": 1, "7": 7, "30": 30, "all": 365}  # the admin chart's range
 class CopyBody(BaseModel):
     to: str
     track_ids: list[int] = Field(..., min_length=1, max_length=200)
+
+
+class ViewAsBody(BaseModel):
+    email: str
 
 
 class LimitsBody(BaseModel):
@@ -211,6 +215,32 @@ def router(ctx: AppContext) -> APIRouter:
             ctx.event(admin, "admin", f"Copied {n} track{'' if n == 1 else 's'} to {to.split('@')[0]}")
         return {"to": to, "copied": [{"from": a, "id": b} for a, b in made.items()],
                 "skipped": [t for t in body.track_ids if t not in made]}
+
+    @api.post(VIEW_AS_PATH)
+    def view_as(body: ViewAsBody, request: Request):
+        """See the app as someone else sees it: their library, limits and screens, read-only. Sets a cookie that the
+        login middleware honours for admins only (server.py), for VIEW_AS_HOURS; DELETE stops. Admins only; logged."""
+        admin = ctx.require_admin(request)
+        email = body.email.strip().lower()
+        if not EMAIL.match(email) or email == admin:
+            raise HTTPException(400, "Give someone else's email address.")
+        with closing(ctx.conn()) as c:
+            known = c.execute("SELECT 1 FROM tracks WHERE owner = ? UNION SELECT 1 FROM user_usage WHERE user = ? "
+                              "UNION SELECT 1 FROM events WHERE user = ? LIMIT 1", (email, email, email)).fetchone()
+        if not known:
+            raise HTTPException(404, f"{email} hasn't used Tastr yet.")
+        ctx.event(admin, "admin", f"Viewed the app as {email.split('@')[0]}")
+        r = JSONResponse({"viewing_as": {"email": email, "by": admin, "read_only": True}})
+        r.set_cookie(VIEW_AS_COOKIE, email, max_age=VIEW_AS_HOURS * 3600, path="/", secure=True, httponly=True,
+                     samesite="strict")
+        return r
+
+    @api.delete(VIEW_AS_PATH)
+    def stop_view_as(request: Request):
+        """Back to your own view. Works for anyone, so a stale cookie can always be cleared."""
+        r = JSONResponse({"viewing_as": None})
+        r.delete_cookie(VIEW_AS_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+        return r
 
     @api.get("/api/admin/rekordbox-compare")
     def rekordbox(request: Request, key: str = REKORDBOX_KEY, format: Literal["json", "text"] = "json",

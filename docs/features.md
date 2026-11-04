@@ -230,6 +230,10 @@ When Tastr is hosted for friends, the people in `TASTR_ADMIN_EMAILS` get an **Ad
 - **Usage chart:** pick Today (24 UTC hours, with a "now" line), 7 days, 30 days or All time, and show
   Tracks, Stem jobs, Visits, Storage (GB per person at the end of each day) or Cost (estimated from Modal run
   time). Bars stack per person; click a person in the table to pick them out.
+- **View as:** the **View as** button on a person's row reloads the app as they see it: their library, lists,
+  limits and screens, with no Admin tab. It's read-only: an orange banner says whose view it is, uploads are
+  off, and anything that would change their data is refused with a message. **Exit** in the banner takes you
+  back to the Admin tab; the view also ends by itself after 2 hours.
 - **Daily limits per person:** the ✎ at the end of a person's row changes their tracks and stem jobs per
   day, for today only (back to the default at 00:00 UTC) or until you change it. Their quota shows the raised
   cap with ↑, and someone at their cap gets a **Raise** link. Each change is logged.

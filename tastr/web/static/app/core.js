@@ -109,11 +109,21 @@ export function httpError(status, detail, statusText) {
   if (status === 413) return "This file is too large for the server.";
   return statusText || `The server answered with error ${status}.`;
 }
+// View as (T34): while an admin views the app as someone else, the server refuses every write with 403
+// "Read-only while viewing as X."; that message shows as a toast, and the caller's own error handling rolls back.
+export const READ_ONLY = /^Read-only while viewing as /;
+export function readOnlyToast(msg) {
+  document.querySelectorAll(".va-toast").forEach((t) => t.remove());
+  const t = h("div", { class: "va-toast", role: "alert" }, msg);
+  document.body.append(t);
+  setTimeout(() => t.remove(), 3500);
+}
 export async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) {
     let detail = null;
     try { detail = (await r.json()).detail; } catch (_) {}
+    if (r.status === 403 && READ_ONLY.test(detail || "")) readOnlyToast(detail);
     throw Object.assign(new Error(httpError(r.status, detail, r.statusText)), { status: r.status });
   }
   return r.status === 204 ? null : r.json();

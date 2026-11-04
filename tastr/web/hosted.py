@@ -40,6 +40,13 @@ HEALTH_PATH = "/api/health"
 TOKEN_HEADER = "cf-access-jwt-assertion"
 PUBLIC_PREFIX = "/pub/"  # signed links; Cloudflare Access lets these through (docs/hosting.md)
 LINK_DAYS = 7
+# "View as": an admin's browser carries this cookie, and every request then runs as that person,
+# read-only. Only an admin's cookie counts; anyone else's is ignored. Set and cleared at VIEW_AS_PATH.
+VIEW_AS_COOKIE = "tastr_view_as"
+VIEW_AS_PATH = "/api/admin/view-as"
+VIEW_AS_HOURS = 2  # the cookie lapses after this, so a forgotten "view as" doesn't stick around
+# POSTs that only read, so they still work while viewing as someone: searches, zip downloads, the upload dedupe check.
+VIEW_AS_READS = frozenset({"/api/query", "/api/files/zip", "/api/tracks/known"})
 
 
 class ConfigError(ValueError):

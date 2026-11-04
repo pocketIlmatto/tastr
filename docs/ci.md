@@ -188,6 +188,48 @@ again; it says so on the pull request.
   runs only on a failure, for up to 45 minutes and 60 turns.
 - **Skip a package:** add an `ignore` entry under its ecosystem in `.github/dependabot.yml`.
 
+## Benchmark smoke run
+
+`.github/workflows/bench-smoke.yml` runs on the 3rd of each month at 06:17 UTC. It scores main's engine on the
+first 100 tracks of GiantSteps Key (exact key) and Beatport tempo (BPM within 4%) on Modal, reading the R2 bucket.
+It uses `modal run`, a temporary app from main's code, so it measures main rather than whatever was last deployed,
+and the shared `tastr` app stays as it is. `.github/scripts/bench_smoke.py` compares the scores with two things:
+
+- the last good run on the same tracks; it flags a drop of more than 0.05;
+- the full scores the app quotes in `tastr/engine/bench_scores.json`; it flags a score more than 0.12 below.
+
+It also flags a dataset whose run failed or lost more than 10% of its tracks.
+
+A flagged run opens a `bench-drop` issue assigned to the owner, or adds to the open one, and goes red. A red run never
+becomes "the last good run", so later runs keep comparing with the scores from before the drop. The next good run
+closes the issue. No Claude runs: a drop needs a person to decide whether it is a bug or a trade-off.
+
+- **Secrets:** `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, the deploy workflow's. They are already set. The Modal
+  secret `tastr-r2` (docs/cloud.md) must exist in the Modal workspace's main environment.
+- **Try it:** Actions > bench-smoke > Run workflow. `limit` changes the tracks per dataset, but only runs with the
+  same number are compared with each other. After an intended change that lowers a score, run it with `accept` on
+  so its scores become the new baseline, then record a full run (docs/bench.md).
+- **Cost:** about $0.15 of Modal compute a month, plus about 20 Actions minutes, which are free on a public
+  repository.
+
+## Auto-merge for docs and tests
+
+`.github/workflows/automerge.yml` turns on auto-merge (squash) for pull requests that only touch docs and tests.
+GitHub then merges them by itself once the required `test` check passes. A PR qualifies when all of these hold:
+
+- it comes from a branch in this repository;
+- its author is the owner or `claude[bot]`;
+- every path it adds, changes, deletes or renames (old and new name) is under `docs/` or `tests/`, or is a Markdown
+  file. `CLAUDE.md`, `AGENTS.md` and anything under `.github/` never qualify.
+
+A later push to the PR that touches anything else turns auto-merge off again, and that PR waits for a review.
+Dependabot PRs change manifests, so they never qualify.
+
+- **Setting:** turn on **Settings > General > Pull Requests > Allow auto-merge**. Without it the run fails with
+  "auto-merge is not allowed".
+- **Note:** GitHub starts no workflows for a merge made with the workflow's token, so `tests` doesn't rerun on main
+  after such a merge. It passed on the PR head, and nothing deploys, since docs and tests never ship.
+
 ## Deploy workflow
 
 `.github/workflows/deploy.yml` ships the hosted app (Modal, then the Cloudflare Worker through `deploy-worker.yml`; [deploy.md](deploy.md#updating)). It

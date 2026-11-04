@@ -1,0 +1,49 @@
+name: automerge
+# Docs and tests only pull requests merge on their own once the required `test` check passes
+# (docs/ci.md#auto-merge-for-docs-and-tests). A PR qualifies when it comes from a branch in this repository, its
+# author is the owner or Claude (claude[bot], from claude.yml), and every file it adds, changes, deletes or
+# renames is under docs/ or tests/, or is a Markdown file other than CLAUDE.md and AGENTS.md. Nothing under
+# .github/ qualifies. A later push that touches anything else turns auto-merge off again.
+# Needs "Allow auto-merge" on in the repository settings (General > Pull Requests).
+#
+# The merge is made with this workflow's token, and GitHub starts no workflows for pushes made with it: the tests
+# don't rerun on main (they already passed on the PR head) and nothing deploys (docs and tests never ship).
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+concurrency:
+  group: automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions: {}
+jobs:
+  automerge:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft &&
+      (github.event.pull_request.author_association == 'OWNER' || github.event.pull_request.user.login == 'claude[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # New and old names, so a rename out of docs/ into the app does not count as docs.
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate \
+            -q '.[] | .filename, (.previous_filename // empty)' > files.txt
+          other=$(grep -v -E '^(docs/|tests/)' files.txt | grep -v -E '\.md$' || true)
+          other+=$(printf '\n'; grep -E '^\.github/|(^|/)(CLAUDE|AGENTS)\.md$' files.txt || true)
+          other=$(printf '%s\n' "$other" | sed '/^$/d' | sort -u)
+          if [ -s files.txt ] && [ -z "$other" ]; then
+            echo "Docs and tests only ($(wc -l < files.txt) paths): merging once the checks pass." | tee -a "$GITHUB_STEP_SUMMARY"
+            gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --auto --squash
+          else
+            { echo "Not docs and tests only, so this one waits for a person. Other paths:"; echo '```'; printf '%s\n' "$other"; echo '```'; } \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            # Turns off an auto-merge an earlier, docs-only push had turned on. Fails harmlessly when none is set.
+            gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --disable-auto 2>/dev/null || true
+          fi

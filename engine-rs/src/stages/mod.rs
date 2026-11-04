@@ -9,7 +9,7 @@ pub mod views;
 
 use crate::card::Card;
 use crate::features::{self, Matrix};
-use crate::{cqt, rhythm, spectral};
+use crate::{cqt, spectral};
 
 pub const HOP: usize = spectral::HOP;
 
@@ -95,15 +95,6 @@ impl Ctx {
             beats_per_bar,
             y,
         }
-    }
-
-    /// core's 384-lag tempogram mean, computed on first use.
-    pub fn tempogram(&mut self) -> &[f64] {
-        if self.tempogram.is_none() {
-            let tg = rhythm::tempogram(&self.onset, 384);
-            self.tempogram = Some(rhythm::tempogram_mean(&tg, 384, self.onset.len()));
-        }
-        self.tempogram.as_deref().unwrap()
     }
 }
 

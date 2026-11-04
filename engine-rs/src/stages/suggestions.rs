@@ -1273,3 +1273,28 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     card.suggestions = suggest(card, &grid, model, bass.as_ref(), harm.as_ref(), &by_section, &sec_bass, &sec_harm);
     Ok(())
 }
+
+/// The drum grid alone (the card's suggestions.drum_grid: lane -> pattern, velocity, detected) for a card whose
+/// core beats and downbeats are already set; the drum benchmark scores it on loops with known patterns.
+pub fn drum_grid_json(ctx: &Ctx, card: &Card) -> Result<Json, String> {
+    let sf = step_grid(card, ctx.sr, 1 + ctx.y.len() / HOP);
+    if sf.is_empty() {
+        return Ok(Json::obj());
+    }
+    let mut drums = Drums::new(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux);
+    if let Some(hits) = &ctx.drum_hits {
+        drums.set_model(hits, ctx.sr, HOP);
+    }
+    let grid = drum_grid(ctx, card, &drums, &sf)?;
+    Ok(Json::Obj(
+        grid.iter()
+            .map(|l| {
+                let lane = Json::obj()
+                    .with("pattern", l.pattern.clone())
+                    .with("velocity", l.velocity.clone())
+                    .with("detected", l.detected);
+                (l.name.to_string(), lane)
+            })
+            .collect(),
+    ))
+}

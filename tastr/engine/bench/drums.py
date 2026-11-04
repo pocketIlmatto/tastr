@@ -1,4 +1,4 @@
-"""Drum lane benchmark: how well tastr.engine.drums finds each kind of hit.
+"""Drum lane benchmark: how well the engine's drum lanes (engine-rs/src/drums.rs) find each kind of hit.
 
 Four suites:
 
@@ -53,6 +53,7 @@ from ..pipeline import SR, AnalysisContext
 from .synth import DRUM_PATTERNS, _fade, drum_sounds, make_drum_track
 
 SUITES = ("synth", "idmt", "mdb", "stemgmd-mix")
+LANES = ("kick", "snare", "clap", "hat", "open_hat", "tom", "perc")  # engine-rs drums::LANES
 TOL = 0.05  # seconds: an onset within this of a labeled one counts
 WITH_TOL = 0.03  # a tom or perc hit with a kick or snare this close "lands with" it
 FAMILY = {"kick": "low", "tom": "low", "snare": "mid", "clap": "mid", "perc": "mid", "hat": "high", "open_hat": "high",
@@ -98,17 +99,31 @@ def _synth_ctx(y: np.ndarray, bpm: float) -> AnalysisContext:
     return AnalysisContext(y=y, sr=SR, card=card)
 
 
+def _synth_grid(y: np.ndarray, bpm: float) -> dict:
+    """The drum grid the card would show for a loop at a known tempo (beats from bar 1 at 0 s, in 4/4), from the
+    Rust engine (TASTR_ENGINE=python: the Python reference engine)."""
+    from .. import rust
+
+    ctx = _synth_ctx(y, bpm)
+    if rust.chosen() == "python":
+        return drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
+    core = ctx.card.core
+    hits = _model_hits(y, None)
+    return rust.bench("drum_grid", y, core.beat_times, core.downbeat_times, hits, n=y.size,
+                      beats=len(core.beat_times), downbeats=len(core.downbeat_times), bpm=bpm, beats_per_bar=4,
+                      hits=hits.size)
+
+
 def run_synth(bpms=(100, 128, 174)) -> dict:
     """Step-level precision/recall per lane over every pattern and tempo ("x" and "o" both count as a hit)."""
-    counts = {lane: [0, 0, 0] for lane in drums.LANES}
+    counts = {lane: [0, 0, 0] for lane in LANES}
     rows = []
     for name, pats in DRUM_PATTERNS.items():
         for bpm in bpms:
             y, _ = make_drum_track(pats, bpm=bpm)
-            ctx = _synth_ctx(y, bpm)
-            grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
+            grid = _synth_grid(y, bpm)
             got_all = {}
-            for lane in drums.LANES:
+            for lane in LANES:
                 want = pats.get(lane, "." * 16)
                 got = grid[lane]["pattern"] if grid[lane]["detected"] else "." * 16
                 got_all[lane] = got
@@ -234,7 +249,34 @@ def score_track(acts: dict[str, np.ndarray] | None, ref: dict[str, list[float]],
     return out
 
 
+def _model_hits(y: np.ndarray, path: str | None) -> np.ndarray:
+    """The optional drum model's hits (adt.py) as the flat buffer the Rust engine reads, when it is on
+    (TASTR_DRUM_MODEL, as for the app): on the original file at the model's rate when there is one. Empty when
+    it is off or fails, so the built-in lanes stay, as in the app."""
+    from .. import adt, rust
+
+    if not adt.wanted(None):
+        return np.zeros(0)
+    try:
+        if path and Path(path).is_file():
+            import librosa
+
+            return rust._hits(adt.onsets(librosa.load(path, sr=adt.SR, mono=True)[0], adt.SR))
+        return rust._hits(adt.onsets(y, SR))
+    except Exception as e:  # e.g. no network for the first download
+        print(f"drum model unavailable, using the built-in lanes: {e}", file=sys.stderr)
+        return np.zeros(0)
+
+
 def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int]:
+    """Every lane's strength at every analysis frame, from the Rust engine (TASTR_ENGINE=python: the Python
+    reference engine)."""
+    from .. import rust
+
+    if rust.chosen() == "rust":
+        hits = _model_hits(y, path)
+        r = rust.bench("lane_activations", y, hits, n=y.size, hits=hits.size)
+        return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"]
     ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri=uri, local_path=path)))
     return drums.lane_activations(ctx, np.arange(1 + len(y) // ctx.hop), slop=0), ctx.hop
 

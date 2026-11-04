@@ -76,25 +76,26 @@ def bench(dataset: str, path: str | None = None, stages: list[str] | None = None
 
 
 @app.function(image=image, cpu=2, memory=4096, timeout=3600, volumes={DATA: datasets})
-def spec_bench(bench: str, dataset: str, path: str, limit: int | None = None) -> dict:
+def spec_bench(bench: str, dataset: str, path: str, limit: int | None = None, engine: str | None = None) -> dict:
     from tastr.cloud.jobs import run_spec_bench
 
-    return run_spec_bench(bench, dataset, f"{DATA}/{path}", limit)
+    return run_spec_bench(bench, dataset, f"{DATA}/{path}", limit, engine=engine)
 
 
 @app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3600, volumes={DATA: datasets})
-def key_profiles(dataset: str, path: str, limit: int | None = None) -> dict:
+def key_profiles(dataset: str, path: str, limit: int | None = None, engine: str | None = None) -> dict:
     from tastr.cloud.jobs import run_key_profiles
 
-    return run_key_profiles(dataset, path, DATA, limit=limit, jobs=BENCH_CPUS)
+    return run_key_profiles(dataset, path, DATA, limit=limit, jobs=BENCH_CPUS, engine=engine)
 
 
 @app.function(image=image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
 def drum_bench(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False,
-               kits: str = "all") -> dict:
+               kits: str = "all", engine: str | None = None) -> dict:
     from tastr.cloud.jobs import run_drum_bench
 
-    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits)
+    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits,
+                          engine=engine)
 
 
 # The drum bench with the pretrained drum model (tastr[drums]).
@@ -139,16 +140,23 @@ def run_branch(kind: str, dataset: str, path: str, stages: str = "", limit: int 
         modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --stages core
         modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this   # any spec-bench
         modal run tastr/cloud/modal_app.py --kind bench --dataset giantsteps-key --path giantsteps-key --engine rust
+        modal run tastr/cloud/modal_app.py --kind drums --dataset idmt --path idmt --limit 10 --engine python
+        modal run tastr/cloud/modal_app.py --kind key-profiles --dataset giantsteps-key --path giantsteps-key
 
-    `modal run` uploads the working tree to a temporary app that stops when the run ends.
+    `modal run` uploads the working tree to a temporary app that stops when the run ends. `--engine python`
+    scores the Python reference engine instead of Rust.
     """
     import json
 
     if kind == "bench":
         report = bench.remote(dataset, path, [s for s in stages.split(",") if s] or None, limit or None,
                               engine=engine or None)
+    elif kind == "drums":
+        report = drum_bench.remote(dataset, path if path != "-" else None, limit or None, engine=engine or None)
+    elif kind == "key-profiles":
+        report = key_profiles.remote(dataset, path, limit or None, engine=engine or None)
     else:
-        report = spec_bench.remote(kind, dataset, path, limit or None)
+        report = spec_bench.remote(kind, dataset, path, limit or None, engine=engine or None)
     text = json.dumps(report, indent=1)
     if out:
         with open(out, "w") as f:

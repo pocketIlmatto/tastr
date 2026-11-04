@@ -58,7 +58,19 @@ def tempo(log_mel: np.ndarray) -> float | None:
 
 
 def tempo_and_confidence(log_mel: np.ndarray) -> tuple[float | None, float]:
-    """Core's (bpm, bpm_confidence) for one spectrogram."""
+    """Core's (bpm, bpm_confidence) for one spectrogram, from the Rust engine (TASTR_ENGINE=python: the Python
+    reference engine)."""
+    from .. import rust
+
+    if rust.chosen() == "rust":
+        onset, low_flux = envelopes(log_mel)
+        r = rust.bench("tempo", onset, low_flux, log_mel, n=onset.size, bands=log_mel.shape[0],
+                       frames=log_mel.shape[1], fps=FPS)
+        return r["bpm"], r["confidence"]
+    return _python_tempo(log_mel)
+
+
+def _python_tempo(log_mel: np.ndarray) -> tuple[float | None, float]:
     from ..pipeline import AnalysisContext
     from ..stages.core import _tempo_and_beats
 

@@ -78,6 +78,8 @@ def _load() -> ctypes.CDLL:
             fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int32, ctypes.c_void_p, ctypes.c_size_t]
         lib.tastr_card_ptr.restype = ctypes.c_void_p
         lib.tastr_card_ptr.argtypes = []
+        lib.tastr_bench.restype = ctypes.c_int32
+        lib.tastr_bench.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
         lib.tastr_version.restype = ctypes.c_void_p
         lib.tastr_version_len.restype = ctypes.c_size_t
         _lib = lib
@@ -153,6 +155,20 @@ def card_from_samples(y: np.ndarray, beats_per_bar=None, drum_hits: dict | None 
     h = _hits(drum_hits)
     return _result(lib, lib.tastr_card_f32_hits(ptr, y.size, _meter(beats_per_bar), h.ctypes.data, h.size),
                    "the samples")
+
+
+def bench(op: str, *arrays, **params) -> dict:
+    """One benchmark step in the Rust engine (engine-rs/src/bench.rs lists the ops and what each reads): the
+    arrays go in as one float64 buffer, in order (matrices row-major); `params` become `key=value` words."""
+    lib = _load()
+    line = " ".join([op] + [f"{k}={v}" for k, v in params.items()]).encode()
+    parts = [np.asarray(a, dtype=float).ravel() for a in arrays]
+    data = np.ascontiguousarray(np.concatenate(parts) if parts else np.zeros(0), dtype="<f8")
+    n = lib.tastr_bench(line, len(line), data.ctypes.data, data.size)
+    if n < 0:
+        why = ctypes.string_at(lib.tastr_card_ptr(), -n - 1).decode(errors="replace")
+        raise RustEngineError(f"{op}: {why}")
+    return json.loads(ctypes.string_at(lib.tastr_card_ptr(), n).decode())
 
 
 # --- The WebAssembly build, for the browser (TASTR_BROWSER_ENGINE) ---

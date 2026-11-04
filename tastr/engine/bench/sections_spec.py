@@ -84,7 +84,7 @@ def load(folder: str | Path, dataset: str = "harmonix", limit: int | None = None
 
 
 class _Ctx:
-    """Just enough of an AnalysisContext for the stage's bar helpers: precomputed signals and the frame grid."""
+    """Just enough of an AnalysisContext for the Python stage's bar helpers: precomputed signals and the frame grid."""
 
     def __init__(self, sr: float, hop: int, signals: dict):
         self.sr, self.hop, self._signals = sr, hop, signals
@@ -116,31 +116,54 @@ def signals_from_mel(mel: np.ndarray, info: dict) -> dict:
             "rms": np.sqrt(power.mean(axis=0))}
 
 
-def run(items_info) -> dict:
+def _starts_rust(sig: dict, downbeats, duration: float, info: dict, configs) -> tuple:
+    """(bar times, {config: snapped starts}, the stage's own config) from the Rust engine's sections stage."""
+    from .. import rust
+
+    n = sig["mfcc"].shape[1]
+    r = rust.bench("sections", sig["chroma"][:, :n], sig["mfcc"], sig["rms"][:n], downbeats, frames=n, sr=info["sr"],
+                   hop=info["hop"], duration=repr(float(duration)), downbeats=len(downbeats),
+                   configs=",".join(f"{s}:{p}:{c}" for s, p, c in configs))
+    current = (r["current"][0], int(r["current"][1]), r["current"][2])
+    return np.asarray(r["bar_times"]), dict(zip(configs, r["starts"])) if r["starts"] else None, current
+
+
+def _starts_python(sig: dict, downbeats, duration: float, info: dict, configs) -> tuple:
+    """The same from the Python reference engine (TASTR_ENGINE=python)."""
     from ..stages import sections
 
+    bar_times = sections._bar_times(downbeats, duration)
+    n_bars = len(bar_times)
+    current = (sections.SECONDS_PER_SECTION, sections.PHRASE_BARS, sections.MAX_SECTIONS)
+    if n_bars < sections.MIN_BARS_FOR_SPLIT:
+        return bar_times, None, current
+    z = sections._bar_vectors(_Ctx(info["sr"], info["hop"], sig), bar_times, duration)
+    return bar_times, {c: sections._segment(z, duration, n_bars, seconds=c[0], phrase=c[1], cap=c[2])
+                       for c in configs}, current
+
+
+def run(items_info) -> dict:
+    from .. import rust
+
+    starts_of = _starts_rust if rust.chosen() == "rust" else _starts_python
     items, info = items_info
     configs = list(product(SECONDS, PHRASES, CAPS))
     scores = {c: {"tune": [], "check": []} for c in configs}
     rows = []
+    current = None
     for sid, mel, downbeats, bounds, split in items:
         sig = signals_from_mel(mel, info)
         n_frames = sig["mfcc"].shape[1]
         duration = n_frames * info["hop"] / info["sr"]
-        ctx = _Ctx(info["sr"], info["hop"], sig)
-        bar_times = sections._bar_times(downbeats, duration)
-        n_bars = len(bar_times)
-        if n_bars < sections.MIN_BARS_FOR_SPLIT:
+        bar_times, starts, current = starts_of(sig, downbeats, duration, info, configs)
+        if starts is None:
             continue
-        z = sections._bar_vectors(ctx, bar_times, duration)
         row = {"id": sid, "split": split, "duration": round(duration, 1), "n_ref": len(bounds)}
         for c in configs:
-            seconds, phrase, cap = c
-            starts = sections._segment(z, duration, n_bars, seconds=seconds, phrase=phrase, cap=cap)
-            est = [0.0] + [float(bar_times[s]) for s in starts[1:]]
+            est = [0.0] + [float(bar_times[s]) for s in starts[c][1:]]
             s = boundary_scores(est, bounds, duration)
             scores[c][split].append((s["boundary_f_0.5"], s["boundary_f_3"], s["n_sections_est"] - s["n_sections_ref"]))
-            if c == (sections.SECONDS_PER_SECTION, sections.PHRASE_BARS, sections.MAX_SECTIONS):
+            if c == current:
                 row |= {"f3": round(s["boundary_f_3"], 3), "n_est": s["n_sections_est"]}
         rows.append(row)
 
@@ -154,8 +177,7 @@ def run(items_info) -> dict:
     grid = [{"seconds": c[0], "phrase": c[1], "cap": c[2], "tune": summary(v["tune"]), "check": summary(v["check"])}
             for c, v in scores.items()]
     best = max((g for g in grid if g["tune"]), key=lambda g: g["tune"]["f_3"], default=None)
-    current = next((g for g in grid if (g["seconds"], g["phrase"], g["cap"]) ==
-                    (sections.SECONDS_PER_SECTION, sections.PHRASE_BARS, sections.MAX_SECTIONS)), None)
+    current = next((g for g in grid if (g["seconds"], g["phrase"], g["cap"]) == current), None)
     return {"tracks": len(rows), "tune_tracks": sum(r["split"] == "tune" for r in rows), "info": info,
             "current": current, "best_on_tune": best, "grid": grid, "rows": rows}
 

@@ -122,7 +122,7 @@ def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:
 
 
 @app.function(image=essentia_image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
-def essentia_bench(dataset: str, path: str, limit: int, shard: int = 0, shards: int = 1) -> list[dict]:
+def essentia_bench(dataset: str, path: str, limit: int | None, shard: int = 0, shards: int = 1) -> list[dict]:
     """One shard of the Essentia classifier bench: engine row + head predictions per clip."""
     from pathlib import Path
 
@@ -169,7 +169,7 @@ def run_branch(kind: str, dataset: str, path: str, limit: int = 0, out: str = ""
         from tastr.engine.bench import essentia_heads as eh
 
         shards = 8
-        rows = [r for part in essentia_bench.starmap([(dataset, path, limit or 200, i, shards) for i in range(shards)])
+        rows = [r for part in essentia_bench.starmap([(dataset, path, limit or None, i, shards) for i in range(shards)])
                 for r in part]
         report = {"dataset": dataset, "report": eh.score(rows), "rows": rows}
         if out:

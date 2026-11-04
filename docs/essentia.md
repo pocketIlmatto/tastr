@@ -57,7 +57,7 @@ modal run tastr/cloud/modal_app.py --kind essentia --dataset mtg-moods --path mt
 modal run tastr/cloud/modal_app.py --kind essentia --dataset deam --path deam --limit 200 --out essentia-deam.json
 ```
 
-Each run fans out over 8 containers (4 CPUs each). `--limit` takes a fixed sample (by a hash of the id), so
+Each run fans out over 8 containers (4 CPUs each). Without `--limit` it runs the whole set. `--limit` takes a fixed sample (by a hash of the id), so
 reruns score the same clips. The code is in `tastr/engine/bench/essentia_heads.py`.
 
 ## Results

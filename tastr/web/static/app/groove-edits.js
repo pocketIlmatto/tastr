@@ -1,6 +1,6 @@
 // Your edits to a track's drums, bass and chords, kept per card and autosaved with the track on the server.
 
-import { api } from "./core.js";
+import { api, READ_ONLY, readOnlyToast } from "./core.js";
 
 const partEdits = new Map(), EDIT_PARTS = ["drums", "bass", "chords", "drumsrc"];
 export const savedEdits = new Map(), saveTimers = new Map(); // track id -> JSON last loaded or saved; pending autosaves
@@ -25,7 +25,10 @@ export function putEdits(id, keepalive) {
   if (body === prev) return Promise.resolve();
   savedEdits.set(id, body);
   return fetch(`/api/tracks/${id}/edits`, { method: "PUT", headers: { "Content-Type": "application/json" }, body, keepalive })
-    .then((r) => { if (!r.ok) throw new Error(r.statusText); })
+    .then(async (r) => {
+      if (r.status === 403) { const d = (await r.json().catch(() => ({}))).detail || ""; if (READ_ONLY.test(d)) readOnlyToast(d); }
+      if (!r.ok) throw new Error(r.statusText);
+    })
     .catch(() => { if (savedEdits.get(id) === body) savedEdits.set(id, prev); }); // the next change tries again
 }
 export function saveEdits(card) {

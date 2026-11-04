@@ -7,6 +7,7 @@ import { endStart, routeOf } from "./route.js";
 import { setServerCfg } from "./daw.js";
 import { setStatus } from "./upload.js";
 import * as qlib from "./query-lib.js";
+import { showViewAs } from "./viewas.js";
 
 // Simple builds the SQL itself and runs it through sql(): /api/query on your own machine, or on a hosted server a copy
 // of your own library in the browser (query-lib.js), so every search goes through its gate, qlib.withLib;
@@ -328,6 +329,7 @@ export function init() {
     $("sql-scope").textContent = !cfg.query_browser ? "One read-only SELECT, stopped after 5 seconds."
       : adminCopy ? "One read-only SELECT over everyone's tracks (you're an admin), run in your browser."
         : "One read-only SELECT over your own tracks, run in your browser.";
+    showViewAs(cfg.viewing_as);
     if (cfg.admin) {
       document.querySelector("nav button[data-view=admin]").hidden = false;
       if (startView === "admin") switchTo("admin");

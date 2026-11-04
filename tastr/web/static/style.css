@@ -845,6 +845,19 @@ details.sec[data-sec="try"] > summary .daw-pick { max-width: 9em; } /* the page 
 .adm-raised { color: var(--accent); font-size: 11px; font-weight: 600; }
 .adm-raise { font-size: 11px; }
 .adm-lim-btn { font-size: 12px; padding: 2px 7px; line-height: 1.2; }
+/* View as (T34): the admin's banner while viewing as someone, Admin tab hidden, uploads off; the server refuses writes. */
+.adm-acts { white-space: nowrap; display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+.adm-people .adm-va-btn { font-size: 12px; padding: 2px 8px; line-height: 1.2; }
+#va-bar { position: sticky; top: 0; z-index: 70; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 12px; padding: 7px 16px; background: var(--accent); color: #fff; font-size: 14px; box-shadow: 0 2px 0 rgb(0 0 0 / .25); }
+#va-bar b { font-weight: 700; overflow-wrap: anywhere; }
+#va-bar .va-ro { opacity: .92; }
+#va-bar .va-eye { font-size: 16px; line-height: 1; }
+#va-bar button { background: #fff; color: #161514; border: 1px solid #fff; box-shadow: none; padding: 3px 12px; font-weight: 600; }
+#va-bar button:hover { background: #161514; color: #fff; border-color: #161514; }
+html[data-viewing] nav button[data-view="admin"] { display: none; }
+html[data-viewing] #drop > :not(#va-drop-note) { display: none; }
+#va-drop-note { margin: 0; text-align: center; }
+.va-toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 90; background: #161514; color: #f4efe2; padding: 9px 14px; border-radius: 6px; border-left: 4px solid var(--accent); font-size: 13px; max-width: calc(100vw - 32px); box-shadow: 0 4px 14px rgb(0 0 0 / .3); }
 .adm-people tr.adm-lim-row, .adm-people tr.adm-lim-row:hover td { cursor: default; background: var(--panel); }
 .adm-lim { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 6px 0; font-size: 13px; white-space: normal; }
 .adm-lim label { display: inline-flex; align-items: center; gap: 6px; }

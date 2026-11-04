@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 
-from ... import blobs, db, drum_jobs, stems
+from ... import blobs, db, drum_jobs, ml_jobs, stems
 from ..context import AppContext, _unprefixed, analysis_source, runs_on
 from ..downloads import base_name, content_disposition, stem_file_name
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
@@ -180,5 +180,31 @@ def router(ctx: AppContext) -> APIRouter:
             ctx.event(user, "drums", "Started detecting drums with the model for 1 track", source=analysis_source())
             ctx.drum_runs.start(track_id)
         return _drum_model_status(track_id)
+
+    def _ml_tags_status(track_id: int) -> dict[str, Any]:
+        with closing(ctx.conn()) as c:
+            stored = db.get_ml_tags(c, track_id)
+        return {**ctx.ml_runs.status(track_id), "available": ml_jobs.available(), "result": stored}
+
+    @api.get("/api/tracks/{track_id}/ml-tags")
+    def track_ml_tags(track_id: int):
+        """The track's ML tags (docs/essentia.md): the run's state (none, queued, running, done or error) and the
+        stored result, if any."""
+        ctx.card_or_404(track_id)
+        return _ml_tags_status(track_id)
+
+    @api.post("/api/tracks/{track_id}/ml-tags", status_code=202)
+    def add_ml_tags(track_id: int, request: Request):
+        """Run MTG's Essentia classifiers on the track's audio in the background (one track at a time; others
+        queue) and store the result. Off unless TASTR_ML_TAGS=on."""
+        card = ctx.card_or_404(track_id)
+        if ctx.audio_path(card) is None:
+            raise HTTPException(410, "The original audio file is no longer on disk.")
+        if not ml_jobs.available():
+            raise HTTPException(501, ml_jobs.why_not())
+        if not ctx.ml_runs.busy(track_id):
+            ctx.event(ctx.owner_of(request), "ml_tags", "Started adding ML tags to 1 track", source=analysis_source())
+            ctx.ml_runs.start(track_id)
+        return _ml_tags_status(track_id)
 
     return api

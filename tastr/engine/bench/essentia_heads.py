@@ -20,41 +20,16 @@ from __future__ import annotations
 
 import hashlib
 import os
-import time
 from pathlib import Path
 
-BASE_URL = "https://essentia.upf.edu/models"
+from ..ml_tags import (BASE_URL, EFFNET, EFFNET_HEADS, MUSICNN, MUSICNN_HEADS, Models,  # noqa: F401
+                       download_command as _download_command, head_path as _head_path, model_paths)
+
 MODELS_DIR = os.environ.get("TASTR_ESSENTIA_MODELS", "/opt/essentia-models")
-
-EFFNET = "feature-extractors/discogs-effnet/discogs-effnet-bs64-1"
-MUSICNN = "feature-extractors/musicnn/msd-musicnn-1"
-# Heads on the Discogs-EffNet embedding.
-EFFNET_HEADS = ["danceability", "mood_aggressive", "mood_happy", "mood_party", "mood_relaxed", "mood_sad",
-                "mood_acoustic", "mood_electronic", "voice_instrumental", "gender", "tonal_atonal",
-                "mtg_jamendo_moodtheme", "mtg_jamendo_instrument", "genre_discogs400", "engagement_regression",
-                "approachability_regression"]
-# Arousal/valence heads on the MSD-MusiCNN embedding (each outputs [valence, arousal] per its metadata).
-MUSICNN_HEADS = {"emomusic": "emomusic-msd-musicnn-2", "muse": "muse-msd-musicnn-2", "deam": "deam-msd-musicnn-2"}
-
-
-def _head_path(head: str) -> str:
-    folder = head.replace("_regression", "").replace("_2c", "").replace("_3c", "")
-    return f"classification-heads/{folder}/{head}-discogs-effnet-1"
-
-
-def model_paths() -> list[str]:
-    """Every model's path under BASE_URL / MODELS_DIR, without the .pb/.json suffix."""
-    return ([EFFNET, MUSICNN] + [_head_path(h) for h in EFFNET_HEADS]
-            + [f"classification-heads/{k}/{v}" for k, v in MUSICNN_HEADS.items()])
 
 
 def download_command(root: str = MODELS_DIR) -> str:
-    """One shell step that downloads every model's weights and metadata (about 40 MB) into `root`."""
-    parts = [f"mkdir -p {root}"]
-    for p in model_paths():
-        for ext in (".pb", ".json"):
-            parts.append(f"curl -sSfL --create-dirs -o {root}/{p}{ext} {BASE_URL}/{p}{ext}")
-    return " && ".join(parts)
+    return _download_command(root)
 
 
 # --- Labels ----------------------------------------------------------------------------------------
@@ -100,68 +75,11 @@ def pick(items: list, n: int | None) -> list:
 # --- Running the models ----------------------------------------------------------------------------
 
 
-class Models:
-    """Every model loaded once; `predict(path)` returns {head: {class: mean probability or value}}."""
-
-    def __init__(self, root: str = MODELS_DIR):
-        import json
-
-        import essentia
-        import essentia.standard as es
-
-        essentia.log.warningActive = False
-        self.root = Path(root)
-
-        def meta(p):
-            return json.loads((self.root / f"{p}.json").read_text())
-
-        def out_name(m, purpose, default):
-            for o in m.get("schema", {}).get("outputs", []):
-                if o.get("output_purpose") == purpose:
-                    return o["name"]
-            return default
-
-        def in_name(m, default):
-            ins = m.get("schema", {}).get("inputs", [])
-            return ins[0]["name"] if ins else default
-
-        e, mc = meta(EFFNET), meta(MUSICNN)
-        self.effnet = es.TensorflowPredictEffnetDiscogs(graphFilename=str(self.root / f"{EFFNET}.pb"),
-                                                        output=out_name(e, "embeddings", "PartitionedCall:1"))
-        self.musicnn = es.TensorflowPredictMusiCNN(graphFilename=str(self.root / f"{MUSICNN}.pb"),
-                                                   output=out_name(mc, "embeddings", "model/dense/BiasAdd"))
-        self.heads = {}
-        for name, path, base in ([(h, _head_path(h), "effnet") for h in EFFNET_HEADS]
-                                 + [(k, f"classification-heads/{k}/{v}", "musicnn") for k, v in MUSICNN_HEADS.items()]):
-            m = meta(path)
-            algo = es.TensorflowPredict2D(graphFilename=str(self.root / f"{path}.pb"),
-                                          input=in_name(m, "model/Placeholder"),
-                                          output=out_name(m, "predictions", "model/Softmax"))
-            self.heads[name] = (algo, m.get("classes", []), base)
-        self.loader = es.MonoLoader
-
-    def predict(self, path: str) -> tuple[dict, dict]:
-        import numpy as np
-
-        t0 = time.time()
-        audio = self.loader(filename=path, sampleRate=16000, resampleQuality=4)()
-        t1 = time.time()
-        emb = {"effnet": self.effnet(audio), "musicnn": self.musicnn(audio)}
-        t2 = time.time()
-        out = {}
-        for name, (algo, classes, base) in self.heads.items():
-            p = np.asarray(algo(emb[base])).mean(axis=0)
-            names = classes if len(classes) == len(p) else [str(i) for i in range(len(p))]
-            out[name] = {c: round(float(v), 4) for c, v in zip(names, p)}
-        return out, {"load": round(t1 - t0, 2), "embed": round(t2 - t1, 2), "heads": round(time.time() - t2, 2),
-                     "audio_seconds": round(len(audio) / 16000, 1)}
-
-
 def analyze(items: list, extra: dict | None = None, engine: bool = True) -> list[dict]:
     """One row per item: the engine's vibe row (when `engine`) plus every head's predictions."""
     from . import vibes
 
-    models = Models()
+    models = Models(MODELS_DIR)
     rows = []
     for it in items:
         row = vibes._work(it) if engine else {"id": it.id, "labels": dict(it.meta.get("labels", {}))}

@@ -116,6 +116,7 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
         if hosted:
             background.log_start(ctx, cut)
         ctx.drum_runs.resume()  # and drum model runs
+        ctx.ml_runs.resume()  # and ML tag runs
         return background.start(ctx) if hosted else []
 
     @asynccontextmanager

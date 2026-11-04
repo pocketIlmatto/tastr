@@ -98,7 +98,7 @@ def router(ctx: AppContext) -> APIRouter:
                 "limits": ctx.settings.limits(), "recent": recent, "problems": problems, "blocked_today": blocked,
                 "log_links": ctx.settings.log_links(os.environ.get("TASTR_MODAL_APP", "tastr-web")),
                 "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(ctx.settings.storage_gb * 1024 ** 3)},
-                "active_stem_jobs": ctx.stem_jobs.active(), "active_drum_jobs": ctx.drum_runs.active(), "analyses": ctx.slots.status(),
+                "active_stem_jobs": ctx.stem_jobs.active(), "active_drum_jobs": ctx.drum_runs.active(), "active_ml_tag_jobs": ctx.ml_runs.active(), "analyses": ctx.slots.status(),
                 "series": series,
                 # Ask Claude's cost: tokens are counted per person per day (user_usage ask_in/ask_out), priced here.
                 "claude": {"model": claude.MODEL, "price_in": claude.PRICE_IN, "price_out": claude.PRICE_OUT}}

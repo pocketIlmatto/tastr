@@ -3,8 +3,8 @@
 The web server is small (it fits in 512 MB) because the engine runs here: each upload is sent to `analyze`
 (as its bytes, or with the audio bucket on (tastr/blobs.py) as a signed link that the function downloads from),
 which returns the card, "Detect drums with the model" calls `analyze_drums` (the same analysis plus the
-pretrained drum model, in its own image so everyday analysis doesn't load PyTorch), and "Separate stems"
-calls `stems`. Kept apart from modal_app.py (benchmarks), so
+pretrained drum model, in its own image so everyday analysis doesn't load PyTorch), "Add ML tags" calls
+`ml_tags` (MTG's Essentia classifiers, docs/essentia.md) and "Separate stems" calls `stems`. Kept apart from modal_app.py (benchmarks), so
 it needs no dataset bucket or secrets and can live in its own Modal environment with its own budget:
 
     modal deploy --env friends tastr/cloud/modal_web.py
@@ -20,6 +20,7 @@ from __future__ import annotations
 import modal
 
 from tastr.cloud.rust_image import with_rust_engine
+from tastr.engine.ml_tags import download_command
 
 APP_NAME = "tastr-web"
 
@@ -77,6 +78,18 @@ drums_image = (
     .add_local_python_source("tastr", copy=True)
     .run_function(_warm_drums)
 )
+# Optional ML tags (TASTR_ML_TAGS=on, docs/essentia.md): Essentia (AGPL-3.0) and MTG's classifier weights
+# (non-commercial only), both in this private image only. No Rust engine: it reads the audio and nothing else.
+ESSENTIA_PIN = "essentia-tensorflow==2.1b6.dev1389"  # the last build with a Python 3.12 Linux wheel
+ESSENTIA_MODELS = "/opt/essentia-models"
+ml_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("curl")
+    .pip_install(ESSENTIA_PIN, "numpy<2.3")
+    .run_commands(download_command(ESSENTIA_MODELS))
+    .env({"TASTR_ESSENTIA_MODELS": ESSENTIA_MODELS})
+    .add_local_python_source("tastr")
+)
 stems_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
@@ -111,6 +124,14 @@ def analyze_drums(audio: bytes | str, suffix: str, stages: list[str] | None = No
     from tastr.cloud.jobs import run_analyze
 
     return run_analyze(audio, suffix, stages, options)
+
+
+# ML tags for one track, only when someone asks for them: about 6 s for a 5-minute track.
+@app.function(image=ml_image, cpu=2, memory=4096, timeout=10 * 60, scaledown_window=60)
+def ml_tags(audio: bytes | str, suffix: str) -> dict:
+    from tastr.cloud.jobs import run_ml_tags
+
+    return run_ml_tags(audio, suffix)
 
 
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)
@@ -186,6 +207,8 @@ def api():
             out = answer(lambda: analyze.remote.aio(*args))
         elif name == "analyze_drums":
             out = answer(lambda: analyze_drums.remote.aio(*args))
+        elif name == "ml_tags":
+            out = answer(lambda: ml_tags.remote.aio(audio, body["suffix"]))
         elif name == "stems":
             out = answer(lambda: stems.remote.aio(audio, body["suffix"], body.get("put_urls")))
         else:

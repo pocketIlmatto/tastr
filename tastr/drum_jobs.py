@@ -45,10 +45,13 @@ class Jobs:
     """`run(track_id)` re-analyzes one track with the model and raises on failure. `db_path`: the database
     that keeps the markers (None: the default one)."""
 
-    def __init__(self, run: Callable[[int], None], db_path=None) -> None:
+    def __init__(self, run: Callable[[int], None], db_path=None, kind: str = "drums",
+                 label: str = "the drum model") -> None:
+        """`kind` names the markers and the lane; `label` is what the log calls the job (ML tags reuse this)."""
         self._run_track = run
-        self.markers = Markers(db_path, "drums")
-        self._lane = runner.current().lane("drums", 1)  # one at a time
+        self.kind, self.label = kind, label
+        self.markers = Markers(db_path, kind)
+        self._lane = runner.current().lane(kind, 1)  # one at a time
         self._lock = threading.Lock()
         self._state: dict[int, dict] = {}
 
@@ -71,7 +74,7 @@ class Jobs:
 
     def resume(self) -> int:
         """Restart the jobs a previous run of the server left unfinished; returns how many."""
-        for f in legacy_files(jobs_root(), "*.job"):  # from a server that kept them as files
+        for f in legacy_files(jobs_root(), "*.job") if self.kind == "drums" else []:  # from a server that kept them as files
             if f.stem.isdigit():
                 self.markers.put(f.stem)
             f.unlink(missing_ok=True)
@@ -82,7 +85,7 @@ class Jobs:
             except ValueError:
                 self.markers.remove(key)
                 continue
-            log.info("Resuming the drum model for track %s", track_id)
+            log.info("Resuming %s for track %s", self.label, track_id)
             self.start(track_id)
             n += 1
         return n
@@ -109,15 +112,15 @@ class Jobs:
             cancelled = self._state[track_id].get("cancelled")
         if not cancelled:
             self._set(track_id, state="running")
-            log.info("Detecting drums with the model for track %s", track_id)
+            log.info("Running %s for track %s", self.label, track_id)
             start = time.monotonic()
             try:
                 self._run_track(track_id)
             except Exception as e:  # noqa: BLE001 - the error is shown in the UI
-                log.exception("The drum model failed for track %s", track_id)
+                log.exception("%s failed for track %s", self.label, track_id)
                 self._set(track_id, state="error", error=str(e) or type(e).__name__)
             else:
-                log.info("Drum model done for track %s (%.0f s)", track_id, time.monotonic() - start)
+                log.info("%s done for track %s (%.0f s)", self.label, track_id, time.monotonic() - start)
                 self._set(track_id, state="done")
         with self._lock:
             self.markers.remove(str(track_id))

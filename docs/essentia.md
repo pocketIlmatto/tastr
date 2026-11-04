@@ -1,8 +1,8 @@
 # Essentia classifier bench
 
-Research only. Can MTG's pre-trained [Essentia classifier models](https://essentia.upf.edu/models.html#classifiers)
-rank tracks the way listeners label them better than the engine's own vibe measures? Nothing here is part of
-the app.
+Can MTG's pre-trained [Essentia classifier models](https://essentia.upf.edu/models.html#classifiers) rank
+tracks the way listeners label them better than the engine's own vibe measures? They can (Results below), so
+the app can add them as optional ML tags (In the app, below).
 
 ## Licenses
 
@@ -22,6 +22,32 @@ clip also goes through the Rust engine, so every check compares a head and the e
 Training-set overlap is kept out: the MTG-Jamendo heads were trained on its split-0 training set, and the clean
 yes/no annotations cover only its split-0 test set, so only tracks with a yes/no label are used from
 `mtg-moods`. The DEAM head is never scored on DEAM.
+
+## In the app (optional, off by default)
+
+With `TASTR_ML_TAGS=on`, a server offers ML tags for one track at a time. A hosted server runs them on Modal's
+`ml_tags` function (docs/hosting-map.md); a local one needs `pip install 'tastr[ml-tags]'` and downloads the
+weights (about 40 MB) into `~/.tastr/essentia-models` on first use (`TASTR_ESSENTIA_MODELS` moves them).
+
+- `POST /api/tracks/{id}/ml-tags` starts a run in the background; `GET` reports its state and the stored result.
+  The card's JSON carries `ml_tags`, `ml_tags_available` and `ml_tags_state`. There is no button yet: the UI
+  goes through the design sandbox first.
+- `tastr ml-tags run ID...` or `tastr ml-tags run --all` (every track without ML tags) from the command line.
+- Results go in the `ml_tags` table, apart from the card, so re-analysis keeps them and copies share them. Each
+  row has every head's output (the big heads cut to their top 10) and the tags drawn from them, comma-separated
+  in `tags` for searches.
+
+Tags (`tastr/engine/ml_tags.py`), with provisional cut-offs from the 200-clip runs below:
+
+| Group | Tags | Shown when |
+| --- | --- | --- |
+| style | Discogs styles, e.g. Deep House | up to 3 scoring 0.15 or more; the top one from 0.10 |
+| mood | relaxed, happy, sad, aggressive, party | that head scores 0.7 or more (52-100% of shown tracks labeled yes) |
+| mood | MTG-Jamendo mood/theme tags that describe music (energetic, uplifting, dark, deep, space ...) | up to 3 scoring 0.12 or more, about the top 5% |
+| voice | vocal or instrumental | voice scores 0.7 or more, or 0.3 or less |
+
+The mood/theme cut-off is the weakest: the uploader tags it was checked against are sparse. The engine's own vibe
+tags are unchanged; how the two show side by side is a UI decision.
 
 ## Running it
 

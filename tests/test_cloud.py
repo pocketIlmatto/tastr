@@ -361,7 +361,7 @@ def _load_modal_web(monkeypatch):
 def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
     """Like modal_app: a build step after add_local_python_source fails a deploy unless the source is copied."""
     _, images = _load_modal_web(monkeypatch)
-    assert len(images) == 5 and all(i.local for i in images)
+    assert len(images) == 6 and all(i.local for i in images)
 
 
 @pytest.fixture

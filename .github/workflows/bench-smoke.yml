@@ -50,7 +50,9 @@ jobs:
         with:
           python-version: "3.12"
       # Just the Modal client and the tastr source, which the Modal image uploads; the engine installs there.
-      - run: pip install "modal>=1.0" && pip install --no-deps -e .
+      # With tastr's own light dependencies (numpy, soundfile, ...): defining the images imports tastr.engine
+      # modules (the ML-tag and Essentia weight downloads), and the tastr.engine package imports numpy.
+      - run: pip install "modal>=1.0" && pip install -e .
       - name: Fetch the last good run's reports
         env:
           GH_TOKEN: ${{ github.token }}

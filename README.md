@@ -81,6 +81,8 @@ Then open http://127.0.0.1:8000 and drop in your audio files. Run the tests with
 | [usage.md](docs/usage.md) | the `tastr` command, links, stems, the drum model, tests, cloud jobs |
 | [hosting.md](docs/hosting.md), [deploy.md](docs/deploy.md), [hosting-map.md](docs/hosting-map.md) | hosting for a few invited people (Cloudflare Workers and Access, Modal, R2) |
 | [bench.md](docs/bench.md), [engine-report.md](docs/engine-report.md) | accuracy benchmarks and what they changed |
+| [rekordbox.md](docs/rekordbox.md), [lookup.md](docs/lookup.md) | Tastr vs Rekordbox, and the BPM and key other catalogs list |
+| [local-setup.md](docs/local-setup.md), [cloud.md](docs/cloud.md) | where Tastr keeps files on your machine, and running heavy jobs on Modal |
 | [audio-terms.md](docs/audio-terms.md) | audio analysis terms (STFT, chroma, HPSS, onsets...) explained, with diagrams |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md), [modules/](docs/modules/) | data flow, card fields, DB tables, code layout |
 | [ci.md](docs/ci.md) | CI, Actions minutes and how the README screenshots are made |

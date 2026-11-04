@@ -15,6 +15,7 @@ import time
 import modal
 
 from tastr.cloud.rust_image import with_rust_engine
+from tastr.engine.bench.essentia_heads import download_command
 
 _IMPORTED = time.time()  # in the container: when it finished starting and imported this module
 
@@ -33,10 +34,18 @@ STEMS_DEPS = ["demucs>=4.0.1"]  # the `stems` extra
 PINS = ["numpy<2.3", "numba==0.61.2", "llvmlite==0.44.0", "librosa==0.11.0", "scipy<1.16"]
 
 # With the Rust engine's library (tastr/cloud/rust_image.py), so `tastr bench --remote --engine rust` works.
-image = (
+_engine_base = (
     with_rust_engine(modal.Image.debian_slim(python_version="3.12").apt_install("ffmpeg", "libsndfile1"))
     .pip_install(*ENGINE_DEPS, *PINS, "zstandard")  # zstandard: `fetch acousticbrainz` reads .tar.zst dumps
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
+)
+image = _engine_base.add_local_python_source("tastr")
+# Research only (docs/essentia.md): Essentia (AGPL-3.0) and MTG's classifier weights (non-commercial only),
+# downloaded at build time and never committed.
+ESSENTIA_PIN = "essentia-tensorflow==2.1b6.dev1389"  # the last build with a Python 3.12 Linux wheel
+essentia_image = (
+    _engine_base.pip_install(ESSENTIA_PIN)
+    .run_commands(download_command())
     .add_local_python_source("tastr")
 )
 # The same plus Demucs, with the htdemucs weights baked in so a cold start does not download them.
@@ -114,6 +123,19 @@ def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:
     return run_vibe_bench(dataset, path, DATA, limit=limit, jobs=BENCH_CPUS)
 
 
+@app.function(image=essentia_image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
+def essentia_bench(dataset: str, path: str, limit: int, shard: int = 0, shards: int = 1) -> list[dict]:
+    """One shard of the Essentia classifier bench: engine row + head predictions per clip."""
+    from pathlib import Path
+
+    from tastr.cloud.jobs import load_items
+    from tastr.engine.bench import essentia_heads as eh
+
+    folder = Path(DATA) / path
+    items = eh.pick(eh.held_out(load_items(dataset, folder), dataset), limit)
+    return eh.analyze(items[shard::shards], eh.extra_labels(folder))
+
+
 @app.function(image=image, cpu=2, memory=4096, timeout=6 * 3600, volumes={DATA: datasets_rw})
 def fetch(dataset: str, path: str, archives: str = "") -> dict:
     """`archives`: a list of ints from `tastr fetch --remote`, or "0,1,2" from `modal run`, whose CLI can't
@@ -148,6 +170,18 @@ def run_branch(kind: str, dataset: str, path: str, stages: str = "", limit: int 
     """
     import json
 
+    if kind == "essentia":  # modal run tastr/cloud/modal_app.py --kind essentia --dataset deam --path deam --limit 200
+        from tastr.engine.bench import essentia_heads as eh
+
+        shards = 8
+        rows = [r for part in essentia_bench.starmap([(dataset, path, limit or 200, i, shards) for i in range(shards)])
+                for r in part]
+        report = {"dataset": dataset, "report": eh.score(rows), "rows": rows}
+        if out:
+            with open(out, "w") as f:
+                f.write(json.dumps(report, indent=1))
+        print(eh.format_report(report["report"]))
+        return
     if kind == "bench":
         report = bench.remote(dataset, path, [s for s in stages.split(",") if s] or None, limit or None,
                               engine=engine or None)

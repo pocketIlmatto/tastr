@@ -915,6 +915,7 @@ def test_admin_copies_tracks_to_someone(db_path, home):
     other = save(db_path, "other@example.com", sha="o1")
     conn = db.connect(db_path)
     db.save_lookup(conn, mine[0], {"provider": "freqblog", "status": "found", "bpm": 120.0})
+    db.save_lookup(conn, mine[0], {"provider": "rekordbox", "status": "found", "bpm": 121.0})  # the admin's own
     conn.close()
     plain = make_client(db_path)
     assert plain.get("/api/admin/copy-tracks?to=t@example.com", headers=GOOD).status_code == 404
@@ -934,7 +935,8 @@ def test_admin_copies_tracks_to_someone(db_path, home):
     row = conn.execute("SELECT owner, local_path, sha256 FROM tracks WHERE id = ?", (new,)).fetchone()
     assert tuple(row) == ("t@example.com", str(path), "s0")
     assert db.load_card(conn, new).core.bpm == db.load_card(conn, mine[0]).core.bpm
-    assert conn.execute("SELECT count(*) FROM lookups WHERE track_id = ?", (new,)).fetchone()[0] == 1
+    assert [r["provider"] for r in db.get_lookups(conn, new)] == ["freqblog"]  # not the admin's Rekordbox listing
+    assert len(db.get_lookups(conn, mine[0])) == 2
     assert conn.execute("SELECT owner FROM tracks WHERE id = ?", (mine[0],)).fetchone()[0] == "friend@example.com"
     assert "Copied 2 tracks to t" in [e["detail"] for e in db.find_events(conn, "", "", "", "", "", False, 50)["events"]]
     conn.close()
@@ -1000,6 +1002,9 @@ def test_admin_rekordbox_compare_reads_the_export_from_the_bucket(db_path, home,
                 raise s3.S3Error(404, "NoSuchKey", key)
             return type("R", (), {"read": lambda self: store[key]})()
 
+        def list(self, prefix):
+            return iter(())
+
     monkeypatch.setattr(blobs, "enabled", lambda: True)
     monkeypatch.setattr(blobs, "client", lambda: Bucket())
     assert make_client(db_path).get("/api/admin/rekordbox-compare", headers=GOOD).status_code == 404  # admins only
@@ -1010,6 +1015,12 @@ def test_admin_rekordbox_compare_reads_the_export_from_the_bucket(db_path, home,
     assert rep["disagreements"][0]["track_id"] == mine
     text = c.get("/api/admin/rekordbox-compare?format=text", headers=GOOD).text
     assert "1 tracks in both" in text
+    assert db.get_lookups(db.connect(db_path), mine) == []  # comparing alone saves nothing
+    saved = c.get("/api/admin/rekordbox-compare?save=1", headers=GOOD).json()["saved"]
+    assert saved == {"saved": 1, "cleared": 0}
+    card = c.get(f"/api/tracks/{mine}", headers=GOOD).json()
+    rb = next(x for x in card["lookups"] if x["provider"] == "rekordbox")
+    assert rb["label"] == "Rekordbox" and rb["bpm"] == 60.0 and rb["compare"]["bpm"] == "half"
     assert c.get("/api/admin/rekordbox-compare?key=rekordbox/missing.xml", headers=GOOD).status_code == 404
     assert c.get("/api/admin/rekordbox-compare?key=uploads/x.xml", headers=GOOD).status_code == 400
     store["rekordbox/bad.xml"] = b"<not xml"

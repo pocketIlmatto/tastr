@@ -92,6 +92,12 @@ On the hosted server, upload the export to the audio bucket (`tastr-audio` in Cl
 drop `format=text` for JSON, `key=rekordbox/other.xml` for another file, `show=N` for more disagreements). It
 compares your own tracks. Delete the export from the bucket when you're done: it lists your library's paths.
 
+Add `&save=1` to also store Rekordbox's BPM and key on each of those tracks. Each card then shows Rekordbox in
+its "Listed elsewhere" line, marked where it disagrees (half, double, a fifth...), and the review list gains
+"rekordbox lists 103 BPM, not Tastr's 136" reasons, the same as for the online catalogs ([lookup.md](lookup.md)).
+Running it again with a newer export replaces them. Rekordbox is never looked up: naming it in `TASTR_LOOKUP`
+does nothing.
+
 Tracks are matched by file name first, then by artist and title (with lengths within 3 s), each track once.
 Where you labeled a track in Tastr ([bench.md](bench.md#your-own-tracks)), both apps are scored against your
 label. This reads the analysis as it was stored, so a track analyzed by an older Tastr shows the older answer;

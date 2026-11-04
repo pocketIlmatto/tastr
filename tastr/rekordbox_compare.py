@@ -160,3 +160,41 @@ def format_report(rep: dict, show: int = 15) -> str:
             lines.append(f"  #{r['track_id']} {r['title'][:50]}: Tastr {r['tastr_bpm']} {r['tastr_key']}, "
                          f"Rekordbox {r['rekordbox_bpm']} {r['rekordbox_key']}")
     return "\n".join(lines)
+
+
+PROVIDER = "rekordbox"  # tastr/lookup/rekordbox.py
+
+
+def save_listings(conn: sqlite3.Connection, xml: str | Path | bytes, owner: str | None = None) -> dict:
+    """Store Rekordbox's BPM and key for each track in both libraries as a lookup, so the card's "Listed elsewhere"
+    line and the review list show where Tastr disagrees with it. Earlier Rekordbox listings for `owner`'s tracks
+    are replaced, so a track no longer in the export loses its listing. Returns {"saved", "cleared"}."""
+    from . import db
+    from .engine.music import camelot
+
+    tastr = _tastr_tracks(conn, owner)
+    pairs = match(tastr, parse_xml(xml if isinstance(xml, bytes) else find_xml(xml)))
+    ids = [t["id"] for t in tastr]
+
+    def write():
+        cleared = 0
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            cleared += conn.execute(f"DELETE FROM lookups WHERE provider = ? AND track_id IN ({','.join('?' * len(chunk))})",
+                                    (PROVIDER, *chunk)).rowcount
+        for t, rb, how in pairs:
+            if not rb.bpm and rb.tonic is None:
+                continue
+            key = f"{note_name(rb.tonic)} {rb.mode}" if rb.tonic is not None else None
+            conn.execute("INSERT OR REPLACE INTO lookups VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (t["id"], PROVIDER, "found", rb.bpm, key, rb.tonic, rb.mode,
+                          camelot(rb.tonic, rb.mode) if rb.tonic is not None else None, db._now(),
+                          json.dumps({"provider": PROVIDER, "status": "found", "bpm": rb.bpm, "key": key,
+                                      "tonic": rb.tonic, "mode": rb.mode,
+                                      "camelot": camelot(rb.tonic, rb.mode) if rb.tonic is not None else None,
+                                      "matched_artist": rb.artist or None, "matched_title": rb.name or None,
+                                      "url": None, "extra": {"matched_by": how, "listed_key": rb.key_text}})))
+        return cleared
+
+    cleared = db.atomic(conn, write)
+    return {"saved": sum(1 for _, rb, _ in pairs if rb.bpm or rb.tonic is not None), "cleared": cleared}

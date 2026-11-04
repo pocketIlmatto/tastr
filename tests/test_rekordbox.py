@@ -151,3 +151,34 @@ def test_one_file_imported_twice_still_matches():
     e = rekordbox.RbTrack(location="/m/z/2.mp3", bpm=120.0)
     found = rekordbox.match([a, b, c, d, e], ["/d/1.LOFI.mp3", "/d/2.mp3"])
     assert found[0] is a and 1 not in found
+
+
+def test_rekordbox_listings_show_as_listed_elsewhere(tmp_path, xml):
+    from tastr import db, labels, lookup, rekordbox_compare
+
+    conn = _library(tmp_path)
+    import json
+
+    from tests.test_foundation import full_card
+
+    for tid, bpm in ((1, 120.0), (2, 50.0), (3, 128.0)):  # review_queue and describe load whole cards
+        card = full_card()
+        card.core.bpm = bpm
+        conn.execute("UPDATE cards SET json = ? WHERE track_id = ?", (json.dumps(card.to_dict()), tid))
+    conn.commit()
+    conn.execute("INSERT INTO lookups VALUES (3, 'rekordbox', 'found', 1, NULL, NULL, NULL, NULL, 'x', '{}')")
+    conn.commit()
+    out = rekordbox_compare.save_listings(conn, xml)
+    assert out == {"saved": 2, "cleared": 1}  # track 3 isn't in the export any more
+    rows = {r["provider"]: r for r in db.get_lookups(conn, 2)}
+    assert rows["rekordbox"]["bpm"] == 100.0 and rows["rekordbox"]["camelot"] == "8B"
+    shown = lookup.describe(db.load_card(conn, 2), db.get_lookups(conn, 2))
+    assert shown[0]["label"] == "Rekordbox" and shown[0]["compare"]["bpm"] == "double"
+    assert db.get_lookups(conn, 3) == []
+    queue = {r["track_id"]: r for r in labels.review_queue(conn, owner=None)}
+    assert 2 not in queue  # you labeled it: settled
+    db.set_labels(conn, 2, {})
+    queue = {r["track_id"]: r for r in labels.review_queue(conn, owner=None)}
+    assert any("rekordbox lists 100 BPM" in why for why in queue[2]["reasons"])
+    assert rekordbox_compare.save_listings(conn, xml)["cleared"] == 2  # a re-import replaces them
+    assert lookup.PROVIDERS["rekordbox"].configured() is False  # never looked up through TASTR_LOOKUP

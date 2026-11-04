@@ -1,7 +1,7 @@
 """Copying tracks from one person's hosted library into another's (an admin sharing tracks with a friend).
 
 A copy is a new track owned by the other person, with the same analysis (the card and the tables made from it) and
-the same lookups. It points at the same audio file and shares its stems, which are kept per audio file: deleting
+the same catalog lookups (not the copier's Rekordbox listings, which come from their own collection). It points at the same audio file and shares its stems, which are kept per audio file: deleting
 either copy leaves the file while the other still uses it (tracks.py `remove_upload`), and the expiry keeps a file
 an admin's track still uses (hosted.expire_audio). Each person's own work on a track (edits, labels, reviews, cues,
 playlists) stays with them. The card's waveform data, kept in the audio bucket by track id, is copied too.
@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 # The tables the analysis fills, copied with each track. track_edits, track_labels, review_flags, pattern_reviews,
 # track_cues and list_tracks are someone's own work, so they stay behind.
 ANALYSIS_TABLES = ("sections", "tags", "suggestions", "features", "series", "cards", "lookups")
+# Rows of these tables that belong to the person, not the track: left out of a copy.
+PERSONAL_ROWS = {"lookups": "provider = 'rekordbox'"}  # from their own Rekordbox export (rekordbox_compare.py)
 
 
 def _columns(conn, table: str) -> list[str]:
@@ -66,7 +68,8 @@ def copy_tracks(conn, track_ids: list[int], src: str, dst: str) -> dict[int, int
             new = cur.lastrowid
             for t, cols in tables.items():
                 cs = ", ".join(f'"{c}"' for c in cols)
-                conn.execute(f'INSERT INTO "{t}" (track_id, {cs}) SELECT ?, {cs} FROM "{t}" WHERE track_id = ?',
+                skip = f" AND NOT ({PERSONAL_ROWS[t]})" if t in PERSONAL_ROWS else ""
+                conn.execute(f'INSERT INTO "{t}" (track_id, {cs}) SELECT ?, {cs} FROM "{t}" WHERE track_id = ?{skip}',
                              (new, old))
             made[old] = new
 

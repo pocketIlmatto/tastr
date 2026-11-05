@@ -1,7 +1,7 @@
 // The track card: opening a track, its header and stats, sections and their order, Hear a key and the metadata section.
 
-import { $, VIBE_GROUPS, VIBE_MIN, api, currentId, groupOf, h, isNum, mmss, setCurrentId, tagHelp, vibeHelp } from "./core.js";
-import { bpmFilter, camelotNear, keyFilter, lib, syncCardFilters, vibeFilter, visibleTracks } from "./library.js";
+import { $, ML_REPLACES, VIBE_GROUPS, VIBE_MIN, api, currentId, groupOf, h, isNum, mlState, mlTip, mmss, nap, setCurrentId, tagHelp, vibeHelp, vibeTags } from "./core.js";
+import { bpmFilter, camelotNear, keyFilter, lib, loadTracks, renderList, syncCardFilters, vibeFilter, visibleTracks } from "./library.js";
 import { setDrumModelOn, setLookupProviders } from "./bulk.js";
 import { camPc, charts, labelOpen, setLabelOpen, setMarkHook } from "./labels.js";
 import { labelBar } from "./label-bar.js";
@@ -16,16 +16,68 @@ import { pollStems, stemStatus, stemsBusy, trackMenu } from "./menu.js";
 import { setStatus } from "./upload.js";
 import { openGlossary } from "./glossary.js";
 
+// A chip's color strength: the engine's from its 0.20 cut-off; ML moods and voice from 0.1; ML styles score lower (0.10-0.5), so double them.
+const chipStrength = (t) => !isNum(t.score) ? 0 : Math.max(0, Math.min(1,
+  t.src === "ml" ? (t.mlGroup === "style" ? t.score * 2 : (t.score - 0.1) / 0.9) : (t.score - VIBE_MIN) / (1 - VIBE_MIN)));
+// The note under the chips while a track's ML tags aren't in: queued, running, or failed with Try again.
+function mlNote(c) {
+  const st = mlState(c);
+  if (!st || st === "done") return null;
+  if (st === "error") return h("p", { class: "ml-state err", role: "status" }, h("b", {}, "ML tags failed"),
+    ` for this track${c.ml_tags_error ? ` (${c.ml_tags_error.replace(/\.$/, "")})` : ""}. These are Tastr's own vibes. `,
+    h("button", { type: "button", class: "linklike", onclick: () => mlRetry(c) }, "Try again"));
+  return h("p", { class: "ml-state", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }),
+    st === "running" ? "Adding ML tags: style, mood and vocals…" : "ML tags are queued for this track.",
+    h("span", { class: "muted" }, " Until they're in, these are Tastr's own vibes."));
+}
+// Swap the open card's Vibe section in place (the rest of the card, and what's playing, stay as they are).
+function redrawVibe(c) {
+  if (currentId !== c.id || shownCard !== c) return;
+  const box = document.querySelector('#card .sec[data-sec="vibe"] .sec-content');
+  if (box) { box.replaceChildren(vibeBody(c)); syncCardFilters(visibleTracks().length); }
+}
+// Polls GET /api/tracks/{id}/ml-tags while a run is queued or running, then shows the tags (or the error).
+const mlPolling = new Set();
+async function pollMl(c) {
+  if (mlPolling.has(c.id)) return;
+  mlPolling.add(c.id);
+  try {
+    for (;;) {
+      await nap(4000);
+      let st;
+      try { st = await api(`/api/tracks/${c.id}/ml-tags`); } catch (_) { continue; }
+      const was = mlState(c);
+      Object.assign(c, { ml_tags_state: st.state, ml_tags_error: st.error || null });
+      if (st.result) c.ml_tags = st.result;
+      if (mlState(c) !== was) redrawVibe(c);
+      if (st.state !== "queued" && st.state !== "running") break;
+      if (currentId !== c.id) break; // another track is open; its card polls for itself
+    }
+    if (mlState(c) === "done") { await loadTracks(); renderList(); }
+  } finally { mlPolling.delete(c.id); }
+}
+// Try again: POST /api/tracks/{id}/ml-tags starts a run (or joins one), then poll it.
+async function mlRetry(c) {
+  try {
+    const st = await api(`/api/tracks/${c.id}/ml-tags`, { method: "POST" });
+    Object.assign(c, { ml_tags_state: st.state, ml_tags_error: st.error || null });
+  } catch (e) {
+    Object.assign(c, { ml_tags_state: "error", ml_tags_error: e.message });
+  }
+  redrawVibe(c);
+  if (c.ml_tags_state === "queued" || c.ml_tags_state === "running") pollMl(c);
+}
 function vibeBody(c) {
-  const shown = [...c.tags].sort((a, b) => b.score - a.score);
+  const shown = vibeTags(c).sort((a, b) => b.score - a.score), ml = mlState(c) === "done";
   const shownSet = new Set(shown.map((t) => t.tag));
   const all = (c.extras && c.extras["tags.vibe_scores"]) || {};
-  const below = Object.entries(all).filter(([tag]) => !shownSet.has(tag)).map(([tag, score]) => ({ tag, score })).sort((a, b) => b.score - a.score);
+  // Once ML tags are in, the engine vibes they replace aren't listed, not even as hidden scores.
+  const below = Object.entries(all).filter(([tag]) => !shownSet.has(tag) && !(ml && ML_REPLACES[tag])).map(([tag, score]) => ({ tag, score })).sort((a, b) => b.score - a.score);
   const rowOf = (t, on) => h("li", { class: "vibe-row" + (on ? "" : " off"), style: `--g:${groupOf(t.tag).color}` },
-    h("span", { class: "vibe-name", tabindex: "0", "data-tip": vibeHelp(t.tag) }, h("i", { class: "vibe-dot", title: groupOf(t.tag).name }), t.tag),
+    h("span", { class: "vibe-name", tabindex: "0", "data-tip": t.src === "ml" ? `${mlTip(t.tag)} From Essentia's trained models.` : vibeHelp(t.tag) }, h("i", { class: "vibe-dot", title: groupOf(t.tag).name }), t.tag),
     h("span", { class: "vibe-bar", role: "img", "aria-label": `Score ${t.score.toFixed(2)} of 1` }, h("i", { style: `width:${t.score * 100}%` })),
     h("span", { class: "vibe-num" }, t.score.toFixed(2)),
-    h("span", { class: "vibe-state" }, on ? "Shown" : "Hidden"));
+    h("span", { class: "vibe-state" }, on ? (t.src === "ml" ? "ML" : "Shown") : "Hidden"));
   const list = h("ul", { class: "vibe-list", hidden: "" },
     h("li", { class: "vibe-head", "aria-hidden": "true" }, h("span", {}, "Vibe"), h("span", { class: "vibe-axis" }, h("span", { class: "vibe-min", style: `left:${VIBE_MIN * 100}%` }, "0.20 cut-off")), h("span", {}), h("span", {})),
     ...shown.map((t) => rowOf(t, true)), ...below.map((t) => rowOf(t, false)));
@@ -34,15 +86,20 @@ function vibeBody(c) {
   const note = h("p", { class: "vibe-note muted" },
     h("span", { class: "vibe-scale", "aria-hidden": "true" }),
     h("span", { tabindex: "0", "data-tip": `Each vibe gets a score from 0 to 1 from the track's measurements. Chips are grouped by kind of vibe (mood, energy, rhythm, sound, tempo), and each group has its own color. A stronger color means a higher score. Vibes scoring under ${VIBE_MIN.toFixed(2)} are left out, and a vibe the track doesn't qualify for at all gets no score.` }, `Stronger color = higher score. Shown from ${VIBE_MIN.toFixed(2)} up.`));
+  const st = mlState(c);
+  if ((st === "queued" || st === "running") && currentId === c.id) pollMl(c);
   return h("div", { class: "vibe" },
     VIBE_GROUPS.map((g) => ({ g, items: shown.filter((t) => groupOf(t.tag) === g) })).filter((x) => x.items.length).map(({ g, items }) =>
       h("div", { class: "vibe-group", style: `--g:${g.color}` }, h("span", { class: "vibe-glabel" }, g.name),
         h("div", { class: "chips" }, items.map((t) =>
           h("span", { class: "chip" + (lib.vibes.includes(t.tag) ? " on" : ""), role: "button", tabindex: "0", "data-tag": t.tag, "aria-pressed": String(lib.vibes.includes(t.tag)),
             onclick: () => vibeFilter(t.tag), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); vibeFilter(t.tag); } },
-            style: `--t:${isNum(t.score) ? Math.max(0, Math.min(1, (t.score - VIBE_MIN) / (1 - VIBE_MIN))) : 0}`,
-            "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""} Click to filter the track list; click more vibes to narrow it.`.trim() }, t.tag))))),
+            style: `--t:${chipStrength(t)}`,
+            "data-tip": `${t.src === "ml" ? `${mlTip(t.tag)} ML tag, score ${t.score.toFixed(2)}.` : `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`} Click to filter the track list; click more vibes to narrow it.`.trim() },
+            t.tag, t.src === "ml" ? h("span", { class: "ml-mk", "aria-label": "(ML)" }, "✦") : null))))),
+    mlNote(c),
     h("div", { class: "card-filter", "data-kind": "vibe", hidden: "" }),
+    ml && shown.some((t) => t.src === "ml") ? h("p", { class: "ml-src muted" }, "✦ Tagged by Essentia's trained models (ML). The rest are measured by Tastr.") : null,
     h("div", { class: "vibe-foot" }, note, h("a", { class: "link gl-link", href: "#g-vibes", onclick: (e) => { e.preventDefault(); openGlossary("g-vibes"); } }, "What the vibes mean"), btn), list);
 }
 // Hear a key: that key's tonic chord (low root, root, third, fifth, octave) alone for 2 s, then ~6 s of the track's drop or
@@ -294,7 +351,7 @@ export function renderCard(c) {
   if (energy && energy.times && energy.times.length > 1 || (c.sections || []).length) {
     root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration, c)]));
   }
-  if ((c.tags || []).length) root.append(section("vibe", "Vibe", [vibeBody(c)]));
+  if (vibeTags(c).length || mlState(c) === "error") root.append(section("vibe", "Vibe", [vibeBody(c)]));
   // Template drum patterns are tempo-based guesses: they live in the Drums part's Pattern picker, not as grids or in the Try list.
   const isTemplate = (s) => s.data && s.data.origin === "template";
   const templates = (c.suggestions || []).filter(isTemplate), sugs = (c.suggestions || []).filter((s) => !isTemplate(s));

@@ -1,6 +1,6 @@
 // The track list: search, sort and filters, placeholder rows while files analyze, the collapsible sidebar and quick jump.
 
-import { $, api, currentId, h, isNum, labels, mmss, progBar, reviewRows, setTracks, tracks } from "./core.js";
+import { $, VIBE_GROUPS, api, currentId, groupOf, h, isNum, labels, mmss, progBar, reviewRows, rowVibes, setTracks, tracks } from "./core.js";
 import { jobs, renderBulk, sel, selecting, setSelecting, toggleSel } from "./bulk.js";
 import { loadReview, renderReview } from "./labels.js";
 import { openTrack } from "./card.js";
@@ -99,7 +99,11 @@ function syncFilterSelects() {
 }
 function fillFilterOptions() {
   const vibes = [...new Set(tracks.flatMap((t) => t.tags || []))].sort(), keys = [...new Set(tracks.map((t) => t.camelot).filter(Boolean))].sort((a, b) => keyRank(a) - keyRank(b));
-  $("lib-vibe").replaceChildren(h("option", { value: "" }, "Any vibe"), ...vibes.map((v) => h("option", { value: v }, v)));
+  // Grouped like the card's chips (Style, Mood, Energy, Rhythm, Sound, Tempo). While the one-time ML tags pass runs, the
+  // untagged tracks still carry the engine's vibes, so both sets show here until it's done.
+  $("lib-vibe").replaceChildren(h("option", { value: "" }, "Any vibe"),
+    ...VIBE_GROUPS.map((g) => [g, vibes.filter((v) => groupOf(v) === g)]).filter(([, vs]) => vs.length)
+      .map(([g, vs]) => h("optgroup", { label: g.name }, ...vs.map((v) => h("option", { value: v }, v)))));
   $("lib-key").replaceChildren(h("option", { value: "" }, "Any key"), ...keys.map((k) => h("option", { value: k }, k)));
   syncFilterSelects();
 }
@@ -110,7 +114,10 @@ export function syncTools() {
 export async function loadTracks() {
   const [rows] = await Promise.all([api("/api/tracks"), loadReview(false)]);
   setTracks(rows);
-  for (const t of tracks) t.uploaded = Date.parse(t.created_at || t.analyzed_at) || 0; // when it was uploaded, for the list, sort and filter
+  for (const t of tracks) {
+    t.uploaded = Date.parse(t.created_at || t.analyzed_at) || 0; // when it was uploaded, for the list, sort and filter
+    t.tags = rowVibes(t); // the engine's vibes, with the weak ones swapped for ML tags once the track has them
+  }
   fillFilterOptions();
 }
 export async function refresh(selectId) {

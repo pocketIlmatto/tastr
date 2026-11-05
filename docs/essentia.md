@@ -33,8 +33,8 @@ none, once (`meta` key `ml_tags_backfill`). On Modal's 2-CPU container a track c
 weights (about 40 MB) into `~/.tastr/essentia-models` on first use (`TASTR_ESSENTIA_MODELS` moves them).
 
 - `POST /api/tracks/{id}/ml-tags` starts a run in the background; `GET` reports its state and the stored result.
-  The card's JSON carries `ml_tags`, `ml_tags_available` and `ml_tags_state`. There is no button yet: the UI
-  goes through the design sandbox first.
+  The card's JSON carries `ml_tags`, `ml_tags_available`, `ml_tags_state` and, after a failed run,
+  `ml_tags_error`; `/api/tracks` gives each row's ML tag names as `ml_tags` (null before they're in).
 - `tastr ml-tags run ID...` or `tastr ml-tags run --all` (every track without ML tags) from the command line.
 - Results go in the `ml_tags` table, apart from the card, so re-analysis keeps them and copies share them. Each
   row has every head's output (the big heads cut to their top 10) and the tags drawn from them, comma-separated
@@ -49,8 +49,13 @@ Tags (`tastr/engine/ml_tags.py`), with provisional cut-offs from the 200-clip ru
 | mood | MTG-Jamendo mood/theme tags that describe music (energetic, uplifting, dark, deep, space ...) | up to 3 scoring 0.12 or more, about the top 5% |
 | voice | vocal or instrumental | voice scores 0.7 or more, or 0.3 or less |
 
-The mood/theme cut-off is the weakest: the uploader tags it was checked against are sparse. The engine's own vibe
-tags are unchanged; how the two show side by side is a UI decision.
+The mood/theme cut-off is the weakest: the uploader tags it was checked against are sparse.
+
+On the page (`vibeTags` in `static/app/core.js`), a track that has ML tags shows them with a ✦, in a new Style row
+and in Mood and Sound, and they replace the engine's weakest vibes: driving → energetic, euphoric → uplifting,
+hypnotic → meditative, chill → relaxed, bright → happy. The engine keeps "dark" and the rest. Until a track's ML
+tags are in, or when they fail (with Try again), it shows the engine's vibes as before. The engine's `tags` table
+is unchanged, so SQL searches see the engine's vibes; Find's vibe search also reads `ml_tags.tags`.
 
 ## Running it
 

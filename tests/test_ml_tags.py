@@ -133,11 +133,20 @@ def test_api_off_by_default_then_runs_in_the_background(db_path, track, tmp_path
     assert body["result"]["tags"] == RESULT["tags"] and len(calls) == 1
     card = client.get(f"/api/tracks/{track}").json()
     assert card["ml_tags"]["tags"] == RESULT["tags"] and card["ml_tags_available"] and card["ml_tags_state"] == "done"
+    assert "ml_tags_error" not in card
+    row = client.get("/api/tracks").json()[0]  # the track list has the names, for the Library's vibe filter
+    assert row["ml_tags"] == [t["tag"] for t in RESULT["tags"]]
     assert client.get("/api/tracks/9999/ml-tags").status_code == 404
 
     monkeypatch.setattr(ml_tags, "analyze", lambda path: (_ for _ in ()).throw(RuntimeError("bad file")))
     client.post(f"/api/tracks/{track}/ml-tags")
     assert "bad file" in wait_for(client, track, "error")["error"]
+    assert "bad file" in client.get(f"/api/tracks/{track}").json()["ml_tags_error"]  # the card's failed note shows it
+
+
+def test_track_list_without_ml_tags_says_so(db_path, track):
+    row = TestClient(create_app(db_path)).get("/api/tracks").json()[0]
+    assert row["ml_tags"] is None  # not in yet: the page keeps the engine's vibes
 
 
 def test_hosted_server_runs_them_on_modal(db_path, track, monkeypatch):

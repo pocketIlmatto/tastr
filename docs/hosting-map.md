@@ -181,7 +181,9 @@ so stems never pass through the server. "Detect drums with the model" in a track
 so everyday uploads don't wait for PyTorch to load. A queued or running separation or drum model run leaves a
 marker in the database (`job_markers`), so it resumes after a restart. ML tags (with `TASTR_ML_TAGS=auto`, after
 each new upload is analyzed, and once for every track from before) send the track's audio link to `ml_tags`, which runs MTG's Essentia classifiers and returns
-the tags. They queue one at a time and leave markers too. The server keeps them in the `ml_tags` table, apart from the card, so re-analysis keeps them.
+the tags. They queue one at a time and leave markers too. That call doesn't hold a request open: the server
+starts it (`/spawn/ml_tags`) and asks for the answer every 5 seconds (`/poll`), because a request held past 100 s
+got a 524 on the way, keep-alive lines or not. The server keeps them in the `ml_tags` table, apart from the card, so re-analysis keeps them.
 
 ## Which service handles which step
 

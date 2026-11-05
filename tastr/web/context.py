@@ -22,7 +22,8 @@ from .hosted import (AccessVerifier, AnalysisSlots, LinkSigner, Settings, file_b
                      security_headers, today)
 
 log = logging.getLogger("tastr.web.server")  # the name these lines had before the routes moved out of server.py
-ML_BACKFILL_KEY = "ml_tags_backfill"  # meta: the day the one-time ML tags pass over the library was queued
+ML_BACKFILL_KEY = "ml_tags_backfill"  # meta: which one-time ML tags pass over the library was last queued
+ML_BACKFILL_PASS = "2"  # bump to queue the untagged tracks once more (pass 1 failed: every call timed out)
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -159,17 +160,18 @@ class AppContext:
 
     def backfill_ml_tags(self) -> int:
         """With TASTR_ML_TAGS=auto, queue ML tags once for every track that has none (the library from before it
-        was switched on). Queued runs survive restarts (their markers), so this happens once per database."""
+        was switched on). Queued runs survive restarts (their markers), so this happens once per database and
+        ML_BACKFILL_PASS."""
         try:
             if not ml_jobs.automatic():
                 return 0
             with closing(self.conn()) as c:
-                if db.get_meta(c, ML_BACKFILL_KEY):
+                if db.get_meta(c, ML_BACKFILL_KEY) == ML_BACKFILL_PASS:
                     return 0
                 ids = ml_jobs.untagged(c)
                 for tid in ids:
                     self.ml_runs.start(tid)
-                db.set_meta(c, ML_BACKFILL_KEY, today())
+                db.set_meta(c, ML_BACKFILL_KEY, ML_BACKFILL_PASS)
             if ids:
                 self.event(None, "ml_tags", f"Started adding ML tags to {len(ids)} tracks (one-time pass over the library)",
                            source=analysis_source())

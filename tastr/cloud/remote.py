@@ -191,9 +191,37 @@ def stems(audio_path: str | Path, put_urls: dict[str, str] | None = None) -> dic
     return _call("stems", _audio(audio_path), audio_path.suffix)
 
 
+POLL_SECONDS, POLL_TRIES = 5, 15 * 60 // 5  # the ml_tags function times out after 10 minutes
+
+
+def _http_json(name: str, payload: dict) -> dict:
+    """POST to `name` on the web endpoint; its one JSON answer."""
+    url = f"{os.environ['TASTR_MODAL_URL'].rstrip('/')}/{name}"
+    headers = {"Content-Type": "application/json", "Modal-Key": os.environ.get("TASTR_MODAL_KEY", ""),
+               "Modal-Secret": os.environ.get("TASTR_MODAL_SECRET", "")}
+    try:
+        resp = http.request("POST", url, headers, json.dumps(payload).encode())
+    except http.HTTPError as e:
+        raise RemoteError(f"couldn't reach Modal: {e}") from e
+    if resp.status != 200:
+        raise RemoteError(f"Modal answered {resp.status}: {resp.text()[:200]}")
+    return json.loads(resp.read())
+
+
 def ml_tags(audio_path: str | Path) -> dict:
-    """ML tags (engine/ml_tags.py) for one file, from the Modal `ml_tags` function."""
+    """ML tags (engine/ml_tags.py) for one file, from the Modal `ml_tags` function. Over HTTPS the call is
+    started, then polled every few seconds, so no request stays open for longer than the proxy allows."""
     audio_path = Path(audio_path)
     if http_enabled():
-        return _http_result("ml_tags", _payload(_audio(audio_path), audio_path.suffix))
+        from .. import runner
+
+        call_id = _http_json("spawn/ml_tags", _payload(_audio(audio_path), audio_path.suffix))["call_id"]
+        for _ in range(POLL_TRIES):
+            answer = _http_json("poll", {"call_id": call_id})
+            if "error" in answer:
+                raise RemoteError(answer["error"])
+            if "result" in answer:
+                return answer["result"]
+            runner.current().sleep(POLL_SECONDS)
+        raise RemoteError(f"Modal's ml_tags didn't finish in {POLL_SECONDS * POLL_TRIES // 60} minutes")
     return _call("ml_tags", _audio(audio_path), audio_path.suffix)

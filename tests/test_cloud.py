@@ -522,3 +522,54 @@ def test_run_analyze_returns_a_card(synth_wav):
     path, _ = synth_wav
     card = TrackCard.from_dict(jobs.run_analyze(path.read_bytes(), ".wav", ["core"]))  # older servers still send stages
     assert card.duration and card.core.bpm
+
+
+def test_remote_ml_tags_starts_the_call_then_polls(modal_api, tmp_path, monkeypatch):
+    """ML tags don't hold a request open (a held one got a 524 after 100 s): spawn, then poll until done."""
+    from tastr import runner
+    from tastr.cloud import remote
+
+    modal = sys.modules["modal"]
+
+    class Timeout(Exception):
+        pass
+
+    answers = [Timeout(), Timeout(), {"tags": [{"tag": "Deep House"}]}]
+    spawned, slept = [], []
+
+    class Call:
+        object_id = "fc-123"
+
+        @staticmethod
+        def from_id(call_id):
+            assert call_id == "fc-123"
+            return Call()
+
+        async def _get(self, timeout=None):
+            assert timeout == 0
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+
+        get = types.SimpleNamespace(aio=lambda self=None, timeout=None: Call()._get(timeout))
+
+    async def spawn(*a):
+        spawned.append(a)
+        return Call()
+
+    modal.FunctionCall = Call
+    modal.exception = types.SimpleNamespace(TimeoutError=Timeout)
+    modal_api.mod.ml_tags = types.SimpleNamespace(spawn=types.SimpleNamespace(aio=spawn))
+    monkeypatch.setattr(runner.current(), "sleep", slept.append)
+    song = tmp_path / "a.wav"
+    song.write_bytes(b"wav")
+    assert remote.ml_tags(song) == {"tags": [{"tag": "Deep House"}]}
+    assert spawned == [(b"wav", ".wav")] and slept == [remote.POLL_SECONDS] * 2
+    assert [u for u, _ in modal_api.sent] == ["https://modal.example/spawn/ml_tags"] + ["https://modal.example/poll"] * 3
+
+    answers.append(RuntimeError("no such file"))
+    with pytest.raises(remote.RemoteError, match="no such file"):
+        remote.ml_tags(song)
+    with pytest.raises(remote.RemoteError, match="404"):
+        remote._http_json("spawn/stems", remote._payload("https://audio", ".wav"))

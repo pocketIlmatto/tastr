@@ -145,6 +145,9 @@ def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = Non
 # Worker). Only callers with a proxy auth token of this workspace get in (headers Modal-Key and Modal-Secret).
 # Every answer is lines of JSON, streamed: a streaming call's events, then {"result": ...} or {"error": ...};
 # a blank line every 20 seconds keeps a long call (a drum model run, stems) from timing out on the way.
+# ML tags don't hold a request open: POST /spawn/ml_tags starts the call and answers {"call_id"} at once, and
+# POST /poll {"call_id"} answers {"pending": true}, {"result": ...} or {"error": ...} (a held request got a 524
+# from the proxy after 100 s, keep-alive lines or not).
 api_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[standard]").add_local_python_source("tastr")
 KEEPALIVE = 20
 
@@ -215,5 +218,48 @@ def api():
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         return StreamingResponse(out, media_type="application/x-ndjson")
 
+    web.add_route("/spawn/{name}", _spawn, methods=["POST"])
+    web.add_route("/poll", _poll, methods=["POST"])
     web.add_route("/{name}", call, methods=["POST"])
     return web
+
+
+async def _json_body(request) -> dict | None:
+    try:
+        body = await request.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+async def _spawn(request):
+    """POST /spawn/ml_tags: start the call and answer {"call_id"} at once (see `api`)."""
+    import base64
+
+    from fastapi.responses import JSONResponse
+
+    if request.path_params["name"] != "ml_tags":
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    body = await _json_body(request) or {}
+    audio = body.get("audio_url") or base64.b64decode(body.get("audio_b64") or "")
+    if not audio or not isinstance(body.get("suffix"), str):
+        return JSONResponse({"detail": "audio_url or audio_b64, and suffix"}, status_code=422)
+    fc = await ml_tags.spawn.aio(audio, body["suffix"])
+    return JSONResponse({"call_id": fc.object_id})
+
+
+async def _poll(request):
+    """POST /poll {"call_id"}: {"pending": true}, {"result": ...} or {"error": ...}."""
+    import modal
+    from fastapi.responses import JSONResponse
+
+    call_id = (await _json_body(request) or {}).get("call_id")
+    if not isinstance(call_id, str) or not call_id.startswith("fc-"):
+        return JSONResponse({"detail": "a call_id"}, status_code=422)
+    try:
+        result = await modal.FunctionCall.from_id(call_id).get.aio(timeout=0)
+    except (TimeoutError, modal.exception.TimeoutError):
+        return JSONResponse({"pending": True})
+    except Exception as e:  # noqa: BLE001 - the caller gets the message
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"})
+    return JSONResponse({"result": result})

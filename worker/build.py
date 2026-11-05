@@ -6,6 +6,7 @@
 - public/static/: the browser files, served by Workers Static Assets, with the UI's modules also in
   public/static/app-<hash>/, where the page loads them (server.versioned_index), so a deploy never mixes old and
   new modules.
+- public/_headers: Cache-Control for the versioned files (asset_headers).
 - public/sqljs/: sql.js, which runs hosted searches in the browser (TAS-49), from node_modules (`npm install`
   here; package.json pins the version tastr/web/routes/search.py names).
 - public/engine/tastr_engine.wasm: the Rust engine's WebAssembly build, for cards made in the browser
@@ -28,6 +29,17 @@ ROOT = HERE.parent
 PKG = ROOT / "tastr"
 
 
+IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+def asset_headers(app_ver: str) -> str:
+    """public/_headers: Static Assets serve these paths without the Worker (wrangler.jsonc), so the Cache-Control
+    that server.ModuleFiles sets on a local server goes here. The modules' folder and the engine's URL (?v=) change
+    with every new build, so the browser keeps them for good instead of asking again on every load; the other
+    files keep Cloudflare's default (asked again each time, a quick 304 when unchanged)."""
+    return "".join(f"{path}\n  Cache-Control: {IMMUTABLE}\n" for path in (f"/static/app-{app_ver}/*", "/engine/*"))
+
+
 def build() -> None:
     sys.path.insert(0, str(ROOT))
     from tastr.engine import rust
@@ -48,6 +60,7 @@ def build() -> None:
     page.write_text(versioned_index())
     shutil.copytree(PKG / "web" / "static", public / "static", ignore=shutil.ignore_patterns("index.html"))
     shutil.copytree(PKG / "web" / "static" / "app", public / "static" / f"app-{app_version()}")
+    (public / "_headers").write_text(asset_headers(app_version()))
 
     sqljs = HERE / "node_modules" / "sql.js"
     if not (sqljs / "package.json").is_file():

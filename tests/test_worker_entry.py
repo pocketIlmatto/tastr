@@ -137,6 +137,26 @@ def test_worker_pins_the_sqljs_the_app_names():
     assert pkg["devDependencies"]["sql.js"] == SQLJS_VERSION
 
 
+def test_static_files_skip_the_worker_and_the_versioned_ones_cache(entry):
+    """wrangler.jsonc serves the Worker's static paths straight from Static Assets (a page load asks for ~50
+    files, and a cold Python Worker took seconds to start), and build.py's _headers keeps the versioned ones."""
+    import re
+
+    sys.path.insert(0, str(ENTRY.parent.parent))
+    try:
+        import build
+    finally:
+        sys.path.pop(0)
+    conf = (ENTRY.parent.parent / "wrangler.jsonc").read_text()
+    first = json.loads(re.search(r'"run_worker_first": (\[[^\]]*\])', conf).group(1))
+    assert "/*" in first
+    assert sorted(p[1:-1] for p in first if p.startswith("!")) == sorted(entry.ASSET_PATHS)
+    rules = build.asset_headers("abc123")
+    assert "/static/app-abc123/*\n  Cache-Control: public, max-age=31536000, immutable\n" in rules
+    assert "/engine/*\n  Cache-Control: public, max-age=31536000, immutable\n" in rules
+    assert "/static/*\n" not in rules  # the favicon and the unversioned files are asked for again
+
+
 def test_engine_build_id_can_come_from_the_environment(monkeypatch):
     """On the Worker the engine's WebAssembly file is a static asset, not on disk: build.py records its hash."""
     from tastr.engine import rust

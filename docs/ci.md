@@ -1,12 +1,19 @@
 # CI and GitHub Actions minutes
 
-The repo is private, so every Actions minute counts against the owner's monthly quota
-(2,000 minutes on GitHub Free, 3,000 on Pro). Linux runners bill at 1x, and each job is
-rounded **up** to the next whole minute.
+The repo is public, so its Actions minutes on GitHub's standard runners are free. Until it went
+public they counted against the owner's monthly quota, which is why the audit and the speed pass below
+kept the `tests` workflow lean; run time still matters for how fast a PR gets its result.
 
-## The workflow
+Besides `tests`, the repo has workflows that deploy, watch the live app and keep things up to date; each has
+its own section below.
 
-One workflow, `.github/workflows/test.yml`, one job on `ubuntu-latest`. It runs on every
+GitHub runs `schedule` triggers late, or drops them, when it is busy. In November 2026 the 30-minute and
+hourly schedules here ran only every 6 to 8 hours or so. A scheduled check must not assume it ran on time:
+`worker-errors` reads back to its previous run.
+
+## The tests workflow
+
+`.github/workflows/test.yml`, one job on `ubuntu-latest`. It runs on every
 `pull_request` event and every push to `main`.
 
 A typical audio run (about 2.5 minutes, billed 3):
@@ -116,8 +123,9 @@ pull request runs the usual `tests` and waits for the owner to merge it.
 
 ## Worker errors
 
-`.github/workflows/worker-errors.yml` watches the live app without anyone watching. Every 30 minutes
-`.github/scripts/worker_errors.py` reads the last hour of the `tastr` Worker's error logs (Workers Observability),
+`.github/workflows/worker-errors.yml` watches the live app without anyone watching. Every 30 minutes (on
+paper; GitHub often runs it hours late) `.github/scripts/worker_errors.py` reads the `tastr` Worker's error logs
+(Workers Observability) since the start of the previous successful check, at least an hour and at most 12 hours,
 groups the lines by request (a Python traceback arrives as one log line per traceback line) and leaves out the
 known harmless ZipFile noise (TAS-98). When 5 or more requests failed, or the Durable Object was reset (out of
 memory or CPU time), which fails every request in flight:
@@ -136,10 +144,11 @@ is public, so the report masks emails, upload names and link tokens.
   `CF_LOGS_TOKEN` the check only says so in the run summary.
   If Cloudflare refuses the token, the check fails (a red run) and shows Cloudflare's reason in its log;
   no issue is opened. Check the token's permission, account and IP filtering, and that it hasn't expired.
-- **Try it:** Actions > worker-errors > Run workflow with "force" ticked (and "minutes" to look further back).
+- **Try it:** Actions > worker-errors > Run workflow with "force" ticked ("minutes" sets a fixed window instead of
+  "since the previous check").
 - **Cost:** a 15-second job every 30 minutes, free on a public repository. Claude runs only when the check trips,
   for up to 45 minutes and 80 turns.
-- **Change the limit:** `FAILED_LIMIT` and `WINDOW_MIN` in `.github/scripts/worker_errors.py`; add known noise to
+- **Change the limit:** `FAILED_LIMIT`, `WINDOW_MIN` and `MAX_WINDOW_MIN` in `.github/scripts/worker_errors.py`; add known noise to
   `NOISE` there.
 
 ## Live health check
@@ -177,7 +186,8 @@ them. `sql.js` is skipped, because `tastr/web/routes/search.py` and the Dockerfi
 together by hand. Symphonia stays on 0.5 (patch releases only): 0.6 rewrote the decoder API that
 `engine-rs/src/decode.rs` uses, so that move is done by hand, comparing decoded samples with 0.5's.
 
-When an update fails `tests`, `.github/workflows/dependabot-fix.yml` (which runs from main, after the failed run)
+When an update fails `tests`, `.github/workflows/dependabot-fix.yml` (which runs from main, after the failed run on a
+`dependabot/` branch; other branches' runs don't start it)
 starts Claude Code on the same branch. Claude adapts the code to the new version, runs the checks, pushes one
 commit and explains it on the pull request. If the new version looks broken, it comments instead of forcing a fix.
 It never skips tests or pins a dependency back. When the tests still fail after Claude's commit, it doesn't try

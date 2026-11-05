@@ -1,7 +1,7 @@
 name: worker-errors
 # Watches the live app's Cloudflare Worker for failing requests and, when they pile up, has Claude investigate
-# (docs/ci.md#worker-errors). Every 30 minutes .github/scripts/worker_errors.py reads the last hour of the Worker's
-# error logs. When 5 or more requests failed, or the Durable Object was reset (out of memory or CPU), it opens a
+# (docs/ci.md#worker-errors). Every 30 minutes .github/scripts/worker_errors.py reads the Worker's error logs since
+# the previous successful check (at least an hour, at most 12 hours: GitHub often runs the schedule hours late). When 5 or more requests failed, or the Durable Object was reset (out of memory or CPU), it opens a
 # `worker-errors` issue and starts Claude Code (anthropics/claude-code-action), which traces the cause and opens a
 # pull request when a fix is clear. While a `worker-errors` issue is open nothing new starts; a new report is added
 # to it as a comment instead.
@@ -13,8 +13,8 @@ on:
   workflow_dispatch:
     inputs:
       minutes:
-        description: "How far back to look"
-        default: "60"
+        description: "How far back to look, in minutes (empty: since the previous successful check)"
+        default: ""
       force:
         description: "Open the issue and start Claude even if nothing is failing (to try the setup)"
         type: boolean
@@ -30,6 +30,7 @@ jobs:
     permissions:
       issues: write
       contents: read
+      actions: read  # to find when the previous check ran
     outputs:
       issue: ${{ steps.issue.outputs.number }}
     steps:
@@ -37,13 +38,15 @@ jobs:
       - id: errors
         env:
           CF_LOGS_TOKEN: ${{ secrets.CF_LOGS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          MINUTES: ${{ inputs.minutes }}
         run: |
           if [ -z "$CF_LOGS_TOKEN" ]; then
             echo "The repository secret CF_LOGS_TOKEN isn't set (docs/ci.md#worker-errors)." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           set -o pipefail  # a failed log query fails this step instead of leaving an empty report
-          python3 .github/scripts/worker_errors.py --minutes "${{ inputs.minutes || '60' }}" | tee report.md
+          python3 .github/scripts/worker_errors.py ${MINUTES:+--minutes "$MINUTES"} | tee report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"
       - id: issue
         if: steps.errors.outputs.tripped == 'true' || inputs.force
@@ -59,7 +62,7 @@ jobs:
             exit 0
           fi
           gh label create worker-errors --color B60205 --description "The live Worker is failing requests (worker-errors.yml)" --force
-          title="Worker errors: ${{ steps.errors.outputs.failed || 0 }} failed requests in the last hour"
+          title="Worker errors: ${{ steps.errors.outputs.failed || 0 }} failed requests in the last ${{ steps.errors.outputs.minutes || 60 }} min"
           [ "$FORCED" = true ] && title="Trying the worker-errors setup (started by hand)"
           url=$(gh issue create --label worker-errors --title "$title" --body-file report.md)
           echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
@@ -112,7 +115,7 @@ jobs:
 
             The live app (tastr.pocketknows.com) runs on the Cloudflare Worker `tastr`: FastAPI on Pyodide inside
             one SQLite Durable Object with 128 MB of memory (worker/, docs/hosting-map.md). Its requests have been
-            failing; the issue above groups the error logs of the last hour by request, with one example each.
+            failing; the issue above groups the error logs since the previous check by request, with one example each.
             Find out why and, when the fix is clear, fix it in a pull request.
 
             How to work:

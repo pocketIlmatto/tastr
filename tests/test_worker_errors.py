@@ -2,6 +2,7 @@
 like the Workers Observability API's."""
 
 import importlib.util
+import json
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent.parent / ".github" / "scripts" / "worker_errors.py"
@@ -66,3 +67,30 @@ def test_a_refused_query_says_why(monkeypatch):
         assert "HTTP 403" in str(e) and "Authentication error" in str(e)
     else:
         raise AssertionError("a refused query must raise")
+
+
+def test_the_window_reaches_back_to_the_previous_check():
+    hour = 3_600_000
+    now = 1_793_000_000_000
+    assert we.window(None, now) == we.WINDOW_MIN  # no earlier run: the usual hour
+    assert we.window(now - 10 * 60_000, now) == we.WINDOW_MIN  # ran on time: still at least an hour
+    assert we.window(now - 7 * hour - 30_000, now) == 7 * 60 + 1  # GitHub ran it 7 hours late: covers the gap
+    assert we.window(now - 3 * 24 * hour, now) == we.MAX_WINDOW_MIN  # a long gap is capped
+
+
+def test_the_previous_check_is_found_from_the_runs_api(monkeypatch):
+    runs = {"workflow_runs": [{"id": 9, "run_started_at": "2026-11-05T21:55:58Z"},
+                              {"id": 8, "run_started_at": "2026-11-05T15:46:33Z"}]}
+
+    class Done:
+        stdout = json.dumps(runs)
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GH_TOKEN", "x")
+    monkeypatch.setattr(we.subprocess, "run", lambda *a, **k: Done())
+    monkeypatch.setenv("GITHUB_RUN_ID", "9")  # this run already shows in the list: skip it
+    assert we.previous_start_ms() == 1_793_893_593_000
+    monkeypatch.setenv("GITHUB_RUN_ID", "10")
+    assert we.previous_start_ms() == 1_793_915_758_000
+    monkeypatch.delenv("GH_TOKEN")  # outside Actions: the usual hour
+    assert we.previous_start_ms() is None

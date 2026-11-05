@@ -1,6 +1,6 @@
 """Is the Cloudflare Worker failing? Used by .github/workflows/worker-errors.yml (docs/ci.md#worker-errors).
 
-Reads the `tastr` Worker's error log lines from the last WINDOW_MIN minutes (Workers Observability API), groups
+Reads the `tastr` Worker's error log lines since the previous successful check (Workers Observability API), groups
 them by request (a Python traceback arrives as one log line per traceback line), drops known harmless noise, and
 counts failed requests. It trips when FAILED_LIMIT or more requests failed, or when the Durable Object was reset
 (out of memory or CPU), which fails every request in flight.
@@ -8,16 +8,24 @@ counts failed requests. It trips when FAILED_LIMIT or more requests failed, or w
 Prints a Markdown report and writes `tripped=true|false` and `failed=<n>` to $GITHUB_OUTPUT when it is set. The
 report goes into a public issue, so emails, upload names and link tokens are masked.
 
+GitHub runs scheduled workflows late or drops them when it is busy (on 2026-11-05 the 30-minute schedule ran about
+every 6 to 8 hours), so a fixed one-hour window missed most of the time. Each check therefore reads back to the start
+of the previous successful check, at least WINDOW_MIN and at most MAX_WINDOW_MIN minutes. That needs GH_TOKEN,
+GITHUB_REPOSITORY and GITHUB_RUN_ID (set in Actions); without them, or with no earlier run, it reads WINDOW_MIN.
+
 Needs CF_LOGS_TOKEN: a Cloudflare API token with only Account > Workers Observability > Read.
-`--minutes N` looks further back (Claude uses it to investigate).
+`--minutes N` reads a fixed window instead (Claude uses it to investigate).
 """
 
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
+import math
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -27,6 +35,8 @@ from collections import defaultdict
 ACCOUNT = "1c793218966f05bb509e1e76f4ba0b67"  # not a secret (worker/wrangler.jsonc)
 SERVICE = "tastr"
 WINDOW_MIN = 60
+MAX_WINDOW_MIN = 12 * 60  # after a longer gap, the oldest errors are left out rather than reading days of logs
+WORKFLOW = "worker-errors.yml"
 FAILED_LIMIT = 5
 PAGE = 2000  # the API's most events per query; no offset, so long windows are read an hour at a time
 
@@ -71,6 +81,29 @@ def fetch(token: str, minutes: int, now_ms: int | None = None) -> tuple[list[dic
         out += page
         start = stop
     return out, full
+
+
+def window(previous_start_ms: int | None, now_ms: int) -> int:
+    """Minutes to read: back to the previous check's start, within WINDOW_MIN..MAX_WINDOW_MIN."""
+    if previous_start_ms is None:
+        return WINDOW_MIN
+    return max(WINDOW_MIN, min(MAX_WINDOW_MIN, math.ceil((now_ms - previous_start_ms) / 60_000)))
+
+
+def previous_start_ms() -> int | None:
+    """When the newest successful check before this one started, from the GitHub API; None if unknown."""
+    repo, run_id = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_RUN_ID")
+    if not (repo and run_id and os.environ.get("GH_TOKEN")):
+        return None
+    try:
+        out = subprocess.run(["gh", "api", f"repos/{repo}/actions/workflows/{WORKFLOW}/runs?status=success&per_page=10"],
+                             check=True, capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for run in json.loads(out).get("workflow_runs", []):
+        if str(run.get("id")) != run_id and run.get("run_started_at"):
+            return calendar.timegm(time.strptime(run["run_started_at"], "%Y-%m-%dT%H:%M:%SZ")) * 1000
+    return None
 
 
 def mask(text: str) -> str:
@@ -138,17 +171,19 @@ def report(result: dict, minutes: int, full: bool) -> tuple[str, int, bool]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--minutes", type=int, default=WINDOW_MIN)
+    ap.add_argument("--minutes", type=int, help="a fixed window (default: since the previous successful check)")
     args = ap.parse_args()
+    now = int(time.time() * 1000)
+    minutes = args.minutes or window(previous_start_ms(), now)
     try:
-        events, full = fetch(os.environ["CF_LOGS_TOKEN"], args.minutes)
+        events, full = fetch(os.environ["CF_LOGS_TOKEN"], minutes, now)
     except RuntimeError as e:  # fail the run, so a broken token shows as a red run instead of silence
         sys.exit(f"Couldn't read the Worker's logs: {e}")
-    text, failed, tripped = report(group(events), args.minutes, full)
+    text, failed, tripped = report(group(events), minutes, full)
     print(text)
     if out := os.environ.get("GITHUB_OUTPUT"):
         with open(out, "a") as f:
-            f.write(f"tripped={'true' if tripped else 'false'}\nfailed={failed}\n")
+            f.write(f"tripped={'true' if tripped else 'false'}\nfailed={failed}\nminutes={minutes}\n")
 
 
 if __name__ == "__main__":

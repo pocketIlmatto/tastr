@@ -8,6 +8,8 @@ on:
   workflow_run:
     workflows: [tests]
     types: [completed]
+    # Only Dependabot's branches, so other tests runs don't start (and skip) this one.
+    branches: ["dependabot/**"]
 concurrency:
   group: dependabot-fix-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false

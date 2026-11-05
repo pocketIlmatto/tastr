@@ -219,7 +219,8 @@ closes the issue. No Claude runs: a drop needs a person to decide whether it is 
 GitHub then merges them by itself once the required `test` check passes. A PR qualifies when all of these hold:
 
 - it comes from a branch in this repository;
-- its author is the owner or `claude[bot]`;
+- its author is the owner, `claude[bot]`, or `pocketilmatto-bot`, the owner's agent account that Claude sessions
+  work as;
 - every path it adds, changes, deletes or renames (old and new name) is under `docs/` or `tests/`, or is a Markdown
   file. `CLAUDE.md`, `AGENTS.md` and anything under `.github/` never qualify.
 

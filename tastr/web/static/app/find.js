@@ -1,6 +1,6 @@
 // Find tracks: the Simple builder and SQL.
 
-import { $, api, h, isNum, mmss, tracks } from "./core.js";
+import { $, ML_REPLACES, api, h, isNum, mmss, tracks } from "./core.js";
 import { refresh } from "./library.js";
 import { openTrack, switchTo } from "./card.js";
 import { endStart, routeOf } from "./route.js";
@@ -36,12 +36,16 @@ const Q_SORTS = { bpm: ["BPM", ["bpm"]], energy: ["Energy", ["energy"]], length:
 export let qMode = "simple", qGroups = [], qJoin = "and", qSort = ["bpm", "asc"];
 const qGroup = (conds, join = "and") => ({ join, conds: conds.map((q) => ({ ...q, v: q.v.slice() })) });
 const qNew = (field, op, vals) => ({ field, op: op || Q_FIELDS[field].ops[0][0], v: (vals || Q_FIELDS[field].def).slice() });
+// A vibe's tracks, as the card shows them: the engine's tags (tags), plus ML tags (ml_tags.tags, comma-separated) for the
+// tracks that have them; there the engine vibes that ML tags replace don't count.
+const qVibeIds = (a) => ML_REPLACES[a] ? `SELECT track_id FROM tags WHERE tag = '${qEsc(a)}' AND track_id NOT IN (SELECT track_id FROM ml_tags)`
+  : `SELECT track_id FROM tags WHERE tag = '${qEsc(a)}' UNION SELECT track_id FROM ml_tags WHERE ',' || tags || ',' LIKE '%,${qEsc(a)},%'`;
 function qSqlOf(q) {
   const F = Q_FIELDS[q.field]; if (!F) return null;
   const [a, b] = q.v, k = F.scale || 1, n = (x) => +((+x || 0) * k).toFixed(2);
   if (F.kind === "num") return q.op === "between" ? `${F.col} BETWEEN ${n(Math.min(+a, +b))} AND ${n(Math.max(+a, +b))}` : q.op === "min" ? `${F.col} >= ${n(a)}` : q.op === "max" ? `${F.col} <= ${n(a)}` : `${F.col} BETWEEN ${n(a) - 3} AND ${n(a) + 3}`;
   if (q.field === "key") { if (!Q_CAM[a]) return null; return q.op === "is" ? `camelot = '${a}'` : `camelot IN (${qMixes(a).map((x) => `'${x}'`).join(", ")})`; }
-  if (q.field === "vibe") return a ? `id ${q.op === "not" ? "NOT IN" : "IN"} (SELECT track_id FROM tags WHERE tag = '${qEsc(a)}')` : null;
+  if (q.field === "vibe") return a ? `id ${q.op === "not" ? "NOT IN" : "IN"} (${qVibeIds(a)})` : null;
   if (q.field === "section") return a ? `id ${q.op === "none" ? "NOT IN" : "IN"} (SELECT track_id FROM sections WHERE label = '${qEsc(a)}')` : null;
   const t = qEsc(String(a || "").trim()); return t ? `(title LIKE '%${t}%' OR artist LIKE '%${t}%' OR album LIKE '%${t}%')` : null;
 }
@@ -142,7 +146,7 @@ export function renderSimple() {
 const SIMPLE_EXAMPLES = [  // [label, groups, sort]
   ["Mixes with 8A, 120–128 BPM", [qGroup([qNew("key", "mixes", ["8A"]), qNew("bpm", "between", [120, 128])])], ["bpm", "asc"]],
   ["Dark, over 120 BPM", [qGroup([qNew("vibe", "is", ["dark"]), qNew("bpm", "min", [120])])], ["energy", "desc"]],
-  ["Wind-down: slow or calm, and moody", [qGroup([qNew("bpm", "max", [118]), qNew("energy", "max", [0.5])], "or"), qGroup([qNew("vibe", "is", ["chill"]), qNew("vibe", "is", ["melancholic"])], "or")], ["energy", "asc"]],
+  ["Wind-down: slow or calm, and moody", [qGroup([qNew("bpm", "max", [118]), qNew("energy", "max", [0.5])], "or"), qGroup([qNew("vibe", "is", ["chill"]), qNew("vibe", "is", ["relaxed"]), qNew("vibe", "is", ["melancholic"])], "or")], ["energy", "asc"]],
   ["Peak time: 124–130 BPM, high energy", [qGroup([qNew("bpm", "between", [124, 130]), qNew("energy", "min", [0.7])])], ["energy", "desc"]],
   ["No drop", [qGroup([qNew("section", "none", ["drop"])])], ["title", "asc"]],
   ["Longest first", [qGroup([])], ["length", "desc"]],
@@ -238,7 +242,9 @@ const Q_SCHEMA = [
     ["local_path", "Where the audio is stored", true], ["sha256", "Fingerprint of the audio file"], ["duration", "Seconds"], ["sample_rate", "Hz"], ["bpm, bpm_confidence", "Tempo, and 0–1 confidence"],
     ["key_name, key_tonic, key_mode", "e.g. A minor; tonic 0–11 (C = 0); major or minor"], ["key_scale", "Scale name"], ["camelot", "e.g. 8A"], ["key_confidence", "0–1"], ["energy", "0–1, whole track"],
     ["loudness_db", "Integrated loudness"], ["stages_json, errors_json", "Which analysis steps ran, and what failed", true], ["analyzed_at", "ISO time of the last analysis"], ["owner", "Who uploaded it (hosted only)", true]]],
-  ["tags", "Vibe tags, one row per tag on a track.", [["track_id", "→ tracks.id"], ["tag", "e.g. dark, chill, house tempo"], ["score", "0–1, how strongly it applies"]]],
+  ["tags", "Tastr's own vibe tags, one row per tag on a track. ML tags aren't in here: they're in ml_tags, and on a track that has them they replace driving, euphoric, hypnotic, chill and bright.", [["track_id", "→ tracks.id"], ["tag", "e.g. dark, chill, house tempo"], ["score", "0–1, how strongly it applies"]]],
+  ["ml_tags", "Tags from Essentia's trained models (ML ✦), one row per tagged track.", [["track_id", "→ tracks.id"], ["tags", "The shown tags, comma-separated, e.g. Deep House,energetic,vocal"], ["version", "Which set of models"], ["created_at", "ISO time"],
+    ["result_json", "Every tag's group and score, and the models' raw outputs, as JSON (use json_extract)"]]],
   ["sections", "Intro, build, drop and so on, in order.", [["track_id, idx", "Track, and position (0 = first)"], ["label, letter", "e.g. drop, and A/B/C for repeats"], ["start, \"end\"", "Seconds (quote \"end\", it's a keyword)"], ["start_bar, end_bar", "Bar numbers, 1-based, inclusive"], ["energy", "0–1 for that section"], ["confidence", "0–1"]]],
   ["features", "Single measurements per track.", [["track_id", "→ tracks.id"], ["name", "e.g. low_end, percussiveness, danceability"], ["value", "Number"]]],
   ["series", "Measurements over time, for the charts.", [["track_id, name", "Track, and e.g. energy"], ["idx, t", "Point number, and seconds"], ["value", "Number"]]],

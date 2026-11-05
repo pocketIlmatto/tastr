@@ -294,7 +294,10 @@ class AppContext:
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]
         body["ml_tags"] = db.get_ml_tags(c, track_id)
         body["ml_tags_available"] = ml_jobs.available()
-        body["ml_tags_state"] = self.ml_runs.status(track_id)["state"]
+        ml_run = self.ml_runs.status(track_id)
+        body["ml_tags_state"] = ml_run["state"]
+        if ml_run.get("error"):
+            body["ml_tags_error"] = ml_run["error"]
         body["lookups"] = lookup.describe(card, db.get_lookups(c, track_id))
         on = lookup.enabled()
         body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in on]

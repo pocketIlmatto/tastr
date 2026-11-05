@@ -452,6 +452,14 @@ body.num-dragging, body.num-dragging * { cursor: grabbing !important; user-selec
 .vibe-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--g); margin-right: 6px; }
 .vibe-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; margin-top: 10px; font-size: 12px; }
 .vibe-note { margin: 0; display: flex; align-items: center; gap: 8px; position: relative; }
+/* ML tags (docs/essentia.md): the ✦ on ML chips, the source line, and the queued / running / failed note */
+.chip .ml-mk { font-size: 10px; margin-left: 4px; opacity: .7; }
+.ml-state { margin: 8px 0 0; font-size: 13px; }
+.ml-state .spin { margin-right: 6px; vertical-align: -2px; }
+.ml-state.err { color: var(--warn); }
+.ml-state.err .muted, .ml-state.err button { color: var(--fg); }
+.ml-state button.linklike { border: 0; background: none; box-shadow: none; padding: 0; min-height: 0; text-transform: none; letter-spacing: normal; font-family: inherit; font-size: inherit; font-weight: 600; }
+.ml-src { margin: 8px 0 0; font-size: 12px; }
 .vibe-scale { width: 44px; height: 10px; border-radius: 999px; border: 1px solid var(--line); background: linear-gradient(90deg, color-mix(in srgb, var(--muted) 8%, var(--panel)), color-mix(in srgb, var(--muted) 58%, var(--panel))); }
 .vibe-toggle { font-size: 12px; padding: 3px 10px; }
 .vibe-list { list-style: none; margin: 10px 0 0; padding: 0; font-size: 13px; }
@@ -802,6 +810,9 @@ details.sec[data-sec="try"] > summary .daw-pick { max-width: 9em; } /* the page 
 .gl-table { width: 100%; margin: 8px 0 12px; font-size: 13px; }
 .gl-table th, .gl-table td { white-space: normal; vertical-align: top; padding: 6px 8px; }
 .gl-table td:first-child { font-weight: 600; white-space: nowrap; }
+.gl-replaced td { color: var(--muted); }
+.gl-rep { font-size: 11px; font-weight: 400; color: var(--fg); }
+.gl-ml td:first-child { white-space: normal; }
 .gl-compact { width: auto; }
 .gl-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 28px; align-items: start; margin-top: 8px; }
 .gl-two > div > p { margin: 0 0 8px; }

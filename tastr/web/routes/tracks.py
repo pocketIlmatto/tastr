@@ -47,9 +47,12 @@ def router(ctx: AppContext) -> APIRouter:
             vibes: dict[int, list[str]] = {}
             for tid, tag in c.execute("SELECT track_id, tag FROM tags ORDER BY score DESC"):
                 vibes.setdefault(tid, []).append(tag)
+            # ML tags (names), for the tracks that have them: the page swaps them in for the weak engine vibes
+            ml = {tid: [t for t in tags.split(",") if t] for tid, tags in c.execute("SELECT track_id, tags FROM ml_tags")}
         for r in rows:  # tracks uploaded before the hash moved into a folder still have it in their title
             r["title"] = _unprefixed(r["title"], uris.get(r["id"]))
             r["tags"] = vibes.get(r["id"], [])
+            r["ml_tags"] = ml.get(r["id"])
         return rows
 
     @api.post("/api/tracks/known")

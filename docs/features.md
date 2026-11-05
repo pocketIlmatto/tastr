@@ -20,6 +20,8 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   letter, so `Drop B` and `Outro B` are the same part.
 - **Vibe tags.** Scored tags such as bass-heavy, dark or percussive, grouped by
   kind (energy, mood, rhythm, sound...) and tinted by how strongly they apply.
+  Where ML tags are on, Essentia's trained models add a style (e.g. Deep House), moods and vocal/instrumental,
+  marked ✦, and replace Tastr's weakest moods ([essentia.md](essentia.md)).
 - **File tags.** Title, artist and album from MP3, FLAC and m4a tags.
 - **Listed elsewhere (optional).** The BPM and key that [GetSongBPM](https://getsongbpm.com)
   and FreqBlog (your own API keys) or AcousticBrainz's public-domain dump list for the

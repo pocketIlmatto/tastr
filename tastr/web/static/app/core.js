@@ -40,15 +40,60 @@ const VIBE_RULES = {
   "swung": "16th notes land late by a clear, measurable amount (needs a confident swing reading).",
 };
 // The vibe-to-group map lives here, not in the engine. tests/test_web.py checks every vibe the engine can produce has a group.
+// Style holds the ML style tags (Discogs styles, docs/essentia.md); the ML moods join Mood and vocal/instrumental Sound.
 export const VIBE_GROUPS = [
-  { key: "mood", name: "Mood", color: "var(--sec0)", tags: ["dark", "bright", "melancholic", "euphoric"] },
+  { key: "style", name: "Style", color: "var(--sec3)", tags: [], match: (tag) => mlStyles.has(tag) },
+  { key: "mood", name: "Mood", color: "var(--sec0)", tags: ["dark", "bright", "melancholic", "euphoric",
+    "relaxed", "happy", "sad", "aggressive", "party", "calm", "cool", "deep", "dramatic", "dreamy", "emotional", "energetic", "epic",
+    "fast", "fun", "groovy", "heavy", "hopeful", "inspiring", "meditative", "positive", "powerful", "retro", "romantic", "sexy", "slow",
+    "soft", "space", "upbeat", "uplifting"] },
   { key: "energy", name: "Energy", color: "var(--sec2)", tags: ["high energy", "chill", "dynamic"] },
   { key: "rhythm", name: "Rhythm", color: "var(--sec1)", tags: ["driving", "danceable", "hypnotic", "percussive", "swung"] },
-  { key: "sound", name: "Sound", color: "var(--sec4)", tags: ["bass-heavy", "atmospheric"] },
+  { key: "sound", name: "Sound", color: "var(--sec4)", tags: ["bass-heavy", "atmospheric", "vocal", "instrumental"] },
   { key: "tempo", name: "Tempo", color: "var(--muted)", tags: [], match: (tag) => /tempo$/.test(tag) },
   { key: "other", name: "Other", color: "var(--other)", tags: [] },
 ];
 export const groupOf = (tag) => VIBE_GROUPS.find((g) => g.tags.includes(tag) || (g.match && g.match(tag))) || VIBE_GROUPS[VIBE_GROUPS.length - 1];
+
+/* ML tags: Essentia's trained models tag every upload on a server with TASTR_ML_TAGS=auto (docs/essentia.md). A card has
+   ml_tags {tags: [{tag, group: style|mood|voice, score}]} once they're in, and ml_tags_state (none, queued, running, done
+   or error) for the run. Once a track has them, they replace the engine's weak vibes below; the engine keeps the rest
+   ("dark" among them). Until then, or if they fail, the track shows the engine's vibes as before. */
+export const ML_REPLACES = { driving: "energetic", euphoric: "uplifting", hypnotic: "meditative", chill: "relaxed", bright: "happy" };
+export const ML_TIPS = {
+  relaxed: "Calm and laid back.", happy: "Sounds cheerful.", sad: "Sounds sad or melancholy.", aggressive: "Hard and forceful.", party: "Made for a party.",
+  energetic: "Full of energy and drive.", uplifting: "Lifts you up; builds to a bright, positive feel.", meditative: "Steady and trance-like; draws you in.",
+  dreamy: "Soft and hazy.", deep: "Deep, warm and rolling.", dark: "Dark and brooding.", vocal: "Has singing or rapping.", instrumental: "No vocals.",
+};
+export const mlTip = (tag) => ML_TIPS[tag] || (mlStyles.has(tag) ? "A Discogs style." : "A mood from Essentia's trained models.");
+// The ML style names seen so far (cards and the track list), for groupOf: styles are open-ended, moods and voice aren't.
+export const mlStyles = new Set();
+const ML_NOT_STYLE = new Set([...VIBE_GROUPS[1].tags, "vocal", "instrumental"]);
+// Where a card's ML tags are: "done" once it has them (they stay through a later rerun), else the run's state, with
+// "queued" for a track that has none yet on a server that adds them (the upload or the one-time library pass queues it).
+export function mlState(c) {
+  if (c.ml_tags && Array.isArray(c.ml_tags.tags)) return "done";
+  const s = c.ml_tags_state;
+  if (s === "queued" || s === "running" || s === "error") return s;
+  return c.ml_tags_available ? "queued" : null;
+}
+// The one list of vibes for a card, [{tag, score, src: "engine"|"ml", mlGroup?}]: the chips, the summary, the filters.
+export function vibeTags(c) {
+  const eng = (c.tags || []).map((t) => ({ ...t, src: "engine" }));
+  if (mlState(c) !== "done") return eng;
+  const kept = eng.filter((t) => !ML_REPLACES[t.tag]), have = new Set(kept.map((t) => t.tag));
+  const ml = c.ml_tags.tags.filter((t) => t && t.tag && !have.has(t.tag));
+  for (const t of ml) if (t.group === "style") mlStyles.add(t.tag);
+  return [...kept, ...ml.map((t) => ({ tag: t.tag, score: t.score, src: "ml", mlGroup: t.group }))];
+}
+// The same for a /api/tracks row: `tags` (the engine's, strongest first) and `ml_tags` (names, or null before they're in).
+export function rowVibes(row) {
+  const eng = row.tags || [];
+  if (!Array.isArray(row.ml_tags)) return eng;
+  const kept = eng.filter((t) => !ML_REPLACES[t]), have = new Set(kept);
+  for (const t of row.ml_tags) if (!ML_NOT_STYLE.has(t)) mlStyles.add(t);
+  return [...kept, ...row.ml_tags.filter((t) => !have.has(t))];
+}
 export const vibeHelp = (tag) => VIBE_RULES[tag] || tagHelp(tag);
 
 

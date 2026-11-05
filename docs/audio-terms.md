@@ -31,7 +31,7 @@ progression, a bass line, a kick on every beat and off-beat hats at 120 BPM) wit
 
 Read top to bottom: a file becomes a list of numbers, then a few shared "views" of those numbers, and each
 part of the track card reads the views it needs. The shared views live in
-[`tastr/engine/signals.py`](../tastr/engine/signals.py) and are computed once per track.
+[`signals` in `engine-rs/src/lib.rs`](../engine-rs/src/lib.rs) and are computed once per track.
 
 ```mermaid
 flowchart TD

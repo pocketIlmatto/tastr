@@ -4,7 +4,9 @@ name: automerge
 # author is the owner, Claude (claude[bot], from claude.yml) or the owner's agent account (pocketilmatto-bot,
 # which Claude sessions use instead of the owner's own account), and every file it adds, changes, deletes or
 # renames is under docs/ or tests/, or is a Markdown file other than CLAUDE.md and AGENTS.md. Nothing under
-# .github/ qualifies. A later push that touches anything else turns auto-merge off again.
+# .github/ qualifies. A later push that touches anything else turns off an auto-merge this workflow turned on, since
+# its merges start no deploy. An auto-merge the author turned on stays: main's ruleset requires the owner's approval,
+# and Claude sessions turn it on for every PR so that approval is the only step.
 # Needs "Allow auto-merge" on in the repository settings (General > Pull Requests).
 #
 # The merge is made with this workflow's token, and GitHub starts no workflows for pushes made with it: the tests
@@ -49,6 +51,10 @@ jobs:
           else
             { echo "Not docs and tests only, so this one waits for a person. Other paths:"; echo '```'; printf '%s\n' "$other"; echo '```'; } \
               | tee -a "$GITHUB_STEP_SUMMARY"
-            # Turns off an auto-merge an earlier, docs-only push had turned on. Fails harmlessly when none is set.
-            gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --disable-auto 2>/dev/null || true
+            # Turns off only an auto-merge this workflow turned on for an earlier, docs-only push: a merge made with
+            # this token starts no workflows, so code merged that way would not deploy. One the author turned on stays.
+            by=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" -q '.auto_merge.enabled_by.login // empty')
+            if [ "$by" = "github-actions[bot]" ]; then
+              gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --disable-auto
+            fi
           fi

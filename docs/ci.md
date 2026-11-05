@@ -234,7 +234,10 @@ GitHub then merges them by itself once the required `test` check passes. A PR qu
 - every path it adds, changes, deletes or renames (old and new name) is under `docs/` or `tests/`, or is a Markdown
   file. `CLAUDE.md`, `AGENTS.md` and anything under `.github/` never qualify.
 
-A later push to the PR that touches anything else turns auto-merge off again, and that PR waits for a review.
+A later push to the PR that touches anything else turns that auto-merge off again, since a merge made with the
+workflow's token starts no deploy. An auto-merge the PR's author turned on stays on: main's ruleset requires the
+owner's approval, and Claude sessions turn on auto-merge for every PR they open so that approval is the only step.
+For that to be safe, the ruleset must also dismiss stale approvals when new commits are pushed.
 Dependabot PRs change manifests, so they never qualify.
 
 - **Setting:** turn on **Settings > General > Pull Requests > Allow auto-merge**. Without it the run fails with

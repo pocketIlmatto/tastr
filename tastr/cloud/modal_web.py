@@ -29,7 +29,9 @@ def _ml_tags_module():
     import importlib.util
     from pathlib import Path
 
-    path = Path(__file__).resolve().parent.parent / "engine" / "ml_tags.py"
+    # Modal runs this file as /root/modal_web.py, away from the package, so find the package (without
+    # importing tastr.engine) rather than going from __file__.
+    path = Path(importlib.util.find_spec("tastr").submodule_search_locations[0]) / "engine" / "ml_tags.py"
     spec = importlib.util.spec_from_file_location("_tastr_ml_tags_standalone", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

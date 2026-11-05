@@ -51,7 +51,10 @@ const W = 1100; // CSS pixels; shots are taken at 1.5x and shown smaller in the 
   await shotOf("strudel", body("Try this in"));
 
   // 5. The Glossary's Camelot entry, with the wheel set to the open track's key.
-  await page.evaluate(() => openGlossary("g-basics"));
+  // The app is ES modules now, so openGlossary isn't a global: open the Glossary from the nav, then its contents
+  // link, which sets the wheel to the open track's key.
+  await page.locator("nav button[data-view=glossary]").click();
+  await page.locator('.gl-toc a[href="#g-basics"]').click();
   await page.waitForTimeout(500);
   await shotOf("glossary", page.locator("dd.gl-cam"));
 

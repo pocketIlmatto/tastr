@@ -573,3 +573,35 @@ def test_remote_ml_tags_starts_the_call_then_polls(modal_api, tmp_path, monkeypa
         remote.ml_tags(song)
     with pytest.raises(remote.RemoteError, match="404"):
         remote._http_json("spawn/stems", remote._payload("https://audio", ".wav"))
+
+
+def test_modal_web_imports_no_engine_package():
+    """modal_web.py is imported in every container, the api's included, which has no numpy: importing anything
+    under tastr.engine at module level (whose __init__ needs numpy) makes every api call hang until the proxy's 524."""
+    tree = ast.parse((ROOT / "tastr/cloud/modal_web.py").read_text())
+    top = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    names = [n.module for n in top if isinstance(n, ast.ImportFrom)] + [a.name for n in top if isinstance(n, ast.Import) for a in n.names]
+    assert all(n == "modal" or n == "__future__" or n.startswith("tastr.cloud.") for n in names), names
+    src = (ROOT / "tastr/engine/ml_tags.py").read_text()
+    stdlib = {"__future__", "importlib.util", "json", "os", "time", "urllib.request", "pathlib"}
+    mods = [n.module or "" for n in ast.parse(src).body if isinstance(n, ast.ImportFrom)]
+    mods += [a.name for n in ast.parse(src).body if isinstance(n, ast.Import) for a in n.names]
+    assert set(mods) <= stdlib, mods  # it is loaded on its own there, so only the standard library at the top
+
+
+def test_modal_web_loads_without_numpy(monkeypatch):
+    """The api container's view: no numpy importable."""
+    import builtins
+
+    real = builtins.__import__
+
+    def no_numpy(name, *a, **kw):
+        if name == "numpy" or name.startswith("numpy."):
+            raise ImportError("no numpy here")
+        return real(name, *a, **kw)
+
+    for m in [m for m in sys.modules if m == "numpy" or m.startswith("numpy.") or m.startswith("tastr.engine")]:
+        monkeypatch.delitem(sys.modules, m)
+    monkeypatch.setattr(builtins, "__import__", no_numpy)
+    mod, _ = _load_modal_web(monkeypatch)
+    assert "curl" in mod.download_command("/m")

@@ -20,7 +20,23 @@ from __future__ import annotations
 import modal
 
 from tastr.cloud.rust_image import with_rust_engine
-from tastr.engine.ml_tags import download_command
+
+
+def _ml_tags_module():
+    """tastr/engine/ml_tags.py, loaded from its file: importing it as tastr.engine.ml_tags runs tastr/engine's
+    __init__, which needs numpy, and this module is imported in every container, the api's (no numpy) included.
+    That import is what broke every call to the api after the ML tags change."""
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "engine" / "ml_tags.py"
+    spec = importlib.util.spec_from_file_location("_tastr_ml_tags_standalone", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+download_command = _ml_tags_module().download_command
 
 APP_NAME = "tastr-web"
 
@@ -146,8 +162,8 @@ def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = Non
 # Every answer is lines of JSON, streamed: a streaming call's events, then {"result": ...} or {"error": ...};
 # a blank line every 20 seconds keeps a long call (a drum model run, stems) from timing out on the way.
 # ML tags don't hold a request open: POST /spawn/ml_tags starts the call and answers {"call_id"} at once, and
-# POST /poll {"call_id"} answers {"pending": true}, {"result": ...} or {"error": ...} (a held request got a 524
-# from the proxy after 100 s, keep-alive lines or not).
+# POST /poll {"call_id"} answers {"pending": true}, {"result": ...} or {"error": ...}, so no request stays open
+# for the whole run.
 api_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[standard]").add_local_python_source("tastr")
 KEEPALIVE = 20
 

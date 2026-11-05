@@ -605,3 +605,16 @@ def test_modal_web_loads_without_numpy(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", no_numpy)
     mod, _ = _load_modal_web(monkeypatch)
     assert "curl" in mod.download_command("/m")
+
+
+def test_modal_web_loads_from_a_copy_outside_the_package(monkeypatch, tmp_path):
+    """Modal runs modal_web.py as /root/modal_web.py, away from tastr/, so nothing in it may go by __file__."""
+    import importlib.util
+
+    _load_modal_web(monkeypatch)  # installs the fake modal module
+    copy = tmp_path / "modal_web.py"
+    copy.write_text((ROOT / "tastr/cloud/modal_web.py").read_text())
+    spec = importlib.util.spec_from_file_location("modal_web_copy", copy)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert "curl" in mod.download_command("/m")

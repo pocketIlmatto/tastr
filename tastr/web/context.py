@@ -23,7 +23,7 @@ from .hosted import (AccessVerifier, AnalysisSlots, LinkSigner, Settings, file_b
 
 log = logging.getLogger("tastr.web.server")  # the name these lines had before the routes moved out of server.py
 ML_BACKFILL_KEY = "ml_tags_backfill"  # meta: which one-time ML tags pass over the library was last queued
-ML_BACKFILL_PASS = "2"  # bump to queue the untagged tracks once more (pass 1 failed: every call timed out)
+ML_BACKFILL_PASS = "3"  # bump to queue the untagged tracks once more (passes 1 and 2 failed: the api was down)
 STATIC_DIR = Path(__file__).parent / "static"
 
 

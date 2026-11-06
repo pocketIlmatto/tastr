@@ -653,7 +653,7 @@ function strudelSummary(c) {
     `Sections: ${s.secs.length ? s.secs.map((x) => `${sketchSecName(x)} bars ${x.start_bar}-${x.end_bar != null ? x.end_bar : x.start_bar}`).join("; ") : "none detected"}`].join("\n").slice(0, 1900);
 }
 
-if (typeof module !== "undefined") module.exports = { strudelCode, strudelLink, strudelLane, compactSteps, compactBars, STRUDEL_STEMS,
+if (typeof module !== "undefined") module.exports = { sketchInputs, varOf, sketchSecName, STRUDEL_NOTES, strudelCode, strudelLink, strudelLane, compactSteps, compactBars, STRUDEL_STEMS,
   STRUDEL_TEMPLATES, STRUDEL_NEW_TEXT, strudelFillins, strudelFill, strudelUnfill, strudelDiff, strudelHunks, strudelSummary,
   strudelSpeed, strudelMashFit, strudelCamelot, strudelUsesAudio, strudelUsesMash, strudelUsesMashParts,
   STRUDEL_MASH_PRESETS, strudelMashParts, strudelMashFrom, strudelMashApply, strudelMashSwitch, strudelMashState, strudelMashCode, strudelMashPer };

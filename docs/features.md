@@ -50,7 +50,7 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   a version to come back to later. Re-analyzing keeps your edits for sections
   that didn't move.
 
-## Try this in Ableton or Strudel
+## Try this in Ableton, Strudel, Tidal or Sonic Pi
 
 - **Ableton Live:** setup (tempo, scale, Camelot), drum rack programming, bass
   and chord moves, scales to play over each chord, an arrangement map and mix
@@ -61,6 +61,11 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   filter sliders and a punchcard under the code. It can use your edits and the
   original audio cut into bars, either the full mix or separated stems, and start
   from any section. "Open in Strudel" opens it in strudel.cc, ready to play and remix.
+- **[Tidal](https://tidalcycles.org) and [Sonic Pi](https://sonic-pi.net):** a
+  switch above the Strudel code (Strudel, Tidal, Sonic Pi) writes the same sketch,
+  each section's drums, bass and chords with your edits, as TidalCycles or Sonic Pi
+  code. Neither has a web player, so it's code to copy or download (`.tidal`, `.rb`)
+  and run in the app on your computer. The pick is remembered per browser.
 - **Strudel templates:** pick a template above the code: Full sketch (the sketch
   above), Loop the drop (four bars of the drop with a filter slider), Drums only
   (every section's drums with one line to switch the kit), Half-time remix, or

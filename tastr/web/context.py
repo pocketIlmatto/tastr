@@ -152,7 +152,6 @@ class AppContext:
                 raise
             if result is None:
                 raise LookupError("The track was deleted.")
-            db.clear_ml_tags_error(c, track_id)
 
     def ml_run_status(self, c: sqlite3.Connection, track_id: int) -> dict:
         """The ML tags run's state; after a restart, a track whose last run failed is still "error"."""

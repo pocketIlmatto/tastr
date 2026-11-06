@@ -233,3 +233,11 @@ def test_a_failed_run_is_still_failed_after_a_restart(db_path, track, tmp_path, 
     again = TestClient(create_app(db_path))
     assert again.get(f"/api/tracks/{track}").json()["ml_tags_state"] == "none"
     assert "ml_tags_error" not in again.get(f"/api/tracks/{track}").json()
+
+
+def test_a_successful_run_outside_the_server_clears_a_saved_failure(db_path, track, stub):
+    conn = db.connect(db_path)
+    db.save_ml_tags_error(conn, track, "Couldn't add ML tags: bad file")
+    assert db.get_ml_tags_error(conn, track)
+    ml_jobs.tag_track(conn, track)  # what `tastr ml-tags` does
+    assert db.get_ml_tags_error(conn, track) is None

@@ -637,8 +637,9 @@ def save_lookup(conn: sqlite3.Connection, track_id: int, result: dict[str, Any])
 
 
 def save_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:
-    """Store a track's ML tags result (tastr/engine/ml_tags.analyze), replacing an earlier one."""
+    """Store a track's ML tags result (tastr/engine/ml_tags.analyze), replacing an earlier one and any saved failure."""
     with conn:
+        conn.execute("DELETE FROM ml_tag_errors WHERE track_id = ?", (track_id,))
         conn.execute("INSERT OR REPLACE INTO ml_tags VALUES (?, ?, ?, ?, ?)",
                      (track_id, result.get("version", 0), ",".join(t["tag"] for t in result.get("tags", [])), _now(),
                       json.dumps(result)))
@@ -649,11 +650,6 @@ def save_ml_tags_error(conn: sqlite3.Connection, track_id: int, error: str) -> N
     with conn:
         if conn.execute("SELECT 1 FROM tracks WHERE id = ?", (track_id,)).fetchone():
             conn.execute("INSERT OR REPLACE INTO ml_tag_errors VALUES (?, ?, ?)", (track_id, error, _now()))
-
-
-def clear_ml_tags_error(conn: sqlite3.Connection, track_id: int) -> None:
-    with conn:
-        conn.execute("DELETE FROM ml_tag_errors WHERE track_id = ?", (track_id,))
 
 
 def get_ml_tags_error(conn: sqlite3.Connection, track_id: int) -> str | None:

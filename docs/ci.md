@@ -167,16 +167,6 @@ When the site answers again it comments and closes the issue. No Claude runs: an
 - **Try it:** Actions > health > Run workflow.
 - **Cost:** a few seconds an hour, free on a public repository.
 
-## Claude on issues and PRs
-
-`.github/workflows/claude.yml` runs Claude Code when the owner writes `@claude` in an issue, an issue or PR
-comment, a review comment or a review. Comments from anyone else are ignored, so strangers can't start it on
-this public repo. Claude works on a branch and opens or updates a pull request; it doesn't merge, deploy or change
-settings. Be careful with `@claude` on someone else's pull request: Claude then reads and runs their code.
-
-- **Secret:** the same Claude secret as slow tests.
-- **Cost:** up to 45 minutes and 60 turns per mention, on the owner's Claude plan.
-
 ## Codex code reviews
 
 OpenAI Codex reviews pull requests as a second, advisory reviewer. It runs through Codex's own GitHub
@@ -208,7 +198,7 @@ When an update fails `tests`, `.github/workflows/dependabot-fix.yml` (which runs
 starts Claude Code on the same branch. Claude adapts the code to the new version, runs the checks, pushes one
 commit and explains it on the pull request. If the new version looks broken, it comments instead of forcing a fix.
 It never skips tests or pins a dependency back. When the tests still fail after Claude's commit, it doesn't try
-again; it says so on the pull request.
+again; it says so on the pull request and suggests `@codex`, a Claude session or closing the update.
 
 - **Secret:** the same Claude secret as slow tests. If the run says the secret isn't available, add
   `CLAUDE_CODE_OAUTH_TOKEN` under **Settings > Secrets and variables > Dependabot** as well.

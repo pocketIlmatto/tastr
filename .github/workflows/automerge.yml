@@ -1,7 +1,7 @@
 name: automerge
 # Docs and tests only pull requests merge on their own once the required `test` check passes
 # (docs/ci.md#auto-merge-for-docs-and-tests). A PR qualifies when it comes from a branch in this repository, its
-# author is the owner, Claude (claude[bot], from claude.yml) or the owner's agent account (pocketilmatto-bot,
+# author is the owner, Claude (claude[bot], from the workflows that run claude-code-action) or the owner's agent account (pocketilmatto-bot,
 # which Claude sessions use instead of the owner's own account), and every file it adds, changes, deletes or
 # renames is under docs/ or tests/, or is a Markdown file other than CLAUDE.md and AGENTS.md. Nothing under
 # .github/ qualifies. A later push that touches anything else turns off an auto-merge this workflow turned on, since

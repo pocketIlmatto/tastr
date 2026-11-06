@@ -184,7 +184,8 @@ def router(ctx: AppContext) -> APIRouter:
     def _ml_tags_status(track_id: int) -> dict[str, Any]:
         with closing(ctx.conn()) as c:
             stored = db.get_ml_tags(c, track_id)
-        return {**ctx.ml_runs.status(track_id), "available": ml_jobs.available(), "result": stored}
+            run = ctx.ml_run_status(c, track_id)
+        return {**run, "available": ml_jobs.available(), "result": stored}
 
     @api.get("/api/tracks/{track_id}/ml-tags")
     def track_ml_tags(track_id: int):

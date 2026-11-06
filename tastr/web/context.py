@@ -134,19 +134,33 @@ class AppContext:
             raise RuntimeError(f"Couldn't analyze the file with the drum model: {result.error}")
 
     def run_ml_tags(self, track_id: int) -> None:
-        """Add ML tags to one track (an ml_runs job); raises with a message for the UI."""
+        """Add ML tags to one track (an ml_runs job); raises with a message for the UI. A failure's message is also
+        kept in the database, so the card still offers Try again after a restart."""
         with closing(self.conn()) as c:
             try:
-                result = ml_jobs.tag_track(c, track_id)
-            except FileNotFoundError as e:
-                raise RuntimeError("The original audio file is no longer on disk.") from e
-            except Exception as e:
-                if self.hosted:
-                    log.warning("ML tags for track %s failed: %s", track_id, e)
-                    raise RuntimeError("Couldn't add ML tags to this track.") from e
-                raise RuntimeError(f"Couldn't add ML tags: {e}") from e
-        if result is None:
-            raise LookupError("The track was deleted.")
+                try:
+                    result = ml_jobs.tag_track(c, track_id)
+                except FileNotFoundError as e:
+                    raise RuntimeError("The original audio file is no longer on disk.") from e
+                except Exception as e:
+                    if self.hosted:
+                        log.warning("ML tags for track %s failed: %s", track_id, e)
+                        raise RuntimeError("Couldn't add ML tags to this track.") from e
+                    raise RuntimeError(f"Couldn't add ML tags: {e}") from e
+            except RuntimeError as e:
+                db.save_ml_tags_error(c, track_id, str(e))
+                raise
+            if result is None:
+                raise LookupError("The track was deleted.")
+
+    def ml_run_status(self, c: sqlite3.Connection, track_id: int) -> dict:
+        """The ML tags run's state; after a restart, a track whose last run failed is still "error"."""
+        st = self.ml_runs.status(track_id)
+        if st["state"] == "none":
+            err = db.get_ml_tags_error(c, track_id)
+            if err:
+                return {"state": "error", "error": err}
+        return st
 
     def auto_ml_tags(self, rs) -> None:
         """With TASTR_ML_TAGS=auto, queue ML tags for each track these analysis results added. Never fails an upload."""
@@ -294,7 +308,7 @@ class AppContext:
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]
         body["ml_tags"] = db.get_ml_tags(c, track_id)
         body["ml_tags_available"] = ml_jobs.available()
-        ml_run = self.ml_runs.status(track_id)
+        ml_run = self.ml_run_status(c, track_id)
         body["ml_tags_state"] = ml_run["state"]
         if ml_run.get("error"):
             body["ml_tags_error"] = ml_run["error"]

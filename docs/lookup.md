@@ -125,7 +125,12 @@ once more; a second failure comes back as an error naming MusicBrainz. MusicBrai
 headers count its global load, not Tastr's requests, so the guard doesn't pause on them.
 
 In a test on a small library of mostly 2019-2022 house releases (October 2026), no track was found:
-AcousticBrainz's coverage of recent electronic releases is thin. It suits older catalogs better.
+AcousticBrainz's coverage of recent electronic releases is thin. It suits older catalogs better. A
+larger check in November 2026, on 58 tracks of a hosted library, found 8 (14%). By MusicBrainz's
+first-release year: 4 of 4 before 2015, 3 of 9 from 2015-2018, 1 of 8 from 2019-2022 and 0 of 20 from
+2023 on, which the dump can't hold. Of the 50 misses, 33 were on MusicBrainz but never analyzed and 17
+weren't on MusicBrainz at all. That's why the hosted site doesn't load the index: for a library of
+recent uploads it would answer almost nothing that FreqBlog and ReccoBeats don't.
 
 Build the index once:
 

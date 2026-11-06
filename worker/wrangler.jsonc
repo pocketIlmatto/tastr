@@ -23,6 +23,10 @@
   // The library: one SQLite-backed Durable Object holds the database and runs the app.
   "durable_objects": {"bindings": [{"name": "LIB", "class_name": "Library"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["Library"]}],
+  // The AcousticBrainz lookup's index (tastr/lookup/acousticbrainz.py): 7.56M recordings, about 0.4 GB, read by
+  // recording id. No database_id: a deploy finds the database by name, or makes an empty one (wrangler's automatic
+  // provisioning), and the acousticbrainz-d1 workflow loads it once. The deploy token needs D1 Edit for this.
+  "d1_databases": [{"binding": "ACOUSTICBRAINZ", "database_name": "tastr-acousticbrainz"}],
   // Settings (docs/hosting.md); secrets go in with `pywrangler secret put NAME`. A deploy resets these
   // to what's here, so a setting changed in the dashboard must be a Secret.
   // TASTR_MODAL_URL (the tastr-web app's api endpoint), TASTR_MODAL_KEY and TASTR_MODAL_SECRET are secrets.

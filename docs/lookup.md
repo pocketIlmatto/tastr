@@ -125,7 +125,11 @@ once more; a second failure comes back as an error naming MusicBrainz. MusicBrai
 headers count its global load, not Tastr's requests, so the guard doesn't pause on them.
 
 In a test on a small library of mostly 2019-2022 house releases (October 2026), no track was found:
-AcousticBrainz's coverage of recent electronic releases is thin. It suits older catalogs better.
+AcousticBrainz's coverage of recent electronic releases is thin. It suits older catalogs better. A
+larger check in November 2026, on 58 tracks of a hosted library, found 8 (14%). By MusicBrainz's
+first-release year: 4 of 4 before 2015, 3 of 9 from 2015-2018, 1 of 8 from 2019-2022 and 0 of 20 from
+2023 on, which the dump can't hold. Of the 50 misses, 33 were on MusicBrainz but never analyzed and 17
+weren't on MusicBrainz at all. So expect it to answer for older tracks and rarely for new releases.
 
 Build the index once:
 
@@ -149,6 +153,30 @@ index exists.
 | `ACOUSTICBRAINZ_INDEX` | `$TASTR_HOME/acousticbrainz-index.sqlite` |
 | `ACOUSTICBRAINZ_API_BASE` | unset. Instead of an index: a server that still speaks the AcousticBrainz API (its bulk `/api/v1/low-level` endpoint), asked for up to 25 MBIDs at once |
 | `MUSICBRAINZ_API_BASE` | `https://musicbrainz.org/ws/2` (a mirror also works) |
+
+### On the hosted site
+
+The Worker has no lasting disk, so there the index lives in a D1 database, `tastr-acousticbrainz`, bound
+as `ACOUSTICBRAINZ` (`worker/wrangler.jsonc`, [hosting-map.md](hosting-map.md)). Each lookup reads it with
+one query of up to 25 recording ids; the MusicBrainz search is the same as anywhere else. The database is
+about 0.4 GB, which Workers Paid's included D1 storage (5 GB) covers.
+
+Set it up once:
+
+1. Give the deploy token (`CLOUDFLARE_API_TOKEN`, [settings.md](settings.md)) **D1 Edit** and **Workers
+   R2 Storage Read** on the account, if it doesn't have them. A deploy needs D1 Edit: it finds the database
+   by name, or makes an empty one (wrangler's automatic provisioning).
+2. Run **Actions > acousticbrainz-d1 > Run workflow**. It reads `acousticbrainz/acousticbrainz-index.sqlite`
+   from the `tastr-data` bucket (put there by `tastr fetch acousticbrainz ... --remote`), writes it out as SQL
+   (`d1_sql` in `tastr/lookup/acousticbrainz.py`, half a million rows a file), makes the database if a deploy
+   hasn't, and imports the files one after another; about 7.6 million rows written, inside the 50 million a
+   month Workers Paid includes. Every file can be run again, so if a run stops, run it again with `from_file`
+   set to the file it stopped at. It ends by counting the rows (7,564,215).
+3. Add `acousticbrainz` to the Worker's `TASTR_LOOKUP` secret, for example
+   `freqblog,reccobeats,acousticbrainz`.
+
+With the binding but no rows loaded yet, a lookup comes back as an error naming D1 ("no such table"), so
+leave it out of `TASTR_LOOKUP` until the workflow has finished.
 
 The dump URLs and file names are in `tastr/lookup/acousticbrainz.py` (`DUMP_BASE`, `DUMP_FILES`); the
 column layout comes from AcousticBrainz's own dump code (`db/dump.py` in metabrainz/acousticbrainz-server).

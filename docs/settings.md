@@ -26,7 +26,7 @@ Repository **Settings > Secrets and variables > Actions**.
 
 | Secret | Used by | Made at | Renew |
 | --- | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | `deploy-worker.yml` | Cloudflare **My Profile > API Tokens**, "Edit Cloudflare Workers" template | Make a new one, replace the secret, run **Actions > deploy-worker**, revoke the old one |
+| `CLOUDFLARE_API_TOKEN` | `deploy-worker.yml`, `acousticbrainz-d1.yml` | Cloudflare **My Profile > API Tokens**, "Edit Cloudflare Workers" template, plus **D1 Edit** and **Workers R2 Storage Read** on the account (the Worker's D1 binding and the AcousticBrainz load, [lookup.md](lookup.md#on-the-hosted-site)) | Make a new one, replace the secret, run **Actions > deploy-worker**, revoke the old one |
 | `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | `deploy.yml`, `bench-smoke.yml` | Modal **Settings > API Tokens** | Same: new token, replace both, run **deploy**, revoke the old |
 | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | `health.yml` | Cloudflare **Zero Trust > Access > Service credentials > Service Tokens**, with a Service Auth policy on the Tastr app ([ci.md](ci.md#live-health-check)) | New service token, replace both, add it to the policy, revoke the old; note its end date in the calendar above |
 | `CF_LOGS_TOKEN` | `worker-errors.yml` | Cloudflare custom token, Account > Workers Observability > Read only | New token, replace; a refused token turns the run red ([ci.md](ci.md#worker-errors)) |

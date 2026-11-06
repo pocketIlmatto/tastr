@@ -697,6 +697,11 @@ def test_reccobeats_not_found(monkeypatch):
     ("Misunderstood (Extended Mix)", "Misunderstood - Mixed", False),
     ("Say My Name", "Say My Name - Live", False),
     ("One", "One More Time", False),
+    ("夜に駆ける", "夜に駆ける", True),  # non-Latin titles aren't dropped
+    ("夜に駆ける", "群青", False),
+    ("Song feat. Guest - Artist Remix", "Song", False),  # an unbracketed credit doesn't swallow the remix
+    ("Song feat. Guest - Artist Remix", "Song - Artist Remix", True),
+    ("Song ft. Guest (Extended Mix)", "Song", True),
 ])
 def test_reccobeats_same_track(ours, theirs, same):
     assert reccobeats.same_track(ours, theirs) is same

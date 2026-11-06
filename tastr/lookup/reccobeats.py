@@ -33,11 +33,14 @@ STRONG = {"remix", "rmx", "live", "acoustic", "rework", "vip", "bootleg", "flip"
           "reprise", "slowed", "sped", "nightcore"}
 WEAK = {"extended", "radio", "original", "edit", "mix", "version", "instrumental", "remaster", "remastered",
         "club", "single", "album", "explicit", "clean"}
-_FEAT = re.compile(r"[\(\[]\s*(?:feat|ft|featuring|with)\b[^\)\]]*[\)\]]|\s+(?:feat|ft|featuring)\.?\s.*$", re.IGNORECASE)
+_FEAT = re.compile(r"[\(\[]\s*(?:feat|ft|featuring|with)\b[^\)\]]*[\)\]]"  # (feat. X)
+                   r"|\s+(?:feat|ft|featuring)\.?\s.*?(?=\s+-\s|\s*[\(\[]|$)", re.IGNORECASE)  # feat. X, up to " - " or "("
 
 
 def _words(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower())
+    """Lower-case words with accents dropped, any script: "Campeón" -> ["campeon"], "夜に駆ける" stays."""
+    t = "".join(ch for ch in unicodedata.normalize("NFKD", text or "") if not unicodedata.combining(ch))
+    return re.findall(r"[^\W_]+", t.casefold())
 
 
 def _bare(title: str) -> str:

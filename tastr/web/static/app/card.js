@@ -5,7 +5,7 @@ import { bpmFilter, camelotNear, keyFilter, lib, loadTracks, renderList, syncCar
 import { setDrumModelOn, setLookupProviders } from "./bulk.js";
 import { camPc, charts, labelOpen, setLabelOpen, setMarkHook } from "./labels.js";
 import { labelBar } from "./label-bar.js";
-import { DAWS, daw, dawText, keyName, setDaw, strudelView } from "./daw.js";
+import { DAWS, daw, dawText, keyName, liveView, setDaw } from "./daw.js";
 import { delay, trackAudio } from "./audio.js";
 import { energyChart } from "./chart.js";
 import { grooveView } from "./groove.js";
@@ -332,7 +332,7 @@ function trySection(c, sugs) {
   const groups = {};
   for (const s of sugs) (groups[s.category || "other"] ||= []).push(s);
   const body = [];
-  if (DAWS[daw].code) body.push(strudelView(c));
+  if (DAWS[daw].code) body.push(liveView(c));
   else for (const [cat, items] of Object.entries(groups)) {
     body.push(h("h3", {}, cat));
     for (const s of items) body.push(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, dawText(s))));

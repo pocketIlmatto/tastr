@@ -4,6 +4,7 @@ import { api, cap, h, isNum, progBar } from "./core.js";
 import { sectionBus, switchTo } from "./card.js";
 import { allEdits, editedKeys } from "./groove-edits.js";
 import { laneName } from "./groove-lanes.js";
+import { sonicPiCode, tidalCode } from "./livecode.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
 import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
 
@@ -239,6 +240,68 @@ export function strudelView(c) {
       c.has_audio ? " Templates can use the original audio, cut into bars, to remix the real thing." : ""),
     tplBox, edBox, tplWarn, srcRow, audioOpt, stemsRow, mashBox, startRow,
     h("div", { class: "st-actions" }, open, short, copy, say), shortBox, pre, ask.el, note);
+}
+
+// The live-coding switch above the code (sandbox v207): Strudel as above, or the same sketch as Tidal or Sonic Pi code
+// (app/livecode.js). Those two have no web player, so they're read-only code to copy or download; templates, Ask Claude,
+// stems and the audio options stay Strudel-only. The pick is kept per browser, like the DAW pick.
+const LIVECODE = {
+  strudel: { name: "Strudel" },
+  tidal: { name: "Tidal", ext: "tidal", site: "https://tidalcycles.org", aria: "Generated Tidal code",
+    how: "Paste into your Tidal editor, then evaluate each block (Ctrl+Enter in most editors)." },
+  sonicpi: { name: "Sonic Pi", ext: "rb", site: "https://sonic-pi.net", aria: "Generated Sonic Pi code",
+    how: "Paste into a Sonic Pi buffer and press Run. Change anything and press Run again." },
+};
+let livecode = "strudel";
+try { const v = localStorage.getItem("tastr-livecode"); if (Object.hasOwn(LIVECODE, v)) livecode = v; } catch (_) {}
+
+export function liveView(c) {
+  const box = h("div", { class: "lc" });
+  const paint = () => {
+    const pick = h("div", { class: "lc-pick adm-seg", role: "group", "aria-label": "Live-coding language" },
+      ...Object.entries(LIVECODE).map(([k, v]) => h("button", { type: "button", "aria-pressed": String(k === livecode), onclick: () => {
+        livecode = k;
+        try { localStorage.setItem("tastr-livecode", k); } catch (_) {}
+        paint();
+      } }, v.name)));
+    box.replaceChildren(pick, livecode === "strudel" ? strudelView(c) : altLiveView(c, livecode));
+  };
+  paint();
+  return box;
+}
+
+// "Night Shift (Extended Mix)" -> night-shift-extended-mix
+const codeFileName = (c, ext) => `${((c.source && c.source.title) || "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() || "track"}.${ext}`;
+
+function altLiveView(c, lang) {
+  const L = LIVECODE[lang], fname = codeFileName(c, L.ext);
+  const pre = h("pre", { class: "st-code", tabindex: "0", "aria-label": L.aria });
+  const say = h("span", { class: "muted st-say", role: "status", "aria-live": "polite" });
+  const flash = (t) => { say.textContent = t; setTimeout(() => (say.textContent = ""), 2500); };
+  let code = "";
+  // Your edits go in the way they do for Strudel, so the three languages agree.
+  const paint = () => {
+    const edits = editedKeys(allEdits(c)).length && strudelMine ? allEdits(c) : null;
+    code = lang === "tidal" ? tidalCode(c, edits) : sonicPiCode(c, edits);
+    pre.textContent = code;
+  };
+  sectionBus.addEventListener("edits", () => { if (pre.isConnected) paint(); });
+  paint();
+  const copy = h("button", { type: "button", onclick: async () => {
+    try { await navigator.clipboard.writeText(code); flash("Copied"); } catch (_) { flash("Couldn't copy here"); }
+  } }, "Copy code");
+  const dl = h("button", { type: "button", title: `Save as ${fname}`, onclick: () => {
+    const href = URL.createObjectURL(new Blob([code], { type: "text/plain" })), a = h("a", { href, download: fname, hidden: "" });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 60_000);
+    flash(`Downloaded ${fname}`);
+  } }, `Download .${L.ext}`);
+  return h("div", { class: "strudel lc-alt" },
+    h("p", { class: "st-intro" }, "This track as ", h("a", { href: L.site, target: "_blank", rel: "noopener" }, L.name),
+      " code: the detected drums, bass and chords, section by section. Run it in ", L.name, " on your computer."),
+    h("p", { class: "lc-how" }, h("b", {}, "How to run it: "), L.how),
+    h("div", { class: "st-actions" }, copy, dl, say),
+    pre);
 }
 
 // Key names as musicians spell them (the Camelot wheel's spellings: B♭ not A#), with real ♭ and ♯ signs. Display only;

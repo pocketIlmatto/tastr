@@ -305,7 +305,7 @@ the Admin tab's deploy line names the commit and links to its GitHub Actions run
 | Setting | Where |
 | --- | --- |
 | The hostname | Cloudflare **Workers & Pages > tastr > Settings > Domains & Routes** |
-| Logs and errors | **Workers & Pages > tastr > Observability** (linked from the Admin tab), or `npx wrangler tail tastr` |
+| Logs and errors | **Workers & Pages > tastr > Observability** (linked from the Admin tab), or `npx wrangler tail tastr`. One known harmless line is kept out: `worker/src/entry.py`'s `quiet_unraisable` drops the EBADF from `ZipFile.__del__` that the runtime's start-up snapshot leaves behind (Python 3.14 reports it as "Exception ignored while calling deallocator"). Every other error is still logged. |
 | The database's point-in-time recovery | The Durable Object API (`ctx.storage.getBookmarkForTime`, `onNextSessionRestoreBookmark`); see Cloudflare's Durable Objects docs |
 | Who's invited | Cloudflare **Zero Trust > Access > Applications** > the Tastr application > its Allow policy (the Admin tab links here) |
 | Who was blocked, and why | **Zero Trust > Logs > Access** (linked from the Admin tab's blocked count) |

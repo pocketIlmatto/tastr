@@ -375,13 +375,32 @@ flowchart LR
 
 ## Why it's sometimes slow
 
-The first page load after a quiet spell (a few minutes or more) is slow because the Python Worker and the
-Durable Object both start from cold: Cloudflare's logs from 2026-11-03 to 2026-11-05 show the page taking 4 to
-6 s to arrive (the object alone about 3 s, 2 to 3 s of it CPU starting the app), against well under a second when
-warm. Each object start prints a `cold start:` line in the Worker's logs with how long building the app, its
-startup work and fetching the Access keys took. The page's ~50 script files used to go through the Worker too and
-be checked again on every load, which added 3 to 4 s before the track list was asked for; now they skip the
-Worker, and the versioned ones are kept by the browser.
+The first page load after a quiet spell is slow because the Durable Object starts from cold. Its isolate (the
+Python runtime with the app in it) stays in memory a few minutes after the last request or alarm; after 5 to 8 minutes
+without either, the next one starts a new isolate. The Worker's logs from 2026-11-05 and 06 show what a
+cold start costs:
+
+- about 1.8 s before the object sees the request at all: the edge Worker's wall time exceeds the object's by that
+  much, while the edge itself uses only 20 to 40 ms of CPU. That's Cloudflare starting the isolate from the
+  snapshot it took at deploy time (below), which the app can't shorten;
+- 2 to 2.6 s of CPU in the object's first invocation, against well under 0.1 s for the same request warm:
+  building the app (`create_app`, mostly FastAPI and pydantic preparing about 180 routes), its startup work, and
+  loading what the first request needs. A page load on a cold object took 5.2 s in all.
+
+A visit that finds the isolate already started (by the alarm, say) took about 1 s for the page, most of it PyJWT and
+cryptography loading for the login check and fetching Access's keys.
+
+Cloudflare runs `worker/src/entry.py`'s top level when it deploys and snapshots the memory, so whatever the
+entry imports there is loaded before any request. The entry therefore imports the modules the first request
+would otherwise load on first use (PyJWT and cryptography, the review list, ML tags, Starlette's runner for
+plain endpoints), and the alarm fetches Access's keys, so a visitor who arrives after it doesn't wait for them.
+
+Each new isolate prints `cold start: building the app` in the logs. The Worker's clock doesn't move while code
+runs (only on I/O, a Spectre defence), so the app can't time its own start: read the CPU and wall time of the
+invocation that printed the line (Workers Observability, or the telemetry API's `$workers.cpuTimeMs` and
+`$workers.wallTimeMs`; `$workers.entrypoint` is `Library` for the object, empty for the edge Worker). The page's
+~50 script files used to go through the Worker too and be checked again on every load, which added 3 to 4 s
+before the track list was asked for; now they skip the Worker, and the versioned ones are kept by the browser.
 
 Modal stops its container 1 minute after
 the last analysis, so the first upload after a quiet spell waits about 30 seconds for a new one. A drum model

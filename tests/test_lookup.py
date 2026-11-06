@@ -555,6 +555,51 @@ def test_acousticbrainz_is_enabled_by_its_index_and_stored(ab_index, db_path, mo
     assert acousticbrainz.AcousticBrainz.min_interval >= 1.0 and p.guard.limits()["daily"] == 1000  # MusicBrainz: 1 req/s
 
 
+def test_acousticbrainz_index_as_d1_sql_loads_back_the_same(ab_index, tmp_path):
+    """d1_sql's files rebuild the index (run twice: they can be run again), and read_d1 answers like read_index."""
+    import sqlite3
+
+    files = acousticbrainz.d1_sql(acousticbrainz.default_index(), tmp_path / "sql", rows_per_file=2, rows_per_insert=1)
+    assert [f.name for f in files] == ["acousticbrainz-000.sql", "acousticbrainz-001.sql"]
+    d1 = sqlite3.connect(tmp_path / "d1.sqlite")
+    for f in files * 2:
+        d1.executescript(f.read_text())
+    assert d1.execute("SELECT COUNT(*) FROM recordings").fetchone()[0] == ab_index["recordings"]
+    sent = []
+    acousticbrainz.use_d1(lambda sql: sent.append(sql) or [list(r) for r in d1.execute(sql)])
+    try:
+        ids = [MB_ONE, MB_TWO, "nope"]
+        assert acousticbrainz.read_d1(ids) == acousticbrainz.read_index(acousticbrainz.default_index(), ids)
+        assert len(sent) == 1 and "nope" not in sent[0]
+    finally:
+        acousticbrainz.use_d1(None)
+
+
+def test_acousticbrainz_reads_d1_when_there_is_no_index_file(ab_index, tmp_path, monkeypatch):
+    import sqlite3
+
+    index = acousticbrainz.default_index()
+    monkeypatch.setenv("ACOUSTICBRAINZ_INDEX", str(tmp_path / "missing.sqlite"))
+    p = acousticbrainz.AcousticBrainz()
+    assert not p.configured() and "D1" in p.setup_hint()
+    acousticbrainz.use_d1(lambda sql: [list(r) for r in sqlite3.connect(index).execute(sql)])
+    try:
+        assert p.configured()
+        calls = canned(monkeypatch, p, mb_search(mb_rec(MB_ONE)))
+        r = p.lookup(Q)
+        assert (r.status, r.bpm, r.key) == ("found", 123.1, "C# minor") and len(calls) == 1
+
+        def not_loaded(sql):
+            raise RuntimeError("D1_ERROR: no such table: recordings")
+
+        acousticbrainz.use_d1(not_loaded)
+        canned(monkeypatch, p, mb_search(mb_rec(MB_ONE)))
+        with pytest.raises(ProviderError, match="no such table"):
+            p.lookup(Q)
+    finally:
+        acousticbrainz.use_d1(None)
+
+
 def test_fetch_acousticbrainz_downloads_the_dumps_and_builds_the_index(tmp_path, monkeypatch):
     zstandard = pytest.importorskip("zstandard")
     import io

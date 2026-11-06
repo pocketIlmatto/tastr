@@ -11,6 +11,8 @@ Two parts:
 Background work runs on the event loop (tastr/runner.py `Loop`): jobs as asyncio tasks, the repeating work
 (expiry, the watch) from the Durable Object's alarm, which `arm()` sets after each request and each alarm.
 
+The AcousticBrainz lookup reads its index from the D1 database bound as ACOUSTICBRAINZ (`d1_query`).
+
 Outgoing requests (Modal over HTTPS, tastr/cloud/remote.py; the audio bucket, tastr/s3.py) go through
 tastr/http.py, which here sends them with the Worker's own fetch (`fetch_request`).
 """
@@ -20,6 +22,27 @@ import os
 import sys
 import time
 from urllib.parse import urlparse
+
+
+def quiet_unraisable(hook=sys.unraisablehook):
+    """sys.unraisablehook without one known harmless line: a ZipFile from the runtime's start-up snapshot whose
+    file is gone when it is garbage collected (EBADF in ZipFile.__del__). It went to the Worker's logs as an
+    error, hundreds a day, and buried the real ones (T31). Since Python 3.14 (the Workers runtime's Python) a
+    failing __del__ arrives with no `object`, only the message "Exception ignored while calling deallocator
+    <function ZipFile.__del__ at 0x...>", so both are checked."""
+
+    def unraisable(u):
+        if isinstance(u.exc_value, OSError) and u.exc_value.errno == errno.EBADF and (
+                getattr(u.object, "__qualname__", "") == "ZipFile.__del__"
+                or "<function ZipFile.__del__ at " in (getattr(u, "err_msg", None) or "")):
+            return
+        hook(u)
+
+    return unraisable
+
+
+# First thing, before the big imports below: the snapshot's stale ZipFile can be collected at any point after start.
+sys.unraisablehook = quiet_unraisable()
 
 os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: a cache, nothing kept
 try:
@@ -32,6 +55,7 @@ if ENGINE_WASM_ID:
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
 from tastr import blobs, db, http, runner  # noqa: E402
+from tastr.lookup import acousticbrainz  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
 
@@ -94,21 +118,6 @@ def sleep(seconds: float) -> None:
     run_sync(asyncio.sleep(seconds))
 
 
-def quiet_unraisable(hook=sys.unraisablehook):
-    """sys.unraisablehook without one known harmless line: a ZipFile from the runtime's start-up snapshot whose
-    file is gone when it is garbage collected (EBADF in ZipFile.__del__). It went to the Worker's logs as an
-    error, hundreds a day, and buried the real ones (T31)."""
-
-    def unraisable(u):
-        if isinstance(u.exc_value, OSError) and u.exc_value.errno == errno.EBADF \
-                and getattr(u.object, "__qualname__", "") == "ZipFile.__del__":
-            return
-        hook(u)
-
-    return unraisable
-
-
-sys.unraisablehook = quiet_unraisable()
 http.use(fetch_request)
 blobs.keep_copies = False  # the file system is memory: drop local copies of uploads once read
 blobs.copy_limit = 1  # and read back one at a time
@@ -184,6 +193,23 @@ def load_env(env) -> None:
             os.environ[name] = value
 
 
+def d1_query(binding):
+    """tastr/lookup/acousticbrainz.py's D1 reader: SQL text in, rows (lists) out, from synchronous code."""
+    from pyodide.ffi import run_sync
+
+    def query(sql: str) -> list[list]:
+        return [list(r) for r in run_sync(binding.prepare(sql).raw()).to_py()]
+
+    return query
+
+
+def use_bindings(env) -> None:
+    """Hand the app the bindings it reads directly (only the AcousticBrainz database so far)."""
+    raw = getattr(env, "_env", env)
+    db_binding = getattr(raw, "ACOUSTICBRAINZ", None)
+    acousticbrainz.use_d1(d1_query(db_binding) if db_binding is not None else None)
+
+
 APP = None
 SETTINGS: Settings | None = None
 KEYS = AccessKeys()
@@ -211,6 +237,7 @@ class Library(DurableObject):
             # the invocation whose CPU time to read in the logs (docs/hosting-map.md, Cold starts).
             print("cold start: building the app")
             load_env(env)
+            use_bindings(env)
             SETTINGS = Settings.from_env()
             verifier = AccessVerifier(SETTINGS.access_team_domain, SETTINGS.access_aud, keys=KEYS) \
                 if SETTINGS.hosted else None

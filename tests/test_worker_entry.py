@@ -108,6 +108,35 @@ def test_storage_wrapper_and_env(entry, tmp_path, monkeypatch):
     assert os.environ.pop("TASTR_SPIKE_X") == "1"  # strings only: LIB is a binding
 
 
+def test_the_acousticbrainz_database_binding(entry, monkeypatch):
+    from tastr.lookup import acousticbrainz
+
+    class Promise:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def to_py(self):
+            return self.rows
+
+    sent = []
+
+    class D1:  # env.ACOUSTICBRAINZ, roughly: prepare(sql).raw() is a promise of rows
+        def prepare(self, sql):
+            sent.append(sql)
+            return types.SimpleNamespace(raw=lambda: Promise([("ab" * 16, 120.0, "A", "minor")]))
+
+    monkeypatch.setattr(sys.modules["pyodide.ffi"], "run_sync", lambda p: p, raising=False)
+    try:
+        entry.use_bindings(types.SimpleNamespace(_env=types.SimpleNamespace(ACOUSTICBRAINZ=D1())))
+        mbid = "abababab-abab-abab-abab-abababababab"
+        assert acousticbrainz.read_d1([mbid]) == {mbid: {"bpm": 120.0, "key_key": "A", "key_scale": "minor"}}
+        assert sent == [f"SELECT lower(hex(mbid)), bpm, key_key, key_scale FROM recordings WHERE mbid IN (X'{'ab' * 16}')"]
+        entry.use_bindings(types.SimpleNamespace(_env=types.SimpleNamespace()))  # not bound: off
+        assert acousticbrainz._d1 is None
+    finally:
+        acousticbrainz.use_d1(None)
+
+
 def test_the_alarm_is_set_for_the_next_repeating_work(entry):
     assert isinstance(runner.current(), runner.Loop)
     clock = [1000.0]
@@ -208,3 +237,33 @@ def test_only_the_snapshot_zipfile_noise_is_dropped(entry):
     hook(other)
     hook(oops := types.SimpleNamespace(exc_value=ValueError("x"), object=zip_del))
     assert seen == [other, oops]
+
+
+def test_the_zipfile_noise_is_dropped_in_python_3_14_shape(entry):
+    """Python 3.14 (the Workers runtime's) passes a failing __del__ with no object, the function only in err_msg."""
+    seen = []
+    hook = entry.quiet_unraisable(seen.append)
+
+    def unraisable(name, exc):
+        return types.SimpleNamespace(exc_value=exc, object=None,
+                                     err_msg=f"Exception ignored while calling deallocator <function {name} at 0x3205848>")
+    hook(unraisable("ZipFile.__del__", OSError(errno.EBADF, "Bad file descriptor")))
+    assert seen == []
+    hook(other := unraisable("Other.__del__", OSError(errno.EBADF, "Bad file descriptor")))
+    hook(oops := unraisable("ZipFile.__del__", ValueError("x")))
+    hook(bare := types.SimpleNamespace(exc_value=OSError(errno.EBADF, "Bad file descriptor"), object=None, err_msg=None))
+    assert seen == [other, oops, bare]
+
+
+def test_the_hook_catches_a_real_failing_del(entry):
+    """End to end through the interpreter, whichever shape this Python reports it in."""
+    seen = []
+    sys.unraisablehook = entry.quiet_unraisable(seen.append)
+
+    class ZipFile:
+        def __del__(self):
+            raise OSError(errno.EBADF, "Bad file descriptor")
+    ZipFile.__del__.__qualname__ = "ZipFile.__del__"
+    z = ZipFile()
+    del z
+    assert seen == []

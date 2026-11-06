@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import blobs, do_sqlite
+from . import blobs, covers, do_sqlite
 from .engine.card import TrackCard
 
 log = logging.getLogger(__name__)
@@ -625,6 +625,10 @@ def delete_track(conn: sqlite3.Connection, track_id: int) -> bool:
             blobs.remove_views(track_id)  # the card's waveform data, when it is in the audio bucket
         except Exception as e:  # noqa: BLE001 - an orphaned object costs a megabyte, not a failed delete
             log.warning("couldn't remove track %s's views from the bucket: %s", track_id, e)
+        try:
+            covers.remove_cover(track_id)  # its album art, if a mash-up share ever read it
+        except Exception as e:  # noqa: BLE001 - as above
+            log.warning("couldn't remove track %s's cover: %s", track_id, e)
     return gone
 
 

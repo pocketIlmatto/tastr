@@ -126,7 +126,8 @@ spend your API keys, within the per-provider limits in lookup.md. For FreqBlog, 
 `TASTR_LOOKUP=freqblog` and `FREQBLOG_API_KEY=<key>`. ReccoBeats needs no key: add it to the list
 (`TASTR_LOOKUP=freqblog,reccobeats`). It takes about five requests a track, within its own daily limit.
 
-AcousticBrainz reads a 322 MB index file, which the Worker can't hold, so it stays off there (TAS-88).
+AcousticBrainz reads its index from a D1 database on the Worker: load it once with the `acousticbrainz-d1`
+workflow, then add `acousticbrainz` to the list ([lookup.md](lookup.md#on-the-hosted-site)).
 
 ## 9. Ask Claude in Strudel (optional)
 

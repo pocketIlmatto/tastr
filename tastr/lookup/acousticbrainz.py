@@ -20,6 +20,10 @@ A lookup:
 3. MusicBrainz often lists one song as several recordings and AcousticBrainz analyzed only some of
    them, so when none is in the index, one more search finds the other recordings with the same ISRCs.
 
+On the hosted Worker, which has no lasting disk, the index lives in a D1 database instead (bound as
+ACOUSTICBRAINZ in worker/wrangler.jsonc and loaded once by the acousticbrainz-d1 workflow from the copy in
+the R2 bucket; `d1_sql` writes the SQL). worker/src/entry.py hands its query function to `use_d1`.
+
 Without an index, ACOUSTICBRAINZ_API_BASE can name a server that still speaks the AcousticBrainz API
 (its bulk /api/v1/low-level endpoint); then step 2 is one request for up to 25 ids.
 
@@ -161,6 +165,48 @@ def build_index(sources: Iterable[str | Path], out: str | Path, progress=print, 
     return {"index": str(out), "rows_read": rows_read, "recordings": recordings}
 
 
+def d1_sql(index: str | Path, out: str | Path, rows_per_file: int = 500_000, rows_per_insert: int = 400) -> list[Path]:
+    """The index as SQL files for D1 (`wrangler d1 execute --file`), `rows_per_file` rows each so no one import
+    runs into D1's limits. Every file can be run again: the first creates the table if it's missing, and rows go
+    in with INSERT OR REPLACE. Statements stay well under D1's 100 KB per statement."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(f"file:{index}?mode=ro", uri=True)
+    files: list[Path] = []
+    fh = None
+    try:
+        rows = conn.execute("SELECT mbid, bpm, key_key, key_scale FROM recordings ORDER BY mbid")
+        n = 0
+        while True:
+            chunk = rows.fetchmany(rows_per_insert)
+            if not chunk:
+                break
+            if fh is None or n >= rows_per_file:
+                if fh is not None:
+                    fh.close()
+                path = out / f"acousticbrainz-{len(files):03d}.sql"
+                files.append(path)
+                fh = path.open("w", encoding="utf-8")
+                fh.write(SCHEMA + ";\n")
+                n = 0
+            values = ",".join(f"(X'{m.hex()}',{_sql(b)},{_sql(k)},{_sql(sc)})" for m, b, k, sc in chunk)
+            fh.write(f"INSERT OR REPLACE INTO recordings (mbid, bpm, key_key, key_scale) VALUES {values};\n")
+            n += len(chunk)
+    finally:
+        if fh is not None:
+            fh.close()
+        conn.close()
+    return files
+
+
+def _sql(v) -> str:
+    if v is None:
+        return "NULL"
+    if isinstance(v, (int, float)):
+        return repr(float(v))
+    return "'" + str(v).replace("'", "''") + "'"
+
+
 def _cell(col: str, v: str | None):
     v = (v or "").strip().strip('"')
     if col == "bpm":
@@ -179,6 +225,32 @@ def read_index(path: Path, mbids: list[str]) -> dict[str, dict]:
         return {keys[r[0]]: {"bpm": r[1], "key_key": r[2], "key_scale": r[3]} for r in conn.execute(q, list(keys))}
     finally:
         conn.close()
+
+
+# --- the index in D1 (the hosted Worker) -----------------------------------------------------------------
+
+_d1 = None  # a function: SQL text -> list of rows (lists), set by worker/src/entry.py when D1 is bound
+
+
+def use_d1(query) -> None:
+    """Read the index from D1 through `query(sql)`, or stop (None)."""
+    global _d1
+    _d1 = query
+
+
+def read_d1(mbids: list[str]) -> dict[str, dict]:
+    """read_index's answer from D1. The ids go into the SQL as blob literals (hex digits only, from uuid), so the
+    query needs no bound blobs, which the Python Workers bridge doesn't pass cleanly."""
+    keys = {b.hex(): m for m in mbids if (b := _mbid_bytes(m))}
+    if not keys or _d1 is None:
+        return {}
+    sql = ("SELECT lower(hex(mbid)), bpm, key_key, key_scale FROM recordings WHERE mbid IN ("
+           + ", ".join(f"X'{h}'" for h in keys) + ")")
+    try:
+        rows = _d1(sql)
+    except Exception as e:  # noqa: BLE001 - a JsException from the binding: not loaded yet, D1 busy
+        raise ProviderError(f"Couldn't read the AcousticBrainz database (D1): {e}") from None
+    return {keys[r[0]]: {"bpm": r[1], "key_key": r[2], "key_scale": r[3]} for r in rows if r[0] in keys}
 
 
 # --- the provider ----------------------------------------------------------------------------------------
@@ -214,10 +286,10 @@ class AcousticBrainz(Provider):
         return b.rstrip("/") or None
 
     def configured(self) -> bool:
-        return self.index().is_file() or self.api_base() is not None
+        return self.index().is_file() or _d1 is not None or self.api_base() is not None
 
     def setup_hint(self) -> str:
-        return f"no index at {self.index()} (run `tastr fetch acousticbrainz`, see docs/lookup.md)"
+        return f"no index at {self.index()} and no D1 database (run `tastr fetch acousticbrainz`, see docs/lookup.md)"
 
     def search(self, query: str) -> list[dict]:
         """One MusicBrainz recording search. A dropped or cut-off connection, or a 503 (MusicBrainz is busy;
@@ -254,6 +326,8 @@ class AcousticBrainz(Provider):
     def features(self, mbids: list[str]) -> dict[str, dict]:
         if self.index().is_file():
             return read_index(self.index(), mbids)
+        if _d1 is not None:
+            return read_d1(mbids)
         _, body = self.get_json(f"{self.api_base()}/api/v1/low-level", {
             "recording_ids": ";".join(mbids[:BULK_MAX]), "features": "rhythm.bpm;tonal.key_key;tonal.key_scale"})
         out = {}

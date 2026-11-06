@@ -4,13 +4,14 @@ A map of the hosted Tastr: which service does what, what talks to what, how logi
 each setting lives. [deploy.md](deploy.md) has the setup steps and [hosting.md](hosting.md) what hosted mode
 changes in the app.
 
-Six services, each with one job:
+Seven services, each with one job:
 
 | Service | Job |
 | --- | --- |
 | Cloudflare Workers | Runs the web server: the Worker `tastr` (`worker/`) and its Durable Object `Library`, which holds the library database |
 | Cloudflare (DNS and Zero Trust Access) | DNS for your domain, HTTPS at the edge, and the login |
 | Cloudflare R2 | Uploads, stems and each card's waveform data (bucket `tastr-audio`) |
+| Cloudflare D1 | The AcousticBrainz lookup's index, read only (database `tastr-acousticbrainz`, bound as `ACOUSTICBRAINZ`) |
 | Modal | Analysis, the on-request drum model and stem separation (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
 | GitHub Actions | The `deploy` workflow, which ships new code to Modal and the Worker after the tests pass on main (or by hand) |
 | Anthropic (Claude API) | "Ask Claude to change it" under Try this in › Strudel, once `ANTHROPIC_API_KEY` is set (`tastr/web/claude.py`) |
@@ -44,6 +45,7 @@ flowchart TB
       DO[(Durable Object Library: the FastAPI app and tastr.db in its SQLite storage, 30 days of point-in-time recovery)]
       AL[The object's alarm: expiry sweep, GitHub watch]
     end
+    D1[(D1 database tastr-acousticbrainz: the AcousticBrainz index, 2022 dump)]
   end
   subgraph MOD[Modal app tastr-web, environment friends]
     API[api: HTTPS front, proxy auth token]
@@ -55,6 +57,8 @@ flowchart TB
   R2A[(R2 bucket tastr-audio: uploads, stems, each card's waveform data)]
   GHT[GitHub Actions: tests workflow, on each push to main]
   GH[GitHub Actions: deploy workflow, after tests pass if app code changed]
+  GHL[GitHub Actions: acousticbrainz-d1 workflow, by hand, once]
+  R2D[(R2 bucket tastr-data: datasets and the AcousticBrainz index file)]
   CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, ReccoBeats, MusicBrainz])
   ANT([Claude API, if ANTHROPIC_API_KEY is set: claude-sonnet-5-5])
 
@@ -79,6 +83,8 @@ flowchart TB
   R2A -.->|signed links| PL
   R2A -->|the upload| AN
   DO -.->|artist + title| CAT
+  DO -.->|recording ids, if acousticbrainz is in TASTR_LOOKUP| D1
+  R2D -->|acousticbrainz-index.sqlite| GHL -->|SQL import| D1
   DO -.->|Ask Claude: the Strudel code, the ask, BPM, key and sections| ANT
   GHT -->|passed| GH
   GH -->|modal deploy| MOD
@@ -253,10 +259,11 @@ the app's spending apart from benchmarks.
 
 | File | What it sets |
 | --- | --- |
-| `worker/wrangler.jsonc` | The Worker's name (`tastr`), the Durable Object `Library` and its SQLite migration, Static Assets, Observability (on), the CPU limit per request (5 minutes), no `workers.dev` or preview addresses, and the plain settings (`vars`) below |
+| `worker/wrangler.jsonc` | The Worker's name (`tastr`), the Durable Object `Library` and its SQLite migration, Static Assets, the D1 binding `ACOUSTICBRAINZ` (database `tastr-acousticbrainz`, found by name), Observability (on), the CPU limit per request (5 minutes), no `workers.dev` or preview addresses, and the plain settings (`vars`) below |
 | `worker/src/entry.py`, `worker/build.py`, `worker/check.sh` | The Worker's entry point, the bundle of static files, and the build check CI runs |
 | `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums`, `ml_tags`, `stems` and `api`, their images, CPU, GPU, memory and timeouts |
 | `.github/workflows/deploy.yml`, `.github/workflows/deploy-worker.yml` | When it deploys (after `tests` on main, which files count), the deploy order (Modal, then the Worker), which repository secrets it uses (`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `CLOUDFLARE_API_TOKEN`), and the commit it sets as the Worker's `TASTR_COMMIT`, `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` |
+| `.github/workflows/acousticbrainz-d1.yml` | The one-time load of the AcousticBrainz index into D1, by hand: reads it from `tastr-data`, makes `tastr-acousticbrainz` if it's missing, imports it in parts. Uses `CLOUDFLARE_API_TOKEN` |
 
 ### Worker settings (`vars` in `worker/wrangler.jsonc`)
 
@@ -286,7 +293,7 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 | `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT`, `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | The audio bucket `tastr-audio` and its own token ([deploy.md](deploy.md#2-r2-bucket-for-audio)). Required on the Worker. |
 | `TASTR_MODAL_URL`, `TASTR_MODAL_KEY`, `TASTR_MODAL_SECRET` | The Modal `api` endpoint's address (`modal deploy` prints it) and a Modal proxy auth token |
 | `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log: a fine-grained token with read-only Actions access to the repository. Needed even for a public repository: GitHub's limit without a token is per IP address, which Cloudflare shares, so most checks get 403. |
-| `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#8-catalog-lookups-optional)). `reccobeats` needs no key. Not `acousticbrainz`, whose index file the Worker can't hold (TAS-88). |
+| `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#8-catalog-lookups-optional)). `reccobeats` needs no key. `acousticbrainz` reads its index from the D1 database, so add it only once the acousticbrainz-d1 workflow has loaded it ([lookup.md](lookup.md#on-the-hosted-site)). |
 | `ANTHROPIC_API_KEY` (optional) | "Ask Claude to change it" in Try this in › Strudel ([deploy.md](deploy.md#9-ask-claude-in-strudel-optional)). Tastr's own Anthropic key; each ask's tokens are counted per person and priced on the Admin tab. Without it the panel says Ask is off. |
 
 These have defaults and change only if you set a secret of the same name ([hosting.md](hosting.md#settings)):
@@ -313,6 +320,7 @@ the Admin tab's deploy line names the commit and links to its GitHub Actions run
 | AUD tag | The Tastr Access application's **Overview** |
 | `/pub` bypass | A second Access application, same hostname, path `pub`, Bypass policy |
 | Health check's service token | **Zero Trust > Access > Service credentials > Service Tokens**; the Tastr application has a Service Auth policy for it. GitHub secrets `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` (`.github/workflows/health.yml`, docs/ci.md) |
+| The AcousticBrainz database | **Storage & Databases > D1** > `tastr-acousticbrainz` (size, queries, Time Travel) |
 | Audio bucket, its CORS rule and token | Cloudflare **R2 Object Storage** > `tastr-audio` > **Settings** > CORS Policy; **Manage API tokens** |
 | Workers plan | **Workers & Pages > Plans**: Workers Paid ($5 a month), since the bundle (about 7.7 MiB gzipped) is over the Free plan's 3 MiB |
 | Modal usage and spend cap | Modal dashboard, environment `friends`; **Settings > Usage** |
@@ -335,10 +343,13 @@ flowchart LR
     DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, ml_tags, stems)"]
     DO -->|signed requests| R2B[(R2 tastr-audio)]
     DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, ReccoBeats, MusicBrainz])
+    DO -.->|"D1 binding ACOUSTICBRAINZ:<br/>recording ids, if acousticbrainz is in TASTR_LOOKUP"| D1B[(D1 tastr-acousticbrainz)]
 ```
 
 - Everything that leaves the object (Modal, R2, Access's keys, GitHub, the catalogs, the Claude API) goes
   through `tastr/http.py`, which uses the Worker's fetch, since a Python Worker can't open sockets.
+  The one exception is the AcousticBrainz index, read through the D1 binding (`d1_query` in `entry.py`, which
+  waits on it with `run_sync` like the fetches do): one query of up to 25 recording ids per lookup.
   The catalog lookups' per-provider guard waits with the runner's `sleep`, which lets other requests run,
   instead of holding the event loop.
 - Its memory (128 MB for the Durable Object) is why it keeps no local copies (`blobs.keep_copies`): a checked

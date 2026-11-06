@@ -278,6 +278,14 @@ deploys when that run passed on a push (not a PR). So a merge that breaks the te
 - **Known gap:** the scope covers every commit since the last deploy, but the tests only ran on the newest. If an
   earlier merge failed its tests and a later docs-only merge passes, the later run deploys the earlier code.
 
+## AcousticBrainz load workflow
+
+`.github/workflows/acousticbrainz-d1.yml` loads the AcousticBrainz lookup's index into the Worker's D1
+database `tastr-acousticbrainz`. By hand only (**Actions > acousticbrainz-d1 > Run workflow**), once: the data
+is a frozen 2022 dump. It downloads the 322 MB index from the `tastr-data` bucket with wrangler, so it uses
+`CLOUDFLARE_API_TOKEN` (with D1 Edit and Workers R2 Storage Read) and no other secret. Steps and the `from_file`
+restart: [lookup.md](lookup.md#on-the-hosted-site).
+
 ## README screenshots workflow
 
 The README screenshots are generated, not taken by hand, so they follow the UI.

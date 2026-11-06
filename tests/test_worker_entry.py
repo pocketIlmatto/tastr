@@ -108,6 +108,35 @@ def test_storage_wrapper_and_env(entry, tmp_path, monkeypatch):
     assert os.environ.pop("TASTR_SPIKE_X") == "1"  # strings only: LIB is a binding
 
 
+def test_the_acousticbrainz_database_binding(entry, monkeypatch):
+    from tastr.lookup import acousticbrainz
+
+    class Promise:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def to_py(self):
+            return self.rows
+
+    sent = []
+
+    class D1:  # env.ACOUSTICBRAINZ, roughly: prepare(sql).raw() is a promise of rows
+        def prepare(self, sql):
+            sent.append(sql)
+            return types.SimpleNamespace(raw=lambda: Promise([("ab" * 16, 120.0, "A", "minor")]))
+
+    monkeypatch.setattr(sys.modules["pyodide.ffi"], "run_sync", lambda p: p, raising=False)
+    try:
+        entry.use_bindings(types.SimpleNamespace(_env=types.SimpleNamespace(ACOUSTICBRAINZ=D1())))
+        mbid = "abababab-abab-abab-abab-abababababab"
+        assert acousticbrainz.read_d1([mbid]) == {mbid: {"bpm": 120.0, "key_key": "A", "key_scale": "minor"}}
+        assert sent == [f"SELECT lower(hex(mbid)), bpm, key_key, key_scale FROM recordings WHERE mbid IN (X'{'ab' * 16}')"]
+        entry.use_bindings(types.SimpleNamespace(_env=types.SimpleNamespace()))  # not bound: off
+        assert acousticbrainz._d1 is None
+    finally:
+        acousticbrainz.use_d1(None)
+
+
 def test_the_alarm_is_set_for_the_next_repeating_work(entry):
     assert isinstance(runner.current(), runner.Loop)
     clock = [1000.0]

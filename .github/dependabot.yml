@@ -14,12 +14,6 @@ updates:
   - package-ecosystem: cargo
     directory: /engine-rs
     schedule: {interval: monthly}
-    ignore:
-      # 0.6 rewrote the decoder API, and engine-rs/src/decode.rs relies on 0.5 behaviour (tag retries, gapless
-      # trimming, MP4 edit lists, the mono mixdown the calibration expects). Move to 0.6 by hand, comparing
-      # decoded samples with 0.5's; patch releases still come through.
-      - dependency-name: symphonia
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       rust: {patterns: ["*"]}
     open-pull-requests-limit: 2

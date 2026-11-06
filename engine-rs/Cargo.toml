@@ -14,7 +14,7 @@ name = "tastr-engine"
 path = "src/main.rs"
 
 [dependencies]
-symphonia = { version = "0.5", default-features = false, features = ["wav", "pcm", "mp3", "flac", "ogg", "vorbis", "isomp4", "aac"] }
+symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "mp3", "flac", "ogg", "vorbis", "isomp4", "aac", "id3v1", "id3v2", "ape"] }
 rustfft = "6"
 libm = "0.2"
 miniz_oxide = "0.9"

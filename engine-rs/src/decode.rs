@@ -2,13 +2,12 @@
 
 use std::io::Cursor;
 
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::errors::Error;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 pub struct Decoded {
     pub samples: Vec<f32>,
@@ -16,9 +15,9 @@ pub struct Decoded {
 }
 
 pub fn decode(bytes: Vec<u8>) -> Result<Decoded, String> {
-    // symphonia 0.5 refuses a whole file whose ID3v2 tag has a compressed frame ("id3v2: compressed frames are
-    // not supported"; some FMA MP3s). Tags carry no audio, so then try again past them; files it reads
-    // already decode exactly as before.
+    // symphonia 0.5 refused a whole file whose ID3v2 tag has a compressed frame ("id3v2: compressed frames are
+    // not supported"; some FMA MP3s). 0.6 skips such frames, so this is a safety net for any tag error it still
+    // raises. Tags carry no audio, so then try again past them; files it reads already decode exactly as before.
     let id3 = id3v2_len(&bytes);
     let retry = (id3 > 0).then(|| bytes[id3..].to_vec());
     match decode_from(bytes) {
@@ -41,17 +40,21 @@ fn id3v2_len(b: &[u8]) -> usize {
 fn decode_from(bytes: Vec<u8>) -> Result<Decoded, String> {
     let edit = mp4_edit(&bytes);
     let mss = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
-    // Gapless trims the encoder delay and padding MP3/AAC files declare, as libsndfile/mpg123 do.
-    let fmt = FormatOptions { enable_gapless: true, ..Default::default() };
-    let probed = symphonia::default::get_probe()
-        .format(&Hint::new(), mss, &fmt, &MetadataOptions::default())
+    let mut format = symphonia::default::get_probe()
+        .probe(&Hint::new(), mss, FormatOptions::default(), MetadataOptions::default())
         .map_err(|e| format!("unrecognised audio: {e}"))?;
-    let mut format = probed.format;
-    let track = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL).ok_or("no audio track")?;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.as_ref().and_then(|c| c.audio()).is_some())
+        .ok_or("no audio track")?;
     let track_id = track.id;
-    let sr = track.codec_params.sample_rate.unwrap_or(0);
+    let params = track.codec_params.as_ref().and_then(|c| c.audio()).ok_or("no audio track")?;
+    let sr = params.sample_rate.unwrap_or(0);
+    // Gapless trims the encoder delay and padding MP3 files declare, as libsndfile/mpg123 do. (0.6 moved the
+    // switch from the format to the decoder; it is on by default, set here so it stays on.)
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(params, &AudioDecoderOptions::default().gapless(true))
         .map_err(|e| format!("unsupported codec: {e}"))?;
     let (mut samples, sr) = decode_mono(format.as_mut(), decoder.as_mut(), track_id, sr)?;
     if sr == 0 || samples.is_empty() {
@@ -65,21 +68,22 @@ fn decode_from(bytes: Vec<u8>) -> Result<Decoded, String> {
 
 /// Every packet of the track, decoded and mixed to mono: (samples, sample rate, which starts as `sr`).
 fn decode_mono(
-    format: &mut dyn symphonia::core::formats::FormatReader,
-    decoder: &mut dyn symphonia::core::codecs::Decoder,
+    format: &mut dyn FormatReader,
+    decoder: &mut dyn AudioDecoder,
     track_id: u32,
     mut sr: u32,
 ) -> Result<(Vec<f32>, u32), String> {
     let mut samples = Vec::new();
-    let mut buf: Option<SampleBuffer<f32>> = None;
+    let mut buf: Vec<f32> = Vec::new();
     loop {
         let packet = match format.next_packet() {
-            Ok(p) => p,
+            Ok(Some(p)) => p,
+            Ok(None) => break,
             Err(Error::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(Error::ResetRequired) => break,
             Err(e) => return Err(format!("read error: {e}")),
         };
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
         let audio = match decoder.decode(&packet) {
@@ -87,15 +91,13 @@ fn decode_mono(
             Err(Error::DecodeError(_)) => continue, // a damaged frame: skip it, as mpg123 does
             Err(e) => return Err(format!("decode error: {e}")),
         };
-        let spec = *audio.spec();
-        sr = spec.rate;
-        let channels = spec.channels.count();
-        let b = buf.get_or_insert_with(|| SampleBuffer::new(audio.capacity() as u64, spec));
-        if b.capacity() < audio.capacity() * channels {
-            *b = SampleBuffer::new(audio.capacity() as u64, spec);
+        sr = audio.spec().rate();
+        let channels = audio.spec().channels().count();
+        if channels == 0 || audio.frames() == 0 {
+            continue;
         }
-        b.copy_interleaved_ref(audio);
-        push_mono(&mut samples, b.samples(), channels);
+        audio.copy_to_vec_interleaved(&mut buf);
+        push_mono(&mut samples, &buf, channels);
     }
     Ok((samples, sr))
 }
@@ -120,7 +122,7 @@ struct Mp4Edit {
 }
 
 impl Mp4Edit {
-    /// The samples the edit plays. symphonia 0.5 ignores MP4 edit lists, which is where AAC files say how much
+    /// The samples the edit plays. symphonia (0.5 and 0.6) ignores MP4 edit lists, which is where AAC files say how much
     /// priming to drop.
     fn apply(&self, samples: Vec<f32>, sr: u32) -> Vec<f32> {
         let skip = ((self.skip as f64) * sr as f64 / self.media_timescale as f64).round() as usize;

@@ -26,8 +26,8 @@ can't decode, are decoded by the server and analyzed by Rust from the samples.
 ```
 engine-rs/
   src/decode.rs      audio bytes -> mono f32 (symphonia: WAV, FLAC, MP3, AAC/M4A, Ogg Vorbis; not Opus), with
-                     the M4A edit list honoured (symphonia 0.5 ignores it), and MP3s whose ID3v2 tag has a
-                     compressed frame read past the tag (symphonia 0.5 refuses them; 8 of FMA Keys' 695)
+                     the M4A edit list honoured (symphonia ignores it), and MP3s whose ID3v2 tag has a
+                     compressed frame read past the tag (symphonia 0.5 refused them; 8 of FMA Keys' 695)
   src/resample.rs    our own rational-ratio Kaiser-sinc resampler, shaped like soxr HQ
   src/spectral.rs    STFT, inverse STFT and HPSS, step by step as librosa 1.0 does them
   src/features.rs    mel filter banks, power_to_db, MFCC, RMS, onset strength, spectral centroid, the kick- and

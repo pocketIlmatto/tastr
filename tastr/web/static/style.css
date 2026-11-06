@@ -191,6 +191,10 @@ body.chart-open { overflow: hidden; }
 .st-short-head button.linklike { font-size: 16px; line-height: 1; text-decoration: none; }
 .st-short input { width: 100%; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; }
 .st-short p { margin: 0; font-size: 12px; }
+/* A mash-up link's preview picture, for admins (sandbox v208). */
+.st-art { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.st-art img { width: 240px; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); }
+.st-art p { flex: 1 1 160px; }
 .btn-link { display: inline-block; background: var(--accent); color: var(--bg); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 12px; text-decoration: none; font-size: 14px; }
 .btn-link:hover { filter: brightness(1.08); }
 .btn-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

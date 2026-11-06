@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 
-from ... import blobs, db, drum_jobs, ml_jobs, stems
+from ... import blobs, covers, db, drum_jobs, ml_jobs, stems
 from ..context import AppContext, _unprefixed, analysis_source, runs_on
 from ..downloads import base_name, content_disposition, stem_file_name
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
@@ -66,6 +66,19 @@ def router(ctx: AppContext) -> APIRouter:
             raise HTTPException(404, "The original audio file is not on disk.")
         name = _base(card, track_id) + path.suffix.lower() if download else None
         return _serve(path, origin, filename=name)
+
+    @api.get("/api/tracks/{track_id}/cover")
+    def track_cover(track_id: int):
+        """The album art embedded in the track's file, for a mash-up share's preview picture (routes/strudel.py);
+        404 when it has none. Read from the audio the first time, so it can take a moment then."""
+        with closing(ctx.conn()) as c:
+            card = db.load_card(c, track_id)
+        if card is None:
+            raise HTTPException(404, "no such track")
+        got = covers.cover(track_id, card.source.local_path)
+        if got is None:
+            raise HTTPException(404, "This track has no album art.")
+        return Response(got[0], media_type=got[1], headers={"Cache-Control": "private, max-age=86400"})
 
     def _preflight(origin: str | None) -> Response:
         if origin not in STRUDEL_ORIGINS:

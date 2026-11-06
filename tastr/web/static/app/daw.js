@@ -6,6 +6,7 @@ import { allEdits, editedKeys } from "./groove-edits.js";
 import { laneName } from "./groove-lanes.js";
 import { sonicPiCode, tidalCode } from "./livecode.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
+import { shareArt } from "./share-art.js";
 import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
 
 // Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.
@@ -206,12 +207,21 @@ export function strudelView(c) {
   // The same code gives the same link.
   const short = h("button", { type: "button", class: "st-short-btn", title: "Copy a short link to this sketch that you can share" }, "Copy short link");
   short.onclick = async () => {
-    const forCode = code;
+    const forCode = code, mashB = ctx.b ? ctx.b.card : null;
     short.disabled = true; short.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), "Making link…");
-    let url, err = null;
+    let url, err = null, art = null;
     try {
-      const r = await api("/api/strudel/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: forCode }) });
+      const r = await api("/api/strudel/share", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: forCode, tracks: mashB ? [c.id, mashB.id] : [] }) });
       url = location.origin + r.url;
+      // A mash-up from an admin (the server decides): its preview shows both tracks' album art. Best effort: the
+      // link works without it, with the standard preview.
+      if (r.art === "wanted") {
+        try {
+          const png = await shareArt(c, mashB);
+          if (png) { await api(r.art_url, { method: "PUT", headers: { "Content-Type": "image/png" }, body: png }); art = r.url + ".png"; }
+        } catch (_) { art = null; }
+      } else if (r.art === "have") art = r.url + ".png";
     } catch (e) {
       err = e.status ? e.message : "Couldn't make a link: you're offline. Try again when you're back online.";
     }
@@ -226,7 +236,10 @@ export function strudelView(c) {
       h("div", { class: "st-short-head" }, h("b", {}, copied ? "✓ Short link copied" : "Short link ready: copy it from here"),
         h("button", { type: "button", class: "linklike", "aria-label": "Close", onclick: () => { shortBox.hidden = true; } }, "×")),
       inp,
-      h("p", { class: "muted" }, "Works for anyone with the link: it opens this code in Strudel. The audio stays playable while the track is in your library."));
+      h("p", { class: "muted" }, "Works for anyone with the link: it opens this code in Strudel. The audio stays playable while the track is in your library."),
+      ...(art ? [h("div", { class: "st-art" }, h("img", { src: art, width: "240", height: "126",
+        alt: `Link preview picture: ${(c.source && c.source.title) || "Untitled"} × ${(mashB.source && mashB.source.title) || "Untitled"}` }),
+        h("p", { class: "muted" }, "Chat apps show this picture with the link (album art shows only on links you share)."))] : []));
     if (!copied) inp.focus();
   };
   const copy = h("button", { type: "button", onclick: async () => {

@@ -178,3 +178,33 @@ def test_only_the_snapshot_zipfile_noise_is_dropped(entry):
     hook(other)
     hook(oops := types.SimpleNamespace(exc_value=ValueError("x"), object=zip_del))
     assert seen == [other, oops]
+
+
+def test_the_zipfile_noise_is_dropped_in_python_3_14_shape(entry):
+    """Python 3.14 (the Workers runtime's) passes a failing __del__ with no object, the function only in err_msg."""
+    seen = []
+    hook = entry.quiet_unraisable(seen.append)
+
+    def unraisable(name, exc):
+        return types.SimpleNamespace(exc_value=exc, object=None,
+                                     err_msg=f"Exception ignored while calling deallocator <function {name} at 0x3205848>")
+    hook(unraisable("ZipFile.__del__", OSError(errno.EBADF, "Bad file descriptor")))
+    assert seen == []
+    hook(other := unraisable("Other.__del__", OSError(errno.EBADF, "Bad file descriptor")))
+    hook(oops := unraisable("ZipFile.__del__", ValueError("x")))
+    hook(bare := types.SimpleNamespace(exc_value=OSError(errno.EBADF, "Bad file descriptor"), object=None, err_msg=None))
+    assert seen == [other, oops, bare]
+
+
+def test_the_hook_catches_a_real_failing_del(entry):
+    """End to end through the interpreter, whichever shape this Python reports it in."""
+    seen = []
+    sys.unraisablehook = entry.quiet_unraisable(seen.append)
+
+    class ZipFile:
+        def __del__(self):
+            raise OSError(errno.EBADF, "Bad file descriptor")
+    ZipFile.__del__.__qualname__ = "ZipFile.__del__"
+    z = ZipFile()
+    del z
+    assert seen == []

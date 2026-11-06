@@ -21,6 +21,27 @@ import sys
 import time
 from urllib.parse import urlparse
 
+
+def quiet_unraisable(hook=sys.unraisablehook):
+    """sys.unraisablehook without one known harmless line: a ZipFile from the runtime's start-up snapshot whose
+    file is gone when it is garbage collected (EBADF in ZipFile.__del__). It went to the Worker's logs as an
+    error, hundreds a day, and buried the real ones (T31). Since Python 3.14 (the Workers runtime's Python) a
+    failing __del__ arrives with no `object`, only the message "Exception ignored while calling deallocator
+    <function ZipFile.__del__ at 0x...>", so both are checked."""
+
+    def unraisable(u):
+        if isinstance(u.exc_value, OSError) and u.exc_value.errno == errno.EBADF and (
+                getattr(u.object, "__qualname__", "") == "ZipFile.__del__"
+                or "<function ZipFile.__del__ at " in (getattr(u, "err_msg", None) or "")):
+            return
+        hook(u)
+
+    return unraisable
+
+
+# First thing, before the big imports below: the snapshot's stale ZipFile can be collected at any point after start.
+sys.unraisablehook = quiet_unraisable()
+
 os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: a cache, nothing kept
 try:
     from tastr_build import ENGINE_WASM_ID  # build.py: the hash of the engine build in public/engine/
@@ -83,21 +104,6 @@ def sleep(seconds: float) -> None:
     run_sync(asyncio.sleep(seconds))
 
 
-def quiet_unraisable(hook=sys.unraisablehook):
-    """sys.unraisablehook without one known harmless line: a ZipFile from the runtime's start-up snapshot whose
-    file is gone when it is garbage collected (EBADF in ZipFile.__del__). It went to the Worker's logs as an
-    error, hundreds a day, and buried the real ones (T31)."""
-
-    def unraisable(u):
-        if isinstance(u.exc_value, OSError) and u.exc_value.errno == errno.EBADF \
-                and getattr(u.object, "__qualname__", "") == "ZipFile.__del__":
-            return
-        hook(u)
-
-    return unraisable
-
-
-sys.unraisablehook = quiet_unraisable()
 http.use(fetch_request)
 blobs.keep_copies = False  # the file system is memory: drop local copies of uploads once read
 blobs.copy_limit = 1  # and read back one at a time

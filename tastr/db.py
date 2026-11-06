@@ -195,6 +195,13 @@ CREATE TABLE IF NOT EXISTS ml_tags (
     result_json TEXT NOT NULL
 );
 
+-- The message of a track's last failed ML tags run, so "Try again" survives a restart (cleared when a run succeeds).
+CREATE TABLE IF NOT EXISTS ml_tag_errors (
+    track_id  INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    error     TEXT NOT NULL,
+    failed_at TEXT NOT NULL
+);
+
 -- Requests sent to each lookup provider per UTC day, for the guardrails in tastr/lookup/guard.py.
 CREATE TABLE IF NOT EXISTS lookup_usage (
     provider TEXT NOT NULL,
@@ -635,6 +642,23 @@ def save_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]
         conn.execute("INSERT OR REPLACE INTO ml_tags VALUES (?, ?, ?, ?, ?)",
                      (track_id, result.get("version", 0), ",".join(t["tag"] for t in result.get("tags", [])), _now(),
                       json.dumps(result)))
+
+
+def save_ml_tags_error(conn: sqlite3.Connection, track_id: int, error: str) -> None:
+    """Remember why a track's last ML tags run failed (the in-memory run state is lost on a restart)."""
+    with conn:
+        if conn.execute("SELECT 1 FROM tracks WHERE id = ?", (track_id,)).fetchone():
+            conn.execute("INSERT OR REPLACE INTO ml_tag_errors VALUES (?, ?, ?)", (track_id, error, _now()))
+
+
+def clear_ml_tags_error(conn: sqlite3.Connection, track_id: int) -> None:
+    with conn:
+        conn.execute("DELETE FROM ml_tag_errors WHERE track_id = ?", (track_id,))
+
+
+def get_ml_tags_error(conn: sqlite3.Connection, track_id: int) -> str | None:
+    r = conn.execute("SELECT error FROM ml_tag_errors WHERE track_id = ?", (track_id,)).fetchone()
+    return r[0] if r else None
 
 
 def get_ml_tags(conn: sqlite3.Connection, track_id: int) -> dict[str, Any] | None:

@@ -211,3 +211,25 @@ def test_auto_tags_new_uploads_and_the_library_once(db_path, track, tmp_path, mo
     with TestClient(create_app(db_path)) as client:  # the pass ran once: a restart doesn't tag the library again
         assert client.get(f"/api/tracks/{track}/ml-tags").json()["state"] == "none"
     assert len(calls) == n
+
+
+def test_a_failed_run_is_still_failed_after_a_restart(db_path, track, tmp_path, monkeypatch):
+    monkeypatch.setenv("TASTR_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TASTR_ML_TAGS", "on")
+    monkeypatch.setattr(ml_tags, "installed", lambda: True)
+    monkeypatch.setattr(ml_tags, "analyze", lambda path: (_ for _ in ()).throw(RuntimeError("bad file")))
+    client = TestClient(create_app(db_path))
+    client.post(f"/api/tracks/{track}/ml-tags")
+    wait_for(client, track, "error")
+
+    restarted = TestClient(create_app(db_path))  # the in-memory run state is gone
+    assert "bad file" in restarted.get(f"/api/tracks/{track}/ml-tags").json()["error"]
+    card = restarted.get(f"/api/tracks/{track}").json()
+    assert card["ml_tags_state"] == "error" and "bad file" in card["ml_tags_error"]
+
+    monkeypatch.setattr(ml_tags, "analyze", lambda path: dict(RESULT))  # Try again works, and clears the failure
+    restarted.post(f"/api/tracks/{track}/ml-tags")
+    wait_for(restarted, track, "done")
+    again = TestClient(create_app(db_path))
+    assert again.get(f"/api/tracks/{track}").json()["ml_tags_state"] == "none"
+    assert "ml_tags_error" not in again.get(f"/api/tracks/{track}").json()

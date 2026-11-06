@@ -2,8 +2,9 @@
 
 Two parts:
 - `Default`, the Worker: /static/*, /sqljs/* (sql.js) and /engine/* (the engine's WebAssembly build) come from
-  Workers Static Assets (the files `build.py` copies to public/), and so do /pub/preview.png and /pub/favicon.svg;
-  everything else goes to the one Durable Object.
+  Workers Static Assets (the files `build.py` copies to public/) without reaching it (wrangler.jsonc
+  `run_worker_first`), and it hands out /pub/preview.png and /pub/favicon.svg from there too; everything else goes
+  to the one Durable Object.
 - `Library`, a SQLite-backed Durable Object: the library database lives in its SQL storage (tastr/do_sqlite.py)
   and it runs the FastAPI app (tastr/web/server.py), one request at a time.
 
@@ -176,6 +177,10 @@ def load_env(env) -> None:
             os.environ[name] = value
 
 
+def ms(seconds: float) -> int:
+    return round(seconds * 1000)
+
+
 APP = None
 SETTINGS: Settings | None = None
 KEYS = AccessKeys()
@@ -188,17 +193,24 @@ class Library(DurableObject):
         storage = Storage(ctx.storage)
         db.use_storage(lambda path: storage)
         if APP is None:
+            t0 = time.perf_counter()
             load_env(env)
             SETTINGS = Settings.from_env()
             verifier = AccessVerifier(SETTINGS.access_team_domain, SETTINGS.access_aud, keys=KEYS) \
                 if SETTINGS.hosted else None
             APP = create_app(DB_PATH, SETTINGS, verifier=verifier, threads=False)
+            t1 = time.perf_counter()
             APP.state.startup()
+            # A cold start: the first request after a quiet spell waits for this (docs/hosting-map.md).
+            print(f"cold start: app {ms(t1 - t0)} ms, startup {ms(time.perf_counter() - t1)} ms")
 
     async def fetch(self, request):
         if SETTINGS.hosted:
             try:
+                t0, cold = time.perf_counter(), not KEYS.by_kid
                 await KEYS.refresh(SETTINGS.access_team_domain)
+                if cold:
+                    print(f"cold start: Access keys {ms(time.perf_counter() - t0)} ms")
             except Exception as e:  # noqa: BLE001 - keys unreachable: the known keys (or none: every login fails) stand
                 print(f"couldn't fetch the Access signing keys: {type(e).__name__}: {e}")
         response = await asgi.fetch(APP, request, self.env)

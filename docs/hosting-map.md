@@ -59,9 +59,10 @@ flowchart TB
   ANT([Claude API, if ANTHROPIC_API_KEY is set: claude-sonnet-5-5])
 
   F -->|your hostname| ACC -->|request + signed token| W
+  ACC -->|/static, /sqljs, /engine: no Worker| SA
   S -->|signed /pub link| BYP --> W
   PL -->|signed /pub link| BYP
-  W -->|/static, /sqljs, /engine| SA
+  W -->|/pub/preview.png, /pub/favicon.svg| SA
   W -->|everything else| DO
   AL --> DO
   DO -.->|a copy of your own library, for searches in the browser| F
@@ -111,7 +112,7 @@ sequenceDiagram
   C->>C: is the email in the Allow policy?
   C->>W: request + Cf-Access-Jwt-Assertion
   W->>W: verify the token, read the email
-  Note over W: an idle object wakes here (well under a second)
+  Note over W: an idle object wakes here (about 3 s after a quiet spell)
   B->>B: file size and length within the limits?
   opt TASTR_BROWSER_ENGINE is on
     B->>W: GET /engine/tastr_engine.wasm (once, then cached)
@@ -319,8 +320,9 @@ the Admin tab's deploy line names the commit and links to its GitHub Actions run
 ```mermaid
 flowchart LR
     B[Browser] -->|HTTPS, Access login| CF[Cloudflare edge]
-    CF --> W["Worker tastr<br/>(worker/src/entry.py)"]
-    W -->|"/static/*, /sqljs/*, /engine/*,<br/>/pub/preview.png, /pub/favicon.svg"| SA["Workers Static Assets<br/>worker/public: page files, sql.js,<br/>the engine's WebAssembly build"]
+    CF -->|"everything else"| W["Worker tastr<br/>(worker/src/entry.py)"]
+    CF -->|"/static/*, /sqljs/*, /engine/*<br/>(run_worker_first in wrangler.jsonc)"| SA["Workers Static Assets<br/>worker/public: page files, sql.js,<br/>the engine's WebAssembly build, _headers"]
+    W -->|"/pub/preview.png, /pub/favicon.svg"| SA
     W -->|everything else| DO["Durable Object Library<br/>FastAPI app + the library database<br/>in its SQLite storage"]
     DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
     AL[Durable Object alarm] -->|expiry sweep, watch| DO
@@ -344,7 +346,10 @@ flowchart LR
 - Browser files: `worker/build.py` puts the page's files, sql.js (for the Simple and SQL searches; pinned in
   `worker/package.json` at the version `routes/search.py` names) and the Rust engine's WebAssembly build (for
   `TASTR_BROWSER_ENGINE`; `deploy-worker.yml` builds it, and `src/tastr_build.py` records its hash for the
-  card check) in `worker/public/`, and Static Assets serve them.
+  card check) in `worker/public/`, and Static Assets serve them without starting the Worker (`run_worker_first`
+  in `wrangler.jsonc` leaves those paths out; Access still checks the login first). `worker/build.py` also writes
+  `public/_headers`, which lets browsers keep the modules' folder (`/static/app-<hash>/`) and `/engine/` for good,
+  since their addresses change with each build; the other files are asked for again on each load (a quick 304).
 - CI builds the Worker whenever the app or `worker/` changes (`worker/check.sh`, the last steps of
   `.github/workflows/test.yml`): it bundles it with its Pyodide packages, fails above 10 MiB gzipped (the Workers
   Paid limit; it is about 7.7 MiB), and runs it under `pywrangler dev` to check a few pages answer.
@@ -370,7 +375,15 @@ flowchart LR
 
 ## Why it's sometimes slow
 
-An idle Durable Object wakes quickly, so the page itself opens fast. Modal stops its container 1 minute after
+The first page load after a quiet spell (a few minutes or more) is slow because the Python Worker and the
+Durable Object both start from cold: Cloudflare's logs from 2026-11-03 to 2026-11-05 show the page taking 4 to
+6 s to arrive (the object alone about 3 s, 2 to 3 s of it CPU starting the app), against well under a second when
+warm. Each object start prints a `cold start:` line in the Worker's logs with how long building the app, its
+startup work and fetching the Access keys took. The page's ~50 script files used to go through the Worker too and
+be checked again on every load, which added 3 to 4 s before the track list was asked for; now they skip the
+Worker, and the versioned ones are kept by the browser.
+
+Modal stops its container 1 minute after
 the last analysis, so the first upload after a quiet spell waits about 30 seconds for a new one. A drum model
 run usually starts its own, larger container, so it takes a minute or two.
 

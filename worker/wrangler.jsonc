@@ -9,9 +9,12 @@
   // is reachable only there (docs/hosting-map.md).
   "workers_dev": false,
   "preview_urls": false,
-  // The browser files (python worker/build.py puts them here). The Worker answers first, so it decides which paths
-  // are static (only /static/*) and everything else reaches the app.
-  "assets": {"directory": "./public", "binding": "ASSETS", "run_worker_first": true},
+  // The browser files (python worker/build.py puts them here). /static/*, /sqljs/* and /engine/* are served straight
+  // from Static Assets, without starting the (Python) Worker: a page load asks for about 50 of them, and the cold
+  // Worker took seconds to start. Cloudflare Access still checks the login first. Everything else, and a static
+  // path with no file, reaches the Worker. public/_headers (build.py) lets the browser keep the versioned ones.
+  "assets": {"directory": "./public", "binding": "ASSETS",
+             "run_worker_first": ["/*", "!/static/*", "!/sqljs/*", "!/engine/*"]},
   // Logs and errors in the dashboard (Workers > tastr > Observability). A deploy sets this from here, so it stays on.
   "observability": {"enabled": true},
   // CPU time per request (Workers Paid allows up to 5 minutes; the default is 30 s). Raised for the one-time import

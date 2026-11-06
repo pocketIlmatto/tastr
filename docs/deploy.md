@@ -123,7 +123,8 @@ bucket's PUT rule is missing or names another hostname.
 
 "Listed elsewhere" ([lookup.md](lookup.md)) is off until `TASTR_LOOKUP` names providers. Friends' lookups
 spend your API keys, within the per-provider limits in lookup.md. For FreqBlog, set the secrets
-`TASTR_LOOKUP=freqblog` and `FREQBLOG_API_KEY=<key>`.
+`TASTR_LOOKUP=freqblog` and `FREQBLOG_API_KEY=<key>`. ReccoBeats needs no key: add it to the list
+(`TASTR_LOOKUP=freqblog,reccobeats`). It takes about five requests a track, within its own daily limit.
 
 AcousticBrainz reads a 322 MB index file, which the Worker can't hold, so it stays off there (TAS-88).
 

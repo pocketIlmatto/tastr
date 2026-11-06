@@ -55,7 +55,7 @@ flowchart TB
   R2A[(R2 bucket tastr-audio: uploads, stems, each card's waveform data)]
   GHT[GitHub Actions: tests workflow, on each push to main]
   GH[GitHub Actions: deploy workflow, after tests pass if app code changed]
-  CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, MusicBrainz])
+  CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, ReccoBeats, MusicBrainz])
   ANT([Claude API, if ANTHROPIC_API_KEY is set: claude-sonnet-5-5])
 
   F -->|your hostname| ACC -->|request + signed token| W
@@ -281,7 +281,7 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 | `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT`, `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | The audio bucket `tastr-audio` and its own token ([deploy.md](deploy.md#2-r2-bucket-for-audio)). Required on the Worker. |
 | `TASTR_MODAL_URL`, `TASTR_MODAL_KEY`, `TASTR_MODAL_SECRET` | The Modal `api` endpoint's address (`modal deploy` prints it) and a Modal proxy auth token |
 | `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log: a fine-grained token with read-only Actions access to the repository. Needed even for a public repository: GitHub's limit without a token is per IP address, which Cloudflare shares, so most checks get 403. |
-| `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#8-catalog-lookups-optional)). Not `acousticbrainz`, whose index file the Worker can't hold (TAS-88). |
+| `TASTR_LOOKUP`, `FREQBLOG_API_KEY` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#8-catalog-lookups-optional)). `reccobeats` needs no key. Not `acousticbrainz`, whose index file the Worker can't hold (TAS-88). |
 | `ANTHROPIC_API_KEY` (optional) | "Ask Claude to change it" in Try this in › Strudel ([deploy.md](deploy.md#9-ask-claude-in-strudel-optional)). Tastr's own Anthropic key; each ask's tokens are counted per person and priced on the Admin tab. Without it the panel says Ask is off. |
 
 These have defaults and change only if you set a secret of the same name ([hosting.md](hosting.md#settings)):
@@ -329,7 +329,7 @@ flowchart LR
     GHD[GitHub Actions: deploy, then deploy-worker] -->|pywrangler deploy| W
     DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, ml_tags, stems)"]
     DO -->|signed requests| R2B[(R2 tastr-audio)]
-    DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, MusicBrainz])
+    DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, ReccoBeats, MusicBrainz])
 ```
 
 - Everything that leaves the object (Modal, R2, Access's keys, GitHub, the catalogs, the Claude API) goes

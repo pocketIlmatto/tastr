@@ -125,7 +125,8 @@ Third-party pieces it uses or links to:
   allows storing results only on paid plans, so Tastr keeps them only with
   `FREQBLOG_PLAN=paid`. [AcousticBrainz](https://acousticbrainz.org) dumps and
   [MusicBrainz](https://musicbrainz.org) core data are public domain (CC0); Tastr reads a
-  local index of the 2022 AcousticBrainz dump. See [docs/lookup.md](docs/lookup.md).
+  local index of the 2022 AcousticBrainz dump. [ReccoBeats](https://reccobeats.com) is free
+  for personal and commercial use, with no key. See [docs/lookup.md](docs/lookup.md).
 - **ADTOF** (optional drum model): its code and model weights are **CC BY-NC-SA
   4.0, non-commercial and share-alike**. Tastr doesn't include either. The weights
   download on first use from the ADTOF repository; the network and preprocessing

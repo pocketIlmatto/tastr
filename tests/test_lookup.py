@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tastr import db, lookup
-from tastr.lookup import acousticbrainz, freqblog, getsongbpm
+from tastr.lookup import acousticbrainz, freqblog, getsongbpm, reccobeats
 from tastr.lookup.base import LookupResult, Provider, ProviderError, TrackQuery, same_artists, same_text
 from tastr.web.server import create_app
 from test_foundation import full_card
@@ -222,7 +222,8 @@ def test_api_lookup_and_card_body(db_path, tmp_path, monkeypatch, fake):
     assert body["lookups"] == [] and body["lookup_providers"] == [{"name": "fake", "label": "Fake"}]
     # Metadata › Listed elsewhere lists every source, set up or not; Rekordbox first and always "configured"
     sources = {s["provider"]: s for s in body["lookup_sources"]}
-    assert [s["provider"] for s in body["lookup_sources"]][:4] == ["rekordbox", "getsongbpm", "freqblog", "acousticbrainz"]
+    assert [s["provider"] for s in body["lookup_sources"]][:5] == ["rekordbox", "getsongbpm", "freqblog", "reccobeats",
+                                                                  "acousticbrainz"]
     assert sources["fake"]["configured"] and sources["rekordbox"]["configured"]
     assert not sources["getsongbpm"]["configured"] and sources["freqblog"]["homepage"]
     assert sources["rekordbox"]["imported"] is False  # nothing loaded from an export yet
@@ -650,3 +651,52 @@ def test_card_lists_every_source_in_metadata():
                  "Not found: it has no listing for this artist and title.", "Lookup failed: ",
                  "Can't look up: the file has no artist and title tags.", "Measured from the audio"):
         assert text in js
+
+
+def _rb_track(tid, title, ms=200000):
+    return {"id": tid, "trackTitle": title, "durationMs": ms, "isrc": "GBXXX0000001",
+            "artists": [{"name": "Zerb"}], "href": f"https://open.spotify.com/track/{tid}"}
+
+
+def test_reccobeats_walks_the_artist_and_lists_bpm_only(monkeypatch):
+    p = reccobeats.ReccoBeats()
+    calls = canned(monkeypatch, p,
+                   (200, {"content": [{"id": "a0", "name": "Zerbo"}, {"id": "a1", "name": "Zerb"}]}),
+                   (200, {"content": [_rb_track("t0", "Mwaki - Remix")], "totalPages": 2}),
+                   (200, {"content": [_rb_track("t1", "Mwaki", 300000), _rb_track("t2", "Mwaki (feat. Sofiya Nzau)", 190000)],
+                          "totalPages": 2}),
+                   (200, {"content": [{"id": "t2", "tempo": 120.004, "key": 7, "mode": 0, "energy": 0.64, "valence": 0.05}]}))
+    r = p.lookup(TrackQuery(artist="Zerb, Sofiya Nzau", title="Mwaki", duration=185.0))
+    assert (r.status, r.bpm, r.key, r.matched_title) == ("found", 120.0, None, "Mwaki (feat. Sofiya Nzau)")  # closest length
+    assert r.url == "https://open.spotify.com/track/t2" and r.extra["energy"] == 0.64 and "key" not in r.extra
+    assert [c[1] for c in calls] == [{"searchText": "Zerb", "page": "0", "size": "10"},
+                                     {"page": "0", "size": "50"}, {"page": "1", "size": "50"}, {"ids": "t2"}]
+    assert calls[1][0].endswith("/artist/a1/track")  # "Zerbo" isn't "Zerb"
+
+
+def test_reccobeats_not_found(monkeypatch):
+    p = reccobeats.ReccoBeats()
+    canned(monkeypatch, p, (200, {"content": []}))
+    assert p.lookup(Q).status == "not_found"
+    canned(monkeypatch, p, (200, {"content": [{"id": "a1", "name": "Daft Punk"}]}),
+           (200, {"content": [_rb_track("t1", "One More Time - Live")], "totalPages": 1}))
+    assert p.lookup(Q).status == "not_found"
+    canned(monkeypatch, p, (200, {"content": [{"id": "a1", "name": "Daft Punk"}]}),
+           (200, {"content": [_rb_track("t1", "One More Time")], "totalPages": 1}), (200, {"content": []}))
+    assert p.lookup(Q).status == "not_found"  # in the catalog, but no audio features
+
+
+@pytest.mark.parametrize("ours, theirs, same", [
+    ("Another World (Extended Mix)", "Another World", True),  # same tempo, other cut
+    ("Always On Time (Extended Mix)", "Always On Time - Extended Mix", True),
+    ("Babel (Hraach Remix)", "Babel - Hraach Remix", True),
+    ("Say My Name (feat. Zyra) (Instrumental)", "Say My Name", True),
+    ("Campeón", "Campeon", True),
+    ("Addicted", "Addicted - Joel Corry Remix", False),
+    ("Far Away Place (Instrumental)", "Far Away Place - Jody Remix", False),
+    ("Misunderstood (Extended Mix)", "Misunderstood - Mixed", False),
+    ("Say My Name", "Say My Name - Live", False),
+    ("One", "One More Time", False),
+])
+def test_reccobeats_same_track(ours, theirs, same):
+    assert reccobeats.same_track(ours, theirs) is same

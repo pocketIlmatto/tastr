@@ -4,6 +4,7 @@ import { api, cap, h, isNum, progBar } from "./core.js";
 import { sectionBus, switchTo } from "./card.js";
 import { allEdits, editedKeys } from "./groove-edits.js";
 import { laneName } from "./groove-lanes.js";
+import { sonicPiCode, tidalCode } from "./livecode.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
 import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
 
@@ -242,7 +243,7 @@ export function strudelView(c) {
 }
 
 // The live-coding switch above the code (sandbox v207): Strudel as above, or the same sketch as Tidal or Sonic Pi code
-// (livecode.js). Those two have no web player, so they're read-only code to copy or download; templates, Ask Claude,
+// (app/livecode.js). Those two have no web player, so they're read-only code to copy or download; templates, Ask Claude,
 // stems and the audio options stay Strudel-only. The pick is kept per browser, like the DAW pick.
 const LIVECODE = {
   strudel: { name: "Strudel" },

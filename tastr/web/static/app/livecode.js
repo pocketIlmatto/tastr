@@ -1,12 +1,9 @@
-"use strict";
 // The track card as code for two more live-coding tools: TidalCycles (https://tidalcycles.org) and
 // Sonic Pi (https://sonic-pi.net). Written from the same sketch inputs as the Strudel sketch (strudel.js):
 // the song's sections, their drums, chords and bass with your edits in, and the tempo.
 // Tastr only writes text in these languages; neither tool is bundled or linked in.
-// Loaded after strudel.js in the page; tests/test_livecode.py loads it under node.
-
-const LC = typeof module !== "undefined" ? require("./strudel.js")
-  : { sketchInputs, compactSteps, compactBars, varOf, sketchSecName, STRUDEL_NOTES };
+// The sketch helpers (sketchInputs, compactSteps, compactBars, varOf, sketchSecName, STRUDEL_NOTES) are strudel.js's
+// globals, loaded before the modules; tests/test_livecode.py sets them up the same way under node.
 
 // Lane name -> sound. Tidal: SuperDirt's default Dirt-Samples folders. Sonic Pi: its built-in samples.
 const LC_DRUMS = [
@@ -19,10 +16,10 @@ const lcDrum = (lane, tool) => { const l = lane.toLowerCase(), row = LC_DRUMS.fi
 // (the engine names only those two; edits may hold more) map to each tool's own chord names.
 const LC_QUALITY = { "": "major", maj: "major", m: "minor", min: "minor", 7: "dom7", maj7: "major7", m7: "minor7", min7: "minor7",
   dim: "dim", aug: "aug", sus2: "sus2", sus4: "sus4" };
-function lcChord(name) {
+export function lcChord(name) {
   const m = /^([A-G])([#b]?)(.*)$/.exec(name || "");
   if (!m) return null;
-  const pc = (LC.STRUDEL_NOTES.indexOf(m[1]) + (m[2] === "#" ? 1 : m[2] === "b" ? 11 : 0)) % 12;
+  const pc = (STRUDEL_NOTES.indexOf(m[1]) + (m[2] === "#" ? 1 : m[2] === "b" ? 11 : 0)) % 12;
   const q = LC_QUALITY[m[3]] || (/^m(?!aj)/.test(m[3]) ? "minor" : "major");
   return { pc, name: (m[1] + m[2]).toLowerCase(), q };
 }
@@ -42,7 +39,7 @@ function lcBassBar(name, beatNotes) {
 
 // The parts, one per section type, the way the Strudel sketch builds them: each holds its drums (lane -> steps),
 // chords (one per bar, looping), bass (one bar of notes per chord) and bass rhythm (steps, x = hit).
-function livecodeParts(s) {
+export function livecodeParts(s) {
   const parts = [], byName = new Map(), partOf = new Map();
   for (const sec of s.song) {
     const drums = s.mine("drums", sec) || s.pats[sec.idx] || (s.det && s.det.data.pattern) || {};
@@ -56,7 +53,7 @@ function livecodeParts(s) {
     const lanes = Object.entries(drums).filter(([, p]) => typeof p === "string" && /[xo]/.test(p.slice(0, s.nSteps)))
       .map(([lane, p]) => [lane, p.slice(0, s.nSteps).padEnd(s.nSteps, ".")]);
     const part = { lanes, chords, bass, hits }, body = JSON.stringify(part);
-    let v = LC.varOf(sec);
+    let v = varOf(sec);
     // An edited section that differs from its letter's first section gets a part of its own, so the edit is heard.
     if (byName.has(v) && byName.get(v).body !== body && s.editedSecs.includes(sec)) v = `${v}_bar${sec.start_bar}`;
     partOf.set(sec, v);
@@ -74,13 +71,13 @@ function lcAbout(s, tool) {
   const tempo = s.hasBpm ? `${s.bpm} BPM` : "tempo unknown, using 120 BPM";
   return [`Sketched by Tastr for ${tool}: ${tempo}, ${s.keyStr}. Not the original audio: the ${s.editedSecs.length ? "" : "detected "}drums,`,
     `bass and chords for each section, played for that section's length.`,
-    ...(s.editedSecs.length ? [`With your edits in: ${[...new Set(s.editedSecs.map(LC.sketchSecName))].join(", ")}.`] : [])];
+    ...(s.editedSecs.length ? [`With your edits in: ${[...new Set(s.editedSecs.map(sketchSecName))].join(", ")}.`] : [])];
 }
 
 // --- TidalCycles ---
 
 // A bar of steps as Tidal mini-notation, which is the same as Strudel's: x...x...x...x... -> bd*4.
-const tidalSteps = (steps, tok, beats) => LC.compactSteps([...steps].map((ch) => (ch === "." ? "~" : tok(ch))), beats);
+const tidalSteps = (steps, tok, beats) => compactSteps([...steps].map((ch) => (ch === "." ? "~" : tok(ch))), beats);
 function tidalDrums(p, beats) {
   if (!p.lanes.length) return "silence";
   const lines = p.lanes.map(([lane, steps]) => {
@@ -93,7 +90,7 @@ function tidalDrums(p, beats) {
 const TIDAL_Q = { major: "major", minor: "minor", dom7: "dom7", major7: "major7", minor7: "minor7", dim: "dim", aug: "aug", sus2: "sus2", sus4: "sus4" };
 function tidalChords(p) {
   const bars = p.chords.map((ch) => (ch ? `${tidalNote(ch, 4).replace(/\d+$/, "")}'${TIDAL_Q[ch.q]}` : "~"));
-  return bars.some((x) => x !== "~") ? `n "${LC.compactBars(bars)}"` : "silence";
+  return bars.some((x) => x !== "~") ? `n "${compactBars(bars)}"` : "silence";
 }
 function tidalBass(p, beats) {
   const bars = p.bass.map((notes) => {
@@ -108,11 +105,11 @@ function tidalBass(p, beats) {
     return `[${runs.map((r) => r.n + (even || r.k === 1 ? "" : "@" + r.k)).join(" ")}]`;
   });
   if (!bars.some((x) => x !== "~")) return "silence";
-  return `struct "${tidalSteps(p.hits, () => "t", beats)}" $ n "${LC.compactBars(bars)}"`;
+  return `struct "${tidalSteps(p.hits, () => "t", beats)}" $ n "${compactBars(bars)}"`;
 }
 
-function tidalCode(c, edits = null) {
-  const s = LC.sketchInputs(c, null, edits), { parts, partOf } = livecodeParts(s);
+export function tidalCode(c, edits = null) {
+  const s = sketchInputs(c, null, edits), { parts, partOf } = livecodeParts(s);
   const out = [`-- ${lcTitle(c)}`, ...lcAbout(s, "TidalCycles").map((l) => `-- ${l}`),
     "-- Evaluate each block with Ctrl+Enter (Cmd+Enter on a Mac): it runs the lines around the cursor up to a blank line.",
     "-- hush stops everything. Needs SuperDirt running (the usual Tidal setup).", "",
@@ -127,7 +124,7 @@ function tidalCode(c, edits = null) {
   let at = 0;
   s.song.forEach((sec, i) => {
     const bars = lcEnd(sec) - sec.start_bar + 1;
-    out.push(`      ${i ? "," : "["} (${at}, ${at + bars}, layer ${partOf.get(sec)}) -- ${LC.sketchSecName(sec)}, bars ${sec.start_bar}-${lcEnd(sec)}`);
+    out.push(`      ${i ? "," : "["} (${at}, ${at + bars}, layer ${partOf.get(sec)}) -- ${sketchSecName(sec)}, bars ${sec.start_bar}-${lcEnd(sec)}`);
     at += bars;
   });
   out.push("      ]", "    drumsOf (d, _, _) = d", "    chordsOf (_, c, _) = c", "    bassOf (_, _, b) = b", "",
@@ -144,8 +141,8 @@ function tidalCode(c, edits = null) {
 const SONIC_Q = { major: "major", minor: "minor", dom7: "dom7", major7: "major7", minor7: "minor7", dim: "diminished", aug: "augmented", sus2: "sus2", sus4: "sus4" };
 const sonicChord = (ch) => (ch ? `chord(${sonicNote(ch, 3)}, :${SONIC_Q[ch.q]})` : "nil");
 
-function sonicPiCode(c, edits = null) {
-  const s = LC.sketchInputs(c, null, edits), { parts, partOf } = livecodeParts(s), n = s.nSteps;
+export function sonicPiCode(c, edits = null) {
+  const s = sketchInputs(c, null, edits), { parts, partOf } = livecodeParts(s), n = s.nSteps;
   const out = [`# ${lcTitle(c)}`, ...lcAbout(s, "Sonic Pi").map((l) => `# ${l}`),
     "# Paste into an empty buffer and press Run; Stop stops it. Change anything and press Run again.", "",
     `use_bpm ${s.cpmBpm} # one beat = a quarter note, ${s.beats} beats to the bar${s.cpmBpm !== s.bpm ? " (tempo from the detected bar grid)" : ""}`, "",
@@ -161,19 +158,20 @@ function sonicPiCode(c, edits = null) {
       `    hits: "${p.hits}",`, "  },");
   }
   out.push("}", "", "# Song: [bars, part] in the order they happen. Delete a line to skip that section, or reorder lines.", "song = [");
-  for (const sec of s.song) out.push(`  [${lcEnd(sec) - sec.start_bar + 1}, :${partOf.get(sec)}], # ${LC.sketchSecName(sec)}, bars ${sec.start_bar}-${lcEnd(sec)}`);
-  out.push("]", "bars = song.flat_map { |count, part| [part] * count } # the part playing in each bar", "",
+  for (const sec of s.song) out.push(`  [${lcEnd(sec) - sec.start_bar + 1}, :${partOf.get(sec)}], # ${sketchSecName(sec)}, bars ${sec.start_bar}-${lcEnd(sec)}`);
+  out.push("]", "# the part playing in each bar, and the bar within that section (its chords and bass start over at each section)",
+    "bars = song.flat_map { |count, part| count.times.map { |k| [part, k] } }", "",
     "# One loop per layer, one bar per pass. Add a # in front of a loop's lines (or Run with it deleted) to mute it.",
     "live_loop :drums do",
-    "  p = parts[bars[tick % bars.length]]",
+    "  p = parts[bars[tick % bars.length][0]]",
     `  ${n}.times do |i|`,
     "    p[:drums].each { |snd, steps| sample snd, amp: (steps[i] == \"o\" ? 0.5 : 1) if steps[i] != \".\" }",
     "    sleep 0.25",
     "  end",
     "end", "",
     "live_loop :bass do",
-    "  bar = tick",
-    "  p = parts[bars[bar % bars.length]]",
+    "  part, bar = bars[tick % bars.length]",
+    "  p = parts[part]",
     "  notes = p[:bass].empty? ? [] : p[:bass][bar % p[:bass].length]",
     "  use_synth :tb303",
     `  ${n}.times do |i|`,
@@ -183,8 +181,8 @@ function sonicPiCode(c, edits = null) {
     "  end",
     "end", "",
     "live_loop :chords do",
-    "  bar = tick",
-    "  p = parts[bars[bar % bars.length]]",
+    "  part, bar = bars[tick % bars.length]",
+    "  p = parts[part]",
     "  c = p[:chords].empty? ? nil : p[:chords][bar % p[:chords].length]",
     "  use_synth :blade",
     `  play c, sustain: ${s.beats - 0.5}, release: 0.5, amp: 0.3, cutoff: 90 if c`,
@@ -194,4 +192,3 @@ function sonicPiCode(c, edits = null) {
   return out.join("\n");
 }
 
-if (typeof module !== "undefined") module.exports = { tidalCode, sonicPiCode, livecodeParts, lcChord };

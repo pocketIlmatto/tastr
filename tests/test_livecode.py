@@ -11,16 +11,22 @@ from pathlib import Path
 
 import pytest
 
-LIVECODE_JS = Path(__file__).parents[1] / "tastr" / "web" / "static" / "livecode.js"
+STATIC = Path(__file__).parents[1] / "tastr" / "web" / "static"
+LIVECODE_JS = STATIC / "app" / "livecode.js"
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
 
 def run_js(fn: str, card: dict, edits: dict | None = None) -> str:
+    # In the page strudel.js's helpers are globals that the module reads; here they come from require.
     script = f"""
-const m = require({json.dumps(str(LIVECODE_JS))});
+import {{ createRequire }} from "node:module";
+import {{ pathToFileURL }} from "node:url";
+Object.assign(globalThis, createRequire(import.meta.url)({json.dumps(str(STATIC / "strudel.js"))}));
+const m = await import(pathToFileURL({json.dumps(str(LIVECODE_JS))}).href);
 console.log(JSON.stringify(m.{fn}({json.dumps(card)}, {json.dumps(edits)})));
 """
-    return json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    out = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
 
 
 def section(label, letter, a, b):
@@ -165,6 +171,20 @@ def test_sonic_pi_plays_the_song(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("ruby") is None, reason="ruby is not installed")
+def test_sonic_pi_loops_start_over_at_each_section(tmp_path):
+    """A section that starts on a bar the loop length doesn't divide still starts on its first chord and bass note
+    (as Strudel's arrange and Tidal's seqP do)."""
+    c = card()
+    c["sections"][0]["end_bar"] = 1  # a one-bar intro, so the drop starts on bar 2
+    c["sections"][1]["start_bar"] = 2
+    ev = run_sonic(run_js("sonicPiCode", c), tmp_path, 3)["events"]
+    chords = [e[4] for e in ev if e[0] == "chords" and e[2] == "play"]
+    assert chords[:3] == ["[:a3, :minor]", "[:a3, :minor]", "[:f3, :major]"]
+    bass = [e for e in ev if e[0] == "bass" and e[2] == "play"]
+    assert {e[4] for e in bass if 4 <= e[1] < 8} == {"a1"}
+
+
+@pytest.mark.skipif(shutil.which("ruby") is None, reason="ruby is not installed")
 def test_sonic_pi_three_four_and_rests(tmp_path):
     edits = {"chords": {"all": {"chords": [None, "Bb"]}}, "bass": {"all": {"notes": [None, "Bb"], "rhythm": None}}}
     code = run_js("sonicPiCode", card(beats=3), edits)
@@ -177,13 +197,11 @@ def test_sonic_pi_three_four_and_rests(tmp_path):
 
 # --- The switch in the app (checked in a browser for the PR; these keep the wiring from coming apart) ---
 
-def test_page_loads_the_writers_and_the_switch():
+def test_the_switch_uses_the_writers():
     from ui_src import app_js
 
-    static = LIVECODE_JS.parent
-    html = (static / "index.html").read_text()
-    assert html.index('src="/static/strudel.js"') < html.index('src="/static/livecode.js"') < html.index('src="/static/app/main.js"')
     js = app_js()
+    assert 'import { sonicPiCode, tidalCode } from "./livecode.js";' in (STATIC / "app" / "daw.js").read_text()
     assert '"tastr-livecode"' in js and '"aria-label": "Live-coding language"' in js
     assert "tidalCode(c, edits)" in js and "sonicPiCode(c, edits)" in js
-    assert "body.push(liveView(c))" in (static / "app" / "card.js").read_text()
+    assert "body.push(liveView(c))" in (STATIC / "app" / "card.js").read_text()

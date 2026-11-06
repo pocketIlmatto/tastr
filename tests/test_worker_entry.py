@@ -129,6 +129,36 @@ def test_the_alarm_is_set_for_the_next_repeating_work(entry):
     stop()
 
 
+def test_the_alarm_fetches_the_access_keys(entry, monkeypatch):
+    """An alarm often starts the isolate a visitor then finds warm, so it fetches the keys that visit needs."""
+    entry.fake_fetch.jwks = {"keys": []}
+
+    async def set_alarm(ms):
+        pass
+
+    lib = types.SimpleNamespace(ctx=types.SimpleNamespace(storage=types.SimpleNamespace(setAlarm=set_alarm)))
+    lib.arm = types.MethodType(entry.Library.arm, lib)
+    asyncio.run(types.MethodType(entry.Library.alarm, lib)())  # no settings yet (not hosted): nothing fetched
+    assert entry.calls == []
+    monkeypatch.setattr(entry, "SETTINGS", types.SimpleNamespace(hosted=True, access_team_domain=TEAM))
+    asyncio.run(types.MethodType(entry.Library.alarm, lib)())
+    assert entry.calls == [f"https://{TEAM}/cdn-cgi/access/certs"]
+
+
+def test_first_request_imports_are_in_the_deploy_snapshot():
+    """Modules the hosted app imports on first use are imported at the entry's top level, which Cloudflare runs
+    and snapshots at deploy time, so a new isolate's first request doesn't load them."""
+    import ast
+
+    top = set()
+    for node in ast.parse(ENTRY.read_text()).body:
+        if isinstance(node, ast.Import):
+            top |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            top |= {f"{node.module}.{a.name}" for a in node.names}
+    assert {"jwt", "jwt.algorithms", "anyio._backends._asyncio", "tastr.labels", "tastr.engine.ml_tags"} <= top
+
+
 def test_worker_pins_the_sqljs_the_app_names():
     """worker/build.py copies sql.js from npm; the version must be the one the page asks /sqljs/ for."""
     from tastr.web.routes.search import SQLJS_VERSION

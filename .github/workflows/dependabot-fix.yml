@@ -47,7 +47,7 @@ jobs:
             echo "go=false" >> "$GITHUB_OUTPUT"
           elif [ "$author" != "dependabot[bot]" ]; then
             gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body \
-              "The tests still fail after the latest commit (by $author), so Claude won't try again on its own. Comment \`@claude\` with what to try, or close this update."
+              "The tests still fail after the latest commit (by $author), so Claude won't try again on its own. Comment \`@codex\` with what to try, fix it in a Claude session, or close this update."
             echo "go=false" >> "$GITHUB_OUTPUT"
           else
             echo "go=true" >> "$GITHUB_OUTPUT"

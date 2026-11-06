@@ -18,13 +18,13 @@ title tags are skipped.
 Set these in the shell you run `tastr serve` / `tastr analyze` from, never in the repo:
 
 ```bash
-export TASTR_LOOKUP=getsongbpm,freqblog,acousticbrainz   # providers to ask, in order
+export TASTR_LOOKUP=getsongbpm,freqblog,reccobeats,acousticbrainz   # providers to ask, in order
 export GETSONGBPM_API_KEY=...               # https://getsongbpm.com/api (free; requires a link back)
 export FREQBLOG_API_KEY=...                 # https://api.freqblog.com/docs (free tier 1,000 requests a month)
 export FREQBLOG_PLAN=paid                   # only on a paid FreqBlog plan: lets Tastr store its answers (see below)
 ```
 
-AcousticBrainz needs no key but a local index of its dump; see [AcousticBrainz](#acousticbrainz)
+ReccoBeats needs nothing set up. AcousticBrainz needs no key but a local index of its dump; see [AcousticBrainz](#acousticbrainz)
 below. A provider named in `TASTR_LOOKUP` that isn't set up (no key, no index) is skipped with a
 warning.
 
@@ -64,7 +64,7 @@ not a hostile visitor once Tastr is shared. Every request a provider sends goes 
 | Guardrail | Default | Override |
 |---|---|---|
 | Spacing: one request at a time per provider, at least this far apart | 1 s (AcousticBrainz 1.1 s, for MusicBrainz's one a second) | `TASTR_LOOKUP_<NAME>_INTERVAL` |
-| Requests per UTC day | FreqBlog 60, GetSongBPM 1,000 (its own limit is 3,000 an hour), AcousticBrainz 1,000 (MusicBrainz searches) | `TASTR_LOOKUP_<NAME>_DAILY` |
+| Requests per UTC day | FreqBlog 60, GetSongBPM 1,000 (its own limit is 3,000 an hour), ReccoBeats 1,000 (about 200 tracks), AcousticBrainz 1,000 (MusicBrainz searches) | `TASTR_LOOKUP_<NAME>_DAILY` |
 | Requests per calendar month | FreqBlog 900 (its free tier is 1,000), GetSongBPM none | `TASTR_LOOKUP_<NAME>_MONTHLY` |
 | The provider's own quota headers (`x-quota-used` / `x-quota-limit`, `x-ratelimit-remaining`) | pause 20 requests short of its limit until its reset time | |
 | HTTP 429 / 5xx | pause for Retry-After, else 1 min doubling to 1 h | |
@@ -87,10 +87,11 @@ scripts and curl still get through, so a server other people can reach needs rea
 |---|---|---|
 | `getsongbpm` | tempo, key (`key_of`), time signature, Open Key | Free with a key, sent in the `X-API-KEY` header. A visible link back to getsongbpm.com is "REQUIRED (website or store listing)", or the account can be suspended; the card links each listing to its GetSongBPM page and the README links the site, but whether that satisfies them for a local app is worth confirming with GetSongBPM. Search hits use `song_title` / `song_id` (also read: `title` / `id`). Host override: `GETSONGBPM_API_BASE`. |
 | `freqblog` | BPM, half-time BPM, key, Camelot, Open Key | Key in an `X-API-Key` header. Fields per its OpenAPI spec (`track_name`, `artist_name`, ...). It returns its closest match, so a different song is treated as not found. Unknown tracks may come back 202 "queued". Caching results is allowed only on paid plans: answers are stored only with `FREQBLOG_PLAN=paid`. Host override: `FREQBLOG_API_BASE`. |
+| `reccobeats` | BPM only (energy, danceability and valence kept in `result_json`) | Free, no key; its [terms](https://reccobeats.com/docs/documentation/terms-of-service) allow personal and commercial use and keeping answers, but it may block clients that send too much. No track search, so a lookup is an artist search, that artist's tracks 50 at a time (up to 10 pages) until the title matches, then the track's audio features: about five requests. A remix, live take or DJ mix only matches the same version; extended and radio cuts count as the same track, closest length first. Its key isn't used: on 38 tracks (November 2026) it matched Rekordbox's on 14, against 30 for Tastr's, while its BPM matched on 31 (Tastr's on 28). Host override: `RECCOBEATS_API_BASE`. |
 | `acousticbrainz` | BPM, key and scale (Essentia estimates from 2022 and earlier) | Public domain (CC0), so answers are stored. Looked up by MusicBrainz recording id from a local index of the dump; only the MusicBrainz search goes online. See below. |
 | `rekordbox` | BPM and key from your own Rekordbox collection export | Never looked up and not in `TASTR_LOOKUP`: stored for the tracks in both libraries by `/api/admin/rekordbox-compare?save=1` ([rekordbox.md](rekordbox.md)), then shown and compared like the others. |
 
-Both catalogs' figures are estimates too (theirs or their users'), so a disagreement means "check this
+The catalogs' figures are estimates too (theirs or their users'), so a disagreement means "check this
 track", not "Tastr is wrong". The provider modules were written from each API's published examples;
 check them against a live key after an API change.
 

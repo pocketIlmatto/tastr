@@ -19,7 +19,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from . import acousticbrainz, freqblog, getsongbpm, rekordbox  # noqa: F401  registers the built-in providers
+from . import acousticbrainz, freqblog, getsongbpm, reccobeats, rekordbox  # noqa: F401  registers the built-in providers
 from .base import PROVIDERS, LookupResult, Provider, ProviderError, TrackQuery, parse_listed_key, register  # noqa: F401
 from .guard import Limited, usage_conn
 
@@ -43,7 +43,7 @@ def enabled() -> list[Provider]:
     return out
 
 
-SOURCE_ORDER = ("rekordbox", "getsongbpm", "freqblog", "acousticbrainz")  # the card's "Listed elsewhere" table
+SOURCE_ORDER = ("rekordbox", "getsongbpm", "freqblog", "reccobeats", "acousticbrainz")  # the card's "Listed elsewhere" table
 
 
 def sources(on: list[Provider] | None = None) -> list[dict[str, Any]]:

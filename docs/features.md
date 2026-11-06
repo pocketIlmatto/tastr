@@ -24,8 +24,8 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   marked ✦, and replace Tastr's weakest moods ([essentia.md](essentia.md)).
 - **File tags.** Title, artist and album from MP3, FLAC and m4a tags.
 - **Listed elsewhere (optional).** The BPM and key that [GetSongBPM](https://getsongbpm.com)
-  and FreqBlog (your own API keys) or AcousticBrainz's public-domain dump list for the
-  track, shown next to Tastr's figures with a mark when they disagree. Off by default; see
+  and FreqBlog (your own API keys), ReccoBeats (BPM only, no key) or AcousticBrainz's public-domain dump
+  list for the track, shown next to Tastr's figures with a mark when they disagree. Off by default; see
   [lookup.md](lookup.md).
 
 ## Drums, bass and chords

@@ -177,6 +177,23 @@ settings. Be careful with `@claude` on someone else's pull request: Claude then 
 - **Secret:** the same Claude secret as slow tests.
 - **Cost:** up to 45 minutes and 60 turns per mention, on the owner's Claude plan.
 
+## Codex code reviews
+
+OpenAI Codex reviews pull requests as a second, advisory reviewer. It runs through Codex's own GitHub
+integration on the owner's ChatGPT plan, not in Actions, so there is no workflow file and no secret in this
+repository. Codex posts a review with comments. It doesn't approve or block: the owner's approval is still the only
+thing main's ruleset needs, and auto-merge doesn't wait for Codex.
+
+- **What it checks:** the "Review guidelines" in [AGENTS.md](../AGENTS.md), which also tell Codex to follow
+  CLAUDE.md.
+- **Setting:** on [chatgpt.com/codex](https://chatgpt.com/codex), connect GitHub with access to this repository,
+  then in the Codex settings turn on **Code review** for it, with automatic reviews on. Without it, nothing happens.
+- **Try it:** comment `@codex review` on a pull request, optionally followed by what to focus on.
+- **Claude sessions** treat Codex's comments like any other review comment on their pull requests: fix what's
+  right, and reply where a comment is wrong. A fix pushed after the owner approved dismisses that approval, so the
+  owner approves again.
+- **Cost:** counts against the owner's ChatGPT plan's Codex usage. No Actions minutes.
+
 ## Dependency updates
 
 `.github/dependabot.yml` asks for updates once a month, in one grouped pull request per ecosystem: Python

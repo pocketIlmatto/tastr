@@ -59,6 +59,17 @@ from tastr.lookup import acousticbrainz  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
 
+# Cloudflare runs this module's top level at deploy time and snapshots the memory, so a new isolate starts with
+# everything imported here already loaded. These are otherwise imported on first use, which on the Worker means on
+# the first request of every new isolate (docs/hosting-map.md, Cold starts): PyJWT with cryptography for the
+# Access login (the biggest), the review list, ML tags and Starlette's sync-endpoint runner.
+import anyio._backends._asyncio  # noqa: E402, F401
+import jwt  # noqa: E402
+import jwt.algorithms  # noqa: E402, F401
+
+from tastr import labels  # noqa: E402, F401
+from tastr.engine import ml_tags  # noqa: E402, F401
+
 DB_PATH = "/tmp/tastr/tastr.db"  # only a name here: the database is the Durable Object's own storage
 KEYS_SECONDS = 3600
 def fetch_request(method: str, url: str, headers: dict, body, timeout: float = http.TIMEOUT) -> http.Response:
@@ -153,16 +164,12 @@ class AccessKeys:
     async def refresh(self, team_domain: str) -> None:
         if self.by_kid and time.time() - self.at < KEYS_SECONDS:
             return
-        import jwt
-
         r = await fetch(f"https://{team_domain}/cdn-cgi/access/certs")
         data = await r.json()
         self.by_kid = {k["kid"]: jwt.PyJWK(k).key for k in data["keys"]}
         self.at = time.time()
 
     def get_signing_key_from_jwt(self, token: str):
-        import jwt
-
         kid = jwt.get_unverified_header(token).get("kid")
         if kid not in self.by_kid:
             raise jwt.PyJWTError("unknown signing key")
@@ -203,13 +210,19 @@ def use_bindings(env) -> None:
     acousticbrainz.use_d1(d1_query(db_binding) if db_binding is not None else None)
 
 
-def ms(seconds: float) -> int:
-    return round(seconds * 1000)
-
-
 APP = None
 SETTINGS: Settings | None = None
 KEYS = AccessKeys()
+
+
+async def refresh_keys() -> None:
+    """Cloudflare Access's signing keys, when hosted and over an hour old (AccessKeys)."""
+    if SETTINGS is None or not SETTINGS.hosted:
+        return
+    try:
+        await KEYS.refresh(SETTINGS.access_team_domain)
+    except Exception as e:  # noqa: BLE001 - keys unreachable: the known keys (or none: every login fails) stand
+        print(f"couldn't fetch the Access signing keys: {type(e).__name__}: {e}")
 
 
 class Library(DurableObject):
@@ -219,33 +232,28 @@ class Library(DurableObject):
         storage = Storage(ctx.storage)
         db.use_storage(lambda path: storage)
         if APP is None:
-            t0 = time.perf_counter()
+            # A cold start: a new isolate, so the request or alarm that woke it waits for this. The Worker's clock
+            # stands still while code runs (it moves only on I/O), so this can't be timed from here; the line marks
+            # the invocation whose CPU time to read in the logs (docs/hosting-map.md, Cold starts).
+            print("cold start: building the app")
             load_env(env)
             use_bindings(env)
             SETTINGS = Settings.from_env()
             verifier = AccessVerifier(SETTINGS.access_team_domain, SETTINGS.access_aud, keys=KEYS) \
                 if SETTINGS.hosted else None
             APP = create_app(DB_PATH, SETTINGS, verifier=verifier, threads=False)
-            t1 = time.perf_counter()
             APP.state.startup()
-            # A cold start: the first request after a quiet spell waits for this (docs/hosting-map.md).
-            print(f"cold start: app {ms(t1 - t0)} ms, startup {ms(time.perf_counter() - t1)} ms")
 
     async def fetch(self, request):
-        if SETTINGS.hosted:
-            try:
-                t0, cold = time.perf_counter(), not KEYS.by_kid
-                await KEYS.refresh(SETTINGS.access_team_domain)
-                if cold:
-                    print(f"cold start: Access keys {ms(time.perf_counter() - t0)} ms")
-            except Exception as e:  # noqa: BLE001 - keys unreachable: the known keys (or none: every login fails) stand
-                print(f"couldn't fetch the Access signing keys: {type(e).__name__}: {e}")
+        await refresh_keys()
         response = await asgi.fetch(APP, request, self.env)
         await self.arm()
         return response
 
     async def alarm(self, *_):
         RUNNER.run_due()
+        # An alarm often starts the isolate that a visitor then finds warm: fetching the keys here spares that visit.
+        await refresh_keys()
         await self.arm()
 
     async def arm(self):

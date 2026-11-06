@@ -81,6 +81,11 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   `{loop}`, filled from the open track. The editor lists every fill-in with its
   value and previews the result live; templates are saved with your account and
   move between servers with Export all / Import….
+- **Short links:** "Copy short link" gives a short `/pub/s/…` link to the code that
+  anyone can open; chat apps show a Tastr preview card for it. A mash-up's link from
+  an admin (or from your own machine) shows both tracks' album art instead, read
+  from the files' embedded covers, with a drum-pad tile for a track that has none.
+  Other people's links keep the standard card, since cover art belongs to the labels.
 - **Ask Claude to change it:** type what you want ("make the drums half-time and
   add a filter sweep into the drop") and Claude rewrites the code; you see what
   changed, and can undo it or save it as a template. On a shared server each person

@@ -86,6 +86,9 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
 
 ## Listen and explore
 
+- **First load:** until your library arrives, the track list and card show placeholder rows and "Loading your
+  library…". After 3 s the list says the server is waking up (a hosted server starts from cold after a quiet spell),
+  and if loading fails it shows why, with **Retry**. Explore, Files and Admin show one loading line meanwhile.
 - **Energy, waveform and spectrogram views** with playback. Click a section to
   play from there, drag the playhead to scrub (you hear it as you drag), and
   scroll to zoom. The spectrogram redraws sharp at your screen's resolution as you zoom.

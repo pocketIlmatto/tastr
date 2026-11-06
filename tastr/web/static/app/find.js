@@ -1,11 +1,10 @@
 // Find tracks: the Simple builder and SQL.
 
 import { $, ML_REPLACES, api, h, isNum, mmss, tracks } from "./core.js";
-import { refresh } from "./library.js";
+import { configDone, firstLoad } from "./library.js";
 import { openTrack, switchTo } from "./card.js";
 import { endStart, routeOf } from "./route.js";
 import { setServerCfg } from "./daw.js";
-import { setStatus } from "./upload.js";
 import * as qlib from "./query-lib.js";
 import { showViewAs } from "./viewas.js";
 
@@ -321,7 +320,7 @@ export function init() {
   document.querySelectorAll("#q-mode button").forEach((b) => b.addEventListener("click", () => setQMode(b.dataset.mode)));
   $("run-sql").addEventListener("click", runSql);
   qGroups = SIMPLE_EXAMPLES[0][1].map((g) => qGroup(g.conds, g.join));
-  refresh().catch((e) => setStatus(e.message, true));
+  firstLoad();  // the list shows its own loading, slow-start and error states
   // A shared (hosted) server turns off link analysis; hide it rather than let it fail. Its SQL box reads only your own library.
   // Admins of a hosted server also get the Admin tab; everyone else never sees it, and #admin stays on the library.
   api("/api/config").then((cfg) => {
@@ -341,5 +340,6 @@ export function init() {
       if (startView === "admin") switchTo("admin");
     }
     endStart();  // a refresh on #admin waited for this answer before showing anything
-  }).catch(endStart);
+    configDone();
+  }).catch(() => { endStart(); configDone(); });
 }

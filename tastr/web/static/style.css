@@ -41,6 +41,26 @@ textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
 #track-list li { padding: 8px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
 #track-list li:last-child { border-bottom: 0; }
 #track-list li.active { background: var(--accent-soft); }
+/* First load (sandbox v206): skeleton rows and the loading, slow-start and error lines (library.js firstLoad) */
+#track-list li.skel { cursor: default; display: grid; gap: 6px; padding: 10px; }
+#track-list li.skel i, .skel-card i { display: block; height: 12px; border-radius: 4px; background: color-mix(in srgb, var(--line) 70%, transparent); }
+#track-list li.skel i.sub { height: 9px; opacity: .7; }
+#track-list li.boot-say { cursor: default; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 2px; }
+#track-list li.boot-err { cursor: default; font-size: 13px; color: var(--warn); display: grid; gap: 6px; justify-items: start; }
+#track-list li.boot-err span { color: var(--fg); }
+.skel-card { display: grid; gap: 12px; padding: 4px 0; }
+.skel-card .t { width: 45%; height: 22px; } .skel-card .s { width: 30%; }
+.skel-card .row { display: flex; flex-wrap: wrap; gap: 12px; } .skel-card .row i { width: 90px; height: 44px; }
+.skel-card .big { height: 160px; }
+@media (prefers-reduced-motion: no-preference) {
+  #track-list li.skel i, .skel-card i { background: linear-gradient(90deg, color-mix(in srgb, var(--line) 70%, transparent) 0%, color-mix(in srgb, var(--line) 30%, transparent) 50%, color-mix(in srgb, var(--line) 70%, transparent) 100%); background-size: 200% 100%; animation: skel 1.4s ease-in-out infinite; }
+}
+@keyframes skel { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.boot-line { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; margin: 12px 0; font-size: 14px; color: var(--muted); }
+.boot-line[hidden] { display: none; }
+.boot-line.err { color: var(--warn); gap: 8px; }
+html[data-loading] #view-explore > :not(.boot-line), html[data-loading] #view-files > :not(.boot-line), html[data-loading] #view-admin > :not(.boot-line),
+html[data-cfg-wait] #view-admin > :not(.boot-line) { display: none; }
 #track-list .t { font-weight: 600; overflow-wrap: anywhere; }
 #track-list .s { color: var(--muted); font-size: 13px; }
 #card { min-width: 0; }

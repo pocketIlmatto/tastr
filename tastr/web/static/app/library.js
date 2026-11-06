@@ -120,6 +120,56 @@ export async function loadTracks() {
   }
   fillFilterOptions();
 }
+// The first load: until the first /api/tracks answers (seconds after a quiet spell, while the server starts), the
+// list shows skeleton rows and "Loading your library…", after 3 s "Waking up the server…", and if it fails the
+// error with Retry. The card shows a skeleton, and Explore, Files and Admin one line each (their .boot-line), with
+// the rest of the view hidden (style.css, html[data-loading]). Admin also waits for /api/config (configDone).
+let libLoad = null;  // null once loaded, or {phase: "loading" | "slow" | "failed", msg}
+let cfgWait = true;
+const BOOT_SAY = { loading: "Loading your library…", slow: "Waking up the server. This takes a few seconds after a quiet spell." };
+const SLOW_MS = 3000;
+const retryBtn = () => h("button", { type: "button", onclick: () => firstLoad() }, "Retry");
+function bootRows() {
+  if (libLoad.phase === "failed") return [h("li", { class: "boot-err", role: "alert" },
+    h("b", {}, "Couldn't load your library."), h("span", {}, ` ${libLoad.msg}`), retryBtn())];
+  return [h("li", { class: "boot-say", role: "status", "aria-live": "polite" }, h("span", { class: "spin", "aria-hidden": "true" }), BOOT_SAY[libLoad.phase]),
+    ...[62, 48, 70, 55, 66, 44].map((w) => h("li", { class: "skel", "aria-hidden": "true" }, h("i", { style: `width:${w}%` }), h("i", { class: "sub", style: `width:${w - 18}%` })))];
+}
+function paintBoot() {
+  const root = document.documentElement;
+  root.toggleAttribute("data-loading", !!libLoad);
+  root.toggleAttribute("data-cfg-wait", cfgWait);
+  const failed = libLoad?.phase === "failed", slow = libLoad?.phase === "slow";
+  document.querySelectorAll("[data-boot-line]").forEach((p) => {
+    const admin = !!p.closest("#view-admin"), show = !!libLoad || (admin && cfgWait);
+    p.hidden = !show; p.classList.toggle("err", failed);
+    if (!show) { p.replaceChildren(); return; }
+    p.replaceChildren(...(failed ? [`Couldn't load your library. ${libLoad.msg}`, " ", retryBtn()]
+      : [h("span", { class: "spin", "aria-hidden": "true" }), slow ? BOOT_SAY.slow : admin ? "Loading…" : p.closest("#view-files") ? "Loading your files…" : BOOT_SAY.loading]));
+  });
+  // The card: a skeleton while loading, unless a track (from the address) has already opened; the placeholders
+  // this puts there carry .boot-card, so only they are replaced afterwards.
+  const card = $("card"), mine = card.querySelector(":scope > .boot-card"), empty = mine || card.querySelector(":scope > p.muted:only-child");
+  if (!empty) return;
+  if (failed) card.replaceChildren(h("p", { class: "muted boot-card" }, "Your tracks show here once the library loads."));
+  else if (libLoad) { if (!card.querySelector(".skel-card")) card.replaceChildren(h("div", { class: "skel-card boot-card", "aria-hidden": "true" }, h("i", { class: "t" }), h("i", { class: "s" }), h("div", { class: "row" }, h("i"), h("i"), h("i"), h("i")), h("i", { class: "big" }))); }
+  else if (mine) card.replaceChildren(h("p", { class: "muted" }, "Select a track."));
+}
+// Admin's line also waits for /api/config (find.js calls this once it has answered, or failed).
+export function configDone() { cfgWait = false; paintBoot(); }
+export async function firstLoad() {
+  libLoad = { phase: "loading" }; renderList(); paintBoot();
+  const slow = setTimeout(() => { if (libLoad?.phase === "loading") { libLoad.phase = "slow"; renderList(); paintBoot(); } }, SLOW_MS);
+  try {
+    await loadTracks();
+    libLoad = null;
+  } catch (e) {
+    libLoad = { phase: "failed", msg: e.status ? e.message : "The server didn't answer. Check your connection, then retry." };
+  } finally {
+    clearTimeout(slow);
+  }
+  renderList(); paintBoot();
+}
 export async function refresh(selectId) {
   await loadTracks();
   // A freshly analyzed track must be visible, so show everything, newest first.
@@ -243,7 +293,8 @@ export function renderList() {
   $("lib-n").textContent = countLine(l, shown.length);
   $("lib-clear").hidden = !libActive();
   $("lib-tools").hidden = !tracks.length;
-  if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
+  if (libLoad) { $("lib-n").textContent = ""; $("lib-review-n").textContent = ""; ul.append(...bootRows()); }
+  else if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
   else if (!shown.length && !pending.length) ul.append(noneRow(l));
   for (const p of working()) ul.append(pendingLi(p));
   knownRows(ul);

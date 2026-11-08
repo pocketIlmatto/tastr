@@ -248,3 +248,17 @@ def test_snare_sources_score_each_rule():
     pooled = bench_drums._pool([{"counts": {}, "fp_at": {}, "split": {}, "unlabeled": {}, "snare_sources": got}],
                                bench_drums.LANE_LABELS)
     assert pooled["snare_sources"]["model"]["counts"].tolist() == [13, 1, 0]
+
+
+def test_tom_sources_score_each_rule():
+    """The tom rules read only the model's own hits: a weak tom on a snare goes, a strong one stays."""
+    model = {"tom": (np.array([1.0, 2.0, 3.0]), np.array([0.95, 0.6, 0.6])),  # 2.0 is a snare, not a tom
+             "snare": (np.array([1.0, 2.0]), np.array([0.7, 0.9])), "kick": (np.array([3.0]), np.array([0.9]))}
+    ref = {"tom": [1.0, 3.0], "snare": [2.0], "kick": [3.0]}
+    got = bench_drums._score_tom_sources(model, ref)
+    assert got["model"]["counts"] == [2, 1, 0] and got["model"]["fp_at"] == {"snare": 1}
+    assert got["snare-veto"]["counts"] == [1, 0, 1]  # loses the real tom played with a snare too
+    assert got["snare-stronger"]["counts"] == [2, 0, 0]
+    assert got["snare-veto-0.9"]["counts"] == [2, 0, 0]
+    assert got["kit-veto-0.9"]["counts"] == [1, 0, 1]  # the tom on the kick goes
+    assert got["conf-0.7"]["counts"] == [1, 0, 1]

@@ -157,12 +157,13 @@ TensorFlow checkpoint without TensorFlow (`tf_checkpoint.py`). The network,
 the madmom-style spectrogram and the peak picking in `adt.py` are written
 from ADTOF's published architecture and settings, not copied.
 
-**What it replaces.** The model supplies the kick, hat and tom lanes and
-adds a cymbal lane. Each hit is placed on the analysis frames with its
+**What it replaces.** The model supplies the kick, hat, tom and snare lanes
+and adds a cymbal lane. Each hit is placed on the analysis frames with its
 confidence (ADTOF's per-drum threshold maps to 0.5) times the level of the
 built-in part for that family, so the groove's "20% of the loudest lane"
-rule still compares like with like. Snare, clap, perc and open hat stay
-with the built-in detector (the model's hi-hats replace only the hits our
+rule still compares like with like. Its snares go through a confidence rule
+(see "The snare trade-off" below). Clap, perc and open hat stay with the
+built-in detector (the model's hi-hats replace only the hits our
 ringing test calls closed). Because of the license, and because it is
 slower, it runs only when asked for one track: "Detect drums with the model"
 in the track's ⋯ menu (or the bulk Actions menu, or `tastr drum-model run ID`)
@@ -228,7 +229,8 @@ revisit with a bench option that runs MDB and IDMT both ways on Modal.
 **The snare trade-off.** ADTOF's snare is far better on MDB and StemGMD
 (0.74 and 0.91 against 0.51 and 0.46) but worse on IDMT's sampled and
 techno kits (0.88 against 0.94; 338 false snares on hi-hats). The built-in
-snare is kept for now; a confidence rule that gets most of both is below. Keeping ADTOF's snares only where the built-in snare
+snare was kept at first; a confidence rule that gets most of both is below,
+and is what the snare lane uses now. Keeping ADTOF's snares only where the built-in snare
 also has an onset (eval adapter) is precise but loses ADTOF's recall:
 StemGMD test kits F 0.63 (P 0.98, R 0.46) against 0.46 built-in and 0.91
 ADTOF; synth 0.82 against 0.86 and 0.89. MDB and IDMT still to measure.
@@ -289,11 +291,19 @@ What the rules taught us:
   the built-in lane adds the ones it misses; on real kits it adds every hat
   error of both.
 
-These are onset scores of the rule itself (like the eval-adapter rows
-above), not yet through the shipped lanes: the engine still takes its snare
-from the built-in detector. Wiring the rule in means passing the model's
-snare hits to the engine with the others and placing them like the model's
-toms; the shipped-lane scores should then be re-measured on the same suites.
+**Shipped (2026-11-08).** The engine now applies this rule with the model
+on (`drums::SNARE_CONFIDENT`, `SNARE_GATE` in engine-rs/src/drums.rs; the
+built-in onset is a peak of the snare part's rise at 0.4x its 99.5th
+percentile). Through the shipped lanes, same suites, built-in -> model:
+
+| | MDB mixes | MDB stems | StemGMD test kits | IDMT | Synth (onsets) |
+|---|---|---|---|---|---|
+| Snare | 0.506 -> 0.682 (P 0.87, R 0.56) | 0.601 -> 0.784 | 0.463 -> 0.893 | 0.935 -> 0.928 | 0.864 -> 0.996 |
+
+Every other lane scored the same, except perc on the StemGMD test kits
+(0.664 -> 0.627, precision 0.996 -> 0.834) and synth (0.537 -> 0.571): perc's
+onset threshold is a share of the whole mid family, and the model's snares
+sit lower in it than the built-in snare's peaks did.
 
 **Speed.** About 0.6 s per minute of audio on one CPU thread once loaded,
 against about 2.5 s for the built-in lanes in the bench.

@@ -328,6 +328,42 @@ most 6 of zip 0's 168 misses). That fits the music: power chords carry no third,
 the minor pentatonic over major keys. More training data won't fix that. Ideas, not started: lower the key
 confidence or call the mode uncertain when the third and sixth degrees are weak, and bench rock separately.
 
+### Mode uncertain (2026-11-08)
+
+Cards now carry `key.mode_uncertain`: major or minor is a guess. It is raised when both of these hold
+(engine-rs `music::mode_uncertain`, thresholds `MODE_UNCERTAIN_THIRD` and `MODE_UNCERTAIN_MARGIN` in music.rs):
+
+- the thirds don't say: |major 3rd - minor 3rd| / (their sum) in the key profile, above the chosen tonic, is
+  under 0.15 (`third_contrast`; power chords leave both faint, minor-pentatonic riffs over a major key make
+  them equal);
+- the key model barely prefers this mode: the top key's probability is less than 0.2 ahead of its parallel
+  key's (`KeyEstimate::mode_margin`).
+
+Measured with `python -m tastr.engine.bench.key_mode` on the cached key profiles (`tastr key-profiles`, run on
+Modal; FMA genres from the mp3s' ID3 tags). "Mode wrong" counts tracks whose tonic is right but whose mode isn't:
+
+| Set | Flagged | Mode wrong, flagged | Mode wrong, not flagged |
+|---|---|---|---|
+| FMA Keys, all 1,752 | 11% | 35% (33 of 95) | 7% (68 of 914) |
+| FMA Rock + Blues + Punk (284) | 16% | 48% (13 of 27) | 13% (21 of 162) |
+| FMA, other genres (1,215 tagged) | 10% | 30% (17 of 56) | 6% (40 of 630) |
+| GiantSteps (599) | 15% | 20% (7 of 35) | 6% (22 of 345) |
+| Beatport, sure labels (1,122) | 22% | 26% (34 of 132) | 16% (95 of 592) |
+
+It holds on both FMA halves (zip 0: 19 of 47 flagged against 36 of 353; zips 050-069: 14 of 48 against 32 of
+561). On flagged rock songs the mode is a coin flip, which is what the flag should say. The thresholds were
+picked on these same profiles, so read the numbers as in-sample.
+
+What it doesn't fix: most of the major songs read as minor don't keep their tonic. With the current model, 87 of
+FMA's 338 are the parallel minor; the rest are a minor chord of the key (iii, ii, vi) or something else, and the third
+above the wrong tonic says nothing useful about those. Among songs read as minor, neither the third nor the sixth
+contrast tells the major ones apart (AUC about 0.52); the key confidence does better (0.65, 0.71 on rock). The
+sixth adds nothing over the third for parallel misses either (AUC 0.64 against 0.77 for the third alone on
+FMA), and how loud the thirds are against the tonic and fifth doesn't help (0.57). The key model's own
+parallel margin alone does about as well as the third (0.75). Requiring both flags fewer tracks (11% of FMA
+against 16% for the margin under 0.2 alone) and is right more often when it fires (35% against 31%). Card benches (`tastr bench`) now report the flag too: how many tracks it marks, and the parallel-miss
+rate with and without it.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:

@@ -24,7 +24,7 @@ beats, downbeats, key, energy and the shared scalar features.
 | `core.downbeat_times` | list[float] s | every `beats_per_bar`-th beat from the phase `_downbeat_phase` picks (kick, backbeat, timbre/chord, bass and bar-change cues; docs/rhythm.md) |
 | `core.beats_per_bar`, `core.meter_set` | 3 or 4, bool | the caller's `options["beats_per_bar"]` (meter_set true), else the detected guess below |
 | `extras["core.meter_guess"]` | `{beats_per_bar: 3 or 4, score}` | what was detected, even when the user set the meter: `_meter_score` > `METER_THRESHOLD` reads as 3/4 (docs/rhythm.md "Meter") |
-| `core.key` | `Key` | `music.estimate_key(music.key_profile(chroma))`, the learned key model (`key_model.py`, see docs/bench.md) → tonic/mode; confidence = top key probability minus the runner-up's; `likely_correct = calibration.likely_correct("key", confidence)`; `scale = music.refine_mode(...)`; `camelot = music.camelot(tonic, mode)` |
+| `core.key` | `Key` | `music.estimate_key(music.key_profile(chroma))`, the learned key model (`key_model.py`, see docs/bench.md) → tonic/mode; confidence = top key probability minus the runner-up's; `likely_correct = calibration.likely_correct("key", confidence)`; `scale = music.refine_mode(...)`; `camelot = music.camelot(tonic, mode)`; `mode_uncertain` when the major and minor third are close and the parallel key is close behind (docs/bench.md "Mode uncertain") |
 | `core.loudness_db` | float | already done in the stub (RMS dBFS) |
 | `core.energy` | 0..1 | 0.35·clip((loudness_db+30)/22) + 0.25·clip(onset_rate/6) + 0.20·brightness + 0.20·clip(percussiveness/0.5) |
 | `series["energy"]` | `Series` | one point per bar: time = downbeat, value = min-max normalised (5th-95th percentile) mean RMS dB of the bar, 0..1 |

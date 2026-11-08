@@ -178,6 +178,7 @@
    "confidence": 0.351,
    "likely_correct": 0.631,
    "mode": "major",
+   "mode_uncertain": false,
    "scale": "Major",
    "tonic": 0
   },

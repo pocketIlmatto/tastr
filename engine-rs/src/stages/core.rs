@@ -162,6 +162,7 @@ fn set_key(ctx: &Ctx, card: &mut Card) {
         camelot: music::camelot(est.tonic, est.mode),
         confidence: est.confidence,
         likely_correct: music::likely_correct("key", est.confidence),
+        mode_uncertain: music::mode_uncertain(&profile, est.tonic, est.mode_margin),
     });
     let alts: Vec<Json> =
         est.alternatives.iter().map(|(k, p)| Json::obj().with("key", k.clone()).with("probability", *p)).collect();

@@ -579,6 +579,7 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   | Beatport drum & bass | 40 | 0.500 / 0.775 | 0.325 / 0.775 | 21 -> 31 |
   | Beatport 85-92, not drum & bass | 25 | 0.600 / 0.840 | 0.520 / 0.840 | 6 -> 8 |
   | Beatport hip-hop, downtempo, breaks, dubstep, drum & bass | 279 | 0.796 / 0.885 | 0.763 / 0.885 | 40 -> 52 |
+  | `beatport-tempo`, all | 774 | 0.897 / 0.930 | 0.885 / 0.930 | |
 
   The thresholds were picked on the 35 Beatport and GiantSteps tracks read at 79-93 BPM (from the 279-track
   subset and the 43 GiantSteps tracks); GTZAN and hjdb are held out. Results moved little between 0.75 and 0.9
@@ -595,8 +596,13 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   bass. The drum part's unmixing is what separates them.
 - Still open: 5 of 40 Beatport drum & bass tracks and 2 of 16 fast GiantSteps tracks still read at 86-90.
   Their snare is half-time too (beat 3 of the fast bar, like a real 87 BPM backbeat) or they fall just short
-  of the thresholds. The 2/3-tempo locks (116 for 174) are unchanged. The full 774-track `beatport-tempo` run
-  and the BPM calibration refit (`calibrate`) are still to do.
+  of the thresholds. The 2/3-tempo locks (116 for 174) are unchanged. - Full runs after the change (2026-11-08, local; `bench_scores.json` recorded): `beatport-tempo` 774 tracks
+  Acc1 0.897 -> 0.885, Acc2 0.930 both. Its 9 lost tracks are the 7 drum & bass tracks listed at 85-89 and the
+  same hip-hop and downtempo tracks as in the subset; no other track changed result. `giantsteps-tempo` 0.791 /
+  0.907, hjdb (all 235) 0.932 / 0.949. The BPM calibration fitted on these 1,052 tracks gives nearly the
+  same knots as consts.rs (64%, 84%, 89%, 95%, 96-98% at the same raw scores; held-out Brier 0.085 vs flat
+  0.097), so it was not rewritten: `calibrate --write` also refits the key table, which needs fresh
+  out-of-fold key rows.
 
 ## Drum lanes
 

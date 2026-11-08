@@ -11,10 +11,11 @@ pub const LANES: [&str; 7] = ["kick", "snare", "clap", "hat", "open_hat", "tom",
 pub const MODEL_LANES: [&str; 4] = ["kick", "hat", "tom", "cymbal"];
 /// The drum model's hits per MODEL_LANES lane: (onset seconds, confidence 0.5 to 1 as float32).
 pub type ModelHits = [(Vec<f64>, Vec<f32>); 4];
-/// With the drum model, where the open-hat lane comes from. false: the built-in open-hat lane stays and the
-/// model's hi-hats replace only the closed ones. true: the model's hi-hats are split into closed and open by
-/// the built-in ringing test. The drum bench runs both ways (`--open-hats`); docs/drums.md "Open hats".
-pub const MODEL_OPEN_HATS: bool = false;
+/// With the drum model, where the open-hat lane comes from. true: the model's hi-hats are split into closed and
+/// open by the built-in ringing test. false: the built-in open-hat lane stays and the model's hi-hats replace
+/// only the closed ones. true scored better on every suite with open-hat labels (MDB mixes 0.21 -> 0.41);
+/// the drum bench runs both ways (`--open-hats`); docs/drums.md "Open hats".
+pub const MODEL_OPEN_HATS: bool = true;
 
 /// drums.MODEL_LANE_HELP: tooltips for the lanes the drum model finds.
 pub const MODEL_LANE_HELP: [(&str, &str); 4] = [
@@ -432,7 +433,8 @@ fn argmax_f64(v: &[f64], a: usize, b: usize) -> usize {
 }
 
 /// Put the drum model's hits (kick, hat, tom, cymbal) at frame index k in place of the built-in kick, tom and
-/// closed hat lanes. Our open-hat lane stays; the model's hi-hats replace the closed ones.
+/// closed hat lanes, keeping our open-hat lane (the model's hi-hats replace the closed ones). With
+/// model_open_hats, lane_activations then splits the model's hi-hats into both hat lanes instead.
 fn model_hit(m: &[Vec<f64>], out: &mut [Vec<f64>], k: usize, a: usize, b: usize, sh: f64) {
     let mx = |v: &[f64]| v[a..b].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let (mk, mh, mt, mc) = (mx(&m[0]), mx(&m[1]), mx(&m[2]), mx(&m[3]));

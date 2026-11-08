@@ -307,7 +307,7 @@ def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict
 MID = ("snare", "clap", "perc")
 GATE_SECONDS = 0.03  # how close the built-in mid part must be to a model snare for the mid gates
 MID_GATES = (0.05, 0.1, 0.2)  # x the 99.5th percentile of the built-in mid family
-CONFIDENT = 0.75  # model confidence (0.5 = ADTOF's threshold) kept without a gate
+CONFIDENT = (0.6, 0.65, 0.7, 0.75, 0.8, 0.85)  # model confidence (0.5 = ADTOF's threshold) kept without a gate
 
 
 def snare_sources(acts: dict[str, np.ndarray], model: dict, hop: int = 512, sr: int = SR) -> dict[str, np.ndarray]:
@@ -318,7 +318,7 @@ def snare_sources(acts: dict[str, np.ndarray], model: dict, hop: int = 512, sr: 
     - gated: model snares with a built-in snare or clap onset within 50 ms;
     - mid-G: model snares where the built-in mid part (snare, clap, perc) reaches G x its 99.5th percentile
       within 30 ms: a looser gate that only asks for some mid energy, not an onset;
-    - confident: model snares of confidence CONFIDENT or more, plus gated ones below it;
+    - confident-C: model snares of confidence C or more, plus gated ones below it;
     - union: the built-in and the model's snares together, one per hit.
     """
     builtin = lane_onsets(acts, ("snare", "clap")) * hop / sr
@@ -332,7 +332,8 @@ def snare_sources(acts: dict[str, np.ndarray], model: dict, hop: int = 512, sr: 
     peak = np.array([x.max() if x.size else 0.0 for x in win])
     for g in MID_GATES:
         out[f"mid-{g:g}"] = t[(peak >= g * level) & (level > 0)]
-    out["confident"] = t[(conf >= CONFIDENT) | near]
+    for c in CONFIDENT:
+        out[f"confident-{c:g}"] = t[(conf >= c) | near]
     out["union"] = _merged({"a": list(builtin), "b": list(t)}, ("a", "b"))
     return out
 

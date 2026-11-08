@@ -243,7 +243,7 @@ def test_snare_sources_score_each_rule():
     assert got["gated"]["counts"] == [12, 0, 1]
     assert got["mid-0.1"]["counts"] == [13, 0, 0]  # the loose gate keeps the faint one and drops the hat
     assert got["mid-0.2"]["counts"] == [12, 0, 1]
-    assert got["confident"]["counts"] == [12, 0, 1]
+    assert got["confident-0.75"]["counts"] == [12, 0, 1]
     assert got["union"]["counts"] == [13, 1, 0]
     pooled = bench_drums._pool([{"counts": {}, "fp_at": {}, "split": {}, "unlabeled": {}, "snare_sources": got}],
                                bench_drums.LANE_LABELS)

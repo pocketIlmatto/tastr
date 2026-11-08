@@ -39,13 +39,11 @@ def test_modal_image_deps_match_pyproject(name):
 def test_every_analysis_image_has_the_rust_engine():
     """The Rust engine makes every card (there is no Python fallback), so each Modal image that analyzes builds
     its library in; the build-time warm-up fails the deploy otherwise."""
-    src = (ROOT / "tastr/cloud/modal_web.py").read_text()
-    for name in ("image", "drums_image"):
-        assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), name
-    # The bench app's images: the engine base, and the PyTorch base the drum bench runs on with the drum model.
-    src = (ROOT / "tastr/cloud/modal_app.py").read_text()
-    for name in ("_engine_base", "_torch_base"):
-        assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), name
+    for app in ("modal_web.py", "modal_app.py"):  # the hosted app, and the benches (drums_image: the drum bench)
+        src = (ROOT / "tastr/cloud" / app).read_text()
+        for name in ("drums_image",) if app == "modal_app.py" else ("image", "drums_image"):
+            assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), f"{app}: {name}"
+    assert re.search(r"^_engine_base = \(\n    with_rust_engine\(", (ROOT / "tastr/cloud/modal_app.py").read_text(), re.M)
 
 
 @pytest.mark.audio
@@ -259,9 +257,6 @@ def test_drum_bench_remote(monkeypatch, tmp_path, capsys):
     assert "R alone 1.00 (n=2)" in capsys.readouterr().out
     assert json.loads(out.read_text())["tracks"] == 2
     assert main(["drum-bench", "idmt"]) == 2
-    calls.clear()
-    assert main(["drum-bench", "mdb", "mdb-drums", "--remote", "--drum-model", "--open-hats", "model"]) == 0
-    assert calls == [("drum_bench_model", ("mdb", "mdb-drums", None, False, "all"), {"open_hats": "model"})]
 
 
 def test_drum_bench_write_bundle(tmp_path):
@@ -279,6 +274,9 @@ def test_drum_bench_remote_with_the_drum_model(monkeypatch, tmp_path):
     calls = fake_modal(monkeypatch, report)
     assert main(["drum-bench", "idmt", "idmt-smt-drums", "--remote", "--drum-model"]) == 0
     assert calls == [("drum_bench_model", ("idmt", "idmt-smt-drums", None, False, "all"), {})]
+    calls.clear()
+    assert main(["drum-bench", "mdb", "mdb-drums", "--remote", "--drum-model", "--open-hats", "model"]) == 0
+    assert calls == [("drum_bench_model", ("mdb", "mdb-drums", None, False, "all"), {"open_hats": "model"})]
 
 
 def test_drums_extra_shares_pytorch():

@@ -28,6 +28,11 @@ within 30 ms ("alone" or "with").
     python -m tastr.engine.bench.drums mdb ~/data/mdb-drums --jobs 4
     python -m tastr.engine.bench.drums stemgmd-mix ~/data/stemgmd-single-hits
 
+With the drum model on (TASTR_DRUM_MODEL=adtof, or `tastr drum-bench --drum-model`), `--open-hats model`
+takes the open-hat lane from the model's hi-hats split by the built-in ringing test, and `--open-hats
+built-in` keeps the built-in open-hat lane; without it the engine's default (drums::MODEL_OPEN_HATS) holds.
+It is passed on as TASTR_OPEN_HATS so the bench's worker processes see it too.
+
 `--write-bundle` saves what a remote run reads in one go next to the data:
 the annotations as one JSON file (idmt, mdb) or the trimmed mono hits as one
 npz (stemgmd-mix). Iterate on a `--limit` subset; run the full set when a
@@ -38,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -51,6 +57,7 @@ from ..rust import SR
 from .synth import DRUM_PATTERNS, _fade, drum_sounds, make_drum_track
 
 SUITES = ("synth", "synth-onsets", "idmt", "mdb", "stemgmd-mix")
+OPEN_HATS = ("built-in", "model")  # where the open-hat lane comes from with the drum model (--open-hats)
 LANES = ("kick", "snare", "clap", "hat", "open_hat", "tom", "perc")  # engine-rs drums::LANES
 TOL = 0.05  # seconds: an onset within this of a labeled one counts
 WITH_TOL = 0.03  # a tom or perc hit with a kick or snare this close "lands with" it
@@ -97,7 +104,7 @@ def _synth_grid(y: np.ndarray, bpm: float) -> dict:
     downbeats = beats[::4]
     hits = _model_hits(y, None)
     return rust.bench("drum_grid", y, beats, downbeats, hits, n=y.size, beats=len(beats), downbeats=len(downbeats),
-                      bpm=bpm, beats_per_bar=4, hits=hits.size)
+                      bpm=bpm, beats_per_bar=4, hits=hits.size, **_open_hats())
 
 
 def run_synth(bpms=(100, 128, 174)) -> dict:
@@ -235,6 +242,19 @@ def score_track(acts: dict[str, np.ndarray] | None, ref: dict[str, list[float]],
     return out
 
 
+def open_hats() -> str | None:
+    """--open-hats for this run (TASTR_OPEN_HATS), or None for the engine's default."""
+    v = os.environ.get("TASTR_OPEN_HATS") or None
+    if v is not None and v not in OPEN_HATS:
+        raise ValueError(f"TASTR_OPEN_HATS={v!r}; choose from {', '.join(OPEN_HATS)}")
+    return v
+
+
+def _open_hats() -> dict:
+    v = open_hats()
+    return {"open_hats": v} if v else {}
+
+
 def _model_onsets(y: np.ndarray, path: str | None) -> dict | None:
     """The optional drum model's hits (adt.onsets: {drum: (seconds, confidence)}) when it is on
     (TASTR_DRUM_MODEL, as for the app): on the original file at the model's rate when there is one. None when
@@ -268,7 +288,7 @@ def _analyze(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str
     model = _model_onsets(y, path)
     hits = rust._hits(model)
     try:
-        r = rust.bench("lane_activations", y, hits, n=y.size, hits=hits.size)
+        r = rust.bench("lane_activations", y, hits, n=y.size, hits=hits.size, **_open_hats())
     except rust.RustEngineError as e:
         raise RuntimeError(f"{uri}: {e}") from e
     return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"], model
@@ -780,8 +800,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--drums-only", action="store_true", help="mdb: score the drum stems instead of the full mixes")
     ap.add_argument("--kits", choices=KIT_SPLITS, default="all", help="stemgmd-mix: all kits, or the train / test half")
     ap.add_argument("--write-bundle", action="store_true", help="save the file a remote run reads, next to the data")
+    ap.add_argument("--open-hats", choices=OPEN_HATS, help="with the drum model: the open-hat lane from the built-in "
+                                                           "detector or from the model's hi-hats")
     ap.add_argument("--out", help="write the full report as JSON")
     args = ap.parse_args(argv)
+    if args.open_hats:
+        os.environ["TASTR_OPEN_HATS"] = args.open_hats
     if not args.suite.startswith("synth") and not args.path:
         ap.error(f"{args.suite} needs the dataset folder")
     if args.write_bundle:

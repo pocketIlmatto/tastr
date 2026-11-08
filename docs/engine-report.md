@@ -137,7 +137,9 @@ and Strudel. It can be overruled per track.
 The original three-band split became a semi-adaptive NMF with leak removal and per-hit sorting into seven
 lanes (kick, snare, clap, hat, open hat, tom, perc). Real-kit benchmarks then showed real toms were almost
 never found, so an optional pretrained model ([ADTOF](https://github.com/MZehren/ADTOF)) can supply the
-kick, hat and tom lanes and add a cymbal lane. Snare, clap, perc and open hat stay built in. ADTOF's weights
+kick, hat and tom lanes and add a cymbal lane, and its hi-hats are split into closed and open by the built-in
+ringing test (open hat F 0.21 -> 0.41 on MDB mixes, better on every suite with open-hat labels; see
+[drums.md, Open hats](drums.md#pretrained-drum-model-adtof)). Snare, clap and perc stay built in. ADTOF's weights
 are non-commercial (CC BY-NC-SA 4.0), so they download on first use and are not in this repo.
 
 - **Found with:** IDMT-SMT-Drums for snare / hat bleed; MDB Drums (real mixes) and grooves built from
@@ -151,7 +153,8 @@ are non-commercial (CC BY-NC-SA 4.0), so they download on first use and are not 
 | IDMT kick (built-in rewrite, then model) | 0.74 | 0.977 |
 | MDB mixes, tom (model) | 0.013 | 0.369 |
 | StemGMD test kits, tom (model) | 0.002 | 0.880 |
-| MDB mixes, either hat (model) | 0.649 | 0.753 |
+| MDB mixes, either hat (model) | 0.649 | 0.848 |
+| MDB mixes, open hat (model's hi-hats split) | 0.236 | 0.405 |
 | MDB mixes, cymbal (model, new lane) | none | 0.832 |
 
 **Still open:** ADTOF's snare is much better on MDB and StemGMD (0.74, 0.91) but worse on IDMT's sampled and

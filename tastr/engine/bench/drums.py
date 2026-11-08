@@ -50,7 +50,7 @@ import numpy as np
 from ..rust import SR
 from .synth import DRUM_PATTERNS, _fade, drum_sounds, make_drum_track
 
-SUITES = ("synth", "idmt", "mdb", "stemgmd-mix")
+SUITES = ("synth", "synth-onsets", "idmt", "mdb", "stemgmd-mix")
 LANES = ("kick", "snare", "clap", "hat", "open_hat", "tom", "perc")  # engine-rs drums::LANES
 TOL = 0.05  # seconds: an onset within this of a labeled one counts
 WITH_TOL = 0.03  # a tom or perc hit with a kick or snare this close "lands with" it
@@ -235,35 +235,97 @@ def score_track(acts: dict[str, np.ndarray] | None, ref: dict[str, list[float]],
     return out
 
 
-def _model_hits(y: np.ndarray, path: str | None) -> np.ndarray:
-    """The optional drum model's hits (adt.py) as the flat buffer the Rust engine reads, when it is on
-    (TASTR_DRUM_MODEL, as for the app): on the original file at the model's rate when there is one. Empty when
+def _model_onsets(y: np.ndarray, path: str | None) -> dict | None:
+    """The optional drum model's hits (adt.onsets: {drum: (seconds, confidence)}) when it is on
+    (TASTR_DRUM_MODEL, as for the app): on the original file at the model's rate when there is one. None when
     it is off or fails, so the built-in lanes stay, as in the app."""
-    from .. import adt, rust
+    from .. import adt
 
     if not adt.wanted(None):
-        return np.zeros(0)
+        return None
     try:
         if path and Path(path).is_file():
             import librosa
 
-            return rust._hits(adt.onsets(librosa.load(path, sr=adt.SR, mono=True)[0], adt.SR))
-        return rust._hits(adt.onsets(y, SR))
+            return adt.onsets(librosa.load(path, sr=adt.SR, mono=True)[0], adt.SR)
+        return adt.onsets(y, SR)
     except Exception as e:  # e.g. no network for the first download
         print(f"drum model unavailable, using the built-in lanes: {e}", file=sys.stderr)
-        return np.zeros(0)
+        return None
 
 
-def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int]:
-    """Every lane's strength at every analysis frame, from the Rust engine. (`uri` names the track for errors.)"""
+def _model_hits(y: np.ndarray, path: str | None) -> np.ndarray:
+    """_model_onsets as the flat buffer the Rust engine reads (empty without the model)."""
     from .. import rust
 
-    hits = _model_hits(y, path)
+    return rust._hits(_model_onsets(y, path))
+
+
+def _analyze(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int, dict | None]:
+    """(lane activations, hop, the drum model's own onsets or None). (`uri` names the track for errors.)"""
+    from .. import rust
+
+    model = _model_onsets(y, path)
+    hits = rust._hits(model)
     try:
         r = rust.bench("lane_activations", y, hits, n=y.size, hits=hits.size)
     except rust.RustEngineError as e:
         raise RuntimeError(f"{uri}: {e}") from e
-    return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"]
+    return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"], model
+
+
+def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int]:
+    """Every lane's strength at every analysis frame, from the Rust engine."""
+    acts, hop, _ = _analyze(y, uri, path)
+    return acts, hop
+
+
+# --- where the snare lane could come from (with the drum model) -----------------------------------
+# The app's snare is the built-in one. With the model on, the bench also scores the snare onsets each rule
+# below would give, on the same labels, so one run compares them (docs/drums.md, "The snare trade-off").
+
+MID = ("snare", "clap", "perc")
+GATE_SECONDS = 0.03  # how close the built-in mid part must be to a model snare for the mid gates
+MID_GATES = (0.05, 0.1, 0.2)  # x the 99.5th percentile of the built-in mid family
+CONFIDENT = 0.75  # model confidence (0.5 = ADTOF's threshold) kept without a gate
+
+
+def snare_sources(acts: dict[str, np.ndarray], model: dict, hop: int = 512, sr: int = SR) -> dict[str, np.ndarray]:
+    """Snare onset seconds per candidate rule, from the built-in lanes and the model's snare (time, confidence).
+
+    - builtin: the built-in snare and clap lanes, as the app reports them;
+    - model: every snare the model reports;
+    - gated: model snares with a built-in snare or clap onset within 50 ms;
+    - mid-G: model snares where the built-in mid part (snare, clap, perc) reaches G x its 99.5th percentile
+      within 30 ms: a looser gate that only asks for some mid energy, not an onset;
+    - confident: model snares of confidence CONFIDENT or more, plus gated ones below it;
+    - union: the built-in and the model's snares together, one per hit.
+    """
+    builtin = lane_onsets(acts, ("snare", "clap")) * hop / sr
+    t, conf = (np.asarray(v, dtype=float).ravel() for v in model["snare"])
+    near = np.array([_near(x, builtin, TOL) for x in t], dtype=bool)
+    out = {"builtin": builtin, "model": t, "gated": t[near]}
+    mid = sum(np.asarray(acts[lane], dtype=float) for lane in MID if lane in acts)
+    level = float(np.percentile(mid, 99.5))
+    w = max(1, int(round(GATE_SECONDS * sr / hop)))
+    win = [mid[max(0, f - w):f + w + 1] for f in np.round(t * sr / hop).astype(int)]
+    peak = np.array([x.max() if x.size else 0.0 for x in win])
+    for g in MID_GATES:
+        out[f"mid-{g:g}"] = t[(peak >= g * level) & (level > 0)]
+    out["confident"] = t[(conf >= CONFIDENT) | near]
+    out["union"] = _merged({"a": list(builtin), "b": list(t)}, ("a", "b"))
+    return out
+
+
+def _score_snare_sources(acts, model, ref, labels, hop, sr) -> dict:
+    """{rule: {"counts": [tp, fp, fn], "fp_at": {class: n}}} for snare_sources on the snare label."""
+    classes = labels["snare"][0]
+    out = {}
+    for name, est in snare_sources(acts, model, hop, sr).items():
+        tmp = {"counts": {}, "fp_at": {}}
+        _score_label(tmp, "snare", classes, np.sort(est), ref, {})
+        out[name] = {"counts": tmp["counts"]["snare"], "fp_at": tmp["fp_at"]["snare"]}
+    return out
 
 
 def _work(job) -> dict:
@@ -280,8 +342,11 @@ def _work(job) -> dict:
         audio, _ = librosa.load(path, sr=SR, mono=True)
     else:
         path = None
-    acts, hop = _activations(np.asarray(audio, dtype=np.float32), item_id, path)
-    return {"id": item_id, "seconds": round(len(audio) / SR, 1)} | score_track(acts, ref, labels, excused, hop=hop)
+    acts, hop, model = _analyze(np.asarray(audio, dtype=np.float32), item_id, path)
+    row = {"id": item_id, "seconds": round(len(audio) / SR, 1)} | score_track(acts, ref, labels, excused, hop=hop)
+    if model is not None and "snare" in labels and "snare" in model:
+        row["snare_sources"] = _score_snare_sources(acts, model, ref, labels, hop, SR)
+    return row
 
 
 def _score_all(work: list, jobs: int) -> list[dict]:
@@ -316,6 +381,13 @@ def _pool(rows: list[dict], labels: dict) -> dict:
             for cond in s:
                 split[label][cond] = [a + b for a, b in zip(split[label][cond], s[cond])]
         pooled["unlabeled"].update(r["unlabeled"])
+    sources: dict[str, dict] = {}
+    for r in rows:
+        for name, s in r.get("snare_sources", {}).items():
+            p = sources.setdefault(name, {"counts": np.zeros(3, dtype=int), "fp_at": Counter()})
+            p["counts"] += s["counts"]
+            p["fp_at"].update(s["fp_at"])
+    pooled["snare_sources"] = sources
     return pooled
 
 
@@ -341,6 +413,8 @@ def run_onsets(suite: str, items: list, labels: dict, excused: dict | None = Non
             "excused_cymbal_onsets": sum(r["excused"] for r in rows),
             "unlabeled_onsets_per_ref": {lane: round(n / max(1, n_ref), 3) for lane, n in pooled["unlabeled"].items()},
             "seconds": round(time.time() - t0, 1), "audio_seconds": round(sum(r["seconds"] for r in rows), 1),
+            **({"snare_sources": {name: _prf(*s["counts"]) | {"fp_at": dict(s["fp_at"].most_common(4))}
+                                  for name, s in pooled["snare_sources"].items()}} if pooled["snare_sources"] else {}),
             "rows": rows}
 
 
@@ -659,6 +733,8 @@ def run(suite: str, root: str | Path | None = None, limit: int | None = None, jo
         drums_only: bool = False, kits: str = "all") -> dict:
     if suite == "synth":
         return run_synth()
+    if suite == "synth-onsets":
+        return run_onsets(suite, synth_onset_items()[:limit or None], SYNTH_LABELS, jobs=jobs)
     if root is None:
         raise ValueError(f"{suite} needs the dataset folder")
     if suite == "idmt":
@@ -684,6 +760,10 @@ def format_report(report: dict) -> str:
                      + (f"; unlabeled lanes fire per labeled onset: {extra}" if extra else ""))
         if report.get("excused_cymbal_onsets"):
             lines.append(f"hat-lane onsets on ride/crash hits (not counted): {report['excused_cymbal_onsets']}")
+        for name, v in report.get("snare_sources", {}).items():
+            fps = ", ".join(f"{c} {n}" for c, n in v["fp_at"].items())
+            lines.append(f"snare from {name:10s} F {v['f']:.3f}  P {v['p']:.2f}  R {v['r']:.2f}"
+                         + (f"  false at: {fps}" if fps else ""))
         for label in ("tom", "perc"):
             if report["fp_at"].get(label):
                 lines.append(f"{label} false positives at: " + ", ".join(f"{c} {n}" for c, n in report["fp_at"][label].items()))
@@ -701,7 +781,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--write-bundle", action="store_true", help="save the file a remote run reads, next to the data")
     ap.add_argument("--out", help="write the full report as JSON")
     args = ap.parse_args(argv)
-    if args.suite != "synth" and not args.path:
+    if not args.suite.startswith("synth") and not args.path:
         ap.error(f"{args.suite} needs the dataset folder")
     if args.write_bundle:
         print(f"wrote {write_bundle(args.suite, args.path)}")

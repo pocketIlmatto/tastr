@@ -233,6 +233,19 @@ also has an onset (eval adapter) is precise but loses ADTOF's recall:
 StemGMD test kits F 0.63 (P 0.98, R 0.46) against 0.46 built-in and 0.91
 ADTOF; synth 0.82 against 0.86 and 0.89. MDB and IDMT still to measure.
 
+To settle it, every drum bench run with the model (`--drum-model`) also scores
+the snare each candidate rule would give, on the same labels, and lists them
+as "snare from ..." lines (`snare_sources` in the JSON report): `builtin`
+(today's lane), `model` (every model snare), `gated` (model snares with a
+built-in snare onset within 50 ms), `mid-0.05`, `mid-0.1` and `mid-0.2` (a
+looser gate: model snares where the built-in mid part reaches that share of
+its 99.5th percentile within 30 ms, which should drop the model's snares on
+bare hi-hats without needing a built-in onset), `confident` (model snares of
+confidence 0.75 or more, plus gated ones), and `union`. The `synth-onsets`
+suite scores the synthetic loops as onsets so synth can be compared the same
+way. Before a merge, `modal run tastr/cloud/modal_app.py --kind drums-model ...`
+runs a branch's code (docs/cloud.md).
+
 **Speed.** About 0.6 s per minute of audio on one CPU thread once loaded,
 against about 2.5 s for the built-in lanes in the bench.
 

@@ -60,7 +60,12 @@ stems_image = _torch_base.add_local_python_source("tastr")
 # For the pretrained drum model (PyTorch comes with Demucs). Its weights download into /tmp on first use
 # (about 5 MB, docs/drums.md); one torch thread per bench worker, since the 4 workers share the CPUs.
 # Local files go last: Modal refuses build steps after them.
-drums_image = _torch_base.env({"TASTR_HOME": "/tmp/tastr", "TASTR_DRUM_MODEL": "adtof", "OMP_NUM_THREADS": "1"}).add_local_python_source("tastr")
+# The drum bench analyzes through the Rust engine, so this image builds it in (the stems image doesn't need it).
+drums_image = (
+    with_rust_engine(_torch_base)
+    .env({"TASTR_HOME": "/tmp/tastr", "TASTR_DRUM_MODEL": "adtof", "OMP_NUM_THREADS": "1"})
+    .add_local_python_source("tastr")
+)
 datasets = modal.CloudBucketMount(BUCKET, bucket_endpoint_url=ENDPOINT, read_only=True,
                                   secret=modal.Secret.from_name("tastr-r2"))
 # Writable, for `fetch` only: it downloads datasets straight into the bucket.

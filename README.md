@@ -121,9 +121,9 @@ Third-party pieces it uses or links to:
   download on first use.
 - **yt-dlp** (links) is under the Unlicense, also optional.
 - **Catalog lookups** (optional, your own API keys): [GetSongBPM](https://getsongbpm.com)
-  requires a link back wherever its data is shown, which the card does. FreqBlog's API
-  allows storing results only on paid plans, so Tastr keeps them only with
-  `FREQBLOG_PLAN=paid`. [AcousticBrainz](https://acousticbrainz.org) dumps and
+  requires a link back wherever its data is shown, which the card does. FreqBlog's free key
+  is for non-commercial use; its answers may be stored inside Tastr but never
+  published as a dataset, and they must be credited "Audio analysis by FreqBlog". [AcousticBrainz](https://acousticbrainz.org) dumps and
   [MusicBrainz](https://musicbrainz.org) core data are public domain (CC0); Tastr reads a
   local index of the 2022 AcousticBrainz dump. [ReccoBeats](https://reccobeats.com) is free
   for personal and commercial use, with no key. See [docs/lookup.md](docs/lookup.md).

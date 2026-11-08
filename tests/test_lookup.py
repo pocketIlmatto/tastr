@@ -119,20 +119,42 @@ def test_freqblog_found_pending_and_missing(monkeypatch):
     assert wrong.status == "not_found" and wrong.extra["closest"] == "Daft Punk – Around the World"
 
 
-def test_freqblog_is_stored_only_on_a_paid_plan(db_path, monkeypatch):
+def test_freqblog_is_stored_unless_turned_off(db_path, monkeypatch):
     p = freqblog.FreqBlog()
-    canned(monkeypatch, p, (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "key": "F-Minor"}),
-           (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "key": "F-Minor"}))
+    found = (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "key": "F-Minor"})
+    canned(monkeypatch, p, found, found)
     conn = db.connect(db_path)
     tid = db.save_card(conn, tagged_card())
-    monkeypatch.delenv("FREQBLOG_PLAN", raising=False)
+    monkeypatch.setenv("FREQBLOG_STORE", "0")
     (r,) = lookup.lookup_track(conn, tid, tagged_card(), [p])
     assert r["transient"] and (r["tonic"], r["mode"], r["camelot"]) == (5, "minor", "4A")
     assert db.get_lookups(conn, tid) == []
     assert lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True) == []  # analysis skips it
-    monkeypatch.setenv("FREQBLOG_PLAN", "paid")
+    monkeypatch.delenv("FREQBLOG_STORE")  # stored by default (free-key terms of 3 November 2026)
     lookup.lookup_track(conn, tid, tagged_card(), [p])
     assert tuple(conn.execute("SELECT key_name, key_tonic, key_mode, camelot FROM lookups").fetchone()) == ("F-Minor", 5, "minor", "4A")
+    assert lookup.forget(conn, "freqblog") == 1 and db.get_lookups(conn, tid) == []
+
+
+def test_a_freqblog_miss_expires(db_path, monkeypatch):
+    """Its terms allow caching a miss only for a while: retry_after_days from the 404, else miss_days."""
+    p = freqblog.FreqBlog()
+    monkeypatch.setenv("FREQBLOG_API_KEY", "k")
+    calls = canned(monkeypatch, p, ProviderError("FreqBlog answered HTTP 404", 404, {"retry_after_days": 7}),
+                   (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "key": "F-Minor"}))
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, tagged_card())
+    (r,) = lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True)
+    assert r["status"] == "not_found" and r["extra"] == {"retry_after_days": 7.0}
+    (stored,) = db.get_lookups(conn, tid)
+    assert lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True) == []  # still settled
+    now = time.time()
+    assert lookup.settled(p, stored, now + 6 * 86400) and not lookup.settled(p, stored, now + 8 * 86400)
+    assert not lookup.settled(p, stored | {"extra": {}}, now + 31 * 86400)  # miss_days when none was sent
+    conn.execute("UPDATE lookups SET fetched_at = '2020-01-01T00:00:00+00:00'")
+    (again,) = lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True)
+    assert again["status"] == "found" and len(calls) == 2
+    assert lookup.settled(p, db.get_lookups(conn, tid)[0], now + 1e9)  # a found answer doesn't expire
 
 
 @pytest.mark.parametrize("texts,want", [

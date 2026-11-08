@@ -83,6 +83,28 @@ def _refresh_seconds() -> float:
         return 60 * REFRESH_MINUTES
 
 
+def settled(p: Provider, r: dict | None, now: float | None = None) -> bool:
+    """Whether a stored answer can stand without asking again: "found", or a "not_found" that hasn't expired (a
+    provider's miss_days, or the retry_after_days it sent with that answer)."""
+    status = (r or {}).get("status")
+    if status not in SETTLED:
+        return False
+    days = (r.get("extra") or {}).get("retry_after_days") or p.miss_days
+    if status == "found" or days is None:
+        return True
+    try:
+        fetched = datetime.fromisoformat(r["fetched_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (time.time() if now is None else now) - fetched < float(days) * 86400
+
+
+def forget(conn: sqlite3.Connection, provider: str) -> int:
+    """Delete every stored answer from one provider (e.g. FreqBlog's, if its key goes away); returns how many."""
+    with conn:
+        return conn.execute("DELETE FROM lookups WHERE provider = ?", (provider,)).rowcount
+
+
 def _recently_asked(stored: dict[str, dict], track_id: int, p: Provider, now: float) -> bool:
     """Whether this provider answered about this track within the refresh window. An error doesn't count,
     so the track can be asked again right away; the guardrails still pace and pause the provider."""
@@ -114,7 +136,7 @@ def lookup_track(conn: sqlite3.Connection, track_id: int, card, providers: list[
     providers = enabled() if providers is None else providers
     stored = {r["provider"]: r for r in db.get_lookups(conn, track_id)}
     if only_missing:
-        providers = [p for p in providers if stored.get(p.name, {}).get("status") not in SETTLED and p.may_store()]
+        providers = [p for p in providers if not settled(p, stored.get(p.name)) and p.may_store()]
     q = query_for(card)
     out = []
     token = usage_conn.set(conn)

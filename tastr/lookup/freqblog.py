@@ -5,9 +5,12 @@ header. Field names follow the published OpenAPI spec (https://api.freqblog.com/
 match comes back as track_name / artist_name with bpm, bpm_alt, key, camelot and open_key. A track the
 catalog hasn't analyzed yet comes back 202 "queued", stored as status "pending" and asked again later.
 
-FreqBlog's terms allow caching results only on paid plans, so answers are kept in the database only
-when FREQBLOG_PLAN=paid; otherwise they are shown for the lookup that fetched them and not saved.
-FREQBLOG_API_BASE overrides the API host.
+FreqBlog's terms (3 November 2026, section 6.2) let a free key used for a non-commercial project store
+the values it returns, inside the project, so answers are kept like any other provider's. Two of the
+terms' rules show up here: a "not found" may be cached only for a while (MISS_DAYS, or the
+retry_after_days FreqBlog sends with it), and stored values must not be published as a dataset.
+FREQBLOG_STORE=0 turns storing off (answers are then shown for the lookup that fetched them only);
+`tastr lookup --forget freqblog` deletes what is stored. FREQBLOG_API_BASE overrides the API host.
 """
 
 from __future__ import annotations
@@ -38,12 +41,14 @@ class FreqBlog(Provider):
     min_interval = 1.0
     daily_limit = 60
     monthly_limit = 900
+    # Terms: a miss may be cached "as a temporary negative result, but not a permanent one".
+    miss_days = 30.0
 
     def base(self) -> str:
         return os.environ.get("FREQBLOG_API_BASE", DEFAULT_BASE).rstrip("/")
 
     def may_store(self) -> bool:
-        return os.environ.get("FREQBLOG_PLAN", "").strip().lower() == "paid"
+        return os.environ.get("FREQBLOG_STORE", "1").strip().lower() not in ("0", "false", "no", "off")
 
     def _fetch(self, q: TrackQuery) -> tuple[int | None, dict]:
         """(HTTP status, body); status None when the API has no such track (a 404)."""
@@ -52,7 +57,7 @@ class FreqBlog(Provider):
                                          headers={"X-API-Key": self.api_key() or ""})
         except ProviderError as e:
             if e.status == 404:
-                return None, {}
+                return None, e.body if isinstance(e.body, dict) else {}
             raise
         return status, body if isinstance(body, dict) else {}
 
@@ -72,7 +77,8 @@ class FreqBlog(Provider):
     def lookup(self, q: TrackQuery) -> LookupResult:
         status, body = self._fetch(q)
         if status is None:
-            return LookupResult(self.name, "not_found")
+            retry = num(body.get("retry_after_days"))
+            return LookupResult(self.name, "not_found", extra={"retry_after_days": retry} if retry else {})
         if status == 202:
             return LookupResult(self.name, "pending", extra={"message": body.get("message") or body.get("status")})
         track = body.get("track") if isinstance(body.get("track"), dict) else body  # flat or wrapped

@@ -57,9 +57,10 @@ class LookupResult:
 class ProviderError(Exception):
     """The provider couldn't answer: bad key, rate limit, network or an unexpected response."""
 
-    def __init__(self, message: str, status: int | None = None):
+    def __init__(self, message: str, status: int | None = None, body: Any = None):
         super().__init__(message)
         self.status = status  # HTTP status when the provider answered with an error
+        self.body = body  # that answer's JSON body, when it had one (e.g. FreqBlog's retry_after_days on a 404)
 
 
 class Provider:
@@ -81,6 +82,9 @@ class Provider:
     min_interval: float = 1.0  # seconds between requests
     daily_limit: int | None = 200
     monthly_limit: int | None = None
+    # How long a "not_found" answer stays settled, in days (None: for good). A provider whose terms allow caching
+    # a miss only for a while sets this; a result's extra["retry_after_days"] overrides it per track.
+    miss_days: float | None = None
     # Whether the provider's quota headers count our own usage. MusicBrainz's x-ratelimit-* count its global
     # load (x-ratelimit-zone: global), so pausing on them would stop lookups whenever it's busy.
     quota_headers: bool = True
@@ -135,7 +139,12 @@ class Provider:
                 raise ProviderError(f"{who}'s response was cut off ({type(e).__name__})") from None
             if status >= 400:
                 detail = body[:300].decode("utf-8", "replace").strip()
-                raise ProviderError(f"{who} answered HTTP {status}" + (f": {detail}" if detail else ""), status)
+                try:
+                    parsed = json.loads(body) if body else None
+                except ValueError:
+                    parsed = None
+                raise ProviderError(f"{who} answered HTTP {status}" + (f": {detail}" if detail else ""), status,
+                                    parsed)
             try:
                 return status, json.loads(body or b"null")
             except json.JSONDecodeError:

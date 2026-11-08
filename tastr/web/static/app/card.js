@@ -202,6 +202,7 @@ const LOOKUP_SAY = {
   pending: "Asked: the catalog is adding this song. Check back later.", no_tags: "Can't look up: the file has no artist and title tags.",
   limited: "Paused: the catalog's limit was reached. It will be asked again later.",
   rb_none: "Not in your Rekordbox export.", rb_new: "Not imported yet.", off: "Not set up on this server." };
+const fmtDay = (iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 export function lookupsFor(c) {
   const stored = Object.fromEntries((c.lookups || []).map((x) => [x.provider, x]));
   return (c.lookup_sources || []).map((src) => ({ ...src, status: "none", ...(stored[src.provider] || {}),
@@ -216,11 +217,12 @@ function lookupTable(c) {
     h("div", { class: "lk-val", role: "cell" }, ...val));
   const ours = [isNum(core.bpm) ? `${core.bpm.toFixed(1)} BPM` : "no BPM",
     core.key ? `${keyName(core.key)}${core.key.camelot ? ` (${core.key.camelot})` : ""}` : "no key"].join(" · ");
+  const rows = lookupsFor(c);
   return h("div", { class: "meta-lookups" }, h("h4", {}, "Listed elsewhere"),
     h("p", { class: "muted lk-intro" }, "What other sources list for this track's BPM and key, next to what Tastr measured. They never change Tastr's values."),
     h("div", { class: "lk-table", role: "table", "aria-label": "BPM and key from other sources" },
       row(h("b", {}, "Tastr"), "Measured from the audio", [h("span", { class: "lk-v" }, ours)], "lk-ours"),
-      ...lookupsFor(c).map((x) => {
+      ...rows.map((x) => {
         const name = h("a", { href: x.homepage, target: "_blank", rel: "noopener", class: "lk-src" }, x.label);
         if (x.status === "found") return row(name, x.how, [
           h("span", { class: "lk-v" }, isNum(x.bpm) ? h("span", {}, `${Math.round(x.bpm * 10) / 10} BPM`, mark("BPM", x.compare && x.compare.bpm)) : "no BPM", " · ",
@@ -229,10 +231,16 @@ function lookupTable(c) {
         if (!x.configured) return row(name, x.how, [h("span", { class: "muted" }, LOOKUP_SAY.off), h("small", { class: "muted" }, "An admin turns it on with TASTR_LOOKUP (docs/lookup.md).")], "lk-off");
         if (x.status === "error") return row(name, x.how, [h("span", { class: "lk-err" }, `Lookup failed: ${(x.error || "the service didn't answer").replace(/\.$/, "")}.`)], "lk-off");
         if (x.provider === "rekordbox" && x.status === "none" && x.imported === false) return row(name, x.how, [h("span", { class: "muted" }, LOOKUP_SAY.rb_new), h("small", { class: "muted" }, "An admin loads it from your export (docs/rekordbox.md).")], "lk-off");
+        // A stored "not found" that expires (FreqBlog's terms): say when it was checked; it's asked again later.
+        if (x.status === "not_found" && x.checked_at) return row(name, x.how, [h("span", { class: "muted" }, "Not listed yet."), h("small", { class: "muted" }, `Checked ${fmtDay(x.checked_at)}. Tastr asks again after a few days.`)], "lk-off");
         const say = x.provider === "rekordbox" && x.status === "none" ? LOOKUP_SAY.rb_none : LOOKUP_SAY[x.status] || x.status;
         return row(name, x.how, [h("span", { class: "muted" }, say)], "lk-off");
       })),
-    h("p", { class: "muted lk-key" }, "✓ matches Tastr · ×2 / ½ double or half · ≈ a related key (relative, fifth or parallel) · ≠ differs"));
+    h("p", { class: "muted lk-key" }, "✓ matches Tastr · ×2 / ½ double or half · ≈ a related key (relative, fifth or parallel) · ≠ differs"),
+    // FreqBlog's terms ask for "Audio analysis by FreqBlog" where people can find it; the full list is Glossary › Credits.
+    rows.some((x) => x.provider === "freqblog" && x.configured) ? h("p", { class: "muted lk-credit" }, "Audio analysis by ",
+      h("a", { href: "https://freqblog.com", target: "_blank", rel: "noopener", class: "link" }, "FreqBlog"), ". ",
+      h("a", { href: "#g-credits", class: "link", onclick: (e) => { e.preventDefault(); openGlossary("g-credits"); } }, "All credits")) : null);
 }
 
 export function stat(value, label, title) {

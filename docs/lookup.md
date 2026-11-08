@@ -21,7 +21,7 @@ Set these in the shell you run `tastr serve` / `tastr analyze` from, never in th
 export TASTR_LOOKUP=getsongbpm,freqblog,reccobeats,acousticbrainz   # providers to ask, in order
 export GETSONGBPM_API_KEY=...               # https://getsongbpm.com/api (free; requires a link back)
 export FREQBLOG_API_KEY=...                 # https://api.freqblog.com/docs (free tier 1,000 requests a month)
-export FREQBLOG_PLAN=paid                   # only on a paid FreqBlog plan: lets Tastr store its answers (see below)
+export FREQBLOG_STORE=0                     # optional: don't store FreqBlog's answers (stored by default; see below)
 ```
 
 ReccoBeats needs nothing set up. AcousticBrainz needs no key but a local index of its dump; see [AcousticBrainz](#acousticbrainz)
@@ -34,7 +34,8 @@ Then:
   provider that already answered (found or not found), so it doesn't spend quota;
 - "Look up BPM & key online" in a track's ⋯ menu, or in the sidebar's bulk actions, asks again;
 - `tastr lookup [IDS...] [--missing] [--providers a,b]` does the same from a terminal (all tracks when
-  no ids are given); `tastr lookup --usage` shows requests used against each limit.
+  no ids are given); `tastr lookup --usage` shows requests used against each limit;
+  `tastr lookup --forget freqblog` deletes every stored answer from one provider.
 
 Results are stored per track and provider in the `lookups` table (`status`, `bpm`, `key_name` as
 listed, `key_tonic` / `key_mode` / `camelot` parsed from it, `fetched_at`, `result_json`) and survive
@@ -48,9 +49,13 @@ SELECT t.title, t.camelot, l.provider, l.camelot AS listed FROM tracks t JOIN lo
 WHERE l.status = 'found' AND l.camelot IS NOT NULL AND l.camelot <> t.camelot;
 ```
 
-A provider whose terms don't allow keeping its answers (FreqBlog on its free plan) is shown only for
-the lookup that fetched it ("Look up BPM & key online", or `tastr lookup`) and isn't stored or asked
-during analysis.
+A provider whose terms don't allow keeping its answers (FreqBlog with `FREQBLOG_STORE=0`) is shown
+only for the lookup that fetched it ("Look up BPM & key online", or `tastr lookup`) and isn't stored or
+asked during analysis.
+
+A provider can also keep a "not found" only for a while (`miss_days`; FreqBlog 7 days, or the
+`retry_after_days` it sends with the answer). Once that passes, the next analysis or `--missing` run
+asks again, since the catalog may have added the track.
 
 `status` is `found`, `not_found`, `pending` (FreqBlog queued the track for analysis; asked again next
 time), `no_tags` or `error` (the message is in `result_json`).
@@ -86,7 +91,7 @@ scripts and curl still get through, so a server other people can reach needs rea
 | Name | What it returns | Terms to keep |
 |---|---|---|
 | `getsongbpm` | tempo, key (`key_of`), time signature, Open Key | Free with a key, sent in the `X-API-KEY` header. A visible link back to getsongbpm.com is "REQUIRED (website or store listing)", or the account can be suspended; the card links each listing to its GetSongBPM page and the README links the site, but whether that satisfies them for a local app is worth confirming with GetSongBPM. Search hits use `song_title` / `song_id` (also read: `title` / `id`). Host override: `GETSONGBPM_API_BASE`. |
-| `freqblog` | BPM, half-time BPM, key, Camelot, Open Key | Key in an `X-API-Key` header. Fields per its OpenAPI spec (`track_name`, `artist_name`, ...). It returns its closest match, so a different song is treated as not found. Unknown tracks may come back 202 "queued". Caching results is allowed only on paid plans: answers are stored only with `FREQBLOG_PLAN=paid`. Host override: `FREQBLOG_API_BASE`. |
+| `freqblog` | BPM, half-time BPM, key, Camelot, Open Key | Key in an `X-API-Key` header. Fields per its OpenAPI spec (`track_name`, `artist_name`, ...). It returns its closest match, so a different song is treated as not found. Unknown tracks may come back 202 "queued". Its [terms](https://freqblog.com/terms.html#free-use) (3 November 2026, section 6.2) let a free key store the values it returns for a non-commercial project, used inside that project only: never publish them as a file or dataset (a public repository included) or offer them as an export, API or feed (so they are left out of the library snapshot the hosted search downloads, `in_downloads = False`), and credit "Audio analysis by FreqBlog" where a user can find it. A "not found" may be cached only for a while, so it expires (see above). If the key is revoked or the project turns commercial, delete what is stored within 30 days (`tastr lookup --forget freqblog`) or move to a paid plan. One free key per person. `FREQBLOG_STORE=0` stops storing. Host override: `FREQBLOG_API_BASE`. |
 | `reccobeats` | BPM only (energy, danceability and valence kept in `result_json`) | Free, no key; its [terms](https://reccobeats.com/docs/documentation/terms-of-service) allow personal and commercial use and keeping answers, but it may block clients that send too much. No track search, so a lookup is an artist search, that artist's tracks 50 at a time (up to 10 pages) until the title matches, then the track's audio features: about five requests. A remix, live take or DJ mix only matches the same version; extended and radio cuts count as the same track, closest length first. Its key isn't used: on 38 tracks (November 2026) it matched Rekordbox's on 14, against 30 for Tastr's, while its BPM matched on 31 (Tastr's on 28). Host override: `RECCOBEATS_API_BASE`. |
 | `acousticbrainz` | BPM, key and scale (Essentia estimates from 2022 and earlier) | Public domain (CC0), so answers are stored. Looked up by MusicBrainz recording id from a local index of the dump; only the MusicBrainz search goes online. See below. |
 | `rekordbox` | BPM and key from your own Rekordbox collection export | Never looked up and not in `TASTR_LOOKUP`: stored for the tracks in both libraries by `/api/admin/rekordbox-compare?save=1` ([rekordbox.md](rekordbox.md)), then shown and compared like the others. |
@@ -188,7 +193,7 @@ column layout comes from AcousticBrainz's own dump code (`db/dump.py` in metabra
    and implement `lookup(TrackQuery) -> LookupResult` (status `found` / `not_found` /
    `pending`; raise `ProviderError` for anything else). Return the key as the provider spells it;
    `lookup_track` parses it into tonic / mode / Camelot. Override `may_store()` if the provider's terms
-   forbid keeping results, and set `min_interval` / `daily_limit` / `monthly_limit` to fit its quota. `Provider.get_json` does the HTTP with a timeout
+   forbid keeping results, set `miss_days` if they allow caching a "not found" only for a while, and set `min_interval` / `daily_limit` / `monthly_limit` to fit its quota. `Provider.get_json` does the HTTP with a timeout
    and a Tastr user agent; `base.num` and `base.same_text` help with loose fields and fuzzy matches.
 2. Call `register(MyProvider())` (from `.base`) at the bottom of the module, and add the module to the
    provider import at the top of `tastr/lookup/__init__.py`.

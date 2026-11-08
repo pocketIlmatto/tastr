@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from ... import db
+from ... import db, lookup
 from ..context import AppContext
 
 MAX_QUERY_ROWS = 5000
@@ -69,7 +69,7 @@ def router(ctx: AppContext) -> APIRouter:
         hosted server your own tracks without the columns that name people or server paths, admins everyone's
         (`?mine=1`: only their own); on your own machine every track."""
         owner = request.state.user if ctx.hosted and (mine or request.state.user not in ctx.settings.admins) else None
-        data = db.library_snapshot(ctx.db_path or db.default_db_path(), owner)
+        data = db.library_snapshot(ctx.db_path or db.default_db_path(), owner, lookup.held_from_downloads())
         headers = {"Cache-Control": "private, no-store", "X-Library-Bytes": str(len(data)),
                    "Access-Control-Expose-Headers": "X-Library-Bytes"}
         if "gzip" in request.headers.get("accept-encoding", ""):  # SQLite pages compress well (3 to 5 times)

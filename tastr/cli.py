@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     lk.add_argument("--missing", action="store_true", help="skip providers that already answered for a track")
     lk.add_argument("--providers", help="comma-separated provider names (default: TASTR_LOOKUP)")
     lk.add_argument("--usage", action="store_true", help="show requests used and limits per provider, send nothing")
+    lk.add_argument("--forget", metavar="PROVIDER", help="delete every stored answer from this provider, send nothing")
     lb = sub.add_parser("labels", help="your own BPM, key and section labels (docs/bench.md, \"Your own tracks\")")
     lbs = lb.add_subparsers(dest="action", required=True)
     ls_ = lbs.add_parser("set", help="label one track; flags you leave out are cleared")
@@ -511,6 +512,10 @@ def _lookup(args) -> int:
 
     from . import lookup
 
+    if args.forget:
+        n = lookup.forget(db.connect(args.db), args.forget.strip().lower())
+        print(f"deleted {n} stored {args.forget} answer{'s' if n != 1 else ''}")
+        return 0
     if args.providers:
         os.environ["TASTR_LOOKUP"] = args.providers
     providers = lookup.enabled()

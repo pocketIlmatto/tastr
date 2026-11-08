@@ -356,6 +356,64 @@ def _score_snare_sources(acts, model, ref, labels, hop, sr) -> dict:
     return out
 
 
+TOM_NEAR = 0.03  # a model snare (or kick) this close to a model tom "lands with" it
+TOM_CONFIDENT = (0.6, 0.625, 0.65, 0.675, 0.7, 0.75, 0.8)
+TOM_KEEP = (0.7, 0.8, 0.9)
+
+
+def tom_sources(model: dict) -> dict[str, np.ndarray]:
+    """Tom onset seconds per candidate rule, from the drum model's own hits (time, confidence) only:
+
+    - model: every tom the model reports (today's lane);
+    - conf-C: toms of confidence C or more;
+    - snare-veto: no tom where the model also has a snare within 30 ms;
+    - snare-stronger: no tom where a model snare within 30 ms is at least as confident;
+    - snare-veto-C: no tom near a model snare unless the tom's confidence is C or more;
+    - kit-veto-C: the same with a model snare or kick.
+    """
+    def hits(name):
+        t, c = model.get(name, ((), ()))
+        return np.asarray(t, dtype=float).ravel(), np.asarray(c, dtype=float).ravel()
+
+    t, conf = hits("tom")
+    st, sc = hits("snare")
+    kt, _ = hits("kick")
+
+    def nearest(times, x):
+        if not len(times):
+            return None
+        i = int(np.argmin(np.abs(times - x)))
+        return i if abs(times[i] - x) <= TOM_NEAR else None
+
+    near_s = [nearest(st, x) for x in t]
+    near_snare = np.array([i is not None for i in near_s], dtype=bool)
+    near_kick = np.array([nearest(kt, x) is not None for x in t], dtype=bool)
+    stronger = np.array([i is not None and sc[i] >= c for i, c in zip(near_s, conf)], dtype=bool)
+    out = {"model": t}
+    for c in TOM_CONFIDENT:
+        out[f"conf-{c:g}"] = t[conf >= c]
+    out["snare-veto"] = t[~near_snare]
+    out["snare-stronger"] = t[~stronger]
+    for c in TOM_KEEP:
+        out[f"snare-veto-{c:g}"] = t[~near_snare | (conf >= c)]
+        out[f"kit-veto-{c:g}"] = t[~(near_snare | near_kick) | (conf >= c)]
+    return out
+
+
+def _score_tom_sources(model, ref) -> dict:
+    """{rule: {"counts": [tp, fp, fn], "fp_at": {class: n}}} for tom_sources on the tom label (all false on a
+    set without toms)."""
+    out = {}
+    for name, est in tom_sources(model).items():
+        tmp = {"counts": {}, "fp_at": {}}
+        _score_label(tmp, "tom", ("tom",), np.sort(est), ref, {})
+        out[name] = {"counts": tmp["counts"]["tom"], "fp_at": tmp["fp_at"]["tom"]}
+    return out
+
+
+SOURCES = ("snare_sources", "tom_sources")  # rule comparisons a drum-model run adds to the report
+
+
 def _work(job) -> dict:
     """One item: (id, audio path or samples at SR, ref, labels, excused[, onsets]) -> its score_track counts.
     With `onsets` (another transcriber's {lane: seconds}) the audio isn't analyzed."""
@@ -375,6 +433,8 @@ def _work(job) -> dict:
     if model is not None and "snare" in labels and "snare" in model:
         builtin, _ = _lane_acts(np.asarray(audio, dtype=np.float32), item_id, None)
         row["snare_sources"] = _score_snare_sources(builtin, model, ref, labels, hop, SR)
+    if model is not None and "tom" in model:
+        row["tom_sources"] = _score_tom_sources(model, ref)
     return row
 
 
@@ -410,13 +470,14 @@ def _pool(rows: list[dict], labels: dict) -> dict:
             for cond in s:
                 split[label][cond] = [a + b for a, b in zip(split[label][cond], s[cond])]
         pooled["unlabeled"].update(r["unlabeled"])
-    sources: dict[str, dict] = {}
-    for r in rows:
-        for name, s in r.get("snare_sources", {}).items():
-            p = sources.setdefault(name, {"counts": np.zeros(3, dtype=int), "fp_at": Counter()})
-            p["counts"] += s["counts"]
-            p["fp_at"].update(s["fp_at"])
-    pooled["snare_sources"] = sources
+    for key in SOURCES:
+        sources: dict[str, dict] = {}
+        for r in rows:
+            for name, s in r.get(key, {}).items():
+                p = sources.setdefault(name, {"counts": np.zeros(3, dtype=int), "fp_at": Counter()})
+                p["counts"] += s["counts"]
+                p["fp_at"].update(s["fp_at"])
+        pooled[key] = sources
     return pooled
 
 
@@ -442,8 +503,9 @@ def run_onsets(suite: str, items: list, labels: dict, excused: dict | None = Non
             "excused_cymbal_onsets": sum(r["excused"] for r in rows),
             "unlabeled_onsets_per_ref": {lane: round(n / max(1, n_ref), 3) for lane, n in pooled["unlabeled"].items()},
             "seconds": round(time.time() - t0, 1), "audio_seconds": round(sum(r["seconds"] for r in rows), 1),
-            **({"snare_sources": {name: _prf(*s["counts"]) | {"fp_at": dict(s["fp_at"].most_common(4))}
-                                  for name, s in pooled["snare_sources"].items()}} if pooled["snare_sources"] else {}),
+            **{key: {name: _prf(*s["counts"]) | {"fp_at": dict(s["fp_at"].most_common(4)),
+                                                 "fires_per_ref": round(int(s["counts"][:2].sum()) / max(1, n_ref), 3)}
+                     for name, s in pooled[key].items()} for key in SOURCES if pooled[key]},
             "rows": rows}
 
 
@@ -789,10 +851,11 @@ def format_report(report: dict) -> str:
                      + (f"; unlabeled lanes fire per labeled onset: {extra}" if extra else ""))
         if report.get("excused_cymbal_onsets"):
             lines.append(f"hat-lane onsets on ride/crash hits (not counted): {report['excused_cymbal_onsets']}")
-        for name, v in report.get("snare_sources", {}).items():
-            fps = ", ".join(f"{c} {n}" for c, n in v["fp_at"].items())
-            lines.append(f"snare from {name:10s} F {v['f']:.3f}  P {v['p']:.2f}  R {v['r']:.2f}"
-                         + (f"  false at: {fps}" if fps else ""))
+        for key in SOURCES:
+            for name, v in report.get(key, {}).items():
+                fps = ", ".join(f"{c} {n}" for c, n in v["fp_at"].items())
+                lines.append(f"{key.split('_')[0]} from {name:14s} F {v['f']:.3f}  P {v['p']:.2f}  R {v['r']:.2f}  "
+                             f"fires {v['fires_per_ref']:.3f}/ref" + (f"  false at: {fps}" if fps else ""))
         for label in ("tom", "perc"):
             if report["fp_at"].get(label):
                 lines.append(f"{label} false positives at: " + ", ".join(f"{c} {n}" for c, n in report["fp_at"][label].items()))

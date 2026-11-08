@@ -229,3 +229,19 @@ def test_weak_model_snares_need_a_built_in_onset(monkeypatch):
     assert grid["snare"]["pattern"].replace("o", "x") == "....x.......x..."  # the hat's weak "snare" is gone
     hits["snare"] = (np.asarray(snare, float), np.full(len(snare), 0.9, np.float32))  # all confident: kept
     assert grid != _synth_grid(y, bpm) and _synth_grid(y, bpm)["snare"]["pattern"][2] != "."
+
+
+@pytest.mark.rust
+def test_weak_model_toms_are_dropped(monkeypatch):
+    """Model toms under drums::TOM_CONFIDENT are dropped: on real kits they are mostly snares and kicks."""
+    bpm, step = 120, 0.125
+    y, _ = make_drum_track({"kick": "x.......x.......", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."}, bpm=bpm)
+    at = lambda steps: np.asarray([(b * 16 + s) * step for b in range(8) for s in steps], float)  # noqa: E731
+    one = lambda t, c: (t, np.full(len(t), c, np.float32))  # noqa: E731
+    hits = {"kick": one(at([0, 8]), 1.0), "snare": one(at([4, 12]), 1.0), "hat": one(at(range(0, 16, 2)), 1.0),
+            "cymbal": one(at([]), 1.0), "tom": one(at([4]), 0.65)}  # a weak "tom" on the snare
+    monkeypatch.setattr(adt, "wanted", lambda options: True)
+    monkeypatch.setattr(adt, "onsets", lambda y, sr: hits)
+    assert not _synth_grid(y, bpm)["tom"]["detected"]
+    hits["tom"] = one(at([14]), 0.9)  # a confident one stays
+    assert _synth_grid(y, bpm)["tom"]["pattern"].replace("o", "x") == "..............x."

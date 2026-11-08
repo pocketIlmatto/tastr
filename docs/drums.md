@@ -220,6 +220,8 @@ sine sweep the model doesn't recognise. Each run took 38 to 87 s on Modal
 (4 CPUs). The earlier eval-adapter numbers for StemGMD and synth agreed
 within about 0.01. The Open hat and Hats columns are from before the model's
 hi-hats were split into open and closed; see the next table for the change.
+The Tom column is from before weak model toms were dropped; see "False toms"
+below.
 
 **Open hats.** With the model there are two ways to fill the open-hat lane:
 keep the built-in open-hat lane (the model's hi-hats then replace only the
@@ -328,6 +330,47 @@ Every other lane scored the same, except perc on the StemGMD test kits
 (0.664 -> 0.627, precision 0.996 -> 0.834) and synth (0.537 -> 0.571): perc's
 onset threshold is a share of the whole mid family, and the model's snares
 sit lower in it than the built-in snare's peaks did.
+
+**False toms (2026-11-08).** The model's toms were found but imprecise on
+real kits: P 0.25 on MDB mixes and 0.13 on stems, most false toms on snares
+(99 and 300) and kicks. With the model on, every drum bench run also scores
+the toms each candidate rule would keep (`tom_sources` in the JSON report,
+"tom from ..." lines), from the model's own onsets: `conf-C` (toms of
+confidence C or more, C from 0.6 to 0.8), `snare-veto` (no tom with a model
+snare within 30 ms), `snare-stronger` (no tom where that snare is at least as
+confident), and `snare-veto-C` / `kit-veto-C` (the same against a model snare,
+or snare or kick, unless the tom's confidence is C or more). Tom onset F,
+model onsets (IDMT: false toms per labeled hit):
+
+| Rule | MDB mixes | MDB stems | StemGMD test kits | IDMT |
+|---|---|---|---|---|
+| model (all toms) | 0.326 (P 0.21) | 0.209 (P 0.12) | 0.890 | 0.017 |
+| conf-0.6 | 0.437 | 0.316 | 0.889 | 0.007 |
+| conf-0.65 | 0.502 | 0.412 | 0.877 | 0.005 |
+| **conf-0.675** | **0.524** | **0.472** | **0.867** | **0.004** |
+| conf-0.7 | 0.538 | 0.532 | 0.851 | 0.004 |
+| conf-0.75 | 0.570 | 0.624 | 0.801 | 0.003 |
+| snare-veto | 0.360 | 0.223 | 0.837 | 0.009 |
+| snare-stronger | 0.395 | 0.222 | 0.880 | 0.010 |
+| kit-veto-0.8 | 0.461 | 0.243 | 0.765 | 0.008 |
+
+The vetoes barely help: the false toms sit where the model hears no snare at
+all (it calls the snare a tom), so there is nothing to veto against. The
+confidence cut is what works, and it trades MDB against StemGMD's grooves,
+where 43% of the toms land with a kick or snare; those are mostly the ones
+the cut loses (recall with a kick or snare 0.60 -> 0.54, alone 0.98 -> 0.95).
+The engine drops model toms under **0.675** (`drums::TOM_CONFIDENT`), the
+highest cut that keeps StemGMD at 0.86 or more; 0.75 would be better on MDB
+(0.57 and 0.62) for 0.07 on StemGMD. Through the shipped lanes, before ->
+after:
+
+| Tom | MDB mixes | MDB stems | StemGMD test kits | IDMT (false per labeled hit) |
+|---|---|---|---|---|
+| F | 0.369 -> 0.527 (P 0.25 -> 0.47, R 0.69 -> 0.60) | 0.215 -> 0.472 (P 0.13 -> 0.39) | 0.880 -> 0.865 (with kick/snare R 0.60 -> 0.54) | 0.017 -> 0.004 |
+
+False toms on MDB snares fell from 99 to 37 (mixes) and 300 to 82 (stems).
+No other lane changed. The synthetic tom (a sine sweep) is still not
+recognised. MDB has only 90 toms, so its tom scores move a lot per hit.
 
 **Speed.** About 0.6 s per minute of audio on one CPU thread once loaded,
 against about 2.5 s for the built-in lanes in the bench.

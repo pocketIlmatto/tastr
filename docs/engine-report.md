@@ -75,7 +75,8 @@ BPM within 4% (Acc1).
 snare and clap hit evenly on every beat of the slow grid; a real 85-90 BPM backbeat hits every other beat.
 Beatport drum & bass read at 160-180 went from 21 to 31 of 40, fast GiantSteps tracks from 10 to 12 of 16;
 GTZAN Acc1 0.673 -> 0.676, hjdb train 0.915 -> 0.925, and Beatport's 85-92 BPM tracks that aren't drum & bass
-lost 2 of 25. Details: [bench.md, Tempo notes](bench.md#tempo-notes).
+lost 2 of 25. All 774 Beatport tracks: Acc1 0.897 -> 0.885, all from drum & bass listed at 85-89 and those two
+tracks. Details: [bench.md, Tempo notes](bench.md#tempo-notes).
 
 **Still open:** drum & bass whose snare is half-time too (beat 3 of the fast bar) still reads at 87, and
 2/3-tempo locks (116 for 174) are unchanged.

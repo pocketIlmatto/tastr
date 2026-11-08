@@ -20,6 +20,11 @@ pub const SNARE_GATE: f64 = 0.05;
 /// A built-in mid onset is a peak of the mid part's rise at this share of its 99.5th percentile or more (the
 /// drum benches' onset threshold).
 const SNARE_ONSET: f32 = 0.4;
+/// With the drum model, where the open-hat lane comes from. true: the model's hi-hats are split into closed and
+/// open by the built-in ringing test. false: the built-in open-hat lane stays and the model's hi-hats replace
+/// only the closed ones. true scored better on every suite with open-hat labels (MDB mixes 0.21 -> 0.41);
+/// the drum bench runs both ways (`--open-hats`); docs/drums.md "Open hats".
+pub const MODEL_OPEN_HATS: bool = true;
 
 /// drums.MODEL_LANE_HELP: tooltips for the lanes the drum model finds.
 pub const MODEL_LANE_HELP: [(&str, &str); 5] = [
@@ -243,6 +248,8 @@ pub struct Drums {
     snare_ref: f64,
     /// The drum model's lanes per analysis frame (MODEL_LANES order), when it ran.
     model: Option<[Vec<f64>; 5]>,
+    /// MODEL_OPEN_HATS unless the caller (the drum bench) says otherwise.
+    pub model_open_hats: bool,
 }
 
 impl Drums {
@@ -259,7 +266,7 @@ impl Drums {
             rise.data.extend(rise2(v.row(r)));
         }
         let snare_ref = percentile_f32(&nov[1], 99.0) as f64 + 1e-12;
-        Drums { nov, parts, rise, freqs: freqs.to_vec(), snare_ref, model: None }
+        Drums { nov, parts, rise, freqs: freqs.to_vec(), snare_ref, model: None, model_open_hats: MODEL_OPEN_HATS }
     }
 
     /// drums.model_lanes: the drum model's hits on the analysis frames. Each hit is its confidence times the
@@ -363,6 +370,14 @@ impl Drums {
             }
             if let Some(m) = &self.model {
                 model_hit(m, &mut out, k, a, b, sh);
+                if self.model_open_hats {
+                    // The model's hi-hat at its own peak frame, split by how long the air band rings there.
+                    let t = argmax_f64(&m[1], a, b);
+                    let mh = m[1][t];
+                    let ring = if mh > 0.0 { ringing(env_air, (t * hop) as i64, sr, gap) } else { 0.0 };
+                    out[3][k] = mh * (1.0 - ring);
+                    out[4][k] = mh * ring;
+                }
             }
         }
         Ok(out)
@@ -429,9 +444,21 @@ fn argmax(v: &[f32], a: usize, b: usize) -> usize {
     best
 }
 
+/// The first index of the largest value in v[a..b].
+fn argmax_f64(v: &[f64], a: usize, b: usize) -> usize {
+    let mut best = a;
+    for i in a..b {
+        if v[i] > v[best] {
+            best = i;
+        }
+    }
+    best
+}
+
 /// Put the drum model's hits (kick, hat, tom, cymbal, snare) at frame index k in place of the built-in kick,
-/// tom, snare and closed hat lanes. Our clap, perc and open-hat lanes stay; the model's hi-hats replace the
-/// closed ones.
+/// tom, snare and closed hat lanes, keeping our clap, perc and open-hat lanes (the model's hi-hats replace the
+/// closed ones). With model_open_hats, lane_activations then splits the model's hi-hats into both hat lanes
+/// instead.
 fn model_hit(m: &[Vec<f64>], out: &mut [Vec<f64>], k: usize, a: usize, b: usize, sh: f64) {
     let mx = |v: &[f64]| v[a..b].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let (mk, mh, mt, mc, ms) = (mx(&m[0]), mx(&m[1]), mx(&m[2]), mx(&m[3]), mx(&m[4]));

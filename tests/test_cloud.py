@@ -240,6 +240,8 @@ def test_run_drum_bench_on_a_folder(tmp_path):
     assert jobs.run_drum_bench("mdb", tmp_path / "mdb", drums_only=True)["audio"] == "drum_only"
     with pytest.raises(ValueError, match="unknown drum suite"):
         jobs.run_drum_bench("enst", tmp_path)
+    with pytest.raises(ValueError, match="unknown open-hat source"):
+        jobs.run_drum_bench("mdb", tmp_path / "mdb", open_hats="sideways")
     with pytest.raises(ValueError, match="needs the dataset folder"):
         jobs.run_drum_bench("mdb", None)
 
@@ -272,6 +274,9 @@ def test_drum_bench_remote_with_the_drum_model(monkeypatch, tmp_path):
     calls = fake_modal(monkeypatch, report)
     assert main(["drum-bench", "idmt", "idmt-smt-drums", "--remote", "--drum-model"]) == 0
     assert calls == [("drum_bench_model", ("idmt", "idmt-smt-drums", None, False, "all"), {})]
+    calls.clear()
+    assert main(["drum-bench", "mdb", "mdb-drums", "--remote", "--drum-model", "--open-hats", "model"]) == 0
+    assert calls == [("drum_bench_model", ("mdb", "mdb-drums", None, False, "all"), {"open_hats": "model"})]
 
 
 def test_drums_extra_shares_pytorch():

@@ -213,7 +213,14 @@ rclone copy $TASTR_DATA/stemgmd-single-hits r2:tastr-data/stemgmd-single-hits \
 tastr drum-bench mdb mdb-drums --remote
 tastr drum-bench synth --remote          # needs no dataset
 tastr drum-bench mdb mdb-drums --remote --drum-model   # with the pretrained drum model (stems image)
+tastr drum-bench mdb mdb-drums --remote --drum-model --open-hats model   # open hats from the model's hi-hats
 ```
+
+`--open-hats built-in|model` picks where the open-hat lane comes from when the drum model runs (the built-in
+ringing detector, or the model's hi-hats split by the same ringing test); without it the engine's default
+holds ([drums.md](drums.md#pretrained-drum-model-adtof), "Open hats"). To score a branch before it is
+deployed: `modal run tastr/cloud/modal_app.py --kind drums --dataset mdb --path mdb-drums --drum-model
+--open-hats model` (add `--drums-only` for the stems, `--kits test` for StemGMD's held-out kits).
 
 With the bundle, a track's audio is read only when it is scored, so `--limit` reads only what it
 scores. IDMT-SMT-Drums (CC BY-NC-ND) and MDB Drums (CC BY-NC-SA) are non-commercial licenses; the

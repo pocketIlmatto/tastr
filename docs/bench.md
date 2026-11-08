@@ -185,6 +185,11 @@ log p + lambda * (correlation + 0.10 minor prior), at lambda 0.5, 1, 2, 4, 8, 16
 +0.025/6 (shipped), +0.019/1, -0.002/0; x5 with lambda 2 or 4: +0.023/3, +0.017/2; x20 with lambda 4: +0.001/0.
 No variant read every synthetic track right and kept a +0.025 gain on every half.
 
+Since the major bonus (below), the same 48 tracks fare worse: on 2026-11-08 the shipped model read 30 of 48
+wrong, the 6 major keys as their IV key as before plus all 24 minor tracks as their relative major. The tests
+accept the relative major for minor keys, so they still pass. Bass-line and chord inputs did not fix either
+without costing real tracks; see "Bass-line and chord-progression cues" below.
+
 **Full bench (in-sample: every track was in the training set, so these are not held-out numbers),
 `--stages core`, 2026-10-29:** GiantSteps Key 599 tracks, MIREX 0.676, exact 59.9% (fifth 67, relative 23,
 parallel 28, other 122), 408 s with `--jobs 8`. Beatport EDM Key, all 1,275 scored tracks, MIREX 0.586, exact 49.1%
@@ -364,6 +369,55 @@ parallel margin alone does about as well as the third (0.75). Requiring both fla
 against 16% for the margin under 0.2 alone) and is right more often when it fires (35% against 31%). Card benches (`tastr bench`) now report the flag too: how many tracks it marks, and the parallel-miss
 rate with and without it.
 
+### Bass-line and chord-progression cues (2026-11-08): tried, not shipped
+
+The open "a fifth off" errors (68 of 599 GiantSteps tracks held out, 111 of 1,122 Beatport) and the synthetic
+IV-key reads looked like they needed a bass or chord cue: the bass root and the chord at the start of a phrase
+usually sit on the tonic, and whole-track chroma averages that away. Each cue below was added to the learned
+model as extra 12-bin blocks next to the key profile (every block rolled with the key, so the model stays
+transposition-equivariant), refit with the same settings (C = 1, major bonus 0.35, synthetic profiles x5),
+and scored on the alternating held-out halves. The bass comes from the engine's 36-bin bass CQT (lowest two
+octaves folded to 12 pitch classes, frames below 20% of the 90th-percentile low-band power ignored); bars,
+beats and sections come from the engine's card. Weighted score, fifth errors, synthetic failures of 48:
+
+| Extra input | GiantSteps (A / B) | fifth | Beatport conf-2 (A / B) | fifth | Synthetic |
+|---|---|---|---|---|---|
+| none (shipped model) | 0.673 (0.672 / 0.674) | 68 | 0.614 (0.619 / 0.609) | 111 | 30 |
+| bass chroma, mean of per-frame normalized | 0.670 | 71 | 0.619 | 106 | 32 |
+| held bass notes (argmax held at least 8 frames), by duration | 0.678 | 68 | 0.620 | 101 | 35 |
+| bass notes reached by a falling fifth | 0.671 | 70 | 0.616 | 116 | 33 |
+| bass note of every bar | 0.680 | 70 | 0.617 | 105 | 33 |
+| bass note on every downbeat (first beat) | 0.680 | 75 | 0.620 | 111 | 32 |
+| bass note on the first bar of each section | 0.667 | 75 | 0.625 | 121 | 28 |
+| bass note on the first bar of each 4-bar phrase (counted from section starts) | 0.674 | 72 | 0.617 | 110 | 27 |
+| the same, 8-bar phrases | 0.674 | 76 | 0.623 | 115 | 28 |
+| chord of every bar (major and minor triad roots, two blocks) | 0.652 | 75 | 0.616 | 110 | 24 |
+| chord on the first bar of each 4-bar phrase | 0.654 | 68 | 0.598 | 107 | 12 |
+| the same, 8-bar phrases | 0.656 | 71 | 0.596 | 105 | 16 |
+| chord on the first bar of each section | 0.660 | 74 | 0.603 | 119 | 17 |
+| V to I cadences (major chord falling a fifth), by target root | 0.673 | 73 | 0.614 | 123 | 31 |
+| 4-bar phrase bass and 4-bar phrase chords together | 0.655 | 64 | 0.597 | 102 | 14 |
+
+No bass input moves either dataset beyond the noise (the halves differ by 0.01 to 0.02 on their own) or cuts fifth errors on both.
+Phrase-start chords do fix most synthetic misses (30 to 12), but cost GiantSteps 0.02 and Beatport 0.016,
+mostly as extra parallel-mode errors, so none was kept.
+
+**Why the bass can't help here.** In the tracks the model reads a fifth off, the bass agrees with the model,
+not the label. The most-held bass note is the predicted key's tonic in 31 of the shipped model's 67 GiantSteps fifth errors (in-sample) and
+the labeled tonic in only 12; on Beatport 52 against 14. At 4-bar phrase starts it is 23 against 10 and 56
+against 8. These tracks mostly sit on a bass note a fifth from the labeled tonic (a minor track labeled A minor
+with its bass on E, say), so the label follows the scale while the bass and chroma point at the fifth. A
+cue that should pull those tracks toward the label would have to come from somewhere else, for example
+melody or the scale's sixth and second degrees, not the low end. The synthetic misses are different: their
+four chords are equally long and loud, so only the phrase start tells I from IV, and real EDM previews
+rarely give the model that cue cleanly. FMA Keys, the one set with pop progressions, never showed the IV
+read (0 of 695 in zip 0), so the synthetic weakness may not matter for real songs.
+
+How it was run: GiantSteps (Zenodo 4153506) and Beatport EDM Key (Zenodo 1101082) audio, all 599 and 1,275
+scored tracks, feature caches from `key_features` (chroma and bass CQT) plus each track's card for beats,
+downbeats and sections, then offline fits in seconds each. No engine change shipped, so FMA Keys was not
+rerun.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:
@@ -525,6 +579,7 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   | Beatport drum & bass | 40 | 0.500 / 0.775 | 0.325 / 0.775 | 21 -> 31 |
   | Beatport 85-92, not drum & bass | 25 | 0.600 / 0.840 | 0.520 / 0.840 | 6 -> 8 |
   | Beatport hip-hop, downtempo, breaks, dubstep, drum & bass | 279 | 0.796 / 0.885 | 0.763 / 0.885 | 40 -> 52 |
+  | `beatport-tempo`, all | 774 | 0.897 / 0.930 | 0.885 / 0.930 | |
 
   The thresholds were picked on the 35 Beatport and GiantSteps tracks read at 79-93 BPM (from the 279-track
   subset and the 43 GiantSteps tracks); GTZAN and hjdb are held out. Results moved little between 0.75 and 0.9
@@ -541,8 +596,13 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   bass. The drum part's unmixing is what separates them.
 - Still open: 5 of 40 Beatport drum & bass tracks and 2 of 16 fast GiantSteps tracks still read at 86-90.
   Their snare is half-time too (beat 3 of the fast bar, like a real 87 BPM backbeat) or they fall just short
-  of the thresholds. The 2/3-tempo locks (116 for 174) are unchanged. The full 774-track `beatport-tempo` run
-  and the BPM calibration refit (`calibrate`) are still to do.
+  of the thresholds. The 2/3-tempo locks (116 for 174) are unchanged. - Full runs after the change (2026-11-08, local; `bench_scores.json` recorded): `beatport-tempo` 774 tracks
+  Acc1 0.897 -> 0.885, Acc2 0.930 both. Its 9 lost tracks are the 7 drum & bass tracks listed at 85-89 and the
+  same hip-hop and downtempo tracks as in the subset; no other track changed result. `giantsteps-tempo` 0.791 /
+  0.907, hjdb (all 235) 0.932 / 0.949. The BPM calibration fitted on these 1,052 tracks gives nearly the
+  same knots as consts.rs (64%, 84%, 89%, 95%, 96-98% at the same raw scores; held-out Brier 0.085 vs flat
+  0.097), so it was not rewritten: `calibrate --write` also refits the key table, which needs fresh
+  out-of-fold key rows.
 
 ## Drum lanes
 

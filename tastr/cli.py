@@ -117,6 +117,9 @@ def main(argv: list[str] | None = None) -> int:
     db_.add_argument("--drum-model", action="store_true",
                      help="score the pretrained drum model's lanes (locally it needs tastr[drums]; with --remote "
                           "it runs where the model is installed)")
+    db_.add_argument("--open-hats", choices=["built-in", "model"],
+                     help="with --drum-model: the open-hat lane from the built-in detector or from the model's "
+                          "hi-hats split by the ringing test (default: the engine's choice)")
     db_.add_argument("--out", help="write the JSON report here")
     db_.add_argument("--remote", action="store_true", help="run on Modal against the R2 bucket (docs/cloud.md)")
     db_.add_argument("--write-bundle", action="store_true",
@@ -700,13 +703,15 @@ def _drum_bench(args) -> int:
         if args.remote:
             print(f"running {args.suite} on Modal...", file=sys.stderr)
             t0 = time.time()
-            report = remote.drum_bench(args.suite, args.path, args.limit, args.drums_only, args.kits, args.drum_model)
+            report = remote.drum_bench(args.suite, args.path, args.limit, args.drums_only, args.kits, args.drum_model,
+                                       args.open_hats)
             print(f"wall {time.time() - t0:.0f} s, of which the bench {report.get('timing', {}).get('seconds', 0):.0f} s",
                   file=sys.stderr)
         else:
             if args.drum_model:
                 os.environ["TASTR_DRUM_MODEL"] = "adtof"  # every analysis in the bench (and its workers)
-            report = jobs.run_drum_bench(args.suite, args.path, args.limit, args.jobs, args.drums_only, args.kits)
+            report = jobs.run_drum_bench(args.suite, args.path, args.limit, args.jobs, args.drums_only, args.kits,
+                                         args.open_hats)
     except (remote.RemoteError, ValueError, FileNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

@@ -43,7 +43,10 @@ transpositions, so it learns how a key sounds relative to its tonic rather than 
 
 **Still open:** keys a fifth off (67 of 599 GiantSteps tracks) did not move with any profile or decision
 tweak. The learned model also reads some root-heavy major progressions as their IV key (6 of 48 synthetic
-tracks). Both point to new inputs such as bass-line and chord-progression cues. Details:
+tracks; 30 of 48 since the major bonus, the rest minor tracks read as their relative major). Bass-line
+and chord-progression inputs were tried in November 2026 and dropped: in the fifth-off tracks the bass sits on
+the predicted key's tonic, not the labeled one, so the bass agrees with the error; phrase-start chords fixed most
+synthetic misses but cost 0.016 to 0.02 on the real sets. Details:
 [bench.md, Key detection notes](bench.md#key-detection-notes).
 
 ## Tempo
@@ -72,7 +75,8 @@ BPM within 4% (Acc1).
 snare and clap hit evenly on every beat of the slow grid; a real 85-90 BPM backbeat hits every other beat.
 Beatport drum & bass read at 160-180 went from 21 to 31 of 40, fast GiantSteps tracks from 10 to 12 of 16;
 GTZAN Acc1 0.673 -> 0.676, hjdb train 0.915 -> 0.925, and Beatport's 85-92 BPM tracks that aren't drum & bass
-lost 2 of 25. Details: [bench.md, Tempo notes](bench.md#tempo-notes).
+lost 2 of 25. All 774 Beatport tracks: Acc1 0.897 -> 0.885, all from drum & bass listed at 85-89 and those two
+tracks. Details: [bench.md, Tempo notes](bench.md#tempo-notes).
 
 **Still open:** drum & bass whose snare is half-time too (beat 3 of the fast bar) still reads at 87, and
 2/3-tempo locks (116 for 174) are unchanged.
@@ -134,7 +138,9 @@ and Strudel. It can be overruled per track.
 The original three-band split became a semi-adaptive NMF with leak removal and per-hit sorting into seven
 lanes (kick, snare, clap, hat, open hat, tom, perc). Real-kit benchmarks then showed real toms were almost
 never found, so an optional pretrained model ([ADTOF](https://github.com/MZehren/ADTOF)) can supply the
-kick, snare, hat and tom lanes and add a cymbal lane. Clap, perc and open hat stay built in. ADTOF's weights
+kick, snare, hat and tom lanes and add a cymbal lane, and its hi-hats are split into closed and open by the built-in
+ringing test (open hat F 0.21 -> 0.41 on MDB mixes, better on every suite with open-hat labels; see
+[drums.md, Open hats](drums.md#pretrained-drum-model-adtof)). Clap and perc stay built in. ADTOF's weights
 are non-commercial (CC BY-NC-SA 4.0), so they download on first use and are not in this repo.
 
 - **Found with:** IDMT-SMT-Drums for snare / hat bleed; MDB Drums (real mixes) and grooves built from
@@ -150,7 +156,8 @@ are non-commercial (CC BY-NC-SA 4.0), so they download on first use and are not 
 | MDB mixes, snare (model, confidence rule) | 0.506 | 0.682 |
 | StemGMD test kits, snare (same) | 0.463 | 0.893 |
 | StemGMD test kits, tom (model) | 0.002 | 0.880 |
-| MDB mixes, either hat (model) | 0.649 | 0.753 |
+| MDB mixes, either hat (model) | 0.649 | 0.848 |
+| MDB mixes, open hat (model's hi-hats split) | 0.236 | 0.405 |
 | MDB mixes, cymbal (model, new lane) | none | 0.832 |
 
 **Snare source, picked 2026-11-08:** ADTOF's snare alone is much better on MDB and StemGMD (0.74, 0.83) but

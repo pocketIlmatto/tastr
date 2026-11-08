@@ -162,9 +162,9 @@ and adds a cymbal lane. Each hit is placed on the analysis frames with its
 confidence (ADTOF's per-drum threshold maps to 0.5) times the level of the
 built-in part for that family, so the groove's "20% of the loudest lane"
 rule still compares like with like. Its snares go through a confidence rule
-(see "The snare trade-off" below). Clap, perc and open hat stay with the
-built-in detector (the model's hi-hats replace only the hits our
-ringing test calls closed). Because of the license, and because it is
+(see "The snare trade-off" below). Clap and perc stay with the built-in
+detector. The model's hi-hats are split into closed and open hats by the
+built-in ringing test (see "Open hats" below). Because of the license, and because it is
 slower, it runs only when asked for one track: "Detect drums with the model"
 in the track's ⋯ menu (or the bulk Actions menu, or `tastr drum-model run ID`)
 re-analyzes that track with it in the background, like a stem separation, and
@@ -218,13 +218,37 @@ drops a little (0.01 to 0.04), since our open-hat lane now keeps only the
 hits the model doesn't also call a hat. Synth loses its synthetic tom, a
 sine sweep the model doesn't recognise. Each run took 38 to 87 s on Modal
 (4 CPUs). The earlier eval-adapter numbers for StemGMD and synth agreed
-within about 0.01.
+within about 0.01. The Open hat and Hats columns are from before the model's
+hi-hats were split into open and closed; see the next table for the change.
 
-**Open hats.** Splitting the model's hi-hats into closed and open with the
-built-in ringing test scored better on the StemGMD test kits (open hat 0.66
-against 0.48) but worse on synth (0.42 against 0.49), and MDB couldn't be
-checked. The built-in open-hat lane stays (`drums.MODEL_OPEN_HATS = False`);
-revisit with a bench option that runs MDB and IDMT both ways on Modal.
+**Open hats.** With the model there are two ways to fill the open-hat lane:
+keep the built-in open-hat lane (the model's hi-hats then replace only the
+hits our ringing test calls closed), or split the model's own hi-hats into
+closed and open with the same ringing test. `tastr drum-bench SUITE PATH
+--drum-model --open-hats built-in|model` runs either (2026-11-08, Modal,
+temporary app from the branch; onset F within 50 ms, built-in -> model;
+"Hats" counts either hat lane):
+
+| Suite | Hat | Hats (either) | Open hat (n) | Open hat P / R |
+|---|---|---|---|---|
+| MDB mixes | 0.776 -> 0.772 | 0.753 -> 0.848 | 0.209 -> 0.405 (269) | 0.13 / 0.52 -> 0.29 / 0.67 |
+| MDB drum stems | 0.831 -> 0.828 | 0.808 -> 0.867 | 0.289 -> 0.587 | 0.19 / 0.60 -> 0.50 / 0.70 |
+| StemGMD test kits | 0.682 -> 0.675 | 0.751 -> 0.740 | 0.481 -> 0.657 (300) | 0.34 / 0.84 -> 0.51 / 0.93 |
+| IDMT | 0.940 -> 0.948 | | | |
+| Synth | 0.943 -> 0.934 | | 0.686 -> 1.000 (12) | 0.52 / 1.00 -> 1.00 / 1.00 |
+
+Kick, tom and cymbal are unchanged (cymbal within 0.003). Splitting the
+model's hi-hats wins on every suite with open-hat labels, mostly by
+precision: the built-in open-hat lane fires on many hits the model knows are
+something else (snare rattle, cymbal wash), which also costs "either hat"
+on MDB. Closed hats move by 0.01 at most, and the StemGMD test kits lose
+0.011 on "either hat". So it is the default now (`drums::MODEL_OPEN_HATS`).
+This supersedes the earlier eval-adapter check (0.66 against 0.48 on
+StemGMD, worse on synth), which didn't go through the shipped lanes. One thing
+to know: the ringing test reads the air band (above 6 kHz), so a model
+hi-hat with nothing above 6 kHz (very dark or band-limited hats) reads as
+ringing and lands in the open-hat lane. Each run took 41 to 153 s on 4 CPUs
+(about 12 minutes for all ten).
 
 **The snare trade-off.** ADTOF's snare is far better on MDB and StemGMD
 (0.74 and 0.91 against 0.51 and 0.46) but worse on IDMT's sampled and

@@ -99,19 +99,21 @@ def key_profiles(dataset: str, path: str, limit: int | None = None) -> dict:
 
 @app.function(image=image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
 def drum_bench(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False,
-               kits: str = "all") -> dict:
+               kits: str = "all", open_hats: str | None = None) -> dict:
     from tastr.cloud.jobs import run_drum_bench
 
-    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits)
+    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits,
+                          open_hats=open_hats)
 
 
 # The drum bench with the pretrained drum model (tastr[drums]).
 @app.function(image=drums_image, cpu=4, memory=8192, timeout=3600, volumes={DATA: datasets})
 def drum_bench_model(suite: str, path: str | None = None, limit: int | None = None, drums_only: bool = False,
-                     kits: str = "all") -> dict:
+                     kits: str = "all", open_hats: str | None = None) -> dict:
     from tastr.cloud.jobs import run_drum_bench
 
-    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits)
+    return run_drum_bench(suite, f"{DATA}/{path}" if path else None, limit, jobs=4, drums_only=drums_only, kits=kits,
+                          open_hats=open_hats)
 
 
 @app.function(image=image, cpu=BENCH_CPUS, memory=16384, timeout=3600, volumes={DATA: datasets})
@@ -153,12 +155,14 @@ def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = Non
 
 
 @app.local_entrypoint()
-def run_branch(kind: str, dataset: str, path: str, limit: int = 0, out: str = ""):
+def run_branch(kind: str, dataset: str, path: str, limit: int = 0, out: str = "", drum_model: bool = False,
+               open_hats: str = "", drums_only: bool = False, kits: str = "all"):
     """Bench a branch's code without deploying it, so the shared app stays as is:
 
         modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key
         modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this   # any spec-bench
         modal run tastr/cloud/modal_app.py --kind drums --dataset idmt --path idmt-smt-drums --limit 10
+        modal run tastr/cloud/modal_app.py --kind drums --dataset mdb --path mdb-drums --drum-model --open-hats model
         modal run tastr/cloud/modal_app.py --kind key-profiles --dataset giantsteps-key --path giantsteps-key
 
     `modal run` uploads the working tree to a temporary app that stops when the run ends.
@@ -180,7 +184,8 @@ def run_branch(kind: str, dataset: str, path: str, limit: int = 0, out: str = ""
     if kind == "bench":
         report = bench.remote(dataset, path, limit or None)
     elif kind == "drums":
-        report = drum_bench.remote(dataset, path if path != "-" else None, limit or None)
+        fn = drum_bench_model if drum_model else drum_bench
+        report = fn.remote(dataset, path if path != "-" else None, limit or None, drums_only, kits, open_hats or None)
     elif kind == "key-profiles":
         report = key_profiles.remote(dataset, path, limit or None)
     else:

@@ -1194,6 +1194,7 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     let mut model = false;
     if !sf.is_empty() {
         let mut drums = Drums::new(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux);
+        drums.model_open_hats = ctx.model_open_hats;
         if let Some(hits) = &ctx.drum_hits {
             drums.set_model(hits, ctx.sr, HOP);
             card.extras.set("drum_model", "adtof"); // re-analysis keeps using it (service.reanalyze_track)
@@ -1282,6 +1283,7 @@ pub fn drum_grid_json(ctx: &Ctx, card: &Card) -> Result<Json, String> {
         return Ok(Json::obj());
     }
     let mut drums = Drums::new(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux);
+    drums.model_open_hats = ctx.model_open_hats;
     if let Some(hits) = &ctx.drum_hits {
         drums.set_model(hits, ctx.sr, HOP);
     }

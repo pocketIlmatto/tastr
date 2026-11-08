@@ -169,3 +169,30 @@ def test_fetch_rejects_a_bad_download(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="checksum"):
         adt.fetch()
     assert not any(adt.models_dir().glob("*.index"))
+
+
+@pytest.mark.rust
+def test_open_hats_from_the_model(monkeypatch):
+    """--open-hats model splits the model's hi-hats by the ringing test; built-in keeps our open-hat lane."""
+    bpm, step = 120, 0.125
+    y, _ = make_drum_track({"kick": "x...x...x...x...", "hat": "x...x...x...x...", "open_hat": "..x...x...x...x."},
+                           bpm=bpm)
+    bars = 8
+    at = lambda steps: [(b * 16 + s) * step for b in range(bars) for s in steps]  # noqa: E731
+    fake_model(monkeypatch, {"kick": at([0, 4, 8, 12]), "snare": [], "tom": [], "hat": at(range(0, 16, 2)),
+                             "cymbal": []})
+    hits = lambda g: g["pattern"].replace("o", "x") if g["detected"] else "." * 16  # noqa: E731
+    for way in ("built-in", "model"):
+        monkeypatch.setenv("TASTR_OPEN_HATS", way)
+        grid = _synth_grid(y, bpm)
+        assert hits(grid["open_hat"]) == "..x...x...x...x.", way
+        assert hits(grid["hat"]) == "x...x...x...x...", way
+    # The model's split: a hi-hat the model calls where the air band doesn't ring stays closed, even where the
+    # built-in hat part found nothing open.
+    monkeypatch.setenv("TASTR_OPEN_HATS", "model")
+    lanes, hop = _activations(y, "synth")
+    f = int(round(4 * step * SR / hop))
+    assert lanes["hat"][f] > 0 and lanes["open_hat"][f] < 0.2 * lanes["hat"][f]
+    monkeypatch.setenv("TASTR_OPEN_HATS", "sideways")
+    with pytest.raises(ValueError, match="TASTR_OPEN_HATS"):
+        _activations(y, "synth")

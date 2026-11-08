@@ -39,6 +39,8 @@ pub struct Ctx {
     pub tempogram: Option<Vec<f64>>,
     /// The optional drum model's hits, run by the server (engine/adt.py); None for the built-in lanes only.
     pub drum_hits: Option<crate::drums::ModelHits>,
+    /// With the drum model, take the open-hat lane from its hi-hats (drums::MODEL_OPEN_HATS; the bench flips it).
+    pub model_open_hats: bool,
     /// Caller's meter (3 or 4) instead of detecting it.
     pub beats_per_bar: Option<i64>,
 }
@@ -92,6 +94,7 @@ impl Ctx {
             bass_cqt,
             tempogram: None,
             drum_hits: None,
+            model_open_hats: crate::drums::MODEL_OPEN_HATS,
             beats_per_bar,
             y,
         }

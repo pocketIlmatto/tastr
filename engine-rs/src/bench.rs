@@ -15,10 +15,11 @@
 //!   bar_times, starts: [[...] per config], empty below MIN_BARS_FOR_SPLIT bars}
 //! - `key n= matrices=0|1`: mono audio at 22,050 Hz -> {profile, silent} (+ chroma, bass_cqt)
 //! - `key_profile frames=`: chroma (12 x frames) -> {profile}
-//! - `lane_activations n= hits=`: audio, drum model hits (lib::parse_drum_hits layout, `hits` values) ->
-//!   {lanes, acts: [[per frame] per lane], hop}
-//! - `drum_grid n= beats= downbeats= bpm= beats_per_bar= hits=`: audio, beat times, downbeat times, hits ->
-//!   {lane: {pattern, velocity, detected}}
+//! - `lane_activations n= hits= [open_hats=built-in|model]`: audio, drum model hits (lib::parse_drum_hits
+//!   layout, `hits` values) -> {lanes, acts: [[per frame] per lane], hop}. `open_hats` overrides
+//!   drums::MODEL_OPEN_HATS (where the open-hat lane comes from when there are model hits).
+//! - `drum_grid n= beats= downbeats= bpm= beats_per_bar= hits= [open_hats=]`: audio, beat times, downbeat
+//!   times, hits -> {lane: {pattern, velocity, detected}}
 
 use crate::card::Card;
 use crate::features::{mel_frequencies, Matrix};
@@ -218,6 +219,12 @@ fn audio_ctx(a: &mut Args) -> Result<Ctx, String> {
 fn read_hits(a: &mut Args, ctx: &mut Ctx) -> Result<(), String> {
     let n = a.opt_count("hits");
     ctx.drum_hits = crate::parse_drum_hits(a.take(n)?)?;
+    match a.get("open_hats").unwrap_or("default") {
+        "default" => {}
+        "built-in" => ctx.model_open_hats = false,
+        "model" => ctx.model_open_hats = true,
+        v => return Err(format!("open_hats: {v} (built-in or model)")),
+    }
     Ok(())
 }
 
@@ -226,6 +233,7 @@ fn lane_activations(a: &mut Args) -> Result<Json, String> {
     let mut ctx = audio_ctx(a)?;
     read_hits(a, &mut ctx)?;
     let mut drums = crate::drums::Drums::new(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux);
+    drums.model_open_hats = ctx.model_open_hats;
     if let Some(hits) = &ctx.drum_hits {
         drums.set_model(hits, ctx.sr, HOP);
     }

@@ -238,6 +238,8 @@ def test_run_drum_bench_on_a_folder(tmp_path):
     assert jobs.run_drum_bench("mdb", tmp_path / "mdb", drums_only=True)["audio"] == "drum_only"
     with pytest.raises(ValueError, match="unknown drum suite"):
         jobs.run_drum_bench("enst", tmp_path)
+    with pytest.raises(ValueError, match="unknown open-hat source"):
+        jobs.run_drum_bench("mdb", tmp_path / "mdb", open_hats="sideways")
     with pytest.raises(ValueError, match="needs the dataset folder"):
         jobs.run_drum_bench("mdb", None)
 
@@ -253,6 +255,9 @@ def test_drum_bench_remote(monkeypatch, tmp_path, capsys):
     assert "R alone 1.00 (n=2)" in capsys.readouterr().out
     assert json.loads(out.read_text())["tracks"] == 2
     assert main(["drum-bench", "idmt"]) == 2
+    calls.clear()
+    assert main(["drum-bench", "mdb", "mdb-drums", "--remote", "--drum-model", "--open-hats", "model"]) == 0
+    assert calls == [("drum_bench_model", ("mdb", "mdb-drums", None, False, "all"), {"open_hats": "model"})]
 
 
 def test_drum_bench_write_bundle(tmp_path):

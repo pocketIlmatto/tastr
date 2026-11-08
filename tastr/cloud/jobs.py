@@ -126,18 +126,29 @@ def run_spec_bench(bench: str, dataset: str, folder: str | Path, limit: int | No
 
 
 def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = None, jobs: int = 1,
-                   drums_only: bool = False, kits: str = "all") -> dict:
+                   drums_only: bool = False, kits: str = "all", open_hats: str | None = None) -> dict:
     """A drum lane suite (`python -m tastr.engine.bench.drums`) on `folder`; returns its report. A dataset
-    suite that finds no tracks there is an error, not an empty report."""
+    suite that finds no tracks there is an error, not an empty report. `open_hats` ("built-in" or "model")
+    says where the open-hat lane comes from when the drum model is on; None keeps the engine's default."""
+    import os
+
     from ..engine.bench import drums
 
     if suite not in drums.SUITES:
         raise ValueError(f"unknown drum suite {suite!r}; choose from {', '.join(drums.SUITES)}")
+    if open_hats:
+        if open_hats not in drums.OPEN_HATS:
+            raise ValueError(f"unknown open-hat source {open_hats!r}; choose from {', '.join(drums.OPEN_HATS)}")
+        os.environ["TASTR_OPEN_HATS"] = open_hats  # read by the bench and its worker processes
+    else:
+        os.environ.pop("TASTR_OPEN_HATS", None)  # a reused Modal container may hold an earlier run's choice
     t0 = time.time()
     report = drums.run(suite, folder, limit, jobs, drums_only, kits)
     if suite != "synth" and not report.get("tracks"):
         raise ValueError(f"no {suite} tracks found at {folder}")
     report["timing"] = {"seconds": round(time.time() - t0, 1), "jobs": jobs}
+    if drums.open_hats():
+        report["open_hats"] = drums.open_hats()
     return report
 
 

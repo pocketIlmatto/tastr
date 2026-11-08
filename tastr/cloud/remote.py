@@ -105,8 +105,10 @@ def key_profiles(dataset: str, path: str, limit: int | None = None) -> dict:
 
 
 def drum_bench(suite: str, path: str | None, limit: int | None = None, drums_only: bool = False,
-               kits: str = "all", model: bool = False) -> dict:
-    return _call("drum_bench_model" if model else "drum_bench", suite, path, limit, drums_only, kits)
+               kits: str = "all", model: bool = False, open_hats: str | None = None) -> dict:
+    # open_hats only when asked, so an app deployed before the option still answers the other runs.
+    kw = {"open_hats": open_hats} if open_hats else {}
+    return _call("drum_bench_model" if model else "drum_bench", suite, path, limit, drums_only, kits, **kw)
 
 
 def vibe_bench(dataset: str, path: str, limit: int | None = None) -> dict:

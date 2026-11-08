@@ -357,7 +357,7 @@ def _score_snare_sources(acts, model, ref, labels, hop, sr) -> dict:
 
 
 TOM_NEAR = 0.03  # a model snare (or kick) this close to a model tom "lands with" it
-TOM_CONFIDENT = (0.6, 0.7, 0.8)
+TOM_CONFIDENT = (0.6, 0.625, 0.65, 0.675, 0.7, 0.75, 0.8)
 TOM_KEEP = (0.7, 0.8, 0.9)
 
 

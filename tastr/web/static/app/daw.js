@@ -324,6 +324,10 @@ export const accid = (s) => String(s).replace(/([A-G])b(?![a-z])/g, "$1♭").rep
 export function keyName(k) {
   return isNum(k.tonic) ? `${k.mode === "minor" && k.tonic % 12 === 1 ? "C♯" : KEY_SPELL[k.tonic % 12]} ${k.mode || ""}`.trim() : "–";
 }
+// The same tonic in the other mode (C major -> C minor), for keys whose mode is a guess (key.mode_uncertain).
+export const modeOther = (k) => ({ tonic: k.tonic, mode: k.mode === "minor" ? "major" : "minor" });
+// Its Camelot code: a major nB's parallel minor is (n-3)A, a minor nA's parallel major is (n+3)B (8B C major -> 5A C minor).
+export const camelotParallel = (cam) => { const m = /^(\d+)([AB])$/.exec(cam || ""); if (!m) return null; const d = m[2] === "B" ? -3 : 3; return `${((+m[1] + d + 11) % 12) + 1}${m[2] === "B" ? "A" : "B"}`; };
 
 export function setDaw(v) { return (daw = v); }
 export function setServerCfg(v) { return (serverCfg = v); }

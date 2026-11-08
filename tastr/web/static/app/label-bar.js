@@ -4,7 +4,7 @@
 import { api, h, isNum, labels, reviewRows } from "./core.js";
 import { camelotNear } from "./library.js";
 import { hearChordDb, hearDrums, hearKey, hearing, setHearChordDb, setHearDrums } from "./card.js";
-import { accid, keyName } from "./daw.js";
+import { accid, camelotParallel, keyName, modeOther } from "./daw.js";
 import { audioCtx, dragNumber } from "./sequencer.js";
 import { setStatus } from "./upload.js";
 import { ALL_CAMS, CAM_NAME, JSON_PUT, camLabel, charts, countReviewed, endMarking, fmtMark, labelOpen, loadReview, markHook, nameToCam, openForReview,
@@ -110,9 +110,13 @@ function chordVolume() {
 function keyRow(p) {
   const { st, lb, c, why } = p, { key, cam0 } = lb;
   const near = cam0 ? camelotNear(cam0) : [];
-  const keyCams = cam0 ? [cam0, near[3], near[2], near[1]] : [];
-  const keyBtns = keyCams.map((cam, i) => h("button", { type: "button", "aria-pressed": "false", title: `${cam} · ${["Keep Tastr's key", "Same notes, other mode", "Tastr's most common miss", "Tastr's most common miss"][i]}`,
-    onclick: () => setKey(CAM_NAME(cam)) }, i ? `${["", "Relative", "Fifth up", "Fifth down"][i]}: ${accid(CAM_NAME(cam))}` : `✓ ${keyName(key)}`,
+  // when the mode is a guess (key.mode_uncertain), the same tonic in the other mode comes right after Tastr's key
+  const par = cam0 && key.mode_uncertain && isNum(key.tonic) ? camelotParallel(cam0) : null;
+  const keyOpts = cam0 ? [[cam0, `✓ ${keyName(key)}`, "Keep Tastr's key"], par && [par, `Other mode: ${keyName(modeOther(key))}`, "Same tonic, other mode. Tastr isn't sure of the mode here"],
+    [near[3], `Relative: ${accid(CAM_NAME(near[3]))}`, "Same notes, other mode"], [near[2], `Fifth up: ${accid(CAM_NAME(near[2]))}`, "Tastr's most common miss"],
+    [near[1], `Fifth down: ${accid(CAM_NAME(near[1]))}`, "Tastr's most common miss"]].filter(Boolean) : [];
+  const keyCams = keyOpts.map((o) => o[0]);
+  const keyBtns = keyOpts.map(([cam, label, tip]) => h("button", { type: "button", "aria-pressed": "false", title: `${cam} · ${tip}`, onclick: () => setKey(CAM_NAME(cam)) }, label,
     why && why.catalog_key === cam ? h("span", { class: "lb-cat", title: "What the catalog lists" }, "catalog") : null));
   const hearBtn = (camOf, label) => { const b = h("button", { type: "button", class: "lb-hear", title: `Hear ${label()} against the track`, "aria-label": `Hear ${label()} against the track` }, "🔊"); b.onclick = () => hearKey(c, camOf(), b); return b; };
   const drumsBtn = drumsToggle(), chordVol = chordVolume();

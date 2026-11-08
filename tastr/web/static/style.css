@@ -69,6 +69,9 @@ html[data-cfg-wait] #view-admin > :not(.boot-line) { display: none; }
 .stat { display: flex; flex-direction: column; }
 .stat b { font-size: 22px; font-variant-numeric: tabular-nums; }
 .stat span { color: var(--muted); font-size: 12px; }
+/* a key whose mode is a guess: "C major?", the mode muted at the value's size */
+.stat b > span { font-size: inherit; color: inherit; }
+.stat b .mode-q { font-size: inherit; color: var(--muted); font-weight: inherit; }
 .meter { width: 120px; height: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; margin-top: 8px; }
 .meter > i { display: block; height: 100%; background: var(--accent); }
 .title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-basis: 100%; }

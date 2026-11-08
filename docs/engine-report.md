@@ -43,7 +43,10 @@ transpositions, so it learns how a key sounds relative to its tonic rather than 
 
 **Still open:** keys a fifth off (67 of 599 GiantSteps tracks) did not move with any profile or decision
 tweak. The learned model also reads some root-heavy major progressions as their IV key (6 of 48 synthetic
-tracks). Both point to new inputs such as bass-line and chord-progression cues. Details:
+tracks; 30 of 48 since the major bonus, the rest minor tracks read as their relative major). Bass-line
+and chord-progression inputs were tried in November 2026 and dropped: in the fifth-off tracks the bass sits on
+the predicted key's tonic, not the labeled one, so the bass agrees with the error; phrase-start chords fixed most
+synthetic misses but cost 0.016 to 0.02 on the real sets. Details:
 [bench.md, Key detection notes](bench.md#key-detection-notes).
 
 ## Tempo

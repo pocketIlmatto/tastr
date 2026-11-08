@@ -169,3 +169,16 @@ def test_fetch_rejects_a_bad_download(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="checksum"):
         adt.fetch()
     assert not any(adt.models_dir().glob("*.index"))
+
+
+@pytest.mark.rust
+def test_bench_compares_snare_sources_with_the_model(monkeypatch):
+    from tastr.engine.bench import drums
+
+    items = drums.synth_onset_items()[:2]
+    fake_model(monkeypatch, {"kick": [], "snare": items[0][2].get("snare", [])[:2], "tom": [], "hat": [], "cymbal": []})
+    report = drums.run("synth-onsets", limit=2)
+    assert report["tracks"] == 2
+    assert {"builtin", "model", "gated", "mid-0.1", "confident", "union"} <= set(report["snare_sources"])
+    assert report["snare_sources"]["builtin"]["f"] == report["summary"]["snare"]["f"]
+    assert "snare from model" in drums.format_report(report)

@@ -135,7 +135,7 @@ def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = No
         raise ValueError(f"unknown drum suite {suite!r}; choose from {', '.join(drums.SUITES)}")
     t0 = time.time()
     report = drums.run(suite, folder, limit, jobs, drums_only, kits)
-    if suite != "synth" and not report.get("tracks"):
+    if not suite.startswith("synth") and not report.get("tracks"):
         raise ValueError(f"no {suite} tracks found at {folder}")
     report["timing"] = {"seconds": round(time.time() - t0, 1), "jobs": jobs}
     return report

@@ -48,10 +48,10 @@ essentia_image = (
     .run_commands(download_command())
     .add_local_python_source("tastr")
 )
-# The same plus Demucs, with the htdemucs weights baked in so a cold start does not download them.
+# The same plus Demucs, with the htdemucs weights baked in so a cold start does not download them. The drum
+# bench runs on it with the drum model, and every lane it scores comes from the Rust engine, so it needs the library too.
 _torch_base = (
-    modal.Image.debian_slim(python_version="3.12")
-    .apt_install("ffmpeg", "libsndfile1")
+    with_rust_engine(modal.Image.debian_slim(python_version="3.12").apt_install("ffmpeg", "libsndfile1"))
     .pip_install(*ENGINE_DEPS, *STEMS_DEPS, *PINS)
     .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs')\"")
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})

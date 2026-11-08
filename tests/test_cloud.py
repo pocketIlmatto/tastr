@@ -42,6 +42,10 @@ def test_every_analysis_image_has_the_rust_engine():
     src = (ROOT / "tastr/cloud/modal_web.py").read_text()
     for name in ("image", "drums_image"):
         assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), name
+    # The bench app's images: the engine base, and the PyTorch base the drum bench runs on with the drum model.
+    src = (ROOT / "tastr/cloud/modal_app.py").read_text()
+    for name in ("_engine_base", "_torch_base"):
+        assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), name
 
 
 @pytest.mark.audio

@@ -357,7 +357,8 @@ model onsets (IDMT: false toms per labeled hit):
 The vetoes barely help: the false toms sit where the model hears no snare at
 all (it calls the snare a tom), so there is nothing to veto against. The
 confidence cut is what works, and it trades MDB against StemGMD's grooves,
-where 43% of the toms land with a kick or snare and score lower confidence.
+where 43% of the toms land with a kick or snare; those are mostly the ones
+the cut loses (recall with a kick or snare 0.60 -> 0.54, alone 0.98 -> 0.95).
 The engine drops model toms under **0.675** (`drums::TOM_CONFIDENT`), the
 highest cut that keeps StemGMD at 0.86 or more; 0.75 would be better on MDB
 (0.57 and 0.62) for 0.07 on StemGMD. Through the shipped lanes, before ->

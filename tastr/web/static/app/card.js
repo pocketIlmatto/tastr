@@ -5,7 +5,7 @@ import { bpmFilter, camelotNear, keyFilter, lib, loadTracks, renderList, syncCar
 import { setDrumModelOn, setLookupProviders } from "./bulk.js";
 import { camPc, charts, labelOpen, setLabelOpen, setMarkHook } from "./labels.js";
 import { labelBar } from "./label-bar.js";
-import { DAWS, daw, dawText, keyName, liveView, setDaw } from "./daw.js";
+import { DAWS, camelotParallel, daw, dawText, keyName, liveView, modeOther, setDaw } from "./daw.js";
 import { delay, trackAudio } from "./audio.js";
 import { energyChart } from "./chart.js";
 import { grooveView } from "./groove.js";
@@ -279,11 +279,25 @@ function bpmStat(core) {
   return statBtn("bpm", core.bpm.toFixed(1), sure ? `BPM · ${sure.text}` : "BPM",
     [sure && sure.title, `Click to show tracks from ${Math.round(core.bpm - 5)} to ${Math.round(core.bpm + 5)} BPM.`].filter(Boolean).join(" "), () => bpmFilter(core.bpm));
 }
+// key.mode_uncertain (the thirds barely sound and the key model barely prefers this mode): major or minor is a guess.
+// Missing on older cards, which then show the key as before.
+const MODE_Q_TIP = "Major or minor is a guess for this track: its third barely sounds, so Tastr can't hear which it is. Tracks like this get the mode wrong about 1 time in 3 (about half for rock). If you know, label the key.";
 function keyStat(key) {
   const sure = key && isNum(key.likely_correct) ? sureness(key.likely_correct) : null;
   if (!key || !key.camelot) return stat(key ? `${keyName(key)}` : "–", key ? [key.scale, sure && sure.text].filter(Boolean).join(" · ") || "key" : "key", sure && sure.title);
+  if (key.mode_uncertain && isNum(key.tonic) && camelotParallel(key.camelot)) return keyUnsureStat(key, sure);
   return statBtn("key", keyName(key), [key.camelot, key.scale, sure && sure.text].filter(Boolean).join(" · "),
     [sure && sure.title, `Click to show tracks in ${key.camelot} and the keys that mix with it (${camelotNear(key.camelot).slice(1).join(", ")}).`].filter(Boolean).join(" "), () => keyFilter(key.camelot));
+}
+// "C major?" with the mode muted, and the other mode named under it: "8B · or C minor (5A)".
+function keyUnsureStat(key, sure) {
+  const o = modeOther(key), oCam = camelotParallel(key.camelot), tonic = keyName(key).replace(/ (major|minor)$/, "");
+  const click = `Click to show tracks in ${key.camelot} and the keys that mix with it.`;
+  const b = statBtn("key", h("span", {}, tonic, " ", h("span", { class: "mode-q" }, `${key.mode}?`)), [key.camelot, `or ${keyName(o)} (${oCam})`, sure && sure.text].filter(Boolean).join(" · "),
+    `${[MODE_Q_TIP, sure && sure.title].filter(Boolean).join(" ")}\n${click}`, () => keyFilter(key.camelot));
+  b.dataset.unsure = "";
+  b.setAttribute("aria-label", `Key: ${keyName(key)} or ${keyName(o)}, the mode is a guess. Show tracks in ${key.camelot} and keys that mix with it.`);
+  return b;
 }
 const energyStat = (core) => h("div", { class: "stat" },
   h("b", {}, isNum(core.energy) ? core.energy.toFixed(2) : "–"),

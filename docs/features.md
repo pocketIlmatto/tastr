@@ -9,7 +9,8 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
 
 - **Tempo and key.** BPM with how likely it is to be right (calibrated on the benchmarks), a beat and bar grid, and the
   key from a small learned model trained on GiantSteps and Beatport (shown with
-  its Camelot code for mixing). Drum & bass is read at its real tempo, not
+  its Camelot code for mixing). When the third barely sounds, so major or minor is a guess, the key shows as
+  "C major?" with the other mode under it ("8B · or C minor (5A)"). Drum & bass is read at its real tempo, not
   half or two thirds of it.
 - **Time signature.** Bars of 4 beats (4/4) or 3 (3/4, waltz time), detected
   from how the beats group. Grids, MIDI and Strudel follow it. When it's wrong,
@@ -184,7 +185,7 @@ the music you actually use, and every label also scores future engine changes
   - BPM: Tastr's, half or double in one click, a drag box (a whole BPM per notch, Shift for 0.1), or **Tap**
     along to the beat.
   - Key: Tastr's key, its relative and the fifths above and below (Tastr's most common misses), or any of the
-    24. A "catalog" tag marks the one a catalog lists.
+    24. When the mode is a guess, **Other mode** (the same tonic in minor or major) comes right after Tastr's key. A "catalog" tag marks the one a catalog lists.
   - 🔊 next to each key plays its chord alone for 2 seconds, then brings the track's drop in under it: the right
     key blends in, a wrong one clashes. **🥁 Drums off** plays only the track's harmonic part (HPSS, worked out
     in the browser for the clip), which is what the key detector listens to. A slider sets the chord's level.

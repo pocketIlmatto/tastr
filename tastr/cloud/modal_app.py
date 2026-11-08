@@ -163,6 +163,9 @@ def run_branch(kind: str, dataset: str, path: str, limit: int = 0, out: str = ""
         modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this   # any spec-bench
         modal run tastr/cloud/modal_app.py --kind drums --dataset idmt --path idmt-smt-drums --limit 10
         modal run tastr/cloud/modal_app.py --kind drums --dataset mdb --path mdb-drums --drum-model --open-hats model
+        modal run tastr/cloud/modal_app.py --kind drums-model --dataset mdb --path mdb-drums   # with the drum model
+        modal run tastr/cloud/modal_app.py --kind drums-model-stems --dataset mdb --path mdb-drums   # MDB drum stems
+        modal run tastr/cloud/modal_app.py --kind drums-model-test-kits --dataset stemgmd-mix --path stemgmd-single-hits
         modal run tastr/cloud/modal_app.py --kind key-profiles --dataset giantsteps-key --path giantsteps-key
 
     `modal run` uploads the working tree to a temporary app that stops when the run ends.
@@ -186,6 +189,11 @@ def run_branch(kind: str, dataset: str, path: str, limit: int = 0, out: str = ""
     elif kind == "drums":
         fn = drum_bench_model if drum_model else drum_bench
         report = fn.remote(dataset, path if path != "-" else None, limit or None, drums_only, kits, open_hats or None)
+    elif kind.startswith("drums-model"):  # -stems: MDB drum stems; -test-kits: the held-out StemGMD kits
+        report = drum_bench_model.remote(dataset, path if path != "-" else None, limit or None,
+                                         drums_only=kind.endswith("-stems"),
+                                         kits="test" if kind.endswith("-test-kits") else "all",
+                                         open_hats=open_hats or None)
     elif kind == "key-profiles":
         report = key_profiles.remote(dataset, path, limit or None)
     else:

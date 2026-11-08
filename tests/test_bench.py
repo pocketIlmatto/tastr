@@ -126,7 +126,7 @@ def test_meter_is_scored_per_meter():
 def test_beatport_tempo_loader(tmp_path):
     (tmp_path / "meta").mkdir()
     (tmp_path / "audio").mkdir()
-    metas = {"301": '{"id": 301, "bpm": 174}', "302": '{"id": 302, "bpm": nan, "genres": []}',
+    metas = {"301": '{"id": 301, "bpm": 174, "genres": [{"name": "Drum & Bass"}]}', "302": '{"id": 302, "bpm": nan, "genres": []}',
              "303": '{"id": 303, "bpm": 0}', "304": '{"id": 304}', "305": '{"id": 305, "bpm": 128}'}
     for sid, text in metas.items():
         (tmp_path / "meta" / f"{sid} Artist - Title (Original Mix).json").write_text(text)
@@ -135,6 +135,22 @@ def test_beatport_tempo_loader(tmp_path):
     (tmp_path / "audio" / "305 Artist - Title (Original Mix).mp3").unlink()  # no audio: skipped
     tempos = datasets.beatport_tempo(tmp_path)
     assert [(i.id, i.truth.bpm) for i in tempos] == [("bp-tempo-301", 174.0)]
+    assert tempos[0].meta == {"genre": "Drum & Bass"}
+
+
+def test_drum_and_bass_read_at_full_tempo_is_counted():
+    """Beatport lists drum & bass at 87, 116 or 174, so the report also counts how many read at 160-180."""
+    from tastr.engine.card import Source, TrackCard
+
+    rows = []
+    for genre, est in (("Drum & Bass", 172.3), ("Drum & Bass", 86.1), ("Hip-Hop / R&B", 172.3)):
+        card = TrackCard(source=Source(kind="file", uri="x"))
+        card.core.bpm = est
+        item = datasets.Item(id=f"t{len(rows)}", truth=datasets.Truth(bpm=87.0), meta={"genre": genre})
+        rows.append(runner.score_item(item, card))
+    s = runner.summarize(rows)
+    assert (s["dnb_fast"], s["dnb_n"]) == (1, 2)
+    assert "drum & bass read at 160-180 BPM: 1 of 2" in runner.format_summary({"summary": s, "seconds": 0, "review": []})
 
 
 def test_harmonix_loader(tmp_path):
@@ -284,6 +300,41 @@ def test_engine_key_model_is_the_one_in_consts_rs():
     est = train_key.estimate_key(key_features.features(y)["profile"], weights, bias)
     assert (card["core"]["key"]["tonic"], card["core"]["key"]["mode"]) == (est["tonic"], est["mode"])
     assert np.isfinite(est["confidence"])
+
+
+def test_mode_uncertain_flag_matches_the_engine():
+    """key_mode's Python copy of the flag agrees with the card's, and reads music.rs's thresholds."""
+    from tastr.engine import rust
+    from tastr.engine.bench import key_features, key_mode, train_key
+    from tastr.engine.bench.synth import make_track
+
+    third, margin = key_mode.thresholds()
+    assert 0 < third < 1 and 0 < margin < 1
+    power = [0.0] * 12
+    power[4], power[11], power[7], power[8] = 1.0, 0.8, 0.3, 0.3  # E5 power chord, G and G# equally faint
+    assert key_mode.third_contrast(power, 4) == 0.0 and key_mode.third_contrast([0.0] * 12, 0) == 0.0
+    if not rust.available():
+        pytest.skip("needs the Rust engine built")
+    for mode in ("major", "minor"):
+        y, _ = make_track(bpm=124, tonic=2, mode=mode, bars_per_section=(4, 8, 4))
+        key = rust.card_from_samples(y)["core"]["key"]
+        est = key_mode.estimate(key_features.features(y)["profile"], *train_key.model(), (third, margin))
+        assert (key["tonic"], key["mode"], key["mode_uncertain"]) == (est["tonic"], est["mode"], est["mode_uncertain"])
+
+
+def test_mode_uncertain_is_summarized_by_flag():
+    from tastr.engine.card import Key, Source, TrackCard
+
+    rows = []
+    for est_mode, flag in (("minor", True), ("major", True), ("major", False), ("major", False)):
+        card = TrackCard(source=Source(kind="file", uri="x"))
+        card.core.key = Key(tonic=0, mode=est_mode, mode_uncertain=flag)
+        rows.append(runner.score_item(datasets.Item(id="t", truth=datasets.Truth(tonic=0, mode="major")), card))
+    s = runner.summarize(rows)
+    assert s["key_mode_flagged"] == 2 and s["key_mode_flagged_parallel"] == 0.5
+    assert s["key_mode_unflagged"] == 2 and s["key_mode_unflagged_parallel"] == 0.0
+    assert "mode uncertain: 2 tracks; parallel-mode misses (tonic right) 50% flagged, 0% not" in runner.format_summary(
+        {"summary": s, "seconds": 0, "review": []})
 
 
 def test_numpy_key_model_matches_sklearn():

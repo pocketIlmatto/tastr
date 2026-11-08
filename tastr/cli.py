@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     ml.add_argument("--all", action="store_true", help="run: every track that has no ML tags yet")
 
     db_ = sub.add_parser("drum-bench", help="drum lane benches (synth, idmt, mdb, stemgmd-mix), locally or on Modal")
-    db_.add_argument("suite", choices=["synth", "idmt", "mdb", "stemgmd-mix"])
+    db_.add_argument("suite", choices=["synth", "synth-onsets", "idmt", "mdb", "stemgmd-mix"])
     db_.add_argument("path", nargs="?", help="dataset folder (a bucket folder with --remote); not for synth")
     db_.add_argument("--limit", type=int, help="first N tracks")
     db_.add_argument("--jobs", type=int, default=1, help="tracks analyzed in parallel (locally)")
@@ -693,7 +693,7 @@ def _drum_bench(args) -> int:
     from .cloud import jobs, remote
     from .engine.bench import drums
 
-    if args.suite != "synth" and not args.path:
+    if not args.suite.startswith("synth") and not args.path:
         print(f"error: {args.suite} needs the dataset folder", file=sys.stderr)
         return 2
     try:

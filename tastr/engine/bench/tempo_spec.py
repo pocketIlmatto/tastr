@@ -34,7 +34,14 @@ RATIOS = {"x2": 2.0, "/2": 0.5, "x3/2": 1.5, "x2/3": 2 / 3, "x4/3": 4 / 3, "x3/4
 
 
 def envelopes(log_mel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(onset_env, low_flux) on core's grid from a 128 x frames Beat This! log-mel spectrogram.
+    """(onset_env, low_flux) on core's grid from a 128 x frames Beat This! log-mel spectrogram."""
+    onset, low_flux, _ = envelopes_and_percussive(log_mel)
+    return onset, low_flux
+
+
+def envelopes_and_percussive(log_mel: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(onset_env, low_flux) on core's grid from a 128 x frames Beat This! log-mel spectrogram, and the
+    percussive part's mel power on the spectrogram's own frames (for core's drum & bass check).
 
     Mirrors the engine's onset envelope and low-band flux (engine-rs features.rs): HPSS on mel power (undoing
     log1p(1000 x)), percussive part to dB, positive flux averaged over bands
@@ -50,7 +57,7 @@ def envelopes(log_mel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     low_flux = np.maximum(0.0, np.diff(low, axis=1, prepend=low[:, :1])).mean(axis=0)
     t_src = np.arange(onset.size) / FPS
     t_dst = np.arange(int(t_src[-1] * SR / HOP) + 1) * HOP / SR
-    return np.interp(t_dst, t_src, onset), np.interp(t_dst, t_src, low_flux)
+    return np.interp(t_dst, t_src, onset), np.interp(t_dst, t_src, low_flux), perc
 
 
 def tempo(log_mel: np.ndarray) -> float | None:
@@ -59,12 +66,17 @@ def tempo(log_mel: np.ndarray) -> float | None:
 
 def tempo_and_confidence(log_mel: np.ndarray) -> tuple[float | None, float]:
     """Core's (bpm, bpm_confidence) for one spectrogram, from the Rust engine's tempo logic."""
+    r = tempo_result(log_mel)
+    return r["bpm"], r["confidence"]
+
+
+def tempo_result(log_mel: np.ndarray) -> dict:
+    """The Rust engine's `tempo` bench op for one spectrogram (bpm, confidence, backbeat, beats ...)."""
     from .. import rust
 
-    onset, low_flux = envelopes(log_mel)
-    r = rust.bench("tempo", onset, low_flux, log_mel, n=onset.size, bands=log_mel.shape[0], frames=log_mel.shape[1],
-                   fps=FPS)
-    return r["bpm"], r["confidence"]
+    onset, low_flux, perc = envelopes_and_percussive(log_mel)
+    return rust.bench("tempo", onset, low_flux, log_mel, perc, n=onset.size, bands=log_mel.shape[0],
+                      frames=log_mel.shape[1], fps=FPS, perc=1)
 
 
 def ratio_name(est: float | None, ref: float) -> str:
@@ -99,9 +111,10 @@ def load(root: str | Path, dataset: str = "hjdb", limit: int | None = None):
 def run(items) -> dict:
     rows = []
     for name, log_mel, ref, split in items:
-        est, conf = tempo_and_confidence(log_mel)
+        r = tempo_result(log_mel)
+        est, conf = r["bpm"], r["confidence"]
         rows.append({"name": name, "split": split, "ref": round(ref, 2), "est": est and round(est, 2),
-                     "bpm_confidence": round(conf, 3),
+                     "bpm_confidence": round(conf, 3), "backbeat": r["backbeat"],
                      "error": ratio_name(est, ref), **tempo_scores(est, ref)})
     summary = {}
     for split in sorted({r["split"] for r in rows}) + ["all"]:

@@ -178,6 +178,7 @@
    "confidence": 0.351,
    "likely_correct": 0.631,
    "mode": "major",
+   "mode_uncertain": false,
    "scale": "Major",
    "tonic": 0
   },
@@ -704,7 +705,7 @@
  },
  "source": null,
  "stages_run": {
-  "core": "0.4.0",
+  "core": "0.5.0",
   "sections": "0.2.0",
   "suggestions": "0.5.0",
   "tags": "0.2.0",

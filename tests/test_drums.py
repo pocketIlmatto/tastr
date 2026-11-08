@@ -222,3 +222,29 @@ def test_bench_pool_spawns_its_workers(monkeypatch):
                                                            "split": {}, "excused": 0, "unlabeled": {}})
     bench_drums.run_onsets("x", [("a", None, {}), ("b", None, {})], {}, jobs=2)
     assert seen["method"] == "spawn"
+
+
+def test_snare_sources_score_each_rule():
+    """With the drum model on, the bench scores the snare each candidate rule would give on the same labels."""
+    hop, sr = 512, 22050
+    frame = lambda t: int(round(t * sr / hop))  # noqa: E731
+    acts = {lane: np.zeros(800) for lane in LANES}
+    snares = [float(t) for t in range(1, 13)]
+    for t in snares:  # the built-in snare finds these
+        acts["snare"][frame(t)] = 1.0
+    acts["snare"][frame(13.5)] = 0.15  # this one is only a faint rise in the mid part
+    t = np.array(snares + [13.5, 15.0])  # 15.0: the model calls a hat a snare
+    conf = np.full(t.size, 0.6)
+    conf[0] = 0.9
+    ref = {"snare": snares + [13.5], "hat": [15.0]}
+    got = bench_drums._score_snare_sources(acts, {"snare": (t, conf)}, ref, bench_drums.LANE_LABELS, hop, sr)
+    assert got["builtin"]["counts"] == [12, 0, 1]
+    assert got["model"]["counts"] == [13, 1, 0] and got["model"]["fp_at"] == {"hat": 1}
+    assert got["gated"]["counts"] == [12, 0, 1]
+    assert got["mid-0.1"]["counts"] == [13, 0, 0]  # the loose gate keeps the faint one and drops the hat
+    assert got["mid-0.2"]["counts"] == [12, 0, 1]
+    assert got["confident"]["counts"] == [12, 0, 1]
+    assert got["union"]["counts"] == [13, 1, 0]
+    pooled = bench_drums._pool([{"counts": {}, "fp_at": {}, "split": {}, "unlabeled": {}, "snare_sources": got}],
+                               bench_drums.LANE_LABELS)
+    assert pooled["snare_sources"]["model"]["counts"].tolist() == [13, 1, 0]

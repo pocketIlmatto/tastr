@@ -328,6 +328,42 @@ most 6 of zip 0's 168 misses). That fits the music: power chords carry no third,
 the minor pentatonic over major keys. More training data won't fix that. Ideas, not started: lower the key
 confidence or call the mode uncertain when the third and sixth degrees are weak, and bench rock separately.
 
+### Mode uncertain (2026-11-08)
+
+Cards now carry `key.mode_uncertain`: major or minor is a guess. It is raised when both of these hold
+(engine-rs `music::mode_uncertain`, thresholds `MODE_UNCERTAIN_THIRD` and `MODE_UNCERTAIN_MARGIN` in music.rs):
+
+- the thirds don't say: |major 3rd - minor 3rd| / (their sum) in the key profile, above the chosen tonic, is
+  under 0.15 (`third_contrast`; power chords leave both faint, minor-pentatonic riffs over a major key make
+  them equal);
+- the key model barely prefers this mode: the top key's probability is less than 0.2 ahead of its parallel
+  key's (`KeyEstimate::mode_margin`).
+
+Measured with `python -m tastr.engine.bench.key_mode` on the cached key profiles (`tastr key-profiles`, run on
+Modal; FMA genres from the mp3s' ID3 tags). "Mode wrong" counts tracks whose tonic is right but whose mode isn't:
+
+| Set | Flagged | Mode wrong, flagged | Mode wrong, not flagged |
+|---|---|---|---|
+| FMA Keys, all 1,752 | 11% | 35% (33 of 95) | 7% (68 of 914) |
+| FMA Rock + Blues + Punk (284) | 16% | 48% (13 of 27) | 13% (21 of 162) |
+| FMA, other genres (1,215 tagged) | 10% | 30% (17 of 56) | 6% (40 of 630) |
+| GiantSteps (599) | 15% | 20% (7 of 35) | 6% (22 of 345) |
+| Beatport, sure labels (1,122) | 22% | 26% (34 of 132) | 16% (95 of 592) |
+
+It holds on both FMA halves (zip 0: 19 of 47 flagged against 36 of 353; zips 050-069: 14 of 48 against 32 of
+561). On flagged rock songs the mode is a coin flip, which is what the flag should say. The thresholds were
+picked on these same profiles, so read the numbers as in-sample.
+
+What it doesn't fix: most of the major songs read as minor don't keep their tonic. With the current model, 87 of
+FMA's 338 are the parallel minor; the rest are a minor chord of the key (iii, ii, vi) or something else, and the third
+above the wrong tonic says nothing useful about those. Among songs read as minor, neither the third nor the sixth
+contrast tells the major ones apart (AUC about 0.52); the key confidence does better (0.65, 0.71 on rock). The
+sixth adds nothing over the third for parallel misses either (AUC 0.64 against 0.77 for the third alone on
+FMA), and how loud the thirds are against the tonic and fifth doesn't help (0.57). The key model's own
+parallel margin alone does about as well as the third (0.75). Requiring both flags fewer tracks (11% of FMA
+against 16% for the margin under 0.2 alone) and is right more often when it fires (35% against 31%). Card benches (`tastr bench`) now report the flag too: how many tracks it marks, and the parallel-miss
+rate with and without it.
+
 **Before the learned model** (Krumhansl-Kessler correlation, measured on GiantSteps): most errors were not
 relative swaps but parallel-mode (12% of tracks before the minor prior) and fifth errors (11 to 13%).
 Per-frame normalized chroma beat the plain mean, and the model still uses it. Tried and dropped there:
@@ -470,9 +506,43 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   | `giantsteps-tempo` | 43 | 0.721 / 0.884 | 0.744 / 0.907 |
 
   The gate was picked on GTZAN only, so the other four rows are held out.
-- Still open: drum & bass reported at half tempo (86 for 174) and half-time tracks labeled ~86 reported at 172.
-  The tempogram and off-beat onsets do not separate them, and Beatport's labels show the convention itself
-  varies, so a fix needs a stronger cue (e.g. snare placement within the bar) and labels that agree.
+- Drum & bass at full tempo (2026-11-08): drum & bass read at half tempo (86 for 174) is now doubled when the
+  doubled tempo lands in 160-180 and the snare hits on every beat of the slow grid. At 174 the snare lands on
+  2 and 4 of each fast bar, which is every slow beat at 87; a real 85-90 BPM backbeat hits every other beat.
+  `core::fast_backbeat` takes the mid drum part (drums.rs's NMF part between kick and hats, less what the kick
+  and hats leak into it: snare, clap, perc), samples its strongest hit near each half beat, and averages the
+  four half beats of a two-beat cycle. Of the two pairs one beat apart, the stronger pair must be even
+  (`BACKBEAT_BALANCE`, weaker hit / stronger, at least 0.8) and stand out (`BACKBEAT_CONTRAST`, the pair over
+  the other pair, at least 2). Contrast keeps out busy percussion that hits every half beat (psy-trance, 140
+  BPM tracks read at 87). Acc1 / Acc2 and how many tracks read at 160-180, before -> after:
+
+  | Set | Tracks | Before | After | At 160-180 |
+  |---|---|---|---|---|
+  | GTZAN (spectrograms) | 999 | 0.673 / 0.872 | 0.676 / 0.872 | 91 -> 98 |
+  | hjdb train (spectrograms) | 200 | 0.915 / 0.945 | 0.925 / 0.945 | 44 -> 46 |
+  | hjdb val | 35 | 0.971 / 0.971 | 0.971 / 0.971 | 4 -> 4 |
+  | `giantsteps-tempo` | 43 | 0.744 / 0.907 | 0.791 / 0.907 | 14 -> 16 |
+  | Beatport drum & bass | 40 | 0.500 / 0.775 | 0.325 / 0.775 | 21 -> 31 |
+  | Beatport 85-92, not drum & bass | 25 | 0.600 / 0.840 | 0.520 / 0.840 | 6 -> 8 |
+  | Beatport hip-hop, downtempo, breaks, dubstep, drum & bass | 279 | 0.796 / 0.885 | 0.763 / 0.885 | 40 -> 52 |
+
+  The thresholds were picked on the 35 Beatport and GiantSteps tracks read at 79-93 BPM (from the 279-track
+  subset and the 43 GiantSteps tracks); GTZAN and hjdb are held out. Results moved little between 0.75 and 0.9
+  balance and 1.5 and 2.5 contrast. Beatport's drum & bass Acc1 drops because 22 of its 40 drum & bass
+  labels are at 84-92: 7 of those now read at 172-179 (the point of the change), so `beatport-tempo` reports
+  "drum & bass read at 160-180 BPM" separately (on Modal only once the bucket's track index is rewritten
+  with `--write-index`, since older indexes don't have the genre). The guard set lost 2 tracks: a hip-hop track listed at 87 and
+  a downtempo track listed at 90, both with a snare on every slow beat. GTZAN gained 5 (blues, country,
+  hip-hop, metal and reggae labeled at 168-180) and lost 2 (blues at 82, country at 86); hjdb gained 2.
+  Measured locally with `bench.tempo_spec` and core's tempo on audio (the `tempo_audio` bench op, the same
+  tempo a card gets).
+- Tried first for that rule: snare-band flux (180-2,500 Hz of the log-mel) at the half beats. Its balance
+  overlapped: kick, bass and vocals in that band made 85-92 BPM hip-hop and downtempo look as even as drum &
+  bass. The drum part's unmixing is what separates them.
+- Still open: 5 of 40 Beatport drum & bass tracks and 2 of 16 fast GiantSteps tracks still read at 86-90.
+  Their snare is half-time too (beat 3 of the fast bar, like a real 87 BPM backbeat) or they fall just short
+  of the thresholds. The 2/3-tempo locks (116 for 174) are unchanged. The full 774-track `beatport-tempo` run
+  and the BPM calibration refit (`calibrate`) are still to do.
 
 ## Drum lanes
 

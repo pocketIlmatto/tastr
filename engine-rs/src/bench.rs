@@ -8,8 +8,10 @@
 //!
 //! - `downbeat_phase bands= frames= beats= m=`: log-mel (bands x frames), beat frames -> {phase}
 //! - `meter bands= frames= beats=`: the same -> {score, guess, threshold, phase3}
-//! - `tempo n= bands= frames= fps=`: onset envelope and low-band flux (n frames on core's grid), log-mel at
-//!   `fps` -> {bpm, confidence, stability, pulse, beats}
+//! - `tempo n= bands= frames= fps= perc=0|1`: onset envelope and low-band flux (n frames on core's grid), log-mel
+//!   at `fps`, and with perc=1 the percussive part's mel power (same shape) -> {bpm, confidence, stability,
+//!   pulse, backbeat (the drum & bass check's balance and contrast, null when it didn't run), beats}
+//! - `tempo_audio n=`: mono audio at 22,050 Hz -> {bpm, confidence, backbeat, beats}, as the card has them
 //! - `sections frames= sr= hop= duration= downbeats= configs=s:p:c,...`: chroma (12 x frames), MFCC (13 x
 //!   frames), RMS (frames), downbeat times -> {current (the stage's own seconds, phrase, cap),
 //!   bar_times, starts: [[...] per config], empty below MIN_BARS_FOR_SPLIT bars}
@@ -89,6 +91,7 @@ pub fn call(line: &str, data: &[f64]) -> Result<Json, String> {
         "downbeat_phase" => downbeat_phase(&mut a),
         "meter" => meter(&mut a),
         "tempo" => tempo(&mut a),
+        "tempo_audio" => tempo_audio(&mut a),
         "sections" => sections_op(&mut a),
         "key" => key(&mut a),
         "key_profile" => {
@@ -135,25 +138,58 @@ fn tempo(a: &mut Args) -> Result<Json, String> {
     let (bands, frames, fps) = (a.count("bands")?, a.count("frames")?, a.num("fps")?);
     let log_mel = a.matrix(bands, frames)?;
     let freqs = log_mel_freqs(bands);
+    // the percussive part's mel power, for the drum & bass check (without it the check never fires)
+    let perc = if a.opt_count("perc") == 1 { Some(a.matrix(bands, frames)?) } else { None };
+    let mid = perc.map(|m| core::mid_drum_hits(&m, &freqs, &crate::features::air_flux(&m, &freqs)));
     let sr = SR as f64;
-    // core's beat frames onto the spectrogram's own frame rate for the meter check
-    let meter_of = |f: &[f64]| {
-        let idx: Vec<usize> = f
+    // core's beat frames onto the spectrogram's own frame rate
+    let at_fps = |f: &[f64]| -> Vec<f64> { f.iter().map(|&x| x * HOP as f64 / sr * fps).collect() };
+    let index = |f: &[f64]| -> Vec<usize> {
+        at_fps(f)
             .iter()
-            .map(|&x| {
-                crate::np::clip(crate::np::round_half_even(x * HOP as f64 / sr * fps), 0.0, frames as f64 - 1.0)
-                    as usize
-            })
-            .collect();
-        core::meter_score(&idx, &log_mel, &freqs, None)
+            .map(|&x| crate::np::clip(crate::np::round_half_even(x), 0.0, frames as f64 - 1.0) as usize)
+            .collect()
+    };
+    let meter_of = |f: &[f64]| core::meter_score(&index(f), &log_mel, &freqs, None);
+    let seen = std::cell::Cell::new(None);
+    let backbeat_of = |f: &[f64]| {
+        let v = mid.as_ref().map_or((0.0, 0.0), |m| core::fast_backbeat(&at_fps(f), m));
+        seen.set(Some(v));
+        v
     };
     let (bpm, beats, conf, stability, pulse) =
-        core::tempo_from_envelopes(&onset, &low_flux, sr, n, &mut None, &meter_of);
+        core::tempo_from_envelopes(&onset, &low_flux, sr, n, &mut None, &meter_of, &backbeat_of);
     Ok(Json::obj()
         .with("bpm", bpm)
         .with("confidence", conf)
         .with("stability", stability)
         .with("pulse", pulse)
+        .with("backbeat", backbeat_json(seen.get()))
+        .with("beats", beats))
+}
+
+fn backbeat_json(v: Option<(f64, f64)>) -> Json {
+    v.map_or(Json::Null, |(balance, contrast)| Json::from(vec![balance, contrast]))
+}
+
+/// Core's tempo for audio, as a card has it, with the drum & bass check's (balance, contrast) when it ran.
+fn tempo_audio(a: &mut Args) -> Result<Json, String> {
+    let ctx = audio_ctx(a)?;
+    let n_frames = ctx.onset.len();
+    let meter_of =
+        |f: &[f64]| core::meter_score(&core::beat_index(f, n_frames), &ctx.log_mel, &ctx.log_mel_freqs, None);
+    let seen = std::cell::Cell::new(None);
+    let backbeat_of = |f: &[f64]| {
+        let v = core::fast_backbeat(f, &core::mid_drum_hits(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux));
+        seen.set(Some(v));
+        v
+    };
+    let (bpm, beats, conf, _, _) =
+        core::tempo_from_envelopes(&ctx.onset, &ctx.low_flux, ctx.sr, n_frames, &mut None, &meter_of, &backbeat_of);
+    Ok(Json::obj()
+        .with("bpm", bpm)
+        .with("confidence", conf)
+        .with("backbeat", backbeat_json(seen.get()))
         .with("beats", beats))
 }
 

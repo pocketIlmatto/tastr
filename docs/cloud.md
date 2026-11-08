@@ -156,9 +156,12 @@ a temporary app with `modal run`, from that branch's checkout (it uploads the wo
 ```
 modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --out bp.json
 modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this --out hjdb.json
+modal run tastr/cloud/modal_app.py --kind drums-model --dataset idmt --path idmt-smt-drums --out idmt.json
 ```
 
-`--kind bench` is `tastr bench`; any other kind is a `tastr spec-bench` bench (tempo, downbeats, meter).
+`--kind bench` is `tastr bench`; `drums` is `tastr drum-bench`, and `drums-model` the same with the drum
+model (`drums-model-stems` scores MDB's drum stems, `drums-model-test-kits` the held-out StemGMD kits; pass
+`--path -` for `synth` and `synth-onsets`). Any other kind is a `tastr spec-bench` bench (tempo, downbeats, meter).
 The app stops when the run ends.
 
 Upload only what the loaders read (audio and annotations), not result reports or feature caches. The

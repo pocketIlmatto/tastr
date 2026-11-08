@@ -286,6 +286,41 @@ def test_engine_key_model_is_the_one_in_consts_rs():
     assert np.isfinite(est["confidence"])
 
 
+def test_mode_uncertain_flag_matches_the_engine():
+    """key_mode's Python copy of the flag agrees with the card's, and reads music.rs's thresholds."""
+    from tastr.engine import rust
+    from tastr.engine.bench import key_features, key_mode, train_key
+    from tastr.engine.bench.synth import make_track
+
+    third, margin = key_mode.thresholds()
+    assert 0 < third < 1 and 0 < margin < 1
+    power = [0.0] * 12
+    power[4], power[11], power[7], power[8] = 1.0, 0.8, 0.3, 0.3  # E5 power chord, G and G# equally faint
+    assert key_mode.third_contrast(power, 4) == 0.0 and key_mode.third_contrast([0.0] * 12, 0) == 0.0
+    if not rust.available():
+        pytest.skip("needs the Rust engine built")
+    for mode in ("major", "minor"):
+        y, _ = make_track(bpm=124, tonic=2, mode=mode, bars_per_section=(4, 8, 4))
+        key = rust.card_from_samples(y)["core"]["key"]
+        est = key_mode.estimate(key_features.features(y)["profile"], *train_key.model(), (third, margin))
+        assert (key["tonic"], key["mode"], key["mode_uncertain"]) == (est["tonic"], est["mode"], est["mode_uncertain"])
+
+
+def test_mode_uncertain_is_summarized_by_flag():
+    from tastr.engine.card import Key, Source, TrackCard
+
+    rows = []
+    for est_mode, flag in (("minor", True), ("major", True), ("major", False), ("major", False)):
+        card = TrackCard(source=Source(kind="file", uri="x"))
+        card.core.key = Key(tonic=0, mode=est_mode, mode_uncertain=flag)
+        rows.append(runner.score_item(datasets.Item(id="t", truth=datasets.Truth(tonic=0, mode="major")), card))
+    s = runner.summarize(rows)
+    assert s["key_mode_flagged"] == 2 and s["key_mode_flagged_parallel"] == 0.5
+    assert s["key_mode_unflagged"] == 2 and s["key_mode_unflagged_parallel"] == 0.0
+    assert "mode uncertain: 2 tracks; parallel-mode misses (tonic right) 50% flagged, 0% not" in runner.format_summary(
+        {"summary": s, "seconds": 0, "review": []})
+
+
 def test_numpy_key_model_matches_sklearn():
     import numpy as np
     from sklearn.linear_model import LogisticRegression

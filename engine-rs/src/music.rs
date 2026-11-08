@@ -8,6 +8,11 @@ pub const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "
 const MODE_ROTATION: [&str; 7] = ["Major", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Minor", "Locrian"];
 const ROMAN: [&str; 7] = ["I", "II", "III", "IV", "V", "VI", "VII"];
 const KEY_INPUT_SCALE: f64 = 12.0;
+/// The key's mode is flagged uncertain when the major and minor third are this close (`third_contrast`)...
+pub const MODE_UNCERTAIN_THIRD: f64 = 0.15;
+/// ...and the key model's top key is less than this far ahead of its parallel key (`KeyEstimate::mode_margin`).
+/// Both picked on the FMA Keys and EDM key profiles; see docs/bench.md "Mode uncertain".
+pub const MODE_UNCERTAIN_MARGIN: f64 = 0.2;
 
 fn mode_steps(name: &str) -> Option<[i64; 7]> {
     Some(match name {
@@ -58,6 +63,8 @@ pub struct KeyEstimate {
     pub tonic: i64,
     pub mode: &'static str,
     pub confidence: f64,
+    /// Top key probability minus its parallel key's (same tonic, other mode).
+    pub mode_margin: f64,
     pub alternatives: Vec<(String, f64)>,
 }
 
@@ -82,12 +89,32 @@ pub fn estimate_key(profile: &[f64; 12]) -> KeyEstimate {
     let mut order: Vec<usize> = (0..24).collect();
     order.sort_by(|&a, &b| p[b].total_cmp(&p[a]));
     let (best, second) = (order[0], order[1]);
+    let parallel = best ^ 1;
     KeyEstimate {
         tonic: (best / 2) as i64,
         mode: if best % 2 == 1 { "minor" } else { "major" },
         confidence: round_dec(p[best] - p[second], 3),
+        mode_margin: p[best] - p[parallel],
         alternatives: order[1..4].iter().map(|&i| (key_name(i), round_dec(p[i], 3))).collect(),
     }
+}
+
+/// How clearly one third stands above the other above `tonic`: |major 3rd - minor 3rd| / (their sum), 0 when
+/// both are equal (or silent), 1 when only one sounds. Power chords and minor-pentatonic riffs over a major key
+/// leave it low.
+pub fn third_contrast(profile: &[f64; 12], tonic: i64) -> f64 {
+    let at = |i: i64| profile[(tonic + i).rem_euclid(12) as usize];
+    let (maj, min) = (at(4), at(3));
+    if maj + min <= 0.0 {
+        return 0.0;
+    }
+    (maj - min).abs() / (maj + min)
+}
+
+/// Whether major or minor is a guess: the thirds don't say (`third_contrast`) and the key model barely prefers
+/// this mode over the parallel one. The tonic can still be right.
+pub fn mode_uncertain(profile: &[f64; 12], tonic: i64, mode_margin: f64) -> bool {
+    third_contrast(profile, tonic) < MODE_UNCERTAIN_THIRD && mode_margin < MODE_UNCERTAIN_MARGIN
 }
 
 /// music.refine_mode: a modal flavour from the scale degrees that stand out.
@@ -217,4 +244,45 @@ pub fn likely_correct(kind: &str, raw: f64) -> f64 {
     let xs: Vec<f64> = knots.iter().map(|k| k.0).collect();
     let ys: Vec<f64> = knots.iter().map(|k| k.1).collect();
     round_dec(interp(raw, &xs, &ys), 3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A key profile with these pitch classes above `tonic` sounding, the rest faint.
+    fn profile(tonic: i64, weights: &[(i64, f64)]) -> [f64; 12] {
+        let mut p = [0.02f64; 12];
+        for &(i, w) in weights {
+            p[(tonic + i).rem_euclid(12) as usize] = w;
+        }
+        let s: f64 = p.iter().sum();
+        p.map(|v| v / s)
+    }
+
+    #[test]
+    fn third_contrast_is_low_without_a_third() {
+        let power = profile(4, &[(0, 1.0), (7, 0.8)]);
+        assert!(third_contrast(&power, 4) < 0.01);
+        let major = profile(4, &[(0, 1.0), (4, 0.6), (7, 0.8)]);
+        assert!(third_contrast(&major, 4) > 0.9);
+        assert_eq!(third_contrast(&[0.0; 12], 0), 0.0);
+    }
+
+    #[test]
+    fn mode_is_uncertain_only_when_the_thirds_and_the_model_both_waver() {
+        for tonic in 0..12 {
+            let triad = profile(tonic, &[(0, 1.0), (4, 0.6), (7, 0.8), (5, 0.3), (9, 0.3), (2, 0.3), (11, 0.3)]);
+            let est = estimate_key(&triad);
+            assert_eq!((est.tonic, est.mode), (tonic, "major"));
+            // the parallel key is never ahead of the runner-up
+            assert!(est.mode_margin >= est.confidence - 1e-3 && est.mode_margin <= 1.0);
+            assert!(!mode_uncertain(&triad, est.tonic, est.mode_margin));
+            assert!(!mode_uncertain(&triad, tonic, 0.0), "a clear third settles the mode");
+            let power = profile(tonic, &[(0, 1.0), (7, 0.8), (3, 0.3), (4, 0.3), (10, 0.3)]);
+            assert!(mode_uncertain(&power, tonic, 0.1));
+            assert!(!mode_uncertain(&power, tonic, 0.5), "the model is sure enough");
+        }
+        assert!(!mode_uncertain(&[0.0; 12], 0, 1.0));
+    }
 }

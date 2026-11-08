@@ -240,8 +240,8 @@ as "snare from ..." lines (`snare_sources` in the JSON report): `builtin`
 built-in snare onset within 50 ms), `mid-0.05`, `mid-0.1` and `mid-0.2` (a
 looser gate: model snares where the built-in mid part reaches that share of
 its 99.5th percentile within 30 ms, which should drop the model's snares on
-bare hi-hats without needing a built-in onset), `confident` (model snares of
-confidence 0.75 or more, plus gated ones), and `union`. The `synth-onsets`
+bare hi-hats without needing a built-in onset), `confident-C` (model snares of
+confidence C or more, plus gated ones; C from 0.6 to 0.85), and `union`. The `synth-onsets`
 suite scores the synthetic loops as onsets so synth can be compared the same
 way. Before a merge, `modal run tastr/cloud/modal_app.py --kind drums-model ...`
 runs a branch's code (docs/cloud.md).

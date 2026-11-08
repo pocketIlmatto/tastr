@@ -228,7 +228,7 @@ revisit with a bench option that runs MDB and IDMT both ways on Modal.
 **The snare trade-off.** ADTOF's snare is far better on MDB and StemGMD
 (0.74 and 0.91 against 0.51 and 0.46) but worse on IDMT's sampled and
 techno kits (0.88 against 0.94; 338 false snares on hi-hats). The built-in
-snare is kept for now. Keeping ADTOF's snares only where the built-in snare
+snare is kept for now; a confidence rule that gets most of both is below. Keeping ADTOF's snares only where the built-in snare
 also has an onset (eval adapter) is precise but loses ADTOF's recall:
 StemGMD test kits F 0.63 (P 0.98, R 0.46) against 0.46 built-in and 0.91
 ADTOF; synth 0.82 against 0.86 and 0.89. MDB and IDMT still to measure.
@@ -245,6 +245,55 @@ confidence C or more, plus gated ones; C from 0.6 to 0.85), and `union`. The `sy
 suite scores the synthetic loops as onsets so synth can be compared the same
 way. Before a merge, `modal run tastr/cloud/modal_app.py --kind drums-model ...`
 runs a branch's code (docs/cloud.md).
+
+**Result (2026-11-08, main 862c0f5, full suites on Modal, 30 to 90 s each).**
+Snare onset F within 50 ms (P / R where it matters); StemGMD is the 5 held-out
+test kits:
+
+| Rule | MDB mixes | MDB stems | StemGMD test | IDMT | Synth |
+|---|---|---|---|---|---|
+| builtin (today) | 0.506 (0.72 / 0.39) | 0.601 | 0.463 | 0.935 (0.95 / 0.92) | 0.864 |
+| model | 0.744 | 0.818 | 0.826 | 0.872 (0.78 / 0.98) | 0.889 |
+| gated | 0.508 (0.93 / 0.35) | 0.606 | 0.621 | 0.942 | 0.824 |
+| mid-0.05 / 0.1 / 0.2 | 0.687 / 0.664 / 0.628 | 0.748 / 0.714 / 0.668 | 0.836 / 0.809 / 0.748 | 0.883 / 0.886 / 0.909 | 0.84 / 0.83 / 0.82 |
+| confident-0.6 | 0.722 | 0.819 | 0.890 | 0.907 | 0.889 |
+| confident-0.65 | 0.700 | 0.805 | 0.896 | 0.922 | 0.889 |
+| **confident-0.7** | **0.672 (0.88 / 0.54)** | **0.789** | **0.890 (0.96 / 0.83)** | **0.929 (0.90 / 0.96)** | **0.889** |
+| confident-0.75 | 0.637 | 0.738 | 0.867 | 0.935 | 0.889 |
+| confident-0.85 | 0.563 | 0.641 | 0.744 | 0.936 | 0.832 |
+| union | 0.721 | 0.811 | 0.668 | 0.852 | 0.913 |
+
+The pick is **confident-0.7**: keep a model snare when its confidence is 0.7
+or more (ADTOF's own threshold maps to 0.5), and a weaker one only when the
+built-in snare or clap also has an onset within 50 ms. It is the only family
+that clears the bar on every suite: it beats the built-in snare by 0.17 on
+MDB mixes, 0.19 on MDB stems and 0.43 on the StemGMD test kits, and stays
+above 0.92 on IDMT (0.929 against 0.935). 0.65 is a little better on MDB but
+sits right at the IDMT floor (0.922); 0.75 and up give back MDB recall for no
+IDMT gain.
+
+What the rules taught us:
+
+- The model's false snares are mostly on hi-hats (379 on IDMT, 220 on MDB
+  mixes), and they are its low-confidence ones: the confidence cut removes
+  them far better than asking for mid-band energy (`mid-*`), because hat
+  bleed into the mid part is enough to pass any mid gate loose enough to keep
+  recall.
+- Gating by a built-in onset alone (`gated`) is precise (P 0.93 to 0.98) but
+  inherits the built-in snare's low recall on real kits (0.35 on MDB mixes);
+  the built-in lane mostly misses ghost notes and snares under cymbals.
+- The built-in snare's own false snares on StemGMD are toms (218) and the
+  cowbell (99); the model rules don't have that problem, which matters for
+  the "snares read as toms" follow-up.
+- `union` is best only on synth, where the model has no false snares and
+  the built-in lane adds the ones it misses; on real kits it adds every hat
+  error of both.
+
+These are onset scores of the rule itself (like the eval-adapter rows
+above), not yet through the shipped lanes: the engine still takes its snare
+from the built-in detector. Wiring the rule in means passing the model's
+snare hits to the engine with the others and placing them like the model's
+toms; the shipped-lane scores should then be re-measured on the same suites.
 
 **Speed.** About 0.6 s per minute of audio on one CPU thread once loaded,
 against about 2.5 s for the built-in lanes in the bench.

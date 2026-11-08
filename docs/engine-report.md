@@ -151,8 +151,13 @@ are non-commercial (CC BY-NC-SA 4.0), so they download on first use and are not 
 | MDB mixes, either hat (model) | 0.649 | 0.753 |
 | MDB mixes, cymbal (model, new lane) | none | 0.832 |
 
-**Still open:** ADTOF's snare is much better on MDB and StemGMD (0.74, 0.91) but worse on IDMT's sampled and
-techno kits (0.88 vs 0.94), so the built-in snare stays. Model toms on MDB are found but imprecise (precision
+**Snare source, picked 2026-11-08:** ADTOF's snare alone is much better on MDB and StemGMD (0.74, 0.83) but
+worse on IDMT's sampled and techno kits (0.87 vs 0.94, false snares on hi-hats). Keeping a model snare when
+its confidence is 0.7 or more, or when the built-in snare also fires within 50 ms, scores MDB mixes 0.67
+(built-in 0.51), MDB stems 0.79 (0.60), StemGMD test kits 0.89 (0.46) and IDMT 0.93 (0.94), measured as
+onsets of the rule. The engine still uses the built-in snare until the rule is wired in.
+
+**Still open:** model toms on MDB are found but imprecise (precision
 0.25). Clap has only a synthetic check, and real perc (tambourine, side stick) scores near zero. Details:
 [drums.md](drums.md).
 

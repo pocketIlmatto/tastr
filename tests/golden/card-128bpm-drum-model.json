@@ -431,23 +431,23 @@
    },
    "snare": {
     "detected": true,
-    "pattern": "o.x.x.x.x.x...x.",
+    "pattern": "....x.......o...",
     "velocity": [
-     0.599,
      0.0,
-     0.79,
+     0.0,
+     0.0,
      0.0,
      1.0,
      0.0,
-     0.762,
      0.0,
-     0.807,
      0.0,
-     0.768,
      0.0,
-     0.471,
      0.0,
-     0.752,
+     0.0,
+     0.0,
+     0.635,
+     0.0,
+     0.0,
      0.0
     ]
    },
@@ -726,7 +726,7 @@
    "title": "Set the project to 128 BPM, C Major"
   },
   {
-   "body": "Measured per section, since drums change between sections. Averaged over the busiest bars the whole track reads as kick on steps 1, 9; snare on steps 1, 3, 5, 7, 9, 11, 15; hat on steps 1, 3, 5, 7, 9, 11, 13, 15; tom on steps 15; cymbal on steps 1. Program it on a Drum Rack (kick C1, snare D1, hat F#1, tom A1, cymbal C#2) and vary the last bar of every 4.",
+   "body": "Measured per section, since drums change between sections. Averaged over the busiest bars the whole track reads as kick on steps 1, 9; snare on steps 5, 13; hat on steps 1, 3, 5, 7, 9, 11, 13, 15; tom on steps 15; cymbal on steps 1. Program it on a Drum Rack (kick C1, snare D1, hat F#1, tom A1, cymbal C#2) and vary the last bar of every 4.",
    "category": "drums",
    "data": {
     "bpm": 128,
@@ -741,7 +741,7 @@
        "cymbal": "x...............",
        "hat": "x...............",
        "kick": "x.......x.......",
-       "snare": "................",
+       "snare": "....x...........",
        "tom": "..............x."
       },
       "start_bar": 1
@@ -756,7 +756,7 @@
        "cymbal": "x...............",
        "hat": "x.x.x.x.x.x.x.x.",
        "kick": "x.......x.......",
-       "snare": "o.x.x.x.x.x.o.x.",
+       "snare": "....x.......o...",
        "tom": "..............x."
       },
       "start_bar": 9
@@ -771,7 +771,7 @@
        "cymbal": "x...............",
        "hat": "x...............",
        "kick": "x.......x.......",
-       "snare": "o...............",
+       "snare": "....x.......o...",
        "tom": "..............x."
       },
       "start_bar": 25
@@ -781,7 +781,7 @@
      "cymbal": "Crash and ride cymbal hits, found by the ADTOF drum model.",
      "hat": "Hi-hat hits, found by the ADTOF drum model.",
      "kick": "Kick drum hits, found by the ADTOF drum model.",
-     "snare": "Noisy mid hits (400 Hz to 5 kHz), usually with some body around 200 Hz.",
+     "snare": "Snare hits, found by the ADTOF drum model: its confident ones, and weaker ones the built-in detector also hears.",
      "tom": "Tom hits (high, mid and floor toms), found by the ADTOF drum model."
     },
     "origin": "detected",
@@ -799,10 +799,10 @@
      "cymbal": "x...............",
      "hat": "x.x.x.x.x.x.x.x.",
      "kick": "x.......x.......",
-     "snare": "o.x.x.x.x.x...x.",
+     "snare": "....x.......o...",
      "tom": "..............x."
     },
-    "template": "Measured per section, since drums change between sections. Averaged over the busiest bars the whole track reads as kick on steps 1, 9; snare on steps 1, 3, 5, 7, 9, 11, 15; hat on steps 1, 3, 5, 7, 9, 11, 13, 15; tom on steps 15; cymbal on steps 1. Program it on {drumrack}{pads} and vary the last bar of every 4."
+    "template": "Measured per section, since drums change between sections. Averaged over the busiest bars the whole track reads as kick on steps 1, 9; snare on steps 5, 13; hat on steps 1, 3, 5, 7, 9, 11, 13, 15; tom on steps 15; cymbal on steps 1. Program it on {drumrack}{pads} and vary the last bar of every 4."
    },
    "title": "Detected groove"
   },

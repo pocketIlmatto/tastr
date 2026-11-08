@@ -35,7 +35,7 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
 
 - **Drum lanes** for kick, snare, clap, hat, open hat, tom and perc, as a
   16-step grid per section (12 steps in 3/4). Template patterns that fit the
-  tempo (waltz patterns in 3/4) are one click away. Ask for the optional [drum model](usage.md#drum-model-optional) on a track and kick, hat and tom come from
+  tempo (waltz patterns in 3/4) are one click away. Ask for the optional [drum model](usage.md#drum-model-optional) on a track and kick, snare, hat and tom come from
   [ADTOF](https://github.com/MZehren/ADTOF), a network trained on annotated
   real music that finds toms the built-in detector misses, and a cymbal lane
   (crash and ride) is added.

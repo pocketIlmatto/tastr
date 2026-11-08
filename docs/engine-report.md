@@ -138,9 +138,9 @@ and Strudel. It can be overruled per track.
 The original three-band split became a semi-adaptive NMF with leak removal and per-hit sorting into seven
 lanes (kick, snare, clap, hat, open hat, tom, perc). Real-kit benchmarks then showed real toms were almost
 never found, so an optional pretrained model ([ADTOF](https://github.com/MZehren/ADTOF)) can supply the
-kick, hat and tom lanes and add a cymbal lane, and its hi-hats are split into closed and open by the built-in
+kick, snare, hat and tom lanes and add a cymbal lane, and its hi-hats are split into closed and open by the built-in
 ringing test (open hat F 0.21 -> 0.41 on MDB mixes, better on every suite with open-hat labels; see
-[drums.md, Open hats](drums.md#pretrained-drum-model-adtof)). Snare, clap and perc stay built in. ADTOF's weights
+[drums.md, Open hats](drums.md#pretrained-drum-model-adtof)). Clap and perc stay built in. ADTOF's weights
 are non-commercial (CC BY-NC-SA 4.0), so they download on first use and are not in this repo.
 
 - **Found with:** IDMT-SMT-Drums for snare / hat bleed; MDB Drums (real mixes) and grooves built from
@@ -153,13 +153,20 @@ are non-commercial (CC BY-NC-SA 4.0), so they download on first use and are not 
 | IDMT snare (built-in rewrite) | 0.48 | 0.94 |
 | IDMT kick (built-in rewrite, then model) | 0.74 | 0.977 |
 | MDB mixes, tom (model) | 0.013 | 0.369 |
+| MDB mixes, snare (model, confidence rule) | 0.506 | 0.682 |
+| StemGMD test kits, snare (same) | 0.463 | 0.893 |
 | StemGMD test kits, tom (model) | 0.002 | 0.880 |
 | MDB mixes, either hat (model) | 0.649 | 0.848 |
 | MDB mixes, open hat (model's hi-hats split) | 0.236 | 0.405 |
 | MDB mixes, cymbal (model, new lane) | none | 0.832 |
 
-**Still open:** ADTOF's snare is much better on MDB and StemGMD (0.74, 0.91) but worse on IDMT's sampled and
-techno kits (0.88 vs 0.94), so the built-in snare stays. Model toms on MDB are found but imprecise (precision
+**Snare source, picked 2026-11-08:** ADTOF's snare alone is much better on MDB and StemGMD (0.74, 0.83) but
+worse on IDMT's sampled and techno kits (0.87 vs 0.94, false snares on hi-hats). Keeping a model snare when
+its confidence is 0.7 or more, or when the built-in snare also fires within 50 ms, is what the snare lane
+uses with the model. Through the shipped lanes it scores MDB mixes 0.68 (built-in 0.51), MDB stems 0.78
+(0.60), StemGMD test kits 0.89 (0.46) and IDMT 0.93 (0.94).
+
+**Still open:** model toms on MDB are found but imprecise (precision
 0.25). Clap has only a synthetic check, and real perc (tambourine, side stick) scores near zero. Details:
 [drums.md](drums.md).
 

@@ -1,16 +1,25 @@
 //! Drum lane activations: semi-adaptive NMF of the percussive mel spectrogram into low,
 //! mid and high parts, leakage removed, and each hit sorted into a lane by a closer look at its spectrum and
 //! envelope. With the optional ADTOF drum model, the server runs the model and hands its hits in
-//! (`Drums::set_model`); they replace the kick, tom and closed-hat lanes and add a cymbal lane.
+//! (`Drums::set_model`); they replace the kick, tom and closed-hat lanes, supply the snare lane (by the rule in
+//! `set_model`) and add a cymbal lane.
 
 use crate::features::Matrix;
 use crate::np::{clip, pairwise_sum, percentile_f32, round_half_even};
 
 pub const LANES: [&str; 7] = ["kick", "snare", "clap", "hat", "open_hat", "tom", "perc"];
 /// The lanes the drum model's hits come in for (drums.MODEL_LANES).
-pub const MODEL_LANES: [&str; 4] = ["kick", "hat", "tom", "cymbal"];
+pub const MODEL_LANES: [&str; 5] = ["kick", "hat", "tom", "cymbal", "snare"];
 /// The drum model's hits per MODEL_LANES lane: (onset seconds, confidence 0.5 to 1 as float32).
-pub type ModelHits = [(Vec<f64>, Vec<f32>); 4];
+pub type ModelHits = [(Vec<f64>, Vec<f32>); 5];
+/// A model snare at this confidence or more is kept as is (ADTOF's own threshold maps to 0.5). A weaker one is
+/// kept only when the built-in mid part has an onset within SNARE_GATE seconds: weak model snares are mostly
+/// hi-hats (docs/drums.md, "The snare trade-off").
+pub const SNARE_CONFIDENT: f32 = 0.7;
+pub const SNARE_GATE: f64 = 0.05;
+/// A built-in mid onset is a peak of the mid part's rise at this share of its 99.5th percentile or more (the
+/// drum benches' onset threshold).
+const SNARE_ONSET: f32 = 0.4;
 /// With the drum model, where the open-hat lane comes from. true: the model's hi-hats are split into closed and
 /// open by the built-in ringing test. false: the built-in open-hat lane stays and the model's hi-hats replace
 /// only the closed ones. true scored better on every suite with open-hat labels (MDB mixes 0.21 -> 0.41);
@@ -18,11 +27,12 @@ pub type ModelHits = [(Vec<f64>, Vec<f32>); 4];
 pub const MODEL_OPEN_HATS: bool = true;
 
 /// drums.MODEL_LANE_HELP: tooltips for the lanes the drum model finds.
-pub const MODEL_LANE_HELP: [(&str, &str); 4] = [
+pub const MODEL_LANE_HELP: [(&str, &str); 5] = [
     ("kick", "Kick drum hits, found by the ADTOF drum model."),
     ("hat", "Hi-hat hits, found by the ADTOF drum model."),
     ("tom", "Tom hits (high, mid and floor toms), found by the ADTOF drum model."),
     ("cymbal", "Crash and ride cymbal hits, found by the ADTOF drum model."),
+    ("snare", "Snare hits, found by the ADTOF drum model: its confident ones, and weaker ones the built-in detector also hears."),
 ];
 
 pub const LANE_HELP: [(&str, &str); 7] = [
@@ -237,7 +247,7 @@ pub struct Drums {
     freqs: Vec<f64>,
     snare_ref: f64,
     /// The drum model's lanes per analysis frame (MODEL_LANES order), when it ran.
-    model: Option<[Vec<f64>; 4]>,
+    model: Option<[Vec<f64>; 5]>,
     /// MODEL_OPEN_HATS unless the caller (the drum bench) says otherwise.
     pub model_open_hats: bool,
 }
@@ -260,8 +270,9 @@ impl Drums {
     }
 
     /// drums.model_lanes: the drum model's hits on the analysis frames. Each hit is its confidence times the
-    /// level of that drum family's own part (the kick part for kick and tom, the hat part for hat and cymbal),
-    /// so the model's lanes sit on the same scale as the built-in ones.
+    /// level of that drum family's own part (the kick part for kick and tom, the snare part for snare, the hat
+    /// part for hat and cymbal), so the model's lanes sit on the same scale as the built-in ones. Snares below
+    /// SNARE_CONFIDENT are kept only near a built-in mid onset.
     pub fn set_model(&mut self, hits: &ModelHits, sr: f64, hop: usize) {
         let n = self.nov[0].len();
         let level = |part: usize| {
@@ -272,13 +283,25 @@ impl Drums {
                 l
             } // `or 1.0`
         };
-        let (low, high) = (level(0), level(2));
-        let mut lanes: [Vec<f64>; 4] = Default::default();
+        let (low, mid, high) = (level(0), level(1), level(2));
+        let onsets = peaks(&self.nov[1], SNARE_ONSET * percentile_f32(&self.nov[1], 99.5));
+        let gate = round_half_even(SNARE_GATE * sr / hop as f64) as i64;
+        let mut lanes: [Vec<f64>; 5] = Default::default();
         for (li, (times, conf)) in hits.iter().enumerate() {
-            let lv = if MODEL_LANES[li] == "kick" || MODEL_LANES[li] == "tom" { low } else { high };
+            let lv = match MODEL_LANES[li] {
+                "kick" | "tom" => low,
+                "snare" => mid,
+                _ => high,
+            };
             let mut x = vec![0.0f64; n];
             for (&t, &c) in times.iter().zip(conf) {
                 let f = round_half_even(t * sr / hop as f64).clamp(0.0, n.saturating_sub(1) as f64) as usize;
+                if MODEL_LANES[li] == "snare"
+                    && c < SNARE_CONFIDENT
+                    && !onsets.iter().any(|&o| (o as i64 - f as i64).abs() <= gate)
+                {
+                    continue;
+                }
                 x[f] = x[f].max((c * lv) as f64); // float32 product, as numpy does for conf * level
             }
             lanes[li] = x;
@@ -432,16 +455,38 @@ fn argmax_f64(v: &[f64], a: usize, b: usize) -> usize {
     best
 }
 
-/// Put the drum model's hits (kick, hat, tom, cymbal) at frame index k in place of the built-in kick, tom and
-/// closed hat lanes, keeping our open-hat lane (the model's hi-hats replace the closed ones). With
-/// model_open_hats, lane_activations then splits the model's hi-hats into both hat lanes instead.
+/// Put the drum model's hits (kick, hat, tom, cymbal, snare) at frame index k in place of the built-in kick,
+/// tom, snare and closed hat lanes, keeping our clap, perc and open-hat lanes (the model's hi-hats replace the
+/// closed ones). With model_open_hats, lane_activations then splits the model's hi-hats into both hat lanes
+/// instead.
 fn model_hit(m: &[Vec<f64>], out: &mut [Vec<f64>], k: usize, a: usize, b: usize, sh: f64) {
     let mx = |v: &[f64]| v[a..b].iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let (mk, mh, mt, mc) = (mx(&m[0]), mx(&m[1]), mx(&m[2]), mx(&m[3]));
+    let (mk, mh, mt, mc, ms) = (mx(&m[0]), mx(&m[1]), mx(&m[2]), mx(&m[3]), mx(&m[4]));
     out[0][k] = mk;
+    out[1][k] = ms;
     out[5][k] = mt;
     out[7][k] = mc;
     out[3][k] = if sh > 0.0 { mh * (1.0 - ramp(out[4][k] / (sh + 1e-12), 0.5, 0.9)) } else { mh };
+}
+
+/// bench.drums._peaks: frames of local maxima of at least `thr` (and above 0), at least 3 frames apart (the
+/// larger of two closer ones kept).
+fn peaks(x: &[f32], thr: f32) -> Vec<usize> {
+    let mut keep: Vec<usize> = Vec::new();
+    for i in 1..x.len().saturating_sub(1) {
+        if x[i] < thr || x[i] <= 0.0 || x[i] < x[i - 1] || x[i] <= x[i + 1] {
+            continue;
+        }
+        match keep.last_mut() {
+            Some(last) if i - *last < 3 => {
+                if x[i] > x[*last] {
+                    *last = i;
+                }
+            }
+            _ => keep.push(i),
+        }
+    }
+    keep
 }
 
 fn window(len: usize, i: i64, back: f64, ahead: f64, sr: f64) -> (usize, usize) {

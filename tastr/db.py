@@ -1102,12 +1102,16 @@ LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestio
 _PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_json"}
 
 
-def library_snapshot(path: str | os.PathLike, owner: str | None) -> bytes:
+def library_snapshot(path: str | os.PathLike, owner: str | None, held: tuple[str, ...] | list[str] = ()) -> bytes:
     """A SQLite file of one person's library (LIBRARY_TABLES, their rows, no private columns), or with `owner`
     None every library's rows with all their columns (hosted admins), for the page to query in the browser with
     sql.js (TAS-49). Indexes on tracks are added so the page's searches stay quick. The rows are copied through a
-    connection into a database in memory (no ATTACH or temporary file), so it works on a Durable Object too."""
+    connection into a database in memory (no ATTACH or temporary file), so it works on a Durable Object too.
+    `held`: lookup providers whose stored answers stay out of it (lookup.held_from_downloads(): FreqBlog's terms
+    forbid handing its values out as a file)."""
     where, args = ("WHERE owner = ?", (owner,)) if owner is not None else ("", ())
+    held = tuple(held)
+    held_sql = f" AND provider NOT IN ({', '.join('?' * len(held))})" if held else ""
     with closing(connect(path, readonly=True)) as src, closing(sqlite3.connect(":memory:")) as dst:
         for t in LIBRARY_TABLES:
             cols = [(r[1], r[2]) for r in src.execute(f"PRAGMA table_info({t})")
@@ -1115,8 +1119,9 @@ def library_snapshot(path: str | os.PathLike, owner: str | None) -> bytes:
             names = ", ".join(f'"{c}"' for c, _ in cols)
             dst.execute(f"CREATE TABLE {t} ({', '.join(f'{chr(34)}{c}{chr(34)} {typ}' for c, typ in cols)})")
             sql = (f"SELECT {names} FROM tracks {where}" if t == "tracks" else
-                   f"SELECT {names} FROM {t} WHERE track_id IN (SELECT id FROM tracks {where})")
-            rows = [tuple(r) for r in src.execute(sql, args).fetchall()]
+                   f"SELECT {names} FROM {t} WHERE track_id IN (SELECT id FROM tracks {where})"
+                   + (held_sql if t == "lookups" else ""))
+            rows = [tuple(r) for r in src.execute(sql, (*args, *held) if t == "lookups" else args).fetchall()]
             if rows:
                 dst.executemany(f"INSERT INTO {t} VALUES ({', '.join('?' * len(cols))})", rows)
         for name, cols in (("tracks", "id"), ("tracks", "bpm"), ("tracks", "camelot"), ("tags", "tag"),

@@ -1,5 +1,6 @@
 """Catalog lookups (tastr.lookup): providers on canned responses, storage, comparison and the API."""
 
+import sqlite3
 import time
 
 import pytest
@@ -133,6 +134,9 @@ def test_freqblog_is_stored_unless_turned_off(db_path, monkeypatch):
     monkeypatch.delenv("FREQBLOG_STORE")  # stored by default (free-key terms of 3 November 2026)
     lookup.lookup_track(conn, tid, tagged_card(), [p])
     assert tuple(conn.execute("SELECT key_name, key_tonic, key_mode, camelot FROM lookups").fetchone()) == ("F-Minor", 5, "minor", "4A")
+    snap = sqlite3.connect(":memory:")
+    snap.deserialize(db.library_snapshot(db_path, None, lookup.held_from_downloads()))  # the hosted search's download leaves FreqBlog's answers out
+    assert snap.execute("SELECT count(*) FROM lookups").fetchone()[0] == 0
     assert lookup.forget(conn, "freqblog") == 1 and db.get_lookups(conn, tid) == []
 
 

@@ -44,6 +44,9 @@ class FreqBlog(Provider):
     # Terms: a miss may be cached "as a temporary negative result, but not a permanent one". The card says
     # Tastr "asks again after a few days".
     miss_days = 7.0
+    # Terms: stored values must not be offered "as an API, feed, export or dataset", so they stay out of the
+    # library snapshot the hosted search downloads.
+    in_downloads = False
 
     def base(self) -> str:
         return os.environ.get("FREQBLOG_API_BASE", DEFAULT_BASE).rstrip("/")

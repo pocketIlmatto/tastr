@@ -99,6 +99,11 @@ def settled(p: Provider, r: dict | None, now: float | None = None) -> bool:
     return (time.time() if now is None else now) - fetched < float(days) * 86400
 
 
+def held_from_downloads() -> list[str]:
+    """Providers whose stored answers must not leave the server in a downloaded file (Provider.in_downloads)."""
+    return [p.name for p in PROVIDERS.values() if not p.in_downloads]
+
+
 def forget(conn: sqlite3.Connection, provider: str) -> int:
     """Delete every stored answer from one provider (e.g. FreqBlog's, if its key goes away); returns how many."""
     with conn:

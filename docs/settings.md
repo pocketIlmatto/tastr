@@ -52,7 +52,7 @@ what each does, is in [hosting-map.md](hosting-map.md#worker-secrets). The ones 
 | `FREQBLOG_API_KEY` (optional) | [FreqBlog](https://api.freqblog.com/docs) account | Only if it leaks |
 | `ANTHROPIC_API_KEY` (optional) | Anthropic Console **Settings > API Keys**, with a monthly spend limit on its workspace | Only if it leaks; without it "Ask Claude to change it" is off |
 
-`TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD`, `TASTR_ADMIN_EMAILS` and the limits are kept as secrets to keep
+`TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD`, `TASTR_ADMIN_EMAILS`, `FREQBLOG_STORE` (optional, `0` stops storing FreqBlog's answers) and the limits are kept as secrets to keep
 them out of the repository, but aren't credentials; nothing to renew.
 
 To see which names are set (never the values): `uv run pywrangler secret list` in `worker/`.

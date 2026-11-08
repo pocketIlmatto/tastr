@@ -82,6 +82,9 @@ class Provider:
     min_interval: float = 1.0  # seconds between requests
     daily_limit: int | None = 200
     monthly_limit: int | None = None
+    # Whether stored answers may leave the server in a file people download (the hosted search's library snapshot).
+    # False when the terms forbid offering the values as an export or dataset; they still show on the card.
+    in_downloads: bool = True
     # How long a "not_found" answer stays settled, in days (None: for good). A provider whose terms allow caching
     # a miss only for a while sets this; a result's extra["retry_after_days"] overrides it per track.
     miss_days: float | None = None

@@ -110,7 +110,7 @@ def _result(lib: ctypes.CDLL, n: int, what: str) -> dict:
     return json.loads(ctypes.string_at(lib.tastr_card_ptr(), n).decode())
 
 
-MODEL_LANES = ("kick", "hat", "tom", "cymbal")  # engine-rs drums::MODEL_LANES, the order drum hits go in
+MODEL_LANES = ("kick", "hat", "tom", "cymbal", "snare")  # engine-rs drums::MODEL_LANES, the order drum hits go in
 
 
 def _hits(drum_hits: dict | None) -> np.ndarray:

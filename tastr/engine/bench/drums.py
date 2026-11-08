@@ -261,17 +261,23 @@ def _model_hits(y: np.ndarray, path: str | None) -> np.ndarray:
     return rust._hits(_model_onsets(y, path))
 
 
-def _analyze(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int, dict | None]:
-    """(lane activations, hop, the drum model's own onsets or None). (`uri` names the track for errors.)"""
+def _lane_acts(y: np.ndarray, uri: str, model: dict | None) -> tuple[dict[str, np.ndarray], int]:
+    """Every lane's strength at every analysis frame from the Rust engine, with the model's hits when given."""
     from .. import rust
 
-    model = _model_onsets(y, path)
     hits = rust._hits(model)
     try:
         r = rust.bench("lane_activations", y, hits, n=y.size, hits=hits.size)
     except rust.RustEngineError as e:
         raise RuntimeError(f"{uri}: {e}") from e
-    return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"], model
+    return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"]
+
+
+def _analyze(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int, dict | None]:
+    """(lane activations, hop, the drum model's own onsets or None). (`uri` names the track for errors.)"""
+    model = _model_onsets(y, path)
+    acts, hop = _lane_acts(y, uri, model)
+    return acts, hop, model
 
 
 def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int]:
@@ -281,8 +287,9 @@ def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict
 
 
 # --- where the snare lane could come from (with the drum model) -----------------------------------
-# The app's snare is the built-in one. With the model on, the bench also scores the snare onsets each rule
-# below would give, on the same labels, so one run compares them (docs/drums.md, "The snare trade-off").
+# With the model on, the bench also scores the snare onsets each rule below would give, on the same labels, so
+# one run compares them (docs/drums.md, "The snare trade-off"). The rules read the built-in lanes (analyzed a
+# second time without the model); the shipped lane, which takes its snare from the model, is the "snare" label.
 
 MID = ("snare", "clap", "perc")
 GATE_SECONDS = 0.03  # how close the built-in mid part must be to a model snare for the mid gates
@@ -293,7 +300,7 @@ CONFIDENT = (0.6, 0.65, 0.7, 0.75, 0.8, 0.85)  # model confidence (0.5 = ADTOF's
 def snare_sources(acts: dict[str, np.ndarray], model: dict, hop: int = 512, sr: int = SR) -> dict[str, np.ndarray]:
     """Snare onset seconds per candidate rule, from the built-in lanes and the model's snare (time, confidence).
 
-    - builtin: the built-in snare and clap lanes, as the app reports them;
+    - builtin: the built-in snare and clap lanes, as the app reports them without the model;
     - model: every snare the model reports;
     - gated: model snares with a built-in snare or clap onset within 50 ms;
     - mid-G: model snares where the built-in mid part (snare, clap, perc) reaches G x its 99.5th percentile
@@ -346,7 +353,8 @@ def _work(job) -> dict:
     acts, hop, model = _analyze(np.asarray(audio, dtype=np.float32), item_id, path)
     row = {"id": item_id, "seconds": round(len(audio) / SR, 1)} | score_track(acts, ref, labels, excused, hop=hop)
     if model is not None and "snare" in labels and "snare" in model:
-        row["snare_sources"] = _score_snare_sources(acts, model, ref, labels, hop, SR)
+        builtin, _ = _lane_acts(np.asarray(audio, dtype=np.float32), item_id, None)
+        row["snare_sources"] = _score_snare_sources(builtin, model, ref, labels, hop, SR)
     return row
 
 

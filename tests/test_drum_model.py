@@ -66,7 +66,7 @@ def test_model_onsets_map_onto_the_groove(monkeypatch):
     y, _ = make_drum_track({"kick": "x.......x.......", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."}, bpm=bpm)
     bars = 8
     at = lambda steps: [(b * 16 + s) * step for b in range(bars) for s in steps]  # noqa: E731
-    fake_model(monkeypatch, {"kick": at([0, 8]), "snare": [], "tom": at([14]), "hat": at(range(0, 16, 2)),
+    fake_model(monkeypatch, {"kick": at([0, 8]), "snare": at([4, 12]), "tom": at([14]), "hat": at(range(0, 16, 2)),
                              "cymbal": at([0])})
     lanes, hop = _activations(y, "synth")
     f = int(round(14 * step * SR / hop))
@@ -78,7 +78,7 @@ def test_model_onsets_map_onto_the_groove(monkeypatch):
     assert hits(grid["cymbal"]) == "x..............."
     assert hits(grid["kick"]) == "x.......x......."
     assert hits(grid["hat"]) == "x.x.x.x.x.x.x.x."
-    assert hits(grid["snare"]) == "....x.......x..."  # still ours
+    assert hits(grid["snare"]) == "....x.......x..."  # the model's (confident) snares
 
 
 def test_filterbank_and_spectrogram_shape():
@@ -180,5 +180,25 @@ def test_bench_compares_snare_sources_with_the_model(monkeypatch):
     report = drums.run("synth-onsets", limit=2)
     assert report["tracks"] == 2
     assert {"builtin", "model", "gated", "mid-0.1", "confident-0.75", "union"} <= set(report["snare_sources"])
-    assert report["snare_sources"]["builtin"]["f"] == report["summary"]["snare"]["f"]
+    monkeypatch.setattr(adt, "wanted", lambda options: False)
+    assert report["snare_sources"]["builtin"]["f"] == drums.run("synth-onsets", limit=2)["summary"]["snare"]["f"]
     assert "snare from model" in drums.format_report(report)
+
+
+@pytest.mark.rust
+def test_weak_model_snares_need_a_built_in_onset(monkeypatch):
+    """A model snare under drums::SNARE_CONFIDENT is kept only where the built-in mid part has an onset: the
+    model's weak snares are mostly hi-hats."""
+    bpm, step = 120, 0.125
+    y, _ = make_drum_track({"kick": "x.......x.......", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."}, bpm=bpm)
+    at = lambda steps: [(b * 16 + s) * step for b in range(8) for s in steps]  # noqa: E731
+    snare = at([4, 12, 2])  # the real snares, and a hat (step 2) the model also calls a snare
+    hits = {k: (np.asarray(t, float), np.full(len(t), 1.0, np.float32)) for k, t in
+            {"kick": at([0, 8]), "tom": [], "hat": at(range(0, 16, 2)), "cymbal": []}.items()}
+    hits["snare"] = (np.asarray(snare, float), np.full(len(snare), 0.6, np.float32))  # all weak
+    monkeypatch.setattr(adt, "wanted", lambda options: True)
+    monkeypatch.setattr(adt, "onsets", lambda y, sr: hits)
+    grid = _synth_grid(y, bpm)
+    assert grid["snare"]["pattern"].replace("o", "x") == "....x.......x..."  # the hat's weak "snare" is gone
+    hits["snare"] = (np.asarray(snare, float), np.full(len(snare), 0.9, np.float32))  # all confident: kept
+    assert grid != _synth_grid(y, bpm) and _synth_grid(y, bpm)["snare"]["pattern"][2] != "."

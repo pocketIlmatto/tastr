@@ -198,8 +198,11 @@ def describe(card, stored: list[dict]) -> list[dict]:
     out = []
     for r in stored:
         p = PROVIDERS.get(r["provider"])
-        out.append(r | {"label": p.label if p else r["provider"], "homepage": p.homepage if p else None,
-                        "compare": compare(card, r) if r.get("status") == "found" else None})
+        row = r | {"label": p.label if p else r["provider"], "homepage": p.homepage if p else None,
+                   "compare": compare(card, r) if r.get("status") == "found" else None}
+        if r.get("status") == "not_found" and p and p.miss_days and r.get("fetched_at"):
+            row["checked_at"] = r["fetched_at"]  # a miss that expires: the card says when it was checked
+        out.append(row)
     return out
 
 

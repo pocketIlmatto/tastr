@@ -41,8 +41,9 @@ class FreqBlog(Provider):
     min_interval = 1.0
     daily_limit = 60
     monthly_limit = 900
-    # Terms: a miss may be cached "as a temporary negative result, but not a permanent one".
-    miss_days = 30.0
+    # Terms: a miss may be cached "as a temporary negative result, but not a permanent one". The card says
+    # Tastr "asks again after a few days".
+    miss_days = 7.0
 
     def base(self) -> str:
         return os.environ.get("FREQBLOG_API_BASE", DEFAULT_BASE).rstrip("/")

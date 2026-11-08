@@ -53,7 +53,7 @@ A provider whose terms don't allow keeping its answers (FreqBlog with `FREQBLOG_
 only for the lookup that fetched it ("Look up BPM & key online", or `tastr lookup`) and isn't stored or
 asked during analysis.
 
-A provider can also keep a "not found" only for a while (`miss_days`; FreqBlog 30 days, or the
+A provider can also keep a "not found" only for a while (`miss_days`; FreqBlog 7 days, or the
 `retry_after_days` it sends with the answer). Once that passes, the next analysis or `--missing` run
 asks again, since the catalog may have added the track.
 

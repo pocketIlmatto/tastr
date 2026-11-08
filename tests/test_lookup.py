@@ -150,7 +150,8 @@ def test_a_freqblog_miss_expires(db_path, monkeypatch):
     assert lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True) == []  # still settled
     now = time.time()
     assert lookup.settled(p, stored, now + 6 * 86400) and not lookup.settled(p, stored, now + 8 * 86400)
-    assert not lookup.settled(p, stored | {"extra": {}}, now + 31 * 86400)  # miss_days when none was sent
+    assert not lookup.settled(p, stored | {"extra": {}}, now + 8 * 86400)  # miss_days (7) when none was sent
+    assert lookup.describe(tagged_card(), [stored])[0]["checked_at"] == stored["fetched_at"]  # the card says when
     conn.execute("UPDATE lookups SET fetched_at = '2020-01-01T00:00:00+00:00'")
     (again,) = lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True)
     assert again["status"] == "found" and len(calls) == 2

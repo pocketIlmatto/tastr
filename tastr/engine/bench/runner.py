@@ -50,6 +50,8 @@ def score_item(item: Item, card: TrackCard) -> dict:
     t, c = item.truth, card.core
     row: dict = {"id": item.id, "path": item.path, "errors": dict(card.errors)}
     row["est_bpm"] = c.bpm
+    if item.meta.get("genre"):
+        row["genre"] = item.meta["genre"]
     row["bpm_confidence"] = c.bpm_confidence
     row["est_key"] = c.key.name if c.key else None
     row["key_confidence"] = c.key.confidence if c.key else None
@@ -85,6 +87,8 @@ def _work(item: Item) -> dict:
     return row
 
 
+DRUM_AND_BASS = "Drum & Bass"  # Beatport's genre name
+FAST_RANGE = (160.0, 181.0)  # drum & bass at its DJ tempo
 SUMMARY_METRICS = ["acc1", "acc2", "key_weighted", "key_correct", "beat_f", "downbeat_f", "boundary_f_0.5", "boundary_f_3",
                    "meter_correct"]
 
@@ -112,6 +116,10 @@ def summarize(rows: list[dict]) -> dict:
         if hits:
             out[f"meter_{m}_correct"] = round(metrics.mean(hits), 4)
             out[f"meter_{m}_n"] = len(hits)
+    dnb = [r for r in rows if r.get("genre") == DRUM_AND_BASS]
+    if dnb:  # Beatport lists drum & bass at 87, 116 or 174; the card should say ~174 (docs/bench.md, Tempo notes)
+        out["dnb_fast"] = sum(1 for r in dnb if FAST_RANGE[0] <= (r.get("est_bpm") or 0) < FAST_RANGE[1])
+        out["dnb_n"] = len(dnb)
     octaves = [r["octave"] for r in rows if r.get("octave")]
     if octaves:
         out["tempo_octave_errors"] = {k: octaves.count(k) for k in sorted(set(octaves))}
@@ -198,6 +206,8 @@ def _detail_lines(s: dict) -> list[str]:
     if "meter_3_n" in s or "meter_4_n" in s:
         lines.append("  meter: " + ", ".join(f"{m}/4 right {s[f'meter_{m}_correct']:.3f} (n={s[f'meter_{m}_n']})"
                                              for m in (3, 4) if f"meter_{m}_n" in s))
+    if "dnb_n" in s:
+        lines.append(f"  drum & bass read at 160-180 BPM: {s['dnb_fast']} of {s['dnb_n']}")
     if "tempo_octave_errors" in s:
         lines.append("  BPM octave errors: " + ", ".join(f"{k} {v}" for k, v in s["tempo_octave_errors"].items()))
     return lines

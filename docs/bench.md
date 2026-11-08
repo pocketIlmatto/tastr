@@ -506,9 +506,43 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   | `giantsteps-tempo` | 43 | 0.721 / 0.884 | 0.744 / 0.907 |
 
   The gate was picked on GTZAN only, so the other four rows are held out.
-- Still open: drum & bass reported at half tempo (86 for 174) and half-time tracks labeled ~86 reported at 172.
-  The tempogram and off-beat onsets do not separate them, and Beatport's labels show the convention itself
-  varies, so a fix needs a stronger cue (e.g. snare placement within the bar) and labels that agree.
+- Drum & bass at full tempo (2026-11-08): drum & bass read at half tempo (86 for 174) is now doubled when the
+  doubled tempo lands in 160-180 and the snare hits on every beat of the slow grid. At 174 the snare lands on
+  2 and 4 of each fast bar, which is every slow beat at 87; a real 85-90 BPM backbeat hits every other beat.
+  `core::fast_backbeat` takes the mid drum part (drums.rs's NMF part between kick and hats, less what the kick
+  and hats leak into it: snare, clap, perc), samples its strongest hit near each half beat, and averages the
+  four half beats of a two-beat cycle. Of the two pairs one beat apart, the stronger pair must be even
+  (`BACKBEAT_BALANCE`, weaker hit / stronger, at least 0.8) and stand out (`BACKBEAT_CONTRAST`, the pair over
+  the other pair, at least 2). Contrast keeps out busy percussion that hits every half beat (psy-trance, 140
+  BPM tracks read at 87). Acc1 / Acc2 and how many tracks read at 160-180, before -> after:
+
+  | Set | Tracks | Before | After | At 160-180 |
+  |---|---|---|---|---|
+  | GTZAN (spectrograms) | 999 | 0.673 / 0.872 | 0.676 / 0.872 | 91 -> 98 |
+  | hjdb train (spectrograms) | 200 | 0.915 / 0.945 | 0.925 / 0.945 | 44 -> 46 |
+  | hjdb val | 35 | 0.971 / 0.971 | 0.971 / 0.971 | 4 -> 4 |
+  | `giantsteps-tempo` | 43 | 0.744 / 0.907 | 0.791 / 0.907 | 14 -> 16 |
+  | Beatport drum & bass | 40 | 0.500 / 0.775 | 0.325 / 0.775 | 21 -> 31 |
+  | Beatport 85-92, not drum & bass | 25 | 0.600 / 0.840 | 0.520 / 0.840 | 6 -> 8 |
+  | Beatport hip-hop, downtempo, breaks, dubstep, drum & bass | 279 | 0.796 / 0.885 | 0.763 / 0.885 | 40 -> 52 |
+
+  The thresholds were picked on the 35 Beatport and GiantSteps tracks read at 79-93 BPM (from the 279-track
+  subset and the 43 GiantSteps tracks); GTZAN and hjdb are held out. Results moved little between 0.75 and 0.9
+  balance and 1.5 and 2.5 contrast. Beatport's drum & bass Acc1 drops because 22 of its 40 drum & bass
+  labels are at 84-92: 7 of those now read at 172-179 (the point of the change), so `beatport-tempo` reports
+  "drum & bass read at 160-180 BPM" separately (on Modal only once the bucket's track index is rewritten
+  with `--write-index`, since older indexes don't have the genre). The guard set lost 2 tracks: a hip-hop track listed at 87 and
+  a downtempo track listed at 90, both with a snare on every slow beat. GTZAN gained 5 (blues, country,
+  hip-hop, metal and reggae labeled at 168-180) and lost 2 (blues at 82, country at 86); hjdb gained 2.
+  Measured locally with `bench.tempo_spec` and core's tempo on audio (the `tempo_audio` bench op, the same
+  tempo a card gets).
+- Tried first for that rule: snare-band flux (180-2,500 Hz of the log-mel) at the half beats. Its balance
+  overlapped: kick, bass and vocals in that band made 85-92 BPM hip-hop and downtempo look as even as drum &
+  bass. The drum part's unmixing is what separates them.
+- Still open: 5 of 40 Beatport drum & bass tracks and 2 of 16 fast GiantSteps tracks still read at 86-90.
+  Their snare is half-time too (beat 3 of the fast bar, like a real 87 BPM backbeat) or they fall just short
+  of the thresholds. The 2/3-tempo locks (116 for 174) are unchanged. The full 774-track `beatport-tempo` run
+  and the BPM calibration refit (`calibrate`) are still to do.
 
 ## Drum lanes
 

@@ -126,7 +126,7 @@ def test_meter_is_scored_per_meter():
 def test_beatport_tempo_loader(tmp_path):
     (tmp_path / "meta").mkdir()
     (tmp_path / "audio").mkdir()
-    metas = {"301": '{"id": 301, "bpm": 174}', "302": '{"id": 302, "bpm": nan, "genres": []}',
+    metas = {"301": '{"id": 301, "bpm": 174, "genres": [{"name": "Drum & Bass"}]}', "302": '{"id": 302, "bpm": nan, "genres": []}',
              "303": '{"id": 303, "bpm": 0}', "304": '{"id": 304}', "305": '{"id": 305, "bpm": 128}'}
     for sid, text in metas.items():
         (tmp_path / "meta" / f"{sid} Artist - Title (Original Mix).json").write_text(text)
@@ -135,6 +135,22 @@ def test_beatport_tempo_loader(tmp_path):
     (tmp_path / "audio" / "305 Artist - Title (Original Mix).mp3").unlink()  # no audio: skipped
     tempos = datasets.beatport_tempo(tmp_path)
     assert [(i.id, i.truth.bpm) for i in tempos] == [("bp-tempo-301", 174.0)]
+    assert tempos[0].meta == {"genre": "Drum & Bass"}
+
+
+def test_drum_and_bass_read_at_full_tempo_is_counted():
+    """Beatport lists drum & bass at 87, 116 or 174, so the report also counts how many read at 160-180."""
+    from tastr.engine.card import Source, TrackCard
+
+    rows = []
+    for genre, est in (("Drum & Bass", 172.3), ("Drum & Bass", 86.1), ("Hip-Hop / R&B", 172.3)):
+        card = TrackCard(source=Source(kind="file", uri="x"))
+        card.core.bpm = est
+        item = datasets.Item(id=f"t{len(rows)}", truth=datasets.Truth(bpm=87.0), meta={"genre": genre})
+        rows.append(runner.score_item(item, card))
+    s = runner.summarize(rows)
+    assert (s["dnb_fast"], s["dnb_n"]) == (1, 2)
+    assert "drum & bass read at 160-180 BPM: 1 of 2" in runner.format_summary({"summary": s, "seconds": 0, "review": []})
 
 
 def test_harmonix_loader(tmp_path):

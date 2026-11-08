@@ -17,6 +17,9 @@ pub type ModelHits = [(Vec<f64>, Vec<f32>); 5];
 /// hi-hats (docs/drums.md, "The snare trade-off").
 pub const SNARE_CONFIDENT: f32 = 0.7;
 pub const SNARE_GATE: f64 = 0.05;
+/// Model toms below this confidence are dropped: on real kits the model's weak toms are mostly snares and
+/// kicks (docs/drums.md, "False toms").
+pub const TOM_CONFIDENT: f32 = 0.675;
 /// A built-in mid onset is a peak of the mid part's rise at this share of its 99.5th percentile or more (the
 /// drum benches' onset threshold).
 const SNARE_ONSET: f32 = 0.4;
@@ -272,7 +275,7 @@ impl Drums {
     /// drums.model_lanes: the drum model's hits on the analysis frames. Each hit is its confidence times the
     /// level of that drum family's own part (the kick part for kick and tom, the snare part for snare, the hat
     /// part for hat and cymbal), so the model's lanes sit on the same scale as the built-in ones. Snares below
-    /// SNARE_CONFIDENT are kept only near a built-in mid onset.
+    /// SNARE_CONFIDENT are kept only near a built-in mid onset; toms below TOM_CONFIDENT are dropped.
     pub fn set_model(&mut self, hits: &ModelHits, sr: f64, hop: usize) {
         let n = self.nov[0].len();
         let level = |part: usize| {
@@ -296,6 +299,9 @@ impl Drums {
             let mut x = vec![0.0f64; n];
             for (&t, &c) in times.iter().zip(conf) {
                 let f = round_half_even(t * sr / hop as f64).clamp(0.0, n.saturating_sub(1) as f64) as usize;
+                if MODEL_LANES[li] == "tom" && c < TOM_CONFIDENT {
+                    continue;
+                }
                 if MODEL_LANES[li] == "snare"
                     && c < SNARE_CONFIDENT
                     && !onsets.iter().any(|&o| (o as i64 - f as i64).abs() <= gate)

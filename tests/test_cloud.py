@@ -39,9 +39,11 @@ def test_modal_image_deps_match_pyproject(name):
 def test_every_analysis_image_has_the_rust_engine():
     """The Rust engine makes every card (there is no Python fallback), so each Modal image that analyzes builds
     its library in; the build-time warm-up fails the deploy otherwise."""
-    src = (ROOT / "tastr/cloud/modal_web.py").read_text()
-    for name in ("image", "drums_image"):
-        assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), name
+    for app in ("modal_web.py", "modal_app.py"):  # the hosted app, and the benches (drums_image: the drum bench)
+        src = (ROOT / "tastr/cloud" / app).read_text()
+        for name in ("drums_image",) if app == "modal_app.py" else ("image", "drums_image"):
+            assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), f"{app}: {name}"
+    assert re.search(r"^_engine_base = \(\n    with_rust_engine\(", (ROOT / "tastr/cloud/modal_app.py").read_text(), re.M)
 
 
 @pytest.mark.audio

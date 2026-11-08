@@ -153,7 +153,9 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   analysis and can play the audio; your edits, labels, cues and lists stay yours.
 - **Play and export lists:** Library › List shows one list in its own order, with **Play**, **Shuffle** and
   **Export**. The player bar at the bottom streams each track in turn (previous, play/pause, next, shuffle,
-  seek), and the keyboard's media keys work too. Starting a card's playback pauses the list. Export saves the
+  seek), and the keyboard's media keys work too. When a track ends on its own, the next one fades in over
+  6 seconds; the bar's crossfade button turns that off or sets 1 to 12 seconds, kept in this browser (next and
+  previous still cut straight away). Starting a card's playback pauses the list. Export saves the
   list as M3U8, XSPF or PLS, whose entries point at the tracks' audio on your Tastr server (on a shared server,
   links that work for 7 days), or as a zip with the audio and an .m3u8 that plays anywhere. Blend's list chips
   have the same ▶ and ⤓ buttons.

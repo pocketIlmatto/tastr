@@ -1,15 +1,25 @@
 // Playing and exporting saved lists (TAS-79): a player bar fixed to the bottom of the page that streams each track's
-// audio in turn (in list order or shuffled), and the Export menu that saves a list as an M3U8, XSPF or PLS file, or a
-// zip with the audio. The queue logic is in playlist-core.js.
+// audio in turn (in list order or shuffled), fading into the next track when one ends on its own (crossfade, set in
+// the bar and kept in this browser), and the Export menu that saves a list as an M3U8, XSPF or PLS file, or a zip
+// with the audio. The queue and crossfade logic is in playlist-core.js.
 
 import { $, h, httpError, isNum, mmss, tracks } from "./core.js";
 import { openTrack, switchTo } from "./card.js";
 import { player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { pinPop } from "./pin.js";
-import { markPlayed, newQueue, nextStep, prevStep, queueId, toggleShuffle } from "./playlist-core.js";
+import { XF_MAX, XF_MIN, markPlayed, newQueue, nextStep, prevStep, queueId, readXf, toggleShuffle, xfCurve, xfLen } from "./playlist-core.js";
 
 let pl = null; // the queue (playlist-core.js) plus msg: a line that replaces the subline for now
-let el = null; // one shared <audio>: it streams with Range requests, so a long list never decodes whole files
+// Two <audio> elements that take turns, so the next track can start while the last one fades out. They stream with
+// Range requests, so a long list never decodes whole files. `el` is the one playing the queue's current track.
+const els = [];
+let el = null;
+let fade = null; // while a crossfade runs: { from: the element fading out, prev: its track's name, timer }
+let ctx = null; // Web Audio, made on a click (browsers start it muted otherwise); each element plays through a gain
+const gains = new Map();
+const XF_KEY = "tastr-crossfade";
+let xf = readXf(null);
+try { xf = readXf(localStorage.getItem(XF_KEY)); } catch (_) { /* storage off */ }
 const hooks = new Set();
 // Told when the playing track changes or the bar closes (the Library list marks the playing track).
 export const onPlaying = (fn) => hooks.add(fn);
@@ -20,26 +30,107 @@ const nameOf = (t) => (t && t.title) || "Untitled";
 
 // Registered as the shared `player` while playing, so starting a card's playback (or the drum player, or a key
 // preview) pauses the list, and starting the list stops them.
-const me = { stop() { if (el && !el.paused) el.pause(); } };
+const me = { stop() { finishFade(); if (el && !el.paused) el.pause(); } };
 
-function audioEl() {
-  if (el) return el;
-  el = new Audio();
-  el.preload = "auto";
-  el.addEventListener("play", () => { if (player !== me) { stopAllPlayback(); setPlayer(me); } paint(); });
-  el.addEventListener("pause", () => { if (player === me) setPlayer(null); paint(); });
-  el.addEventListener("timeupdate", paintTime);
-  el.addEventListener("loadedmetadata", paintTime);
-  el.addEventListener("ended", () => { if (pl) { markPlayed(pl); const n = nextStep(pl); if (n == null) end(); else go(n, true); } });
-  el.addEventListener("error", () => {
-    if (!pl || !el.getAttribute("src")) return;
+function makeEl() {
+  const a = new Audio();
+  a.preload = "auto";
+  // Hosted audio redirects to the bucket, whose CORS rule allows any origin; without this Web Audio would get silence.
+  a.crossOrigin = "anonymous";
+  a.addEventListener("play", () => {
+    if (a !== el) return;
+    if (ctx && ctx.state !== "running" && ctx.state !== "closed") ctx.resume().catch(() => {});
+    if (player !== me) { stopAllPlayback(); setPlayer(me); } paint(); });
+  a.addEventListener("pause", () => { if (a !== el) return; finishFade(); if (player === me) setPlayer(null); paint(); });
+  a.addEventListener("timeupdate", () => { if (a === el) { paintTime(); maybeFade(); } });
+  a.addEventListener("loadedmetadata", () => { if (a === el) paintTime(); });
+  a.addEventListener("ended", () => {
+    if (a !== el) { if (fade && fade.from === a) finishFade(); return; }
+    if (pl) { markPlayed(pl); const n = nextStep(pl); if (n == null) end(); else go(n, true); }
+  });
+  a.addEventListener("error", () => {
+    if (a !== el || !pl || !a.getAttribute("src")) return;
+    finishFade();
     // Its audio isn't on the server (expired or deleted): skip it.
     const t = byId(queueId(pl)), n = nextStep(pl);
     const msg = `Skipped “${nameOf(t)}”: its audio isn't on the server`;
     if (n == null) { end(msg); return; }
     go(n, true, msg);
   });
+  return a;
+}
+function audioEl() {
+  if (!els.length) els.push(makeEl(), makeEl());
+  if (!el) el = els[0];
   return el;
+}
+
+// Route both elements through Web Audio gains, when crossfade is on. Called from a click (playing a list, the play
+// button, turning crossfade on) so the context starts unmuted. Without Web Audio, tracks just cut.
+function ensureGraph() {
+  if (ctx && ctx.state !== "running" && ctx.state !== "closed") ctx.resume().catch(() => {});
+  if (!xf.on) return;
+  audioEl();
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!ctx && AC) ctx = new AC();
+    if (!ctx) return;
+    for (const a of els) {
+      if (gains.has(a)) continue;
+      const g = ctx.createGain();
+      ctx.createMediaElementSource(a).connect(g);
+      g.connect(ctx.destination);
+      gains.set(a, g);
+    }
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  } catch (_) { /* no Web Audio here: no crossfade */ }
+}
+const canFade = () => !!ctx && ctx.state === "running" && els.every((a) => gains.has(a));
+function setGain(a, v) {
+  const g = gains.get(a);
+  if (!g) return;
+  g.gain.cancelScheduledValues(ctx.currentTime);
+  g.gain.setValueAtTime(v, ctx.currentTime);
+}
+function ramp(a, rising, secs) {
+  const g = gains.get(a);
+  g.gain.cancelScheduledValues(ctx.currentTime);
+  g.gain.setValueCurveAtTime(xfCurve(rising), ctx.currentTime, secs);
+}
+
+// Near the end of a track that's playing on its own, start the next one and fade between them.
+function maybeFade() {
+  if (!pl || fade || !xf.on || el.paused || !canFade()) return;
+  const n = nextStep(pl), d = el.duration;
+  if (n == null || !isFinite(d)) return;
+  const len = xfLen(xf.sec, d, (byId(pl.ids[pl.order[n]]) || {}).duration);
+  if (len > 0 && d - el.currentTime <= len) startFade(n, len);
+}
+function startFade(n, len) {
+  const from = el, to = els.find((a) => a !== from);
+  fade = { from, prev: nameOf(byId(queueId(pl))), timer: setTimeout(finishFade, len * 1000 + 300) };
+  markPlayed(pl);
+  pl.i = n; pl.msg = ""; pl.ended = false;
+  el = to;
+  ramp(from, false, len);
+  setGain(to, 0);
+  ramp(to, true, len);
+  to.src = `/api/tracks/${queueId(pl)}/audio`;
+  to.play().catch(() => {});
+  paint(); told(); media();
+}
+// End a crossfade now: stop the track fading out and play the new one at full volume.
+function finishFade() {
+  if (!fade) return;
+  const f = fade;
+  fade = null;
+  clearTimeout(f.timer);
+  f.from.pause(); f.from.removeAttribute("src"); f.from.load();
+  setGain(f.from, 1);
+  setGain(el, 1);
+  // Just the line under the title: rebuilding the bar would drop a drag on its seek slider.
+  const sub = pl && $("pl-bar").querySelector(".pl-sub");
+  if (sub) sub.textContent = subText();
 }
 
 // Start playing a list: from its first track, or a random one when shuffled.
@@ -47,10 +138,12 @@ export function playList(name, ids, { shuffle = false } = {}) {
   ids = ids.filter((id) => byId(id));
   if (!ids.length) return;
   pl = newQueue(name, ids, { shuffle });
+  ensureGraph();
   go(pl.i, true);
 }
 
 function go(i, autoplay, msg = "") {
+  finishFade();
   const a = audioEl();
   pl.i = i; pl.msg = msg; pl.ended = false;
   a.src = `/api/tracks/${queueId(pl)}/audio`;
@@ -58,27 +151,85 @@ function go(i, autoplay, msg = "") {
   paint(); told(); media();
 }
 function end(msg = "") {
+  finishFade();
   el.pause(); el.currentTime = 0;
   pl.ended = true; pl.msg = msg ? `${msg}. End of “${pl.name}”` : `End of “${pl.name}”`;
   paint();
 }
 function prev() {
   const s = prevStep(pl, el.currentTime);
-  if (s === "restart") { el.currentTime = 0; if (el.paused) el.play().catch(() => {}); } else go(s, !el.paused);
+  if (s === "restart") { finishFade(); el.currentTime = 0; if (el.paused) el.play().catch(() => {}); } else go(s, !el.paused);
 }
 function next() { const n = nextStep(pl); if (n != null) { markPlayed(pl); go(n, !el.paused); } }
+function play() { ensureGraph(); return el.play().catch(() => {}); }
 function toggle() {
   if (!el.paused) { el.pause(); return; }
+  ensureGraph();
   if (pl.ended) { go(pl.i, true); return; }
-  el.play().catch(() => {});
+  play();
 }
 export function stopList() {
   if (!pl) return;
+  finishFade();
   el.pause(); el.removeAttribute("src"); el.load();
   pl = null;
+  closeXf(false);
   $("pl-bar").hidden = true; document.body.classList.remove("pl-on");
   if (navigator.mediaSession) navigator.mediaSession.metadata = null;
   told();
+}
+
+// ---- the crossfade settings: a popover from the bar's XF button ----
+// Two crossing ramps: one track fading out as the next fades in.
+function xfIcon() {
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  for (const [k, v] of Object.entries({ viewBox: "0 0 20 14", width: "20", height: "14", fill: "none", stroke: "currentColor",
+    "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(k, v);
+  for (const d of ["M2 3 H6 L14 11 H18", "M2 11 H6 L14 3 H18"]) { const p = document.createElementNS(ns, "path"); p.setAttribute("d", d); svg.append(p); }
+  return svg;
+}
+const xfTitle = () => (xf.on ? `Crossfade: on, ${xf.sec} s` : "Crossfade: off");
+function saveXf() { try { localStorage.setItem(XF_KEY, JSON.stringify(xf)); } catch (_) { /* storage off */ } }
+let xfPop = null, xfUnpin = () => {};
+const xfOutside = (e) => {
+  const btn = $("pl-bar").querySelector(".pl-xf");
+  if (xfPop && !xfPop.contains(e.target) && !(btn && btn.contains(e.target))) closeXf(false);
+};
+function closeXf(refocus) {
+  if (!xfPop) return;
+  xfPop.remove(); xfPop = null; xfUnpin(); xfUnpin = () => {};
+  document.removeEventListener("pointerdown", xfOutside, true);
+  const btn = $("pl-bar").querySelector(".pl-xf");
+  if (btn) { btn.setAttribute("aria-expanded", "false"); if (refocus) btn.focus(); }
+}
+function syncXfBtn() {
+  const btn = $("pl-bar").querySelector(".pl-xf");
+  if (!btn) return;
+  btn.setAttribute("aria-pressed", String(xf.on)); btn.title = xfTitle(); btn.setAttribute("aria-label", xfTitle());
+}
+function xfMenu() {
+  if (xfPop) { closeXf(true); return; }
+  const btn = $("pl-bar").querySelector(".pl-xf");
+  const out = h("output", { class: "pl-xf-val" }, `${xf.sec} s`);
+  const on = h("input", { type: "checkbox", checked: xf.on ? "" : null });
+  const len = h("input", { type: "range", class: "pl-xf-len", min: String(XF_MIN), max: String(XF_MAX), step: "1", value: String(xf.sec),
+    "aria-label": "Crossfade length in seconds", disabled: xf.on ? null : "" });
+  on.addEventListener("change", () => {
+    xf.on = on.checked; len.disabled = !xf.on; saveXf(); syncXfBtn();
+    if (xf.on) ensureGraph(); else finishFade();
+  });
+  len.addEventListener("input", () => { xf.sec = +len.value; out.textContent = `${xf.sec} s`; saveXf(); syncXfBtn(); });
+  xfPop = h("div", { class: "pl-xf-pop menu-pop", role: "dialog", "aria-label": "Crossfade" },
+    h("b", { class: "pl-xf-head" }, "Crossfade"),
+    h("label", { class: "pl-xf-on" }, on, " Fade into the next track"),
+    h("div", { class: "pl-xf-row" }, len, out),
+    h("p", { class: "muted pl-xf-note" }, "Only when a track ends on its own. ⏭ and ⏮ still cut straight away. Kept in this browser."));
+  xfPop.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closeXf(true); } });
+  document.addEventListener("pointerdown", xfOutside, true);
+  document.body.append(xfPop);
+  btn.setAttribute("aria-expanded", "true");
+  xfUnpin = pinPop(xfPop, btn);
+  on.focus();
 }
 
 // The bar: controls, the track (a link to its card) with "i of n in “Name”", a seek range, and ✕.
@@ -91,27 +242,36 @@ function paintTime() {
   const p = $("pl-bar").querySelector(".pl-prev");
   if (p) p.disabled = pl.i === 0 && t <= 3;
 }
+// The line under the title: a message for now, the crossfade, or "i of n in “List”" with the track's tempo and key.
+function subText() {
+  const t = byId(queueId(pl)) || {};
+  return pl.msg || (fade ? `Fading in from “${fade.prev}”` : null) || [`${pl.i + 1} of ${pl.order.length} in “${pl.name}”${pl.shuffle ? " · shuffled" : ""}`,
+    isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot].filter(Boolean).join(" · ");
+}
 function paint() {
   if (!pl) return;
   const bar = $("pl-bar"), t = byId(queueId(pl)) || { id: queueId(pl) }, n = pl.order.length, playing = !el.paused;
   bar.hidden = false; document.body.classList.add("pl-on");
   seek = h("input", { type: "range", class: "pl-seek", min: "0", max: "0", step: "0.5", value: "0", "aria-label": "Seek in this track" });
-  seek.addEventListener("input", () => { el.currentTime = +seek.value; paintTime(); });
+  seek.addEventListener("input", (e) => { const v = +e.target.value; finishFade(); el.currentTime = v; paintTime(); });
   time = h("span", { class: "pl-time" });
   const b = (label, title, fn, o = {}) => h("button", { type: "button", class: "pl-btn", title, "aria-label": title, onclick: fn, ...o }, label);
-  const sub = pl.msg || [`${pl.i + 1} of ${n} in “${pl.name}”${pl.shuffle ? " · shuffled" : ""}`, isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot].filter(Boolean).join(" · ");
+  const xfBtn = b(xfIcon(), xfTitle(), xfMenu, { class: "pl-btn pl-xf", "aria-pressed": String(xf.on), "aria-haspopup": "dialog", "aria-expanded": String(!!xfPop) });
   bar.replaceChildren(
     h("div", { class: "pl-ctl" },
       b("⏮", "Previous track", prev, { class: "pl-btn pl-prev" }),
       b(playing ? "❚❚" : "▶", playing ? "Pause" : "Play", toggle, { class: "pl-btn pl-play" }),
       b("⏭", "Next track", next, { disabled: pl.i >= n - 1 ? "" : null }),
-      b("⤮", pl.shuffle ? "Shuffle is on" : "Shuffle", () => { toggleShuffle(pl); pl.msg = ""; paint(); }, { class: "pl-btn pl-shuf", "aria-pressed": String(pl.shuffle) })),
+      b("⤮", pl.shuffle ? "Shuffle is on" : "Shuffle", () => { toggleShuffle(pl); pl.msg = ""; paint(); }, { class: "pl-btn pl-shuf", "aria-pressed": String(pl.shuffle) }),
+      xfBtn),
     h("div", { class: "pl-now" },
       h("div", { class: "pl-title" }, h("button", { type: "button", class: "linklike pl-open", title: "Open this track's card",
         onclick: () => { switchTo("library"); openTrack(t.id); } }, nameOf(t)), t.artist ? h("span", { class: "muted" }, ` — ${t.artist}`) : null),
-      h("div", { class: "pl-sub muted", role: "status" }, sub)),
+      h("div", { class: "pl-sub muted", role: "status" }, subText())),
     h("div", { class: "pl-pos" }, seek, time),
     b("✕", "Close the player", stopList, { class: "pl-btn pl-close" }));
+  // The bar is rebuilt on every change: keep an open crossfade popover under the new button.
+  if (xfPop) { xfUnpin(); xfUnpin = pinPop(xfPop, xfBtn); }
   paintTime();
 }
 
@@ -122,7 +282,7 @@ function media() {
   const t = byId(queueId(pl)) || {};
   try {
     ms.metadata = new window.MediaMetadata({ title: nameOf(t), artist: t.artist || "", album: pl.name });
-    ms.setActionHandler("play", () => el.play().catch(() => {}));
+    ms.setActionHandler("play", () => play());
     ms.setActionHandler("pause", () => el.pause());
     ms.setActionHandler("previoustrack", () => pl && prev());
     ms.setActionHandler("nexttrack", () => pl && next());

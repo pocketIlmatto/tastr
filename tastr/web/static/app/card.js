@@ -239,7 +239,7 @@ function lookupTable(c) {
     h("p", { class: "muted lk-key" }, "✓ matches Tastr · ×2 / ½ double or half · ≈ a related key (relative, fifth or parallel) · ≠ differs"),
     // FreqBlog's terms ask for "Audio analysis by FreqBlog" where people can find it; the full list is Glossary › Credits.
     rows.some((x) => x.provider === "freqblog" && x.configured) ? h("p", { class: "muted lk-credit" }, "Audio analysis by ",
-      h("a", { href: "https://freqblog.com", target: "_blank", rel: "noopener" }, "FreqBlog"), ". ",
+      h("a", { href: "https://freqblog.com", target: "_blank", rel: "noopener", class: "link" }, "FreqBlog"), ". ",
       h("a", { href: "#g-credits", class: "link", onclick: (e) => { e.preventDefault(); openGlossary("g-credits"); } }, "All credits")) : null);
 }
 

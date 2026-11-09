@@ -639,7 +639,8 @@ def test_log_links():
 def test_admin_routes_are_admins_only(db_path, home):
     plain = make_client(db_path)
     for method, path in [("get", "/api/admin/usage?range=1"), ("get", "/api/admin/events"),
-                         ("put", "/api/admin/limits/a@example.com"), ("delete", "/api/admin/limits/a@example.com")]:
+                         ("put", "/api/admin/limits/a@example.com"), ("delete", "/api/admin/limits/a@example.com"),
+                         ("put", "/api/admin/audio-days/a@example.com"), ("delete", "/api/admin/audio-days/a@example.com")]:
         kw = {"json": {"daily_tracks": 5}} if method == "put" else {}
         assert getattr(plain, method)(path, headers=GOOD, **kw).status_code == 404, path
         assert getattr(plain, method)(path, **kw).status_code == 401, path
@@ -690,6 +691,55 @@ def test_upload_and_stem_limits_use_the_override(db_path, home, tmp_path, monkey
     assert admin.post(f"/api/tracks/{track}/stems", headers=GOOD).status_code == 429
     admin.put("/api/admin/limits/friend@example.com", json={"daily_stems": 1, "scope": "standing"}, headers=GOOD)
     assert admin.post(f"/api/tracks/{track}/stems", headers=GOOD).status_code == 202
+
+
+def test_audio_is_kept_by_default_and_expires_per_person(db_path, home):
+    assert Settings.audio_days == 0  # keep everything unless TASTR_AUDIO_DAYS or an admin says otherwise
+    up = home / "uploads"
+
+    def upload_file(name, age_days):
+        p = up / name / "song.wav"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b"x")
+        t = time.time() - age_days * 86400
+        os.utime(p, (t, t))
+        return p
+
+    files = {n: upload_file(n, 40) for n in ["sam", "kim", "lee", "copy"]}
+    ids = {n: save(db_path, f"{n}@example.com", sha=n, path=str(f), uri=str(f)) for n, f in files.items() if n != "copy"}
+    # Kim's copy of the same file as Sam's (library_copy): kept while either owner keeps it
+    save(db_path, "kim@example.com", sha="sam", path=str(files["sam"]), uri=str(files["sam"]))
+    conn = db.connect(db_path)
+    assert hosted.expire_audio(conn, up, 0) == []  # the default: nothing goes
+    db.set_audio_days(conn, "kim@example.com", 30, "pam@example.com")
+    db.set_audio_days(conn, "lee@example.com", 60, "pam@example.com")
+    db.set_audio_days(conn, "sam@example.com", 0, "pam@example.com")  # forever, even if the default changes
+    assert db.audio_days(conn) == {"kim@example.com": 30, "lee@example.com": 60, "sam@example.com": 0}
+    gone = hosted.expire_audio(conn, up, 10, per_person=db.audio_days(conn))
+    assert gone == [ids["kim"]]  # 40 days old: past Kim's 30, not Lee's 60; Sam keeps forever, and so the shared file
+    assert not files["kim"].exists() and files["lee"].exists() and files["sam"].exists()
+    db.set_audio_days(conn, "sam@example.com", None, "pam@example.com")  # back to the default (10 days here)
+    assert "sam@example.com" not in db.audio_days(conn)
+    assert sorted(hosted.expire_audio(conn, up, 10, per_person=db.audio_days(conn))) == sorted(
+        [ids["sam"], *[r[0] for r in conn.execute("SELECT id FROM tracks WHERE owner = 'kim@example.com' AND sha256 = 'sam'")]])
+    conn.close()
+
+
+def test_admin_sets_audio_days(db_path, home):
+    admin = make_client(db_path, admins=("friend@example.com",))
+    assert admin.put("/api/admin/audio-days/Sam@Example.com", json={"days": 30}, headers=GOOD).json() == {
+        "email": "sam@example.com", "audio_days": 30}
+    body = admin.get("/api/admin/usage", headers=GOOD).json()
+    assert body["limits"]["audio_days"] == 0
+    assert next(u for u in body["users"] if u["email"] == "sam@example.com")["audio_days"] == 30
+    assert next(u for u in body["users"] if u["email"] == "friend@example.com")["audio_days"] is None
+    admin.put("/api/admin/audio-days/sam@example.com", json={"days": 0}, headers=GOOD)
+    assert admin.delete("/api/admin/audio-days/sam@example.com", headers=GOOD).json()["audio_days"] is None
+    assert admin.put("/api/admin/audio-days/sam@example.com", json={"days": -1}, headers=GOOD).status_code == 422
+    assert admin.put("/api/admin/audio-days/nobody", json={"days": 1}, headers=GOOD).status_code == 400
+    log = [e["detail"] for e in admin.get("/api/admin/usage", headers=GOOD).json()["recent"] if e["kind"] == "admin"]
+    assert log == ["Set sam's audio back to the default", "Set sam's audio to be kept forever",
+                   "Set sam's audio to be kept 30 days"]
 
 
 def test_admin_events_filters(db_path, home):

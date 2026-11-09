@@ -106,7 +106,7 @@ variable added in the dashboard is wiped by the next deploy.
 | `TASTR_DIRECT_UPLOAD` | `1`, so the page uploads straight to the bucket |
 | `TASTR_GITHUB_TOKEN` (optional) | a fine-grained token with read-only Actions access to your repository, for the Admin log ([hosting-map.md](hosting-map.md#worker-secrets)) |
 
-The other settings (daily limits, audio kept for 30 days) have defaults; [hosting.md](hosting.md#settings)
+The other settings (daily limits, audio kept until an admin sets an expiry) have defaults; [hosting.md](hosting.md#settings)
 lists them. `worker/wrangler.jsonc` already turns on hosted mode and points analysis and stems at Modal.
 
 ## 7. Your hostname
@@ -161,7 +161,7 @@ deploy shows up on the next page load even though Cloudflare caches static files
 
 The library database is the Durable Object's own storage, and Cloudflare keeps 30 days of point-in-time
 recovery for it ([Durable Objects docs](https://developers.cloudflare.com/durable-objects/api/storage-api/#pitr-point-in-time-recovery-api)).
-Uploads and stems are in the R2 bucket; they expire after 30 days anyway (except admins').
+Uploads and stems are in the R2 bucket; they are kept unless an admin set an expiry for that person (or `TASTR_AUDIO_DAYS`).
 
 ## Notes
 

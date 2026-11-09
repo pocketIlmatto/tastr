@@ -23,7 +23,7 @@ pieces fit together.
 | Lists (Explore › Blend) | one set | one set per person |
 | SQL history (Explore) | in the browser | in the browser, kept apart per signed-in person |
 | Deleting a track | removes its stems | also removes its uploaded audio |
-| Uploaded audio and stems | kept | deleted after `TASTR_AUDIO_DAYS` (cards stay; admins' audio is kept) |
+| Uploaded audio and stems | kept | kept, unless `TASTR_AUDIO_DAYS` or an admin sets an expiry for that person (cards stay; admins' audio is always kept) |
 | Try this in Strudel | strudel.cc fetches audio from `tastr serve` | strudel.cc fetches it through a signed link that works for a week |
 | Admin view (`/api/admin/usage`) | none | usage per person, for `TASTR_ADMIN_EMAILS` |
 | Stem separation | unlimited | per-person daily limit |
@@ -52,7 +52,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_MAX_MINUTES` | 25 | longest track accepted, read from the file's header before analysis (see [below](#when-an-upload-fails)) |
 | `TASTR_MAX_FILES` | 20 | files per upload |
 | `TASTR_DAILY_TRACKS` | 30 | tracks each person can upload per UTC day |
-| `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this (on disk, or in the audio bucket when that is on) |
+| `TASTR_STORAGE_GB` | 10 | uploads are refused once uploaded audio and stems reach this. With the audio bucket on it is a spending cap (R2 bills about $0.015 per GB-month, so 10 GB is about $0.15 a month), not a disk guard |
 | `TASTR_MAX_ANALYSES` | 2 | analyses that run at once; more wait in a queue |
 | `TASTR_BULK_AT_ONCE` | `TASTR_MAX_ANALYSES` | tracks a bulk action (reload, re-analyze, look up) runs at once from the browser. Stems and the drum model always go one at a time. At home it defaults to about half the CPU cores, 1 to 4 |
 | `TASTR_DAILY_STEMS` | 10 | stem separations each person can start per UTC day |
@@ -60,7 +60,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_DAILY_ASKS` | 20 | "Ask Claude to change it" requests (Try this in › Strudel) each person can make per UTC day; an admin can change one person's on the Admin tab |
 | `ANTHROPIC_API_KEY` | none | Tastr's own Anthropic API key, for "Ask Claude to change it". Without it Ask is off. Keep it secret |
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |
-| `TASTR_AUDIO_DAYS` | 30 | uploaded audio and stems are deleted after this many days; `0` keeps them |
+| `TASTR_AUDIO_DAYS` | 0 | the default for how long uploaded audio and stems are kept: `0` keeps them, a number deletes them that many days after upload. An admin can set each person's own on the Admin tab, which wins |
 | `TASTR_CF_ACCOUNT_ID` | none | your Cloudflare account id (32 hex characters, from the dashboard URL); the Admin tab then links to Access's applications and its log of blocked requests (and, with `TASTR_WORKER_NAME`, to the Worker's logs). Not secret; `worker/wrangler.jsonc` sets it |
 | `TASTR_WORKER_NAME` | none | the Cloudflare Worker this server runs as (`worker/wrangler.jsonc` sets `tastr`): the Admin log's source and its link to the Worker's logs |
 | `TASTR_GITHUB_REPO` | none | `owner/name` of the repository whose GitHub Actions runs on main the Admin log shows (`worker/wrangler.jsonc` sets it) |
@@ -205,8 +205,12 @@ can play the audio until it expires, the same as a shared Strudel sketch.
 
 ## Expiring audio
 
-Every 6 hours (and when the server starts) uploaded files older than `TASTR_AUDIO_DAYS` are deleted, with
-their stems unless another track still has the same file. The track card stays, with everything except
+Audio is kept by default. An admin can set how long each person's audio is kept on the Admin tab (✎ on their row,
+**Keep audio for**: forever, a preset or a number of days; stored in the `audio_keep` table), and
+`TASTR_AUDIO_DAYS` sets the default for everyone else (`0`, the default, keeps everything). Every 6 hours (and
+when the server starts) uploaded files older than their owner's days are deleted, with their stems unless
+another track still has the same file. A file several people's tracks share (copied tracks) stays as long as
+the owner who keeps it longest would keep it. The track card stays, with everything except
 playback, waveform scrubbing, stems and re-analysis. Tracks owned by `TASTR_ADMIN_EMAILS` keep their audio.
 With the audio bucket on, the bucket's copy goes too, and the age is counted from when it reached the bucket.
 

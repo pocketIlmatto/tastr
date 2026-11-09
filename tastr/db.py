@@ -239,6 +239,15 @@ CREATE TABLE IF NOT EXISTS limit_overrides (
     set_at       TEXT NOT NULL
 );
 
+-- How long one person's uploaded audio and stems are kept (hosted only), set by an admin. days 0 = kept forever;
+-- no row = the server default (TASTR_AUDIO_DAYS).
+CREATE TABLE IF NOT EXISTS audio_keep (
+    email   TEXT PRIMARY KEY,
+    days    REAL NOT NULL,
+    set_by  TEXT,
+    set_at  TEXT NOT NULL
+);
+
 -- Bytes stored per owner ('' = no owner) at the last snapshot of each UTC day, for the admin view's Storage chart.
 CREATE TABLE IF NOT EXISTS storage_days (
     day   TEXT NOT NULL,
@@ -1223,6 +1232,23 @@ def daily_cap(conn: sqlite3.Connection, email: str, kind: str, day: str, default
     o = get_override(conn, email, day)
     v = o and o.get(f"daily_{kind}")
     return default if v is None else v
+
+
+# ---- per-person audio expiry (hosted) ----
+
+def audio_days(conn: sqlite3.Connection) -> dict[str, float]:
+    """Each person an admin gave their own audio expiry: email -> days their audio is kept (0 = forever)."""
+    return {e: d for e, d in conn.execute("SELECT email, days FROM audio_keep")}
+
+
+def set_audio_days(conn: sqlite3.Connection, email: str, days: float | None, set_by: str | None) -> None:
+    """Keep `email`'s uploaded audio for `days` (0 = forever); None puts them back on the server default."""
+    with conn:
+        if days is None:
+            conn.execute("DELETE FROM audio_keep WHERE email = ?", (email,))
+        else:
+            conn.execute("INSERT OR REPLACE INTO audio_keep (email, days, set_by, set_at) VALUES (?, ?, ?, ?)",
+                         (email, days, set_by, _now()))
 
 
 # ---- storage history (hosted) ----

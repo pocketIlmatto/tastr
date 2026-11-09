@@ -12,7 +12,8 @@
   request for someone else's track answers 404. TASTR_ADMIN_EMAILS may open /api/admin/usage;
 - hands out signed links that work for a week under /pub/, so strudel.cc (which can't pass the login)
   can fetch a track's audio and stems for "Try this in Strudel" (`LinkSigner`);
-- deletes uploaded audio and stems after TASTR_AUDIO_DAYS (cards stay; admins' audio is kept).
+- can delete uploaded audio and stems after TASTR_AUDIO_DAYS, or after the days an admin set for that person
+  (cards stay; admins' audio is kept). By default everything is kept.
 
 Settings come from environment variables (see `Settings.from_env` and docs/hosting.md).
 """
@@ -23,6 +24,7 @@ import logging
 import base64
 import hashlib
 import hmac
+import math
 import os
 import re
 import sqlite3
@@ -74,7 +76,9 @@ class Settings:
     daily_drums: int = 10  # "Detect drums with the model" runs per person per UTC day
     daily_asks: int = 20  # "Ask Claude to change it" in Try this in > Strudel, per person per UTC day (tastr/web/claude.py)
     admins: tuple[str, ...] = ()  # emails that may open the admin view
-    audio_days: float = 30  # uploaded audio and stems are deleted after this; 0 keeps them
+    # Uploaded audio and stems are deleted after this many days; 0 (the default) keeps them. An admin can set
+    # each person's own (the Admin tab, db.audio_days), which wins over this.
+    audio_days: float = 0
     link_secret: str = ""  # signs the /pub/ links; without it they stop working when the server restarts
     # For the admin view's links to the logs. TASTR_MODAL_WORKSPACE (your Modal workspace name) makes the Modal
     # link go to the app.
@@ -232,9 +236,11 @@ class LinkSigner:
 
 
 def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[str, ...] = (),
-                 now: float | None = None) -> list[int]:
-    """Delete uploaded audio under `root` older than `days`, except tracks owned by `keep` (the admins) and files
-    one of their tracks shares.
+                 now: float | None = None, per_person: dict[str, float] | None = None) -> list[int]:
+    """Delete uploaded audio under `root` older than its owner's days: `per_person[owner]` when an admin set one,
+    else `days`; 0 keeps it. Tracks owned by `keep` (the admins) are always kept.
+    A file several tracks point at (tracks copied to someone, tastr/library_copy.py) is kept as long as the owner
+    who keeps it longest would keep it.
     With the audio bucket on (tastr/blobs.py), its copy goes too, and its upload time decides the age.
 
     Cards stay, so the track still shows everything but playback. Stems go too, unless another track
@@ -242,25 +248,35 @@ def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[
     """
     from .. import stems
 
-    cutoff = (now or time.time()) - days * 86400
+    per_person = per_person or {}
+
+    def owner_days(owner: str | None) -> float:
+        d = 0 if owner in keep else per_person.get(owner, days) if owner else days
+        return math.inf if d <= 0 else d
+
+    now = now or time.time()
     root = root.resolve()
-    inbucket = blobs.listing(blobs.key(root / "x").rsplit("/", 1)[0] + "/") if blobs.key(root / "x") else {}
-    gone = []
     rows = conn.execute("SELECT id, owner, local_path, sha256 FROM tracks WHERE local_path IS NOT NULL").fetchall()
-    # A file several tracks point at (tracks copied to someone, tastr/library_copy.py) stays while a kept owner's
-    # track uses it.
-    kept = {path for _, owner, path, _ in rows if owner in keep}
-    for tid, owner, path, sha in rows:
+    longest: dict[str, float] = {}
+    for _, owner, path, _ in rows:
+        longest[path] = max(longest.get(path, 0), owner_days(owner))
+    if all(d == math.inf for d in longest.values()):
+        return []
+    inbucket = blobs.listing(blobs.key(root / "x").rsplit("/", 1)[0] + "/") if blobs.key(root / "x") else {}
+    gone, removed = [], set()
+    for tid, _, path, sha in rows:
         p = Path(path).resolve()
-        if owner in keep or path in kept or root not in p.parents:
+        if longest[path] == math.inf or root not in p.parents:
             continue
-        stored = inbucket.get(blobs.key(p) or "")
-        when = stored[1] if stored else (p.stat().st_mtime if p.is_file() else None)
-        if when is None or when >= cutoff:
-            continue
-        blobs.remove(p)
-        if p.parent != root and p.parent.is_dir() and not any(p.parent.iterdir()):
-            p.parent.rmdir()
+        if path not in removed:  # every track sharing a removed file loses its audio too
+            stored = inbucket.get(blobs.key(p) or "")
+            when = stored[1] if stored else (p.stat().st_mtime if p.is_file() else None)
+            if when is None or when >= now - longest[path] * 86400:
+                continue
+            blobs.remove(p)
+            removed.add(path)
+            if p.parent != root and p.parent.is_dir() and not any(p.parent.iterdir()):
+                p.parent.rmdir()
         gone.append((tid, sha))
     for tid, sha in gone:
         paths = conn.execute("SELECT local_path FROM tracks WHERE sha256 = ? AND local_path IS NOT NULL", (sha,)).fetchall()

@@ -255,6 +255,10 @@ When Tastr is hosted for friends, the people in `TASTR_ADMIN_EMAILS` get an **Ad
 - **Daily limits per person:** the ✎ at the end of a person's row changes their tracks and stem jobs per
   day, for today only (back to the default at 00:00 UTC) or until you change it. Their quota shows the raised
   cap with ↑, and someone at their cap gets a **Raise** link. Each change is logged.
+- **Keep audio per person:** the **Keep audio** column shows how long each person's uploads and stems are kept
+  (Forever by default). Under the ✎, **Keep audio for** sets forever, 7, 30 or 90 days, a year or a custom number
+  of days; picking a shorter time warns that older audio goes within 6 hours. The cards stay. Admins' audio is
+  always kept.
 - **Recent activity filters:** filter the log by what happened, who, where (Tastr, Modal, Fly.io, GitHub,
   Cloudflare, R2) and when (today, 7 or 30 days, or between two dates). Filters combine; **Problems** shows
   only what went wrong. Each line names its source. GitHub Actions runs on main show up on their own,

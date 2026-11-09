@@ -138,8 +138,8 @@ Tastr can also run as a small shared web app. Hosted mode (`TASTR_HOSTED=1`, the
 - each person has their own library and sees only the tracks they uploaded;
 - link analysis is off, searches run in your browser on a copy of your own library, and uploads
   and stem jobs have daily limits;
-- uploaded audio and stems are deleted after a while (30 days by default), but
-  the track cards stay;
+- uploaded audio and stems are kept, unless an admin sets how long for that person
+  (the track cards stay either way);
 - admins get an **Admin** tab with usage per person and an activity log.
 
 [docs/hosting.md](hosting.md) lists everything hosted mode changes.

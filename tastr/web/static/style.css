@@ -904,6 +904,9 @@ html[data-viewing] #drop > :not(#va-drop-note) { display: none; }
 .adm-lim input[type=number] { width: 72px; }
 .adm-lim .muted, .adm-lim .error { flex-basis: 100%; font-size: 12px; }
 .adm-lim .error:empty { display: none; }
+.adm-keep { border-top: 1px dashed var(--line); margin-top: 4px; padding-top: 10px; }
+.adm-keep [hidden], .adm-keep-warn[hidden] { display: none; }
+.adm-keep-warn { flex-basis: 100%; margin: 0; font-size: 13px; color: var(--warn); }
 .adm-filters { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12px; margin-bottom: 4px; }
 .adm-filters label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
 .adm-filters label[hidden] { display: none; }

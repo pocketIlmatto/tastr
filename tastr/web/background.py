@@ -22,8 +22,9 @@ def start(ctx: AppContext) -> list[Callable[[], None]]:
     """Start a hosted server's repeating work (tastr/runner.py: threads, or the Worker's alarm); returns the
     functions that stop it."""
     settings, every, stops = ctx.settings, runner.current().every, []
-    if settings.audio_days > 0:
-        stops.append(every("expiry", EXPIRY_EVERY, lambda: expire_once(ctx)))
+    # Always: besides expired audio (TASTR_AUDIO_DAYS, or a person's own days from the Admin tab) the sweep
+    # clears unfinished uploads, orphaned files and the bucket's local cache.
+    stops.append(every("expiry", EXPIRY_EVERY, lambda: expire_once(ctx)))
     if settings.watch_minutes > 0 and settings.github_repo and settings.github_workflows:
         # The first check waits for the server to finish starting.
         stops.append(every("watch", settings.watch_minutes * 60, lambda: watch_once(ctx), delay=60))
@@ -36,7 +37,7 @@ def expire_once(ctx: AppContext) -> None:
     settings = ctx.settings
     try:
         with closing(ctx.conn()) as c:
-            gone = expire_audio(c, upload_dir(), settings.audio_days, settings.admins)
+            gone = expire_audio(c, upload_dir(), settings.audio_days, settings.admins, per_person=db.audio_days(c))
         ctx.snapshot_storage()
         abandoned = prune_uploads(ctx.db_path)  # direct uploads given a link and never finished
         if abandoned:
@@ -53,7 +54,7 @@ def expire_once(ctx: AppContext) -> None:
         if moved["views"]:
             log.info("Moved %d card(s)' waveform data to the audio bucket", moved["views"])
         if gone:
-            log.info("Deleted the audio of %d track(s) older than %g days", len(gone), settings.audio_days)
+            log.info("Deleted the audio of %d track(s) past their owner's expiry", len(gone))
     except Exception:  # noqa: BLE001 - try again next time
         log.exception("Deleting expired audio failed")
 

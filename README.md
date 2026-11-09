@@ -49,7 +49,7 @@ Highlights so far:
 | Exact key, held out | 47.6% | 60.4% | GiantSteps Key, 599 EDM previews |
 | BPM within 4% | 0.49 | 0.74 | GiantSteps Tempo, 43 tracks |
 | Bar 1 in the right place | 0.43 | 0.64 | GTZAN, 933 songs |
-| Toms found (onset F, optional model) | 0.01 | 0.37 | MDB Drums, real mixes |
+| Toms found (onset F, optional model) | 0.01 | 0.53 | MDB Drums, real mixes |
 | Section boundaries within 3 s (F) | 0.48 | 0.58 | Harmonix Set, 912 songs |
 | Danceability vs listeners (AUC) | 0.70 | 0.82 | MTG-Jamendo, 510 tracks |
 

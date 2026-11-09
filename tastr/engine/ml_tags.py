@@ -174,20 +174,22 @@ def analyze(path: str | os.PathLike) -> dict:
 
 
 # --- From outputs to tags ------------------------------------------------------------------------
-# Cut-offs from the small Essentia bench (docs/essentia.md, 2026-11-04): provisional until the full sets run.
+# Cut-offs from the full Essentia bench (docs/essentia.md, 2026-11-09: 1,191 MTG-Jamendo and 1,802 DEAM clips).
 
 TOP_KEEP = {"genre_discogs400": 10, "mtg_jamendo_instrument": 10}  # the rest of these big heads isn't stored
-# Yes/no heads: (head, class, tag, cut). At 0.7 the shown tracks were 52-100% labeled yes (base rates 9-47%).
-MOODS = [("mood_relaxed", "relaxed", "relaxed", 0.7), ("mood_happy", "happy", "happy", 0.7),
-         ("mood_sad", "sad", "sad", 0.7), ("mood_aggressive", "aggressive", "aggressive", 0.7),
-         ("mood_party", "party", "party", 0.7)]
+# Yes/no heads: (head, class, tag, cut). Each cut keeps the shown tracks 57-95% labeled yes (base rates 10-40%):
+# sad and relaxed were too loose at 0.7 (42% and 72%), party gains precision at 0.8 for little recall.
+MOODS = [("mood_relaxed", "relaxed", "relaxed", 0.85), ("mood_happy", "happy", "happy", 0.7),
+         ("mood_sad", "sad", "sad", 0.8), ("mood_aggressive", "aggressive", "aggressive", 0.7),
+         ("mood_party", "party", "party", 0.8)]
+TAGS_PASS = "2026-11-09"  # change with any cut-off, so stored results get their tags drawn again (no new Modal run)
 # MTG-Jamendo mood/theme tags that describe the music (not where it's used, like "advertising" or "film").
 MOODTHEME = {"calm", "cool", "dark", "deep", "dramatic", "dream", "emotional", "energetic", "epic", "fast", "fun",
              "groovy", "happy", "heavy", "hopeful", "inspiring", "melancholic", "meditative", "positive",
              "powerful", "relaxing", "retro", "romantic", "sad", "sexy", "slow", "soft", "space", "upbeat", "uplifting"}
-MOODTHEME_CUT, MOODTHEME_MAX = 0.12, 3  # about the top 5% of these outputs
+MOODTHEME_CUT, MOODTHEME_MAX = 0.12, 3  # about the top 5%; precision is flat from 0.10 to 0.15 on the full set
 STYLE_CUT, STYLE_MAX = 0.15, 3  # the median track's top style scores 0.22, its third 0.11
-VOICE_CUT = 0.7  # voice >= 0.7: "vocal"; <= 0.3: "instrumental" (0.82 precision at 0.7)
+VOICE_CUT = 0.7  # voice >= 0.7: "vocal"; <= 0.3: "instrumental" (0.81 / 0.99 precision, full set)
 
 
 def compact(heads: dict) -> dict:

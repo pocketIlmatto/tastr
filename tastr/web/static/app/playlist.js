@@ -98,24 +98,39 @@ function ramp(a, rising, secs) {
   g.gain.setValueCurveAtTime(xfCurve(rising), ctx.currentTime, secs);
 }
 
-// Near the end of a track that's playing on its own, start the next one and fade between them.
+// Near the end of a track that's playing on its own, load the next one on the spare element (so a slow server can't
+// eat the fade), then start it and fade between them.
+const PRELOAD = 15; // seconds before the fade
+const audioUrl = (id) => `/api/tracks/${id}/audio`;
+const spare = () => els.find((a) => a !== el);
+function load(a, id) { if (a.getAttribute("src") !== audioUrl(id)) { a.src = audioUrl(id); a.load(); } }
+function unload(a) { if (a && a.getAttribute("src")) { a.removeAttribute("src"); a.load(); } }
 function maybeFade() {
   if (!pl || fade || !xf.on || el.paused || !canFade()) return;
   const n = nextStep(pl), d = el.duration;
   if (n == null || !isFinite(d)) return;
-  const len = xfLen(xf.sec, d, (byId(pl.ids[pl.order[n]]) || {}).duration);
-  if (len > 0 && d - el.currentTime <= len) startFade(n, len);
+  const id = pl.ids[pl.order[n]], len = xfLen(xf.sec, d, (byId(id) || {}).duration), left = d - el.currentTime;
+  if (len <= 0) return;
+  if (left <= len + PRELOAD) load(spare(), id);
+  if (left <= len) startFade(n, len);
 }
 function startFade(n, len) {
-  const from = el, to = els.find((a) => a !== from);
-  fade = { from, prev: nameOf(byId(queueId(pl))), timer: setTimeout(finishFade, len * 1000 + 300) };
+  const from = el, to = spare();
+  const f = fade = { from, prev: nameOf(byId(queueId(pl))), timer: 0 };
   markPlayed(pl);
   pl.i = n; pl.msg = ""; pl.ended = false;
   el = to;
-  ramp(from, false, len);
   setGain(to, 0);
-  ramp(to, true, len);
-  to.src = `/api/tracks/${queueId(pl)}/audio`;
+  // The ramps start once the new track really plays. If it's still loading when the old one ends, it comes in at
+  // full volume (finishFade), as without crossfade.
+  const begin = () => {
+    if (fade !== f) return;
+    ramp(from, false, len); ramp(to, true, len);
+    f.timer = setTimeout(finishFade, len * 1000 + 300);
+  };
+  to.addEventListener("playing", begin, { once: true });
+  if (to.error) unload(to); // a preload that failed: load it again, so its error event fires and skips it
+  load(to, queueId(pl));
   to.play().catch(() => {});
   paint(); told(); media();
 }
@@ -145,8 +160,9 @@ export function playList(name, ids, { shuffle = false } = {}) {
 function go(i, autoplay, msg = "") {
   finishFade();
   const a = audioEl();
+  unload(spare());
   pl.i = i; pl.msg = msg; pl.ended = false;
-  a.src = `/api/tracks/${queueId(pl)}/audio`;
+  a.src = audioUrl(queueId(pl));
   if (autoplay) a.play().catch(() => paint());
   paint(); told(); media();
 }
@@ -172,6 +188,7 @@ export function stopList() {
   if (!pl) return;
   finishFade();
   el.pause(); el.removeAttribute("src"); el.load();
+  unload(spare());
   pl = null;
   closeXf(false);
   $("pl-bar").hidden = true; document.body.classList.remove("pl-on");

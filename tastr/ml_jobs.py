@@ -47,6 +47,30 @@ def untagged(conn: sqlite3.Connection) -> list[int]:
     return [r[0] for r in conn.execute("SELECT id FROM tracks WHERE id NOT IN (SELECT track_id FROM ml_tags) ORDER BY id")]
 
 
+RETAG_KEY = "ml_tags_cuts"  # meta: the cut-offs (ml_tags.TAGS_PASS) the stored tags were last drawn with
+
+
+def retag(conn: sqlite3.Connection) -> int:
+    """Draw the stored results' tags again from their stored outputs when the cut-offs changed (ml_tags.TAGS_PASS),
+    once per database; no classifier run. Returns how many tracks' tags changed."""
+    from .engine import ml_tags
+
+    if db.get_meta(conn, RETAG_KEY) == ml_tags.TAGS_PASS:
+        return 0
+    changed = 0
+    for track_id, tags in [(r[0], r[1]) for r in conn.execute("SELECT track_id, tags FROM ml_tags")]:
+        result = db.get_ml_tags(conn, track_id)
+        if not result or not result.get("heads"):
+            continue
+        result.pop("created_at", None)
+        result["tags"] = ml_tags.tags(result["heads"])
+        if ",".join(t["tag"] for t in result["tags"]) != tags:
+            db.update_ml_tags(conn, track_id, result)
+            changed += 1
+    db.set_meta(conn, RETAG_KEY, ml_tags.TAGS_PASS)
+    return changed
+
+
 def why_not() -> str:
     from .engine import ml_tags
 

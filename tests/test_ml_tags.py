@@ -39,6 +39,15 @@ def test_tags_from_outputs():
     assert [x["tag"] for x in t if x["group"] == "style"] == ["Bop"]  # the top style counts from 0.1
 
 
+def test_mood_cut_offs_from_the_full_bench():
+    moods = lambda h: [x["tag"] for x in ml_tags.tags(h) if x["group"] == "mood"]  # noqa: E731
+    h = heads(mood_sad={"sad": 0.75}, mood_relaxed={"relaxed": 0.8}, mood_party={"party": 0.75},
+              mtg_jamendo_moodtheme={})
+    assert moods(h) == ["happy"]  # sad under 0.8, relaxed under 0.85, party under 0.8
+    h = heads(mood_sad={"sad": 0.8}, mood_relaxed={"relaxed": 0.85}, mtg_jamendo_moodtheme={})
+    assert moods(h) == ["relaxed", "happy", "sad", "party"]
+
+
 def test_compact_keeps_the_top_of_big_heads():
     big = {f"Style---{i}": i / 1000 for i in range(400)}
     out = ml_tags.compact({"genre_discogs400": big, "mood_sad": {"sad": 0.4, "non_sad": 0.6}})
@@ -241,3 +250,16 @@ def test_a_successful_run_outside_the_server_clears_a_saved_failure(db_path, tra
     assert db.get_ml_tags_error(conn, track)
     ml_jobs.tag_track(conn, track)  # what `tastr ml-tags` does
     assert db.get_ml_tags_error(conn, track) is None
+
+
+def test_retag_draws_stored_tags_again_once(db_path, track, monkeypatch):
+    conn = db.connect(db_path)
+    old = [{"tag": "sad", "group": "mood", "score": 0.72}]  # drawn with the old 0.7 cut
+    db.save_ml_tags(conn, track, {**RESULT, "heads": heads(mood_sad={"sad": 0.72}), "tags": old})
+    db.set_meta(conn, ml_jobs.RETAG_KEY, None)
+    assert ml_jobs.retag(conn) == 1
+    stored = db.get_ml_tags(conn, track)
+    assert "sad" not in [t["tag"] for t in stored["tags"]] and stored["heads"]["mood_sad"] == {"sad": 0.72}
+    assert conn.execute("SELECT tags FROM ml_tags WHERE track_id = ?", (track,)).fetchone()[0].startswith("Deep House,")
+    monkeypatch.setattr(ml_tags, "tags", lambda h: pytest.fail("ran twice"))
+    assert ml_jobs.retag(conn) == 0  # once per cut-off pass

@@ -649,6 +649,13 @@ def save_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]
                       json.dumps(result)))
 
 
+def update_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:
+    """Replace a stored result's tags (drawn again with new cut-offs), keeping when it was made."""
+    with conn:
+        conn.execute("UPDATE ml_tags SET tags = ?, result_json = ? WHERE track_id = ?",
+                     (",".join(t["tag"] for t in result.get("tags", [])), json.dumps(result), track_id))
+
+
 def save_ml_tags_error(conn: sqlite3.Connection, track_id: int, error: str) -> None:
     """Remember why a track's last ML tags run failed (the in-memory run state is lost on a restart)."""
     with conn:

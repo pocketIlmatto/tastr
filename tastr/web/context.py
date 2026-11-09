@@ -194,6 +194,19 @@ class AppContext:
             log.exception("couldn't queue ML tags for the library")
             return 0
 
+    def retag_ml_tags(self) -> int:
+        """Stored ML tags drawn again after a cut-off change (ml_jobs.retag); never stops the server starting."""
+        try:
+            with closing(self.conn()) as c:
+                n = ml_jobs.retag(c)
+            if n:
+                self.event(None, "ml_tags", f"Redrew the ML tags of {n} tracks with the new cut-offs",
+                           source=analysis_source())
+            return n
+        except Exception:  # noqa: BLE001 - the old tags stay; the next start tries again
+            log.exception("couldn't redraw the stored ML tags")
+            return 0
+
     def analysis_slot(self):
         return self.slots or nullcontext()
 

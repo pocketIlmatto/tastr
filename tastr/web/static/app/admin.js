@@ -170,13 +170,19 @@ function renderPeople(A, all, P) {
       admMeter(capN ? n / capN : 1, n >= capN),
       n >= capN && !raised ? h("button", { type: "button", class: "linklike adm-raise", onclick: (e) => { e.stopPropagation(); admEdit = p.email; renderAdmin(); } }, "Raise") : null);
   };
+  const keepCell = (p) => {
+    if (p.admin) return h("span", { class: "muted", title: "Admins' audio is always kept" }, "Forever");
+    const set = p.email && p.audio_days != null, d = set ? p.audio_days : L.audio_days;
+    return set ? h("span", { title: d ? `Uploads and stems are deleted ${daysText(d).toLowerCase()} after upload. The cards stay.` : "Kept forever, set for this person" }, daysText(d))
+      : h("span", { class: "muted", title: `The server default (TASTR_AUDIO_DAYS${L.audio_days ? `, ${daysText(L.audio_days).toLowerCase()}` : ", keep everything"})` }, daysText(d));
+  };
   const seen = (p) => (p.last_seen ? admAgo(p.last_seen).replace(/^(\d.*)$/, "$1 ago") : p.lastDay != null ? admDaysAgo(29 - p.lastDay) : "–");
   $("adm-people").replaceChildren(
-    h("thead", {}, h("tr", {}, ...["Person", "Last seen", "Visits today", "Tracks today", "Stems today", "Claude asks today", "Tracks, 30 d", "Library", "Storage", "Cost, 30 d", ""]
-      .map((t, i) => h("th", { class: i === 2 || (i > 5 && i < 10) ? "num" : "" }, t, i === 10 ? h("span", { class: "sr-only" }, "Limits") : null)))),
+    h("thead", {}, h("tr", {}, ...["Person", "Last seen", "Visits today", "Tracks today", "Stems today", "Claude asks today", "Tracks, 30 d", "Library", "Storage", "Keep audio", "Cost, 30 d", ""]
+      .map((t, i) => h("th", { class: i === 2 || (i > 5 && i < 9) || i === 10 ? "num" : "" }, t, i === 11 ? h("span", { class: "sr-only" }, "Limits and audio") : null)))),
     h("tbody", {}, ...all.flatMap((p) => {
       if (!p.email) return [h("tr", { class: "adm-none" }, h("td", {}, "No owner", h("span", { class: "muted" }, " · added before sharing")), h("td", { colspan: "6" }),
-        h("td", { class: "num" }, String(p.tracks)), h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td"), h("td"))];
+        h("td", { class: "num" }, String(p.tracks)), h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", {}, keepCell(p)), h("td"), h("td"))];
       const j = P.indexOf(p), pick = () => { admFocus = admFocus === j ? null : j; renderAdmin(); };
       const tr = h("tr", { class: admFocus === j ? "sel" : "", tabindex: "0", title: "Pick out in the chart", onclick: pick,
         onkeydown: (e) => { if (e.target === tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); pick(); } } },
@@ -184,15 +190,17 @@ function renderPeople(A, all, P) {
         h("td", {}, seen(p)), h("td", { class: "num" }, String(p.today.visits)),
         h("td", {}, quota(p, "tracks", p.today.tracks)), h("td", {}, quota(p, "stems", p.today.stems)), h("td", {}, quota(p, "asks", p.today.asks || 0)),
         h("td", { class: "num" }, String(p.tracks30)), h("td", { class: "num" }, String(p.tracks)),
-        h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", { class: "num", title: p.claude ? `$${p.claude.toFixed(2)} of it Ask Claude` : null }, `$${p.cost.toFixed(2)}`),
+        h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", {}, keepCell(p)), h("td", { class: "num", title: p.claude ? `$${p.claude.toFixed(2)} of it Ask Claude` : null }, `$${p.cost.toFixed(2)}`),
         h("td", {}, h("div", { class: "adm-acts" }, p.email !== serverCfg.user ? h("button", { type: "button", class: "adm-va-btn",
           title: `See Tastr exactly as ${p.email.split("@")[0]} sees it. Read-only: you can't change anything while viewing.`,
           onclick: (e) => { e.stopPropagation(); startViewAs(p.email).catch((err) => { $("adm-error").textContent = err.message; }); } }, "View as") : null,
-          h("button", { type: "button", class: "adm-lim-btn", "aria-expanded": String(admEdit === p.email), title: `Change ${p.email}'s daily limits`,
-          "aria-label": `Change ${p.email}'s daily limits`, onclick: (e) => { e.stopPropagation(); admEdit = admEdit === p.email ? null : p.email; renderAdmin(); } }, "✎"))));
+          h("button", { type: "button", class: "adm-lim-btn", "aria-expanded": String(admEdit === p.email), title: editTitle(p), "aria-label": editTitle(p), onclick: (e) => { e.stopPropagation(); admEdit = admEdit === p.email ? null : p.email; renderAdmin(); } }, "✎"))));
       return admEdit === p.email ? [tr, limitRow(p, L)] : [tr];
     })));
 }
+const editTitle = (p) => `Change ${p.email.split("@")[0]}'s daily limits${p.admin ? "" : " and how long their audio is kept"}`;
+// "Forever", "30 days", "1 year": how long audio is kept (0 = forever).
+const daysText = (d) => (!d ? "Forever" : d % 365 === 0 ? (d === 365 ? "1 year" : `${d / 365} years`) : `${d} day${d === 1 ? "" : "s"}`);
 // The inline row under a person: their daily caps (empty = the server default), today only or until changed.
 function limitRow(p, L) {
   const o = p.override || {};
@@ -213,14 +221,55 @@ function limitRow(p, L) {
     send({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ daily_tracks: t, daily_stems: st, daily_asks: ak, scope: until.value }) });
   };
   setTimeout(() => tIn.focus(), 0);
-  return h("tr", { class: "adm-lim-row" }, h("td", { colspan: "11" },
+  return h("tr", { class: "adm-lim-row" }, h("td", { colspan: "12" },
     h("div", { class: "adm-lim", onkeydown: (e) => { if (e.key === "Enter" && e.target.tagName === "INPUT") save(); if (e.key === "Escape") { admEdit = null; renderAdmin(); } } },
       h("b", {}, `Daily limits for ${p.email}`),
       h("label", {}, "Tracks per day", tIn), h("label", {}, "Stem jobs per day", sIn), h("label", {}, "Claude asks per day", aIn), h("label", {}, "For", until),
       h("button", { type: "button", class: "primary", onclick: save }, "Save"),
       p.override ? h("button", { type: "button", class: "linklike", onclick: () => send({ method: "DELETE" }) }, "Back to defaults") : null,
       h("button", { type: "button", class: "linklike", onclick: () => { admEdit = null; renderAdmin(); } }, "Cancel"),
-      h("span", { class: "muted" }, `Empty means the server default (${L.daily_tracks} tracks, ${L.daily_stems} stem jobs, ${L.daily_asks ?? 20} Claude asks, from TASTR_DAILY_*). Only this person changes.`), err)));
+      h("span", { class: "muted" }, `Empty means the server default (${L.daily_tracks} tracks, ${L.daily_stems} stem jobs, ${L.daily_asks ?? 20} Claude asks, from TASTR_DAILY_*). Only this person changes.`), err),
+    keepBlock(p, L)));
+}
+// How long a person's uploaded audio is kept, with its own Save: the limits' "Today only / Until I change it" doesn't
+// apply here. PUT /api/admin/audio-days/{email} {days} (0 = forever); DELETE = back to the server default.
+function keepBlock(p, L) {
+  const who = p.email.split("@")[0];
+  if (p.admin) return h("div", { class: "adm-lim adm-keep" }, h("b", {}, "Keep audio"), h("span", { class: "muted" }, "Admins' audio is always kept."));
+  const set = p.audio_days != null, cur = set ? p.audio_days : L.audio_days || 0;
+  const PRE = [[0, "Forever"], [7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "1 year"]];
+  const sel = h("select", { "aria-label": `Keep ${who}'s audio for` }, ...PRE.map(([v, l]) => h("option", { value: String(v) }, l)), h("option", { value: "custom" }, "Custom…"));
+  const num = h("input", { type: "number", min: "1", max: "3650", step: "1", "aria-label": "Days" });
+  const daysLbl = h("span", {}, "days");
+  if (PRE.some(([v]) => v === cur)) sel.value = String(cur); else { sel.value = "custom"; num.value = String(cur); }
+  const warn = h("p", { class: "adm-keep-warn", role: "status", "aria-live": "polite" }), err = h("span", { class: "error", role: "alert" });
+  const pick = () => (sel.value === "custom" ? (num.value === "" ? NaN : +num.value) : +sel.value);
+  const upd = () => {
+    num.hidden = daysLbl.hidden = sel.value !== "custom"; err.textContent = "";
+    const d = pick(), shorter = Number.isInteger(d) && d > 0 && (cur === 0 || d < cur), span = daysText(d).toLowerCase();
+    warn.textContent = shorter ? `${who}'s audio older than ${span} will be deleted within 6 hours. From then on it's deleted ${span} after upload; the cards stay.` : "";
+    warn.hidden = !shorter;
+  };
+  const url = `/api/admin/audio-days/${encodeURIComponent(p.email)}`;
+  const send = async (opts) => {
+    try { await api(url, opts); admEdit = null; await loadAdmin(); }
+    catch (e) { err.textContent = e.message; }
+  };
+  sel.onchange = () => { upd(); if (sel.value === "custom") num.focus(); };
+  num.oninput = upd;
+  const save = () => {
+    const d = pick();
+    if (!Number.isInteger(d) || d < 0 || d > 3650 || (sel.value === "custom" && d < 1)) { err.textContent = "Days are a whole number from 1 to 3650."; return; }
+    send({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ days: d }) });
+  };
+  upd();
+  return h("div", { class: "adm-lim adm-keep", onkeydown: (e) => { if (e.key === "Enter" && e.target === num) save(); } },
+    h("b", {}, `Keep audio for ${p.email}`),
+    h("label", {}, "Keep audio for", sel), h("label", { class: "adm-keep-days" }, num, daysLbl),
+    h("button", { type: "button", class: "primary", onclick: save }, "Save"),
+    set ? h("button", { type: "button", class: "linklike", onclick: () => send({ method: "DELETE" }) }, "Back to default") : null,
+    warn, err,
+    h("span", { class: "muted" }, `The server default is ${daysText(L.audio_days || 0).toLowerCase()} (TASTR_AUDIO_DAYS). When the time is up, their uploads and stems are deleted: playback, the waveform, stems and re-analysis go. The cards stay.`));
 }
 // Recent activity: filtered on the server by type, person, source and time (AND), each line with its source.
 function fillActFilters() {

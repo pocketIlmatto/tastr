@@ -43,6 +43,15 @@ class LimitsBody(BaseModel):
     scope: Literal["today", "standing"] = "today"  # today only (ends at 00:00 UTC), or until an admin changes it
 
 
+class AudioDaysBody(BaseModel):
+    days: float | None = Field(None, ge=0, le=3650)  # days a person's uploaded audio is kept; 0 = forever, None = the server default
+
+
+def keep_words(days: float) -> str:
+    """"forever" or "30 days", for the admin log."""
+    return "forever" if days <= 0 else f"{days:g} day{'' if days == 1 else 's'}"
+
+
 def router(ctx: AppContext) -> APIRouter:
     api = APIRouter()
 
@@ -77,17 +86,19 @@ def router(ctx: AppContext) -> APIRouter:
             problems = db.recent_events(c, problems=True)
             blocked = db.blocked_on(c, day)
             changed = db.overrides(c, day)
+            keep_days = db.audio_days(c)
             series = usage_series(c, rng, day, library)
         for h in history:
             p = person(h["user"])
             if h["day"] == day:
                 p["today"][h["kind"]] = h["n"]
-        for email in [*ctx.settings.admins, *changed]:
+        for email in [*ctx.settings.admins, *changed, *keep_days]:
             person(email)
         for p in people.values():
             if p["email"]:
                 o = changed.get(p["email"])
                 p["override"] = o
+                p["audio_days"] = keep_days.get(p["email"])  # their own audio expiry (0 = forever), None = the default
                 s = ctx.settings
                 p["caps"] = {"tracks": s.daily_tracks, "stems": s.daily_stems, "asks": s.daily_asks}
                 for k in p["caps"]:
@@ -375,5 +386,28 @@ def router(ctx: AppContext) -> APIRouter:
     def reset_limits(email: str, request: Request):
         """Put one person back on the server's daily limits. Admins only."""
         return set_limits(email, LimitsBody(), request)
+
+    @api.put("/api/admin/audio-days/{email}")
+    def set_audio_days(email: str, body: AudioDaysBody, request: Request):
+        """How long one person's uploaded audio and stems are kept: days (0 = forever), or None for the server default
+        (TASTR_AUDIO_DAYS). The next expiry sweep (every 6 hours) deletes what is past it; cards stay. Logged as an
+        admin change. Admins only."""
+        admin = ctx.require_admin(request)
+        email = email.strip().lower()
+        if not EMAIL.match(email):
+            raise HTTPException(400, "That isn't an email address.")
+        with closing(ctx.conn()) as c:
+            db.set_audio_days(c, email, body.days, admin)
+        who, d = email.split("@")[0], body.days
+        if d is None:
+            ctx.event(admin, "admin", f"Set {who}'s audio back to the default")
+        else:
+            ctx.event(admin, "admin", f"Set {who}'s audio to be kept {keep_words(d)}")
+        return {"email": email, "audio_days": d}
+
+    @api.delete("/api/admin/audio-days/{email}")
+    def reset_audio_days(email: str, request: Request):
+        """Put one person back on the server's audio expiry. Admins only."""
+        return set_audio_days(email, AudioDaysBody(), request)
 
     return api

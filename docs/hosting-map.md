@@ -289,7 +289,7 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 | `TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD` | Checking Cloudflare's token. Not secret, but kept out of the repository. |
 | `TASTR_ADMIN_EMAILS` | Who gets the Admin tab and keeps audio forever |
 | `TASTR_LINK_SECRET` | Signing Strudel and playlist links |
-| `TASTR_STORAGE_GB` | A cap on the uploads and stems the bucket holds |
+| `TASTR_STORAGE_GB` | A spending cap on the uploads and stems the bucket holds |
 | `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT`, `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | The audio bucket `tastr-audio` and its own token ([deploy.md](deploy.md#2-r2-bucket-for-audio)). Required on the Worker. |
 | `TASTR_MODAL_URL`, `TASTR_MODAL_KEY`, `TASTR_MODAL_SECRET` | The Modal `api` endpoint's address (`modal deploy` prints it) and a Modal proxy auth token |
 | `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log: a fine-grained token with read-only Actions access to the repository. Needed even for a public repository: GitHub's limit without a token is per IP address, which Cloudflare shares, so most checks get 403. |
@@ -299,7 +299,8 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 These have defaults and change only if you set a secret of the same name ([hosting.md](hosting.md#settings)):
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`,
 `TASTR_BULK_AT_ONCE` (tracks a bulk action runs at once; defaults to `TASTR_MAX_ANALYSES`), `TASTR_DAILY_STEMS`,
-`TASTR_DAILY_DRUMS`, `TASTR_DAILY_ASKS` (Claude asks per person per day, default 20), `TASTR_AUDIO_DAYS`,
+`TASTR_DAILY_DRUMS`, `TASTR_DAILY_ASKS` (Claude asks per person per day, default 20), `TASTR_AUDIO_DAYS` (default 0, keep
+audio; admins set each person's own on the Admin tab),
 `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin tab's Modal link opens the app) and
 `TASTR_WATCH_MINUTES` (default 15: how often the server checks GitHub Actions for the Admin log; `0` turns it
 off). `TASTR_BROWSER_ENGINE=1` (off by default) has the browser make the whole card with the Rust engine.

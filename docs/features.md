@@ -153,7 +153,9 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   analysis and can play the audio; your edits, labels, cues and lists stay yours.
 - **Play and export lists:** Library › List shows one list in its own order, with **Play**, **Shuffle** and
   **Export**. The player bar at the bottom streams each track in turn (previous, play/pause, next, shuffle,
-  seek), and the keyboard's media keys work too. Starting a card's playback pauses the list. Export saves the
+  seek), and the keyboard's media keys work too. When a track ends on its own, the next one fades in over
+  6 seconds; the bar's crossfade button turns that off or sets 1 to 12 seconds, kept in this browser (next and
+  previous still cut straight away). Starting a card's playback pauses the list. Export saves the
   list as M3U8, XSPF or PLS, whose entries point at the tracks' audio on your Tastr server (on a shared server,
   links that work for 7 days), or as a zip with the audio and an .m3u8 that plays anywhere. Blend's list chips
   have the same ▶ and ⤓ buttons.
@@ -253,6 +255,10 @@ When Tastr is hosted for friends, the people in `TASTR_ADMIN_EMAILS` get an **Ad
 - **Daily limits per person:** the ✎ at the end of a person's row changes their tracks and stem jobs per
   day, for today only (back to the default at 00:00 UTC) or until you change it. Their quota shows the raised
   cap with ↑, and someone at their cap gets a **Raise** link. Each change is logged.
+- **Keep audio per person:** the **Keep audio** column shows how long each person's uploads and stems are kept
+  (Forever by default). Under the ✎, **Keep audio for** sets forever, 7, 30 or 90 days, a year or a custom number
+  of days; picking a shorter time warns that older audio goes within 6 hours. The cards stay. Admins' audio is
+  always kept.
 - **Recent activity filters:** filter the log by what happened, who, where (Tastr, Modal, Fly.io, GitHub,
   Cloudflare, R2) and when (today, 7 or 30 days, or between two dates). Filters combine; **Problems** shows
   only what went wrong. Each line names its source. GitHub Actions runs on main show up on their own,

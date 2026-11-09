@@ -171,8 +171,8 @@ When the site answers again it comments and closes the issue. No Claude runs: an
 
 OpenAI Codex reviews pull requests as a second, advisory reviewer. It runs through Codex's own GitHub
 integration on the owner's ChatGPT plan, not in Actions, so it needs no secret in this repository. Codex posts a
-review with comments. It doesn't approve or block: the owner's approval is still the only
-thing main's ruleset needs, and auto-merge doesn't wait for Codex.
+review with comments. It doesn't approve or block, but merges wait until it has reviewed (the `codex-review` check
+below).
 
 - **What it checks:** the "Review guidelines" in [AGENTS.md](../AGENTS.md), which also tell Codex to follow
   CLAUDE.md.
@@ -183,12 +183,25 @@ thing main's ruleset needs, and auto-merge doesn't wait for Codex.
   commit is completed with no findings, posts "Codex: LGTM" for that commit. It skips commits Codex already answered
   with its own "Didn't find any major issues" comment, which manual requests get. It never checks out pull request
   code.
+- **Merges wait for the review:** `.github/workflows/codex-review.yml` runs a `codex-review` check on every pull
+  request to main. It stays pending until Codex's summary comment says a code review is completed (findings or not;
+  a review of an earlier commit of the same PR counts, since Codex doesn't review every push), so auto-merge waits
+  for Codex. Codex skips PRs that change `.github/workflows/`; then the check says so on the PR, and a `@codex review`
+  comment gets a review. After 30 minutes (`WAIT_MIN`) without one the check passes anyway and comments that it did,
+  so nothing hangs. Drafts pass at once and are checked again when marked ready. Like `automerge.yml`, it runs from
+  main and never checks out PR code.
+  - **Setting:** the check only holds merges once it is required. In **Settings > Rules > Rulesets > main-protect >
+    Require status checks to pass**, add `codex-review` (source GitHub Actions) next to `test`. Add it only after
+    the workflow is on main, or every PR waits on a check that never runs.
+  - **Rerun:** a `@codex review` after the check has passed doesn't rerun it; rerun the job from the PR's Checks tab
+    if you want the merge to wait for that review.
 - **Try it:** comment `@codex review` on a pull request, optionally followed by what to focus on.
 - **Claude sessions** treat Codex's comments like any other review comment on their pull requests: fix what's
   right, and reply where a comment is wrong. A fix pushed after the owner approved dismisses that approval, so the
-  owner approves again.
+  owner approves again. On a PR that changes `.github/workflows/`, they comment `@codex review` right after opening
+  it, so the `codex-review` check gets a real review instead of timing out.
 - **Cost:** counts against the owner's ChatGPT plan's Codex usage. The LGTM workflow takes a few seconds per
-  review, free on a public repository.
+  review, and the `codex-review` check waits a few minutes per push (at most 30), free on a public repository.
 
 ## Dependency updates
 

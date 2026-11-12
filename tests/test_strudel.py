@@ -646,4 +646,7 @@ def test_key_locked_b_plays_at_speed_one_from_the_stretched_file():
 def test_key_locked_fill_ins():
     fast = mash_card(8, 124, B_SECS, "Second")
     f = mash("Object.fromEntries(Object.entries(strudelFillins(a, { audioUrl: url, b: { card: b, audioUrl: burl, lock: { url: 'https://x/keylock/0.968/audio' } } })).map(([k, x]) => [k, x.v]))", b=fast)
-    assert f["b.speed"].startswith("1 (key-locked") and f["b.shift"] == "not at all" and f["b.newkey"] == "A minor (8A, same key)"
+    assert f["b.speed"] == "1" and f["b.shift"] == "not at all" and f["b.newkey"] == "A minor (8A, same key)"
+    # {b.audio} loads the stretched file (whose bars are shorter by the speed), never the original.
+    assert "b: 'https://x/keylock/0.968/audio'" in f["b.audio"] and B_AUDIO not in f["b.audio"]
+    assert f"{240 / 124 / 0.968:.4f}" in f["b.audio"]

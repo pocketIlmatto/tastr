@@ -131,11 +131,13 @@ const locks = new Map(); // "B id|ratio" -> { state: running | ready | error, pa
 const ratioText = (r) => r.toFixed(3);
 const lockKey = (b, r) => `${b.id}|${ratioText(r)}`;
 const LOCK_POLL_MS = 1500;
+let lastPair = null; // the A|B|ratio last shown, to re-check a cached "ready" when the view comes back to a pair
 function lockAsk(b, r, repaint, poll = false) {
   const k = lockKey(b, r), url = `/api/tracks/${b.id}/keylock/${ratioText(r)}`;
   const was = locks.get(k);
   locks.set(k, { ...(was || { parts: [] }), state: "running", asked: true });
   api(url, poll ? {} : { method: "POST" }).then((st) => {
+    if (poll && st.state === "none") { lockAsk(b, r, repaint); return; } // the server pruned it meanwhile: stretch again
     const done = !["queued", "running"].includes(st.state);
     locks.set(k, { state: done ? (st.state === "ready" ? "ready" : "error") : "running", parts: st.parts || [], asked: true });
     if (!done) setTimeout(() => lockAsk(b, r, repaint, true), LOCK_POLL_MS);
@@ -151,6 +153,10 @@ export function mashLock(a, b, repaint) {
   const r = strudelSpeed(ab, bb);
   if (Math.abs(12 * Math.log2(r)) < 0.05) return null; // same tempo: nothing to stretch
   const needStems = stemsOf(b).state === "ready", k = lockKey(b, r), st = locks.get(k);
+  // Coming back to a pair: the server may have pruned that ratio since (it keeps 3 per track), so check again.
+  const pair = `${a.id}|${k}`, back = pair !== lastPair && st && st.state === "ready";
+  lastPair = pair;
+  if (back) { lockAsk(b, r, repaint, true); return { state: "running", r }; }
   if (!st || (st.state === "ready" && needStems && !st.parts.includes("bass") && !st.restemmed)) {
     if (st) st.restemmed = true;
     lockAsk(b, r, repaint);

@@ -542,6 +542,14 @@ function strudelMashCode(a, b, st, ctx = {}) {
   return { audio, arrange };
 }
 
+// B's sketch inputs and audio link for {b.audio}. Key-locked, that is the stretched file, whose bars are the
+// original's divided by the speed r.
+function mashBAudio(sb, url, lock, r) {
+  if (!lock) return [sb, url];
+  const d = sb.c.duration;
+  return [{ ...sb, bar: sb.bar / r, first: sb.first / r, c: { ...sb.c, duration: typeof d === "number" ? d / r : d } }, lock.url];
+}
+
 // Every fill-in for this track: name -> { v: value, d: what it is }.
 // ctx: { audioUrl, stems, edits, startBar, canStems (A's stems are ready),
 //        b: { card, audioUrl, stems (B's picked stems for {b.audio}), canStems, lock ({ url } once B's key-locked
@@ -597,7 +605,7 @@ function strudelFillins(c, ctx = {}) {
     const sb = sketchInputs(B, ctx.b.audioUrl, null), bk = (B.core || {}).key || {};
     const lock = ctx.b.lock && ctx.b.lock.url ? ctx.b.lock : null;
     const fit = strudelMashFit({ bpm: s.bpm, camelot: key.camelot }, { bpm: sb.bpm, camelot: bk.camelot }, !!lock);
-    const ba = tplAudio(sb, ctx.b.audioUrl, ctx.b.stems, "B", strudelMashPer(s, sb));
+    const ba = tplAudio(...mashBAudio(sb, ctx.b.audioUrl, lock, fit.r), ctx.b.stems, "B", strudelMashPer(s, sb));
     const can = { a: !!ctx.canStems, b: !!ctx.b.canStems };
     const mc = strudelMashCode(c, B, ctx.mash || strudelMashState(c, B, null, can), { aUrl: ctx.audioUrl, bUrl: ctx.b.audioUrl, can, bLock: lock });
     Object.assign(f, {
@@ -605,7 +613,7 @@ function strudelFillins(c, ctx = {}) {
       "b.bpm": { v: String(sb.bpm), d: "Second track: tempo" },
       "b.key": { v: sb.keyStr, d: "Second track: key" },
       "b.camelot": { v: bk.camelot || "", d: "Second track: Camelot code" },
-      "b.speed": { v: lock ? "1 (key-locked: stretched to A's tempo on the server)" : String(fit.r), d: "Playback speed that lines B's bars up with this track" },
+      "b.speed": { v: lock ? "1" : String(fit.r), d: "Playback speed that lines B's bars up with this track (1 once B is key-locked: stretched to this tempo on the server)" },
       "b.shift": { v: lock ? "not at all" : `${fit.semis >= 0 ? "up" : "down"} ${Math.abs(fit.semis).toFixed(1)} semitones`, d: "How far that speed moves B's pitch" },
       "b.newkey": { v: fit.nk ? `${keyText(fit.nk)} (${fit.cam}, ${fit.fit})` : "an unknown key", d: "B's key after the speed change" },
       "b.audio": { v: ba.audio, d: "Loads the second track and defines origB(a, b)" },

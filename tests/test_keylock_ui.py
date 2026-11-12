@@ -63,3 +63,37 @@ def test_no_lock_small_shift_onto_a_fitting_key_is_green():
 def test_no_lock_between_keys():
     cls, text, _ = line(123, "8A", 119, "1A")
     assert cls == "st-fit bad" and "semitones, between keys. Tracks marked ✓" in text
+
+
+def test_coming_back_to_a_pair_checks_the_server_and_stretches_again_when_pruned():
+    """The page caches "ready" per B and ratio, but the server keeps only a few ratios per track; going back to a
+    pair asks again (GET), and a pruned ratio ("none") is stretched again (POST) rather than linked to a 404."""
+    src = (STATIC / "app" / "strudel-tpl.js").read_text()
+    block = re.search(r"^const locks = new Map\(\);.*?^export function mashLock\(.*?\n}$", src, re.M | re.S).group(0)
+    script = (STATIC / "strudel.js").read_text() + """
+const isNum = (x) => typeof x === "number" && isFinite(x);
+const stemsOf = () => ({ state: "none" });
+const calls = [], answers = [];
+const api = (url, opts) => { calls.push(`${opts.method || "GET"} ${url}`); return Promise.resolve(answers.shift()); };
+const setTimeout = () => {};
+""" + block.replace("export function", "function") + """
+const tick = () => new Promise((r) => globalThis.setTimeout(r, 0));
+(async () => {
+  const a1 = { id: 1, keylock_available: true, core: { bpm: 123 } }, a2 = { ...a1, id: 2 };
+  const b = { id: 7, has_audio: true, core: { bpm: 117.45 } };
+  const seen = [];
+  answers.push({ state: "ready", parts: ["mix"] });
+  seen.push(mashLock(a1, b, () => {}).state); await tick();
+  seen.push(mashLock(a1, b, () => {}).state); await tick();         // same pair again: the cache answers
+  answers.push({ state: "none", parts: [] }, { state: "ready", parts: ["mix"] });
+  seen.push(mashLock(a2, b, () => {}).state); await tick(); await tick();  // another pair, same ratio: check
+  seen.push(mashLock(a2, b, () => {}).state);
+  console.log(JSON.stringify({ calls, seen }));
+})();
+"""
+    r = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    url = "/api/tracks/7/keylock/1.047"
+    assert out["calls"] == [f"POST {url}", f"GET {url}", f"POST {url}"]
+    assert out["seen"] == ["running", "ready", "running", "ready"]

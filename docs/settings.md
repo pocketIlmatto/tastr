@@ -16,7 +16,7 @@ early: nothing warns before it lapses.
 | --- | --- | --- |
 | Read-only Cloudflare API token in the Claude Code cloud environment (see [below](#claude-code-cloud-environment)) | 2027-01-31 | Claude sessions can no longer read the Worker's logs or settings |
 | `CLAUDE_CODE_OAUTH_TOKEN` | about a year after `claude setup-token` made it | slow-tests and worker-errors open their issue but Claude doesn't start |
-| `TASTR_GITHUB_TOKEN`, and any other fine-grained GitHub token | the date picked when it was made (GitHub shows it under **Settings > Developer settings > Fine-grained tokens**) | the Admin log's GitHub lines |
+| `TASTR_GITHUB_TOKEN`, and any other fine-grained GitHub token | the date picked when it was made (GitHub shows it under **Settings > Developer settings > Fine-grained tokens**) | the Admin log's GitHub lines; with `AUTOMERGE_TOKEN`, code PRs stop auto-merging (the automerge run goes red) |
 
 The other tokens below don't expire unless one was set when it was made; check at the source if unsure.
 
@@ -31,9 +31,10 @@ Repository **Settings > Secrets and variables > Actions**.
 | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | `health.yml` | Cloudflare **Zero Trust > Access > Service credentials > Service Tokens**, with a Service Auth policy on the Tastr app ([ci.md](ci.md#live-health-check)) | New service token, replace both, add it to the policy, revoke the old; note its end date in the calendar above |
 | `CF_LOGS_TOKEN` | `worker-errors.yml` | Cloudflare custom token, Account > Workers Observability > Read only | New token, replace; a refused token turns the run red ([ci.md](ci.md#worker-errors)) |
 | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | `slow-tests.yml`, `worker-errors.yml`, `dependabot-fix.yml` (also under **Dependabot** secrets if that run says it can't see it) | `claude setup-token` (the owner's Claude plan), or the Anthropic Console (billed per use) | Run `claude setup-token` again and replace the secret |
+| `AUTOMERGE_TOKEN` (optional) | `automerge.yml` | GitHub **Settings > Developer settings > Fine-grained tokens**, owner's account, only `pocketIlmatto/tastr`, permissions **Contents**, **Pull requests** and **Workflows**: Read and write. Without it only docs-and-tests PRs auto-merge ([ci.md](ci.md#auto-merge)) | New token, replace the secret, revoke the old; note its expiry in the calendar above |
 
 Repository setting: **Settings > General > Pull Requests > Allow auto-merge** must be on for `automerge.yml`
-([ci.md](ci.md#auto-merge-for-docs-and-tests)).
+([ci.md](ci.md#auto-merge)).
 
 `GH_TOKEN` in the workflows is GitHub's own per-run token (`github.token`); there is nothing to set or renew.
 

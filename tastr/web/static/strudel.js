@@ -338,13 +338,19 @@ function strudelSpeed(aBpm, bBpm) {
   while (r < 0.71) r *= 2;
   return Math.round(r * 1000) / 1000;
 }
+// A shift within this many semitones of a whole step is in tune at the shifted key; further off it sits between keys.
+const STRUDEL_IN_TUNE = 0.3;
 // How well track B ({bpm, camelot}) mixes under A at that speed: the pitch shift, B's key after it, and whether it fits.
-function strudelMashFit(a, b) {
+// lock: B is key-locked (time-stretched on the server, tastr/keylock.py), so it keeps its own key. `own`: how B's own
+// key fits A's; `between`: the shift leaves B between keys (no lock).
+function strudelMashFit(a, b, lock = false) {
   const r = strudelSpeed(a.bpm, b.bpm), semis = 12 * Math.log2(r), k = camelotKey(b.camelot);
-  const nk = k ? { tonic: (((k.tonic + Math.round(semis)) % 12) + 12) % 12, mode: k.mode } : null;
+  const shift = lock || Math.abs(semis) < 0.05 ? 0 : semis, steps = Math.round(shift), between = Math.abs(shift - steps) > STRUDEL_IN_TUNE;
+  const nk = k ? { tonic: (((k.tonic + steps) % 12) + 12) % 12, mode: k.mode } : null;
   const cam = nk ? strudelCamelot(nk.tonic, nk.mode) : null;
-  const fit = !cam || !a.camelot ? "key unknown" : cam === a.camelot ? "same key" : strudelCamelotNear(a.camelot).includes(cam) ? "mixes well" : "keys clash";
-  return { r, semis, nk, cam, fit, ok: fit === "same key" || fit === "mixes well", score: (fit === "same key" || fit === "mixes well" ? 0 : 10) + Math.abs(semis) };
+  const rel = (x) => (!x || !a.camelot ? "key unknown" : x === a.camelot ? "same key" : strudelCamelotNear(a.camelot).includes(x) ? "mixes well" : "keys clash");
+  const fit = cam && a.camelot && between ? "between keys" : rel(cam), ok = fit === "same key" || fit === "mixes well";
+  return { r, semis, nk, cam, fit, own: rel(k ? b.camelot : null), lock: !!lock, between, ok, score: (ok ? 0 : 10) + Math.abs(semis) };
 }
 
 const tplSec = (s, label) => s.secs.find((x) => x.label === label)
@@ -466,11 +472,15 @@ function strudelMashState(a, b, saved, can) {
   return st;
 }
 // The code: both tracks' samples, A(name, a, b) and B(name, a, b) slicers, and A's song order with the picked parts.
-// ctx: { aUrl, bUrl, can }. "live" (default): every part of each track loads, with a 0/1 toggle per part in every
+// ctx: { aUrl, bUrl, can, bLock }. bLock: B's key-locked audio is ready ({ url }: like bUrl, ending /audio), so B
+// loads from there, already at A's tempo, and plays at speed 1. "live" (default): every part of each track loads, with a 0/1 toggle per part in every
 // section and a level slider per part; "plain": only the ticked parts, in arrange().
 function strudelMashCode(a, b, st, ctx = {}) {
-  const can = ctx.can || {}, sa = sketchInputs(a, ctx.aUrl, null), sb = sketchInputs(b, ctx.bUrl, null);
+  const lock = ctx.bLock && ctx.bLock.url ? ctx.bLock : null, bUrl = lock ? lock.url : ctx.bUrl;
+  const can = ctx.can || {}, sa = sketchInputs(a, ctx.aUrl, null), sb = sketchInputs(b, bUrl, null);
   const fit = strudelMashFit({ bpm: sa.bpm }, { bpm: sb.bpm }), per = strudelMashPer(sa, sb), live = st.ctl !== "plain";
+  // The stretched file is the original sped up by fit.r: its bars, first downbeat and length shrink by that much.
+  const sbAt = lock ? { ...sb, bar: sb.bar / fit.r, first: sb.first / fit.r, c: { ...sb.c, duration: typeof sb.c.duration === "number" ? sb.c.duration / fit.r : sb.c.duration } } : sb;
   const pa = strudelMashParts("a", st, can), pb = strudelMashParts("b", st, can), pn = (p) => p.split(".")[1];
   const used = live ? new Set([...pa, ...pb]) : new Set(st.rows.flatMap((r) => r.on));
   const title = (c) => (c.source && c.source.title) || "Untitled";
@@ -481,14 +491,16 @@ function strudelMashCode(a, b, st, ctx = {}) {
     const u = (n) => quoteUrl(n === "mix" ? url : url.replace(/\/audio$/, `/stems/${n}`));
     return `samples({\n${ps.map((p) => `  ${who}_${pn(p)}: '${u(pn(p))}',`).join("\n")}\n})`;
   };
-  const signed = [ctx.aUrl, ctx.bUrl].some((u) => u && /\/pub\/[^/]+\/tracks\//.test(u));
+  const signed = [ctx.aUrl, bUrl].some((u) => u && /\/pub\/[^/]+\/tracks\//.test(u));
+  const fold = per === 1 ? "" : per < 1 ? `, ${1 / per} of its bars to one of A's` : `, one of its bars to ${per} of A's`;
   const audio = [
-    `// A: ${title(a)} (${pa[0] === "a.mix" ? "full mix" : "stems"}). B: ${title(b)} (${pb[0] === "b.mix" ? "full mix" : "stems"}), at speed ${fit.r} to line its bars up with A${per === 1 ? "" : per < 1 ? `, ${1 / per} of its bars to one of A's` : `, one of its bars to ${per} of A's`}.`,
+    lock ? `// A: ${title(a)} (${pa[0] === "a.mix" ? "full mix" : "stems"}). B: ${title(b)} (${pb[0] === "b.mix" ? "full mix" : "stems"}), key-locked: stretched to A's tempo (×${fit.r}) on the server with its pitch kept, so it plays at speed 1${fold}.`
+      : `// A: ${title(a)} (${pa[0] === "a.mix" ? "full mix" : "stems"}). B: ${title(b)} (${pb[0] === "b.mix" ? "full mix" : "stems"}), at speed ${fit.r} to line its bars up with A${fold}.`,
     signed ? "// Tastr serves the audio through private links that work for a week; after that, open the code from Tastr again."
       : "// Keep `tastr serve` running: the audio streams from it. Single quotes on purpose: double quotes mean a pattern.",
-    load(a, "a", ctx.aUrl), load(b, "b", ctx.bUrl),
-    "// A(name, a, b) and B(name, a, b): bars a to b of that track. B plays sped up to A's tempo.",
-    ...slicerLines(sa, "A", "a"), ...slicerLines(sb, "B", "b", { per, speed: fit.r })].join("\n");
+    load(a, "a", ctx.aUrl), load(b, "b", bUrl),
+    `// A(name, a, b) and B(name, a, b): bars a to b of that track. B plays ${lock ? "at" : "sped up to"} A's tempo.`,
+    ...slicerLines(sa, "A", "a"), ...slicerLines(sbAt, "B", "b", { per, speed: lock ? null : fit.r })].join("\n");
   const as = mashSecs(a), bs = mashSecs(b);
   const span = (sec, r) => {
     const n = sec.end_bar - sec.start_bar + 1, from = bs.find((x) => x.idx === r.from) || bs[0];
@@ -530,9 +542,18 @@ function strudelMashCode(a, b, st, ctx = {}) {
   return { audio, arrange };
 }
 
+// B's sketch inputs and audio link for {b.audio}. Key-locked, that is the stretched file, whose bars are the
+// original's divided by the speed r.
+function mashBAudio(sb, url, lock, r) {
+  if (!lock) return [sb, url];
+  const d = sb.c.duration;
+  return [{ ...sb, bar: sb.bar / r, first: sb.first / r, c: { ...sb.c, duration: typeof d === "number" ? d / r : d } }, lock.url];
+}
+
 // Every fill-in for this track: name -> { v: value, d: what it is }.
 // ctx: { audioUrl, stems, edits, startBar, canStems (A's stems are ready),
-//        b: { card, audioUrl, stems (B's picked stems for {b.audio}), canStems } for a mash-up's second track,
+//        b: { card, audioUrl, stems (B's picked stems for {b.audio}), canStems, lock ({ url } once B's key-locked
+//             audio is ready, tastr/keylock.py) } for a mash-up's second track,
 //        mash: the "Parts by section" arrangement (strudelMashState; a fresh one when left out) }.
 function strudelFillins(c, ctx = {}) {
   const s = sketchInputs(c, ctx.audioUrl, ctx.edits), key = (c.core || {}).key || {}, src = c.source || {};
@@ -582,17 +603,18 @@ function strudelFillins(c, ctx = {}) {
   const B = ctx.b && ctx.b.card;
   if (B) {
     const sb = sketchInputs(B, ctx.b.audioUrl, null), bk = (B.core || {}).key || {};
-    const fit = strudelMashFit({ bpm: s.bpm, camelot: key.camelot }, { bpm: sb.bpm, camelot: bk.camelot });
-    const ba = tplAudio(sb, ctx.b.audioUrl, ctx.b.stems, "B", strudelMashPer(s, sb));
+    const lock = ctx.b.lock && ctx.b.lock.url ? ctx.b.lock : null;
+    const fit = strudelMashFit({ bpm: s.bpm, camelot: key.camelot }, { bpm: sb.bpm, camelot: bk.camelot }, !!lock);
+    const ba = tplAudio(...mashBAudio(sb, ctx.b.audioUrl, lock, fit.r), ctx.b.stems, "B", strudelMashPer(s, sb));
     const can = { a: !!ctx.canStems, b: !!ctx.b.canStems };
-    const mc = strudelMashCode(c, B, ctx.mash || strudelMashState(c, B, null, can), { aUrl: ctx.audioUrl, bUrl: ctx.b.audioUrl, can });
+    const mc = strudelMashCode(c, B, ctx.mash || strudelMashState(c, B, null, can), { aUrl: ctx.audioUrl, bUrl: ctx.b.audioUrl, can, bLock: lock });
     Object.assign(f, {
       "b.title": { v: (B.source && B.source.title) || "Untitled", d: "Second track: title" },
       "b.bpm": { v: String(sb.bpm), d: "Second track: tempo" },
       "b.key": { v: sb.keyStr, d: "Second track: key" },
       "b.camelot": { v: bk.camelot || "", d: "Second track: Camelot code" },
-      "b.speed": { v: String(fit.r), d: "Playback speed that lines B's bars up with this track" },
-      "b.shift": { v: `${fit.semis >= 0 ? "up" : "down"} ${Math.abs(fit.semis).toFixed(1)} semitones`, d: "How far that speed moves B's pitch" },
+      "b.speed": { v: lock ? "1" : String(fit.r), d: "Playback speed that lines B's bars up with this track (1 once B is key-locked: stretched to this tempo on the server)" },
+      "b.shift": { v: lock ? "not at all" : `${fit.semis >= 0 ? "up" : "down"} ${Math.abs(fit.semis).toFixed(1)} semitones`, d: "How far that speed moves B's pitch" },
       "b.newkey": { v: fit.nk ? `${keyText(fit.nk)} (${fit.cam}, ${fit.fit})` : "an unknown key", d: "B's key after the speed change" },
       "b.audio": { v: ba.audio, d: "Loads the second track and defines origB(a, b)" },
       "b.loop": { v: ba.loop, d: "Four bars of the second track's drop, needs {b.audio}" },
@@ -656,5 +678,5 @@ function strudelSummary(c) {
 if (typeof module !== "undefined") module.exports = { sketchInputs, varOf, sketchSecName, STRUDEL_NOTES, strudelCode, // + the helpers app/livecode.js uses
   strudelLink, strudelLane, compactSteps, compactBars, STRUDEL_STEMS,
   STRUDEL_TEMPLATES, STRUDEL_NEW_TEXT, strudelFillins, strudelFill, strudelUnfill, strudelDiff, strudelHunks, strudelSummary,
-  strudelSpeed, strudelMashFit, strudelCamelot, strudelUsesAudio, strudelUsesMash, strudelUsesMashParts,
+  strudelSpeed, strudelMashFit, strudelCamelot, strudelCamelotNear, STRUDEL_IN_TUNE, strudelUsesAudio, strudelUsesMash, strudelUsesMashParts,
   STRUDEL_MASH_PRESETS, strudelMashParts, strudelMashFrom, strudelMashApply, strudelMashSwitch, strudelMashState, strudelMashCode, strudelMashPer };

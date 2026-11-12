@@ -193,6 +193,14 @@ def stems(audio_path: str | Path, put_urls: dict[str, str] | None = None) -> dic
     return _call("stems", _audio(audio_path), audio_path.suffix)
 
 
+def keylock(sources: dict[str, str], ratio: float, put_urls: dict[str, str]) -> dict:
+    """Stretch each part ({part: signed link to its audio}) by `ratio` with its pitch kept, in the Modal `keylock`
+    function, which uploads each result to its link in `put_urls` (tastr/keylock.py). Returns {part: bytes written}."""
+    if http_enabled():
+        return _http_result("keylock", {"sources": sources, "ratio": ratio, "put_urls": put_urls})
+    return _call("keylock", sources, ratio, put_urls)
+
+
 POLL_SECONDS, POLL_TRIES = 5, 15 * 60 // 5  # the ml_tags function times out after 10 minutes
 
 

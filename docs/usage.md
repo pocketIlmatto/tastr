@@ -69,6 +69,22 @@ its GPU, which is used automatically (as is a CUDA GPU); set `TASTR_STEMS_DEVICE
 to `cpu`, `mps` or `cuda` to choose. Stems are FLAC files in `~/.tastr/stems/` and are
 deleted with the track.
 
+## Mash-up key lock (optional)
+
+Strudel's `.speed()` moves pitch with tempo, so a Mash-up that speeds the second track up 4% also pulls it most
+of a semitone out of key. With the stretcher installed, `tastr serve` time-stretches the second track (its full
+mix, and its stems once separated) to the first track's tempo with its pitch kept, and the code plays that at
+speed 1:
+
+```bash
+python -m pip install -e '.[keylock]'
+```
+
+It uses [Signalsmith Stretch](https://signalsmith-audio.co.uk/code/stretch/) (MIT) through `python-stretch`
+(MIT), and takes about a second per part for a 7-minute track. The results are FLAC files in
+`~/.tastr/keylock/<track>/<ratio>/`, kept as a cache (each track keeps its 3 latest ratios) and deleted with the
+track. Without it the Mash-up works as before, with `.speed()`.
+
 ## Drum model (optional)
 
 "Detect drums with the model" in a track's ⋯ menu (or the bulk Actions menu)

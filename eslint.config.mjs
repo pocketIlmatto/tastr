@@ -10,7 +10,7 @@ const BROWSER = ["Audio", "Blob", "CustomEvent", "Event", "EventTarget", "FormDa
   "requestAnimationFrame", "setInterval", "setTimeout", "window"];
 const PLAIN_SCRIPTS = ["STRUDEL_STEMS", "strudelCode", "strudelLink", "hpssHarmonic", // strudel.js, hpss.js
   "STRUDEL_TEMPLATES", "STRUDEL_NEW_TEXT", "strudelFillins", "strudelFill", "strudelUnfill", "strudelDiff", "strudelHunks",
-  "strudelSummary", "strudelMashFit", "strudelUsesAudio", "strudelUsesMash", "strudelUsesMashParts", "STRUDEL_MASH_PRESETS",
+  "strudelSummary", "strudelMashFit", "strudelSpeed", "strudelUsesAudio", "strudelUsesMash", "strudelUsesMashParts", "STRUDEL_MASH_PRESETS",
   "strudelMashParts", "strudelMashApply", "strudelMashSwitch", "strudelMashState",
   "sketchInputs", "compactSteps", "compactBars", "varOf", "sketchSecName", "STRUDEL_NOTES"]; // strudel.js helpers app/livecode.js uses
 

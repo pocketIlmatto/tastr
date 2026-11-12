@@ -10,9 +10,9 @@ Seven services, each with one job:
 | --- | --- |
 | Cloudflare Workers | Runs the web server: the Worker `tastr` (`worker/`) and its Durable Object `Library`, which holds the library database |
 | Cloudflare (DNS and Zero Trust Access) | DNS for your domain, HTTPS at the edge, and the login |
-| Cloudflare R2 | Uploads, stems and each card's waveform data (bucket `tastr-audio`) |
+| Cloudflare R2 | Uploads, stems, key-locked mash-up copies and each card's waveform data (bucket `tastr-audio`) |
 | Cloudflare D1 | The AcousticBrainz lookup's index, read only (database `tastr-acousticbrainz`, bound as `ACOUSTICBRAINZ`) |
-| Modal | Analysis, the on-request drum model and stem separation (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
+| Modal | Analysis, the on-request drum model, stem separation and mash-up key lock (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
 | GitHub Actions | The `deploy` workflow, which ships new code to Modal and the Worker after the tests pass on main (or by hand) |
 | Anthropic (Claude API) | "Ask Claude to change it" under Try this in › Strudel, once `ANTHROPIC_API_KEY` is set (`tastr/web/claude.py`) |
 
@@ -28,7 +28,7 @@ from this page. Update the page in the same change.
 Everything a visitor does goes through Cloudflare first, except playing audio: the server answers a request
 for a track's audio or a stem with a redirect to a signed link that expires after an hour, and the browser (or
 strudel.cc) fetches the bytes from R2 directly. Modal reads uploads from the same kind of link and writes stems
-to signed upload links. The server is the only thing that talks to the catalog lookups when they're turned on,
+and key-locked copies to signed upload links. The server is the only thing that talks to the catalog lookups when they're turned on,
 and to the Claude API for "Ask Claude to change it" in Strudel.
 
 ```mermaid
@@ -53,8 +53,9 @@ flowchart TB
     AD[analyze_drums, 2 CPUs + PyTorch + drum model + Rust engine library]
     ML[ml_tags, 2 CPUs + Essentia + MTG classifiers, if TASTR_ML_TAGS is on]
     ST[stems, T4 GPU]
+    KL[keylock, 2 CPUs + Signalsmith Stretch]
   end
-  R2A[(R2 bucket tastr-audio: uploads, stems, each card's waveform data)]
+  R2A[(R2 bucket tastr-audio: uploads, stems, key-locked copies, each card's waveform data)]
   GHT[GitHub Actions: tests workflow, on each push to main]
   GH[GitHub Actions: deploy workflow, after tests pass if app code changed]
   GHL[GitHub Actions: acousticbrainz-d1 workflow, by hand, once]
@@ -71,11 +72,12 @@ flowchart TB
   AL --> DO
   DO -.->|a copy of your own library, for searches in the browser| F
   DO -->|signed link to the upload| API
-  API --> AN & AD & ML & ST
+  API --> AN & AD & ML & ST & KL
   AN -->|each step, then the track card| DO
   AD -->|track card| DO
   ML -->|ML tags| DO
   ST -->|stems, to signed upload links| R2A
+  R2A -->|a track's mix and stems| KL -->|stretched to a mash-up's tempo, to signed upload links| R2A
   F -.->|with TASTR_DIRECT_UPLOAD: the upload itself, on a signed link| R2A
   DO -->|uploads that come through the server, each card's waveform data| R2A
   R2A -.->|signed links: audio, stems, waveform data| F
@@ -93,7 +95,8 @@ flowchart TB
 ```
 
 Every upload and stem is kept in the audio bucket (`tastr/blobs.py`) under the same path it would have under
-`TASTR_HOME` (`uploads/ab12cd34/song.mp3`, `stems/<hash>/drums.flac`), and expiry deletes the bucket's copy.
+`TASTR_HOME` (`uploads/ab12cd34/song.mp3`, `stems/<hash>/drums.flac`, `keylock/<hash>/<ratio>/mix.flac`), and
+expiry deletes the bucket's copy.
 The Worker's own files are in memory and gone after a restart, so it keeps no local copies. Modal keeps nothing
 after a job. With `TASTR_DIRECT_UPLOAD` on, the page uploads each file straight to the bucket on a signed link,
 so the file's bytes never pass through the server on the way in (a Worker takes at most 100 MB in one request);
@@ -183,7 +186,12 @@ The job's state is also kept in the database (`job_markers`, `tastr/markers.py`)
 mid-analysis, the page hears that it failed and can upload again.
 
 Stems work the same way through Modal's `stems` function, which uploads each stem to a signed link of its own,
-so stems never pass through the server. "Detect drums with the model" in a track's menu re-analyzes it through
+so stems never pass through the server. A mash-up's key lock (`tastr/keylock.py`) works the same way through
+`keylock`: it reads the second track's mix and stems from signed links, stretches them to the mash-up's speed
+ratio with their pitch kept (Signalsmith Stretch, CPU only, about a second per part), and uploads the results
+to signed links under `keylock/<hash>/<ratio>/`. Those are a cache: each part is stretched once per ratio, each
+track keeps its 3 latest ratios, and they go with the track or its expired audio. Key lock jobs leave no marker;
+after a restart the page just asks again. "Detect drums with the model" in a track's menu re-analyzes it through
 `analyze_drums`, which is `analyze` plus PyTorch and the pretrained drum model's weights, kept in its own image
 so everyday uploads don't wait for PyTorch to load. A queued or running separation or drum model run leaves a
 marker in the database (`job_markers`), so it resumes after a restart. ML tags (with `TASTR_ML_TAGS=auto`, after
@@ -209,8 +217,9 @@ for the whole run. The server keeps them in the `ml_tags` table, apart from the 
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. The model runs in Python and the Rust library, built into this image too, makes the card. |
 | ML tags (optional) | Modal `ml_tags` | With the Worker's `TASTR_ML_TAGS` set to `auto`, as it is in `worker/wrangler.jsonc`, every new upload gets them after its analysis, and the tracks from before got them once (`on`: only on request) (MTG's weights are non-commercial only, docs/essentia.md). Essentia (AGPL-3.0) and the weights are installed into its own image at deploy time; no Rust engine. One track at a time, about 6 s of embedding for a 5-minute track; about $1 of Modal time per 1,000 tracks. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. Reads the upload from a signed link and uploads each stem to a signed link of its own. |
+| Mash-up key lock | Modal `keylock` | Runs on Modal when `TASTR_STEMS_BACKEND` is `modal` and the audio bucket is on. 2 CPUs, no GPU. Reads the second track's mix and stems from signed links and uploads each one, stretched to the mash-up's tempo with its pitch kept, to a signed link of its own. `TASTR_DAILY_KEYLOCK` caps new stretches per person per day; cached ones are free. |
 | The way in to Modal | Modal `api` | A small web endpoint in front of the functions above, since the Worker can't run the Modal client. Only callers with a Modal proxy auth token get in. Every answer streams lines of JSON, with a blank line every 20 seconds so a long call stays open. The Worker calls it at `TASTR_MODAL_URL`, with the token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET` (`tastr/cloud/remote.py`). |
-| Background work | The Durable Object | `tastr/runner.py`: jobs (analyses, stems, drum model runs, ML tags) are asyncio tasks in lanes that queue them, and the repeating work (the expiry sweep every 6 hours, the GitHub watch) runs from the object's alarm, which wakes it when it is due. |
+| Background work | The Durable Object | `tastr/runner.py`: jobs (analyses, stems, key lock, drum model runs, ML tags) are asyncio tasks in lanes that queue them, and the repeating work (the expiry sweep every 6 hours, the GitHub watch) runs from the object's alarm, which wakes it when it is due. |
 | Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then the Worker (`deploy-worker.yml`), from main. Runs after `tests` passes on a push to main when something that ships changed since the last deploy, or by hand. |
 
 ## How security works
@@ -261,7 +270,7 @@ the app's spending apart from benchmarks.
 | --- | --- |
 | `worker/wrangler.jsonc` | The Worker's name (`tastr`), the Durable Object `Library` and its SQLite migration, Static Assets, the D1 binding `ACOUSTICBRAINZ` (database `tastr-acousticbrainz`, found by name), Observability (on), the CPU limit per request (5 minutes), no `workers.dev` or preview addresses, and the plain settings (`vars`) below |
 | `worker/src/entry.py`, `worker/build.py`, `worker/check.sh` | The Worker's entry point, the bundle of static files, and the build check CI runs |
-| `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums`, `ml_tags`, `stems` and `api`, their images, CPU, GPU, memory and timeouts |
+| `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums`, `ml_tags`, `stems`, `keylock` and `api`, their images, CPU, GPU, memory and timeouts |
 | `.github/workflows/deploy.yml`, `.github/workflows/deploy-worker.yml` | When it deploys (after `tests` on main, which files count), the deploy order (Modal, then the Worker), which repository secrets it uses (`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `CLOUDFLARE_API_TOKEN`), and the commit it sets as the Worker's `TASTR_COMMIT`, `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` |
 | `.github/workflows/acousticbrainz-d1.yml` | The one-time load of the AcousticBrainz index into D1, by hand: reads it from `tastr-data`, makes `tastr-acousticbrainz` if it's missing, imports it in parts. Uses `CLOUDFLARE_API_TOKEN` |
 
@@ -289,7 +298,7 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 | `TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD` | Checking Cloudflare's token. Not secret, but kept out of the repository. |
 | `TASTR_ADMIN_EMAILS` | Who gets the Admin tab and keeps audio forever |
 | `TASTR_LINK_SECRET` | Signing Strudel and playlist links |
-| `TASTR_STORAGE_GB` | A spending cap on the uploads and stems the bucket holds |
+| `TASTR_STORAGE_GB` | A spending cap on the uploads, stems and key-locked copies the bucket holds |
 | `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT`, `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | The audio bucket `tastr-audio` and its own token ([deploy.md](deploy.md#2-r2-bucket-for-audio)). Required on the Worker. |
 | `TASTR_MODAL_URL`, `TASTR_MODAL_KEY`, `TASTR_MODAL_SECRET` | The Modal `api` endpoint's address (`modal deploy` prints it) and a Modal proxy auth token |
 | `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log: a fine-grained token with read-only Actions access to the repository. Needed even for a public repository: GitHub's limit without a token is per IP address, which Cloudflare shares, so most checks get 403. |
@@ -299,7 +308,8 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 These have defaults and change only if you set a secret of the same name ([hosting.md](hosting.md#settings)):
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`,
 `TASTR_BULK_AT_ONCE` (tracks a bulk action runs at once; defaults to `TASTR_MAX_ANALYSES`), `TASTR_DAILY_STEMS`,
-`TASTR_DAILY_DRUMS`, `TASTR_DAILY_ASKS` (Claude asks per person per day, default 20), `TASTR_AUDIO_DAYS` (default 0, keep
+`TASTR_DAILY_DRUMS`, `TASTR_DAILY_ASKS` (Claude asks per person per day, default 20), `TASTR_DAILY_KEYLOCK`
+(new mash-up key lock stretches per person per day, default 40), `TASTR_AUDIO_DAYS` (default 0, keep
 audio; admins set each person's own on the Admin tab),
 `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin tab's Modal link opens the app) and
 `TASTR_WATCH_MINUTES` (default 15: how often the server checks GitHub Actions for the Admin log; `0` turns it
@@ -341,7 +351,7 @@ flowchart LR
     DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
     AL[Durable Object alarm] -->|expiry sweep, watch| DO
     GHD[GitHub Actions: deploy, then deploy-worker] -->|pywrangler deploy| W
-    DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, ml_tags, stems)"]
+    DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, ml_tags, stems, keylock)"]
     DO -->|signed requests| R2B[(R2 tastr-audio)]
     DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, ReccoBeats, MusicBrainz])
     DO -.->|"D1 binding ACOUSTICBRAINZ:<br/>recording ids, if acousticbrainz is in TASTR_LOOKUP"| D1B[(D1 tastr-acousticbrainz)]

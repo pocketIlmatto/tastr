@@ -368,7 +368,7 @@ def _load_modal_web(monkeypatch):
 def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
     """Like modal_app: a build step after add_local_python_source fails a deploy unless the source is copied."""
     _, images = _load_modal_web(monkeypatch)
-    assert len(images) == 6 and all(i.local for i in images)
+    assert len(images) == 7 and all(i.local for i in images)
 
 
 @pytest.fixture
@@ -445,6 +445,32 @@ def test_remote_stems_over_https_and_errors(modal_api, tmp_path):
     assert modal_api.calls[-1] == ("stems", (b"wav", ".wav", {"drums": "https://put"}))
     with pytest.raises(remote.RemoteError, match="404"):
         remote._http_result("nothing", remote._payload("https://audio", ".wav"))
+
+
+def test_remote_keylock_over_https(modal_api):
+    from tastr.cloud import remote
+
+    modal_api.mod.keylock = modal_api.Fn("keylock", {"mix": 123})
+    got = remote.keylock({"mix": "https://get/mix"}, 1.034, {"mix": "https://put/mix"})
+    assert got == {"mix": 123}
+    assert modal_api.calls[-1] == ("keylock", ({"mix": "https://get/mix"}, 1.034, {"mix": "https://put/mix"}))
+    assert modal_api.sent[-1][0] == "https://modal.example/keylock"
+    with pytest.raises(remote.RemoteError, match="422"):
+        remote._http_result("keylock", {"sources": "nope"})
+
+
+def test_run_keylock_downloads_stretches_and_uploads(monkeypatch, tmp_path):
+    from tastr import keylock
+    from tastr.cloud import jobs
+
+    got, put = [], []
+    monkeypatch.setattr(jobs, "_write_audio", lambda url, dest: dest.write_bytes(url.encode()))
+    monkeypatch.setattr(keylock, "stretch_file", lambda src, dst, r: (got.append((src.read_bytes(), r)), dst.write_bytes(b"fLaC")))
+    monkeypatch.setattr(jobs, "_put", lambda url, path: put.append((url, path.read_bytes())) or 4)
+    out = jobs.run_keylock({"mix": "https://a", "bass": "https://b", "junk": "https://c"}, 0.97,
+                           {"mix": "https://pm", "bass": "https://pb"})
+    assert out == {"mix": 4, "bass": 4}
+    assert got == [(b"https://a", 0.97), (b"https://b", 0.97)] and put == [("https://pm", b"fLaC"), ("https://pb", b"fLaC")]
 
 
 def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):

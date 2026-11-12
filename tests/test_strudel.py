@@ -605,3 +605,48 @@ def test_signed_links_reach_both_tracks_stems():
     signed = "https://tastr.example/pub/tok123/tracks/7/audio"
     out = mash("strudelMashCode(a, b, strudelMashState(a, b, null, both), { aUrl: s1, bUrl: s2, can: both })", s1=signed, s2=signed.replace("/7/", "/8/").replace("tok123", "tok456"))
     assert "b_vocals: 'https://tastr.example/pub/tok456/tracks/8/stems/vocals'" in out["audio"] and "private links" in out["audio"]
+
+
+# ---- Key lock (T70): B stretched on the server to A's tempo with its pitch kept ----
+
+@pytest.mark.parametrize("a, b, cam_b, fit, own", [
+    (123, 117.45, "4A", "keys clash", "keys clash"),   # 0.81 semitones: in tune at 11A, which clashes with 8A
+    (123, 117.45, "8A", "keys clash", "same key"),     # B is 8A too, but the speed change moves it to 3A
+    (123, 119, "8A", "between keys", "same key"),      # 0.57 semitones: between keys
+    (120, 118, "8A", "same key", "same key"),          # 0.29 semitones: in tune
+])
+def test_mash_up_fit_counts_a_shift_near_a_whole_step_as_in_tune(a, b, cam_b, fit, own):
+    out = run_tpl("strudelMashFit({ bpm: a, camelot: '8A' }, { bpm: b, camelot: cb })", a=a, b=b, cb=cam_b)
+    assert out["fit"] == fit and out["own"] == own and out["ok"] == (fit in ("same key", "mixes well"))
+
+
+def test_mash_up_fit_with_key_lock_keeps_bs_own_key():
+    out = run_tpl("strudelMashFit({ bpm: 123, camelot: '4A' }, { bpm: 117.45, camelot: '4A' }, true)")
+    assert out["fit"] == "same key" and out["ok"] and out["lock"] and out["cam"] == "4A" and out["r"] == 1.047
+    out = run_tpl("strudelMashFit({ bpm: 123, camelot: '4A' }, { bpm: 117.45, camelot: '5A' }, true)")
+    assert out["fit"] == "mixes well" and out["ok"]
+
+
+def test_key_locked_b_plays_at_speed_one_from_the_stretched_file():
+    fast = mash_card(8, 124, B_SECS, "Second")  # A 120, B 124: speed 0.968
+    lock_url = B_AUDIO.replace("/audio", "/keylock/0.968/audio")
+    plain = mash("strudelMashCode(a, b, strudelMashState(a, b, null, {}), { aUrl: url, bUrl: burl, can: {} })", b=fast)
+    out = mash("strudelMashCode(a, b, strudelMashState(a, b, null, {}), { aUrl: url, bUrl: burl, can: {}, bLock: { url: lk } })",
+               b=fast, lk=lock_url)
+    assert ".speed(0.968)" in plain["audio"] and ".speed(" not in out["audio"]
+    assert f"b_mix: '{lock_url}'" in out["audio"] and "key-locked: stretched to A's tempo (×0.968)" in out["audio"]
+    bar = 240 / 124
+    assert f"bbar = {bar / 0.968:.4f}" in out["audio"] and f"bbar = {bar:.4f}" in plain["audio"]
+    # Stems come from next to the stretched mix.
+    out = mash("strudelMashCode(a, b, strudelMashSwitch(strudelMashState(a, b, null, both), 'b', 'stems'), { aUrl: url, bUrl: burl, can: both, bLock: { url: lk } })",
+               b=fast, lk=lock_url)
+    assert "b_bass: '" + B_AUDIO.replace("/audio", "/keylock/0.968/stems/bass") + "'" in out["audio"]
+
+
+def test_key_locked_fill_ins():
+    fast = mash_card(8, 124, B_SECS, "Second")
+    f = mash("Object.fromEntries(Object.entries(strudelFillins(a, { audioUrl: url, b: { card: b, audioUrl: burl, lock: { url: 'https://x/keylock/0.968/audio' } } })).map(([k, x]) => [k, x.v]))", b=fast)
+    assert f["b.speed"] == "1" and f["b.shift"] == "not at all" and f["b.newkey"] == "A minor (8A, same key)"
+    # {b.audio} loads the stretched file (whose bars are shorter by the speed), never the original.
+    assert "b: 'https://x/keylock/0.968/audio'" in f["b.audio"] and B_AUDIO not in f["b.audio"]
+    assert f"{240 / 124 / 0.968:.4f}" in f["b.audio"]

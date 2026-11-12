@@ -722,6 +722,7 @@ kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 12px/1.6 ui
 .st-fit { font-size: 12px; }
 .st-fit.ok { color: var(--ok, #2f8f4e); }
 .st-fit.bad { color: #c2410c; }
+.st-fit.wait { color: var(--muted); } /* key lock still working (T70) */
 /* Mash-up parts by section (TAS-87) */
 .mx { flex-basis: 100%; display: grid; gap: 8px; margin-top: 6px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); min-width: 0; }
 .mx-head { font-size: 13px; }

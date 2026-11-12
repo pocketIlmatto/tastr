@@ -7,7 +7,7 @@ import { laneName } from "./groove-lanes.js";
 import { sonicPiCode, tidalCode } from "./livecode.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
 import { shareArt } from "./share-art.js";
-import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
+import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashLock, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
 
 // Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.
 // Ableton Live is the only glossary so far; Strudel shows generated code instead. Other DAWs show in the picker but can't be selected.
@@ -103,11 +103,16 @@ export function strudelView(c) {
     const parts = strudelUsesMashParts(text), picked = STRUDEL_STEMS.filter((x) => strudelStems.has(x));
     const useStems = !parts && !!audioUrl && strudelMix === "stems" && st.state === "ready";
     const bAudio = b && b.has_audio ? strudelAudioUrl(b, paint) : null;
+    // Key lock (T70): once B's stretched copy has the parts this code loads, B plays from it at speed 1.
+    const lock = b ? mashLock(c, b, paint) : null, mstate = b && parts ? mashStateFor(c, b) : null;
+    const bStems = mstate ? mstate.src.b === "stems" && mashCan(c, b).b : !parts && strudelMix === "stems" && mashCan(c, b || c).b;
+    const lockUrl = lock && lock.state === "ready" && bAudio && lock.parts.includes(bStems ? "bass" : "mix")
+      ? bAudio.replace(/\/audio$/, `/keylock/${lock.r.toFixed(3)}/audio`) : null;
     return { wantsAudio, audioUrl, st, useStems, stems: useStems ? picked : null, canStems: st.state === "ready",
       edits: n && strudelMine ? allEdits(c) : null, n, startBar: +startSel.value || 1,
-      b: b ? { card: b, audioUrl: bAudio, canStems: mashCan(c, b).b,
+      b: b ? { card: b, audioUrl: bAudio, canStems: mashCan(c, b).b, lock: lockUrl ? { url: lockUrl } : null, lockState: lock,
         stems: !parts && bAudio && strudelMix === "stems" && mashCan(c, b).b ? picked : null } : null,
-      mash: b && parts ? mashStateFor(c, b) : null };
+      mash: mstate };
   };
   const fillsFor = (text) => strudelFillins(c, ctxFor(text, false));
   const editor = (start) => {
@@ -146,7 +151,7 @@ export function strudelView(c) {
     paintStems(c.has_audio && ctx.wantsAudio && !strudelUsesMashParts(tpl.text), ctx.st);
     mashBox.hidden = !strudelUsesMash(tpl.text);
     if (!mashBox.hidden) {
-      mashBox.replaceChildren(...mashRow(c, ctx.b && ctx.b.card, (id) => { tplState.mashB = id; paint(); }));
+      mashBox.replaceChildren(...mashRow(c, ctx.b && ctx.b.card, (id) => { tplState.mashB = id; paint(); }, ctx.b && ctx.b.lockState));
       if (ctx.b && strudelUsesMashParts(tpl.text)) mashBox.append(mashPanel(c, ctx.b.card, paint).el);
     }
     ask.paint();

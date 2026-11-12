@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from ... import blobs, db, lookup, service, stems
+from ... import blobs, db, keylock, lookup, service, stems
 from ..context import AppContext, _failure_reason, _unprefixed, log, upload_dir
 
 
@@ -168,6 +168,8 @@ def router(ctx: AppContext) -> APIRouter:
             folder = ctx.stems_dir(card, track_id)
             ctx.stem_jobs.forget(folder)
             stems.remove(folder)
+            ctx.keylock_jobs.forget(ctx.keylock_dir(card, track_id))
+            keylock.remove(ctx.keylock_dir(card, track_id))
         if ctx.hosted and card is not None:
             remove_upload(card.source.local_path)
         return Response(status_code=204)

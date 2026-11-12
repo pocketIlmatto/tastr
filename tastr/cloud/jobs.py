@@ -238,6 +238,27 @@ def run_analyze_stream(audio: bytes | str, suffix: str, stages: list[str] | None
                 return
 
 
+def run_keylock(sources: dict[str, str], ratio: float, put_urls: dict[str, str]) -> dict:
+    """Key lock (tastr/keylock.py): download each part from its signed link, stretch it by `ratio` with its pitch
+    kept, and upload it to its link in `put_urls`. Returns {part: bytes written}."""
+    import tempfile
+
+    from .. import keylock
+
+    out = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for part, url in sources.items():
+            if part not in keylock.PARTS or part not in put_urls:
+                continue
+            src, dst = Path(tmp) / f"{part}.src", Path(tmp) / f"{part}.flac"
+            _write_audio(url, src)
+            keylock.stretch_file(src, dst, ratio)
+            out[part] = _put(put_urls[part], dst)
+            src.unlink(missing_ok=True)
+            dst.unlink(missing_ok=True)
+    return out
+
+
 def run_stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:
     """Separate one file (its bytes or a signed link to it) with the local Demucs. Returns {stem name: FLAC
     bytes}, or with `put_urls` ({stem name: signed upload link}) uploads each stem there and returns

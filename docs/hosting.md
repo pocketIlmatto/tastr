@@ -57,6 +57,7 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_BULK_AT_ONCE` | `TASTR_MAX_ANALYSES` | tracks a bulk action (reload, re-analyze, look up) runs at once from the browser. Stems and the drum model always go one at a time. At home it defaults to about half the CPU cores, 1 to 4 |
 | `TASTR_DAILY_STEMS` | 10 | stem separations each person can start per UTC day |
 | `TASTR_DAILY_DRUMS` | 10 | drum model runs ("Detect drums with the model") each person can start per UTC day |
+| `TASTR_DAILY_KEYLOCK` | 40 | new mash-up key lock stretches each person can start per UTC day (a pair already stretched at that tempo is free) |
 | `TASTR_DAILY_ASKS` | 20 | "Ask Claude to change it" requests (Try this in › Strudel) each person can make per UTC day; an admin can change one person's on the Admin tab |
 | `ANTHROPIC_API_KEY` | none | Tastr's own Anthropic API key, for "Ask Claude to change it". Without it Ask is off. Keep it secret |
 | `TASTR_ADMIN_EMAILS` | none | comma-separated emails that may open the admin view |

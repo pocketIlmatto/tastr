@@ -131,6 +131,13 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   separate stems or delete, for one track or a whole selection. Bulk reload, re-analyze and look up run a few
   tracks at a time (`TASTR_BULK_AT_ONCE`; on a hosted server it follows `TASTR_MAX_ANALYSES`, at home about
   half the CPU cores); stems and the drum model run one at a time.
+- **Cards from an older engine.** A card keeps the results of the engine version that made it until it's
+  re-analyzed. Such a card shows "Engine 0.5.0 · latest 0.6.0" under its stats, with what changed in the tooltip
+  and a ↻ button that re-analyzes it; its row in the list has a ↻ mark. Filters › Engine shows only current or
+  only older cards, and the line under the filters ("3 tracks are from an older engine. Show them · Re-analyze 2")
+  re-analyzes all of them at once. Re-analysis needs the original audio, so a track whose audio was deleted
+  can't be updated (upload the file again). When a stage version goes up, add a sentence on what changed to
+  `STAGE_NEWS` in `tastr/engine/rust.py`.
 - **Explore tab**, in two tabs:
   - **Find tracks** searches your library without code (BPM, key and the keys that mix with it, energy, vibe,
     length, sections, text, with AND/OR groups), or in read-only SQL with a table and column reference. Save

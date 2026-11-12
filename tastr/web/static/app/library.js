@@ -1,14 +1,15 @@
 // The track list: search, sort and filters, placeholder rows while files analyze, the collapsible sidebar and quick jump.
 
 import { $, VIBE_GROUPS, api, currentId, groupOf, h, isNum, labels, mmss, progBar, reviewRows, rowVibes, setTracks, tracks } from "./core.js";
-import { jobs, renderBulk, sel, selecting, setSelecting, toggleSel } from "./bulk.js";
+import { bulkBusy, jobs, renderBulk, runBulk, sel, selecting, setSelecting, toggleSel } from "./bulk.js";
+import { serverCfg } from "./daw.js";
 import { loadReview, renderReview } from "./labels.js";
 import { openTrack } from "./card.js";
 import { A_STEPS } from "./upload.js";
 import { lists, loadLists, onListsChange } from "./lists.js";
 import { exportMenu, onPlaying, playList, playingId } from "./playlist.js";
 
-export const LIB_CLEAR = () => ({ q: "", vibes: [], key: "", bmin: "", bmax: "", up: "", upFrom: "", upTo: "", lab: "" });
+export const LIB_CLEAR = () => ({ q: "", vibes: [], key: "", bmin: "", bmax: "", up: "", upFrom: "", upTo: "", lab: "", eng: "" });
 export const lib = { sort: "new", list: null, ...LIB_CLEAR() };  // list: the saved list shown (Library › List), or null for all tracks
 const shownList = () => (lib.list == null ? null : lists.find((l) => l.id === lib.list) || null);
 const listSig = () => { const l = shownList(); return l ? `${l.id}:${l.track_ids.join(",")}` : ""; };
@@ -51,7 +52,7 @@ export const SORTS = {
   energy: (a, b) => (b.energy ?? -1) - (a.energy ?? -1),
   len: (a, b) => (b.duration ?? 0) - (a.duration ?? 0),
 };
-export const filtersOn = (f) => !!(f.q || f.vibes.length || f.key || f.bmin || f.bmax || f.up || f.lab);
+export const filtersOn = (f) => !!(f.q || f.vibes.length || f.key || f.bmin || f.bmax || f.up || f.lab || f.eng);
 export const libActive = () => filtersOn(lib);
 // Search, sort and filters run in the browser, which is fine for a few hundred tracks. `f` is a filter state like `lib`.
 export function matchTracks(f, list = tracks) {
@@ -61,7 +62,8 @@ export function matchTracks(f, list = tracks) {
     (!q || `${t.title} ${t.artist || ""}`.toLowerCase().includes(q)) &&
     f.vibes.every((v) => (t.tags || []).includes(v)) && (!f.key || keyMatch(t.camelot, f)) &&
     (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi)) &&
-    upMatch(t.uploaded, f) && (!f.lab || (need ? need.has(t.id) : (f.lab === "yes") === labels.has(t.id))));
+    upMatch(t.uploaded, f) && (!f.lab || (need ? need.has(t.id) : (f.lab === "yes") === labels.has(t.id))) &&
+    (!f.eng || (f.eng === "old") === !!t.stale));  // Engine: cards from the current engine, or an older one (Files has no eng)
 }
 // A list shows in its own order (the Sort is off meanwhile); search and filters still narrow it.
 export function visibleTracks() {
@@ -109,7 +111,7 @@ function fillFilterOptions() {
 }
 export function syncTools() {
   $("lib-q").value = lib.q; $("lib-sort").value = lib.sort; syncFilterSelects(); $("lib-bmin").value = lib.bmin; $("lib-bmax").value = lib.bmax;
-  $("lib-up").value = lib.up; $("lib-up-from").value = lib.upFrom; $("lib-up-to").value = lib.upTo; $("lib-up-range").hidden = lib.up !== "range"; $("lib-lab").value = lib.lab;
+  $("lib-up").value = lib.up; $("lib-up-from").value = lib.upFrom; $("lib-up-to").value = lib.upTo; $("lib-up-range").hidden = lib.up !== "range"; $("lib-lab").value = lib.lab; $("lib-eng").value = lib.eng;
 }
 export async function loadTracks() {
   const [rows] = await Promise.all([api("/api/tracks"), loadReview(false)]);
@@ -280,6 +282,23 @@ function countLine(l, n) {
 }
 const noneRow = (l) => (l && !libActive() ? h("li", { class: "muted empty" }, "This list has no tracks left.")
   : h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
+// "↻ 40 tracks are from an older engine. Show them · Re-analyze 30. 10 can't: their audio was deleted." Re-analyze runs the
+// bulk Re-analyze over every one that still has its audio (re-analysis needs it) and isn't busy already.
+const s1 = (n, one, many) => (n === 1 ? one : many);
+function staleLine() {
+  const el = $("lib-stale"), old = tracks.filter((t) => t.stale), kept = old.filter((t) => !t.audio_gone);
+  const can = kept.filter((t) => !jobs.has(t.id)), gone = old.length - kept.length;
+  el.hidden = !old.length || bulkBusy;
+  if (el.hidden) { el.replaceChildren(); return; }
+  const n = old.length, allGone = gone === n;
+  el.replaceChildren(...[h("span", { class: "eng-mk", "aria-hidden": "true" }, "↻"),
+    allGone ? `${n} ${s1(n, "track is", "tracks are")} from an older engine, but ${s1(n, "its", "their")} audio was deleted, so ${s1(n, "it", "they")} can't be re-analyzed.`
+      : `${n} ${s1(n, "track is", "tracks are")} from an older engine.`,
+    lib.eng === "old" ? null : h("button", { type: "button", class: "linklike", onclick: () => { lib.eng = "old"; syncTools(); renderList(); } }, "Show them"),
+    can.length ? h("button", { type: "button", class: "linklike", title: `Re-analyze them ${serverCfg.bulk_at_once || 1} at a time with the current engine. Your labels, edits and cue points stay.`,
+      onclick: () => runBulk("reanalyze", can.map((t) => t.id)) }, `Re-analyze ${can.length === n ? "them" : can.length}`) : null,
+    gone && !allGone ? h("span", { class: "muted" }, `${gone} can't: ${s1(gone, "its", "their")} audio was deleted.`) : null].filter(Boolean));
+}
 export function renderList() {
   const ul = $("track-list"), top = ul.scrollTop;
   // Rows are rebuilt while bulk jobs run, so put keyboard focus back on the same track afterwards.
@@ -292,6 +311,7 @@ export function renderList() {
   const l = shownList();
   $("lib-n").textContent = countLine(l, shown.length);
   $("lib-clear").hidden = !libActive();
+  staleLine();
   $("lib-tools").hidden = !tracks.length;
   if (libLoad) { $("lib-n").textContent = ""; $("lib-review-n").textContent = ""; ul.append(...bootRows()); }
   else if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
@@ -315,7 +335,8 @@ export function renderList() {
             // status marks in a fixed slot next to the energy bar, so they line up whatever the text length
             h("span", { class: "st-marks" },
               labels.has(t.id) ? h("span", { class: "lb-tick", title: "You labeled this track", "aria-label": "You labeled this track" }, "✓") : null,
-              inQ.has(t.id) ? h("span", { class: "rv-dot", title: "In your review list", "aria-label": "In your review list" }) : null),
+              inQ.has(t.id) ? h("span", { class: "rv-dot", title: "In your review list", "aria-label": "In your review list" }) : null,
+              t.stale ? h("span", { class: "eng-mk", title: t.audio_gone ? "From an older engine. Its audio was deleted, so it can't be re-analyzed." : "From an older engine: re-analyze to update", "aria-label": "From an older engine" }, "↻") : null),
             h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` }))))));
   }
   ul.scrollTop = top;
@@ -389,6 +410,7 @@ export function init() {
   $("lib-up-from").addEventListener("change", (e) => { lib.upFrom = e.target.value; renderList(); });
   $("lib-up-to").addEventListener("change", (e) => { lib.upTo = e.target.value; renderList(); });
   $("lib-lab").addEventListener("change", (e) => { lib.lab = e.target.value; renderList(); });
+  $("lib-eng").addEventListener("change", (e) => { lib.eng = e.target.value; renderList(); });
   $("lib-clear").addEventListener("click", clearFilters);
   $("lib-fbtn").addEventListener("click", () => { const f = $("lib-filters"), open = f.hidden; f.hidden = !open; $("lib-fbtn").setAttribute("aria-expanded", String(open)); });
   $("track-list").addEventListener("keydown", (e) => {

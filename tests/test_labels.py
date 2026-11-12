@@ -64,6 +64,43 @@ def test_review_queue_ranks_disagreements_then_low_odds(db_path):
     assert sure not in [r["track_id"] for r in q]
 
 
+def test_review_queue_reads_no_cards(db_path, monkeypatch):
+    """The app asks for the list on every page load: it reads the tracks table, not every card."""
+    conn = db.connect(db_path)
+    shaky = db.save_card(conn, card(0.55, 0.9, sha="a"))
+    listed = db.save_card(conn, card(0.95, 0.9, sha="b"))
+    db.save_lookup(conn, listed, {"provider": "freqblog", "status": "found", "bpm": 87.0, "tonic": 9, "mode": "minor"})
+    want = labels.review_queue(conn)
+    assert [r["track_id"] for r in want] == [listed, shaky]
+
+    def no_cards(*_):
+        raise AssertionError("review_queue loaded a card")
+    monkeypatch.setattr(db, "load_card", no_cards)
+    assert labels.review_queue(conn) == want
+
+
+def test_old_databases_get_the_likely_scores_from_their_cards(db_path):
+    conn = db.connect(db_path)
+    scored = db.save_card(conn, card(0.55, 0.4, sha="a"))
+    keyless = card(0.3, sha="b")
+    keyless.core.key = None
+    unscored = db.save_card(conn, keyless)
+    with conn:  # as a database from before tracks kept the scores
+        conn.execute("UPDATE tracks SET bpm_likely = NULL, key_likely = NULL")
+        conn.execute("DELETE FROM meta WHERE key = 'likely_filled'")
+    conn.close()
+    conn = db.connect(db_path)
+    got = {r[0]: (r[1], r[2]) for r in conn.execute("SELECT id, bpm_likely, key_likely FROM tracks")}
+    assert got == {scored: (0.55, 0.4), unscored: (0.3, None)}
+    with conn:  # filled once: a score that is really missing isn't looked up again on every connect
+        conn.execute("UPDATE tracks SET bpm_likely = NULL WHERE id = ?", (scored,))
+    conn.close()
+    conn = db.connect(db_path)
+    assert conn.execute("SELECT bpm_likely FROM tracks WHERE id = ?", (scored,)).fetchone()[0] is None
+    (row,) = [r for r in labels.review_queue(conn) if r["track_id"] == unscored]
+    assert (row["key"], row["camelot"], row["chance_right"]) == (None, None, 0.3)
+
+
 def test_review_reasons_spell_out_the_catalog(db_path):
     conn = db.connect(db_path)
     tid = db.save_card(conn, card(0.95, 0.9))  # 124 BPM, A minor (8A)

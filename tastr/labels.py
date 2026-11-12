@@ -18,6 +18,7 @@ import json
 import re
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from . import db
@@ -126,12 +127,13 @@ def _score_reasons(card, settled: bool) -> tuple[list[str], list[float]]:
     return reasons, scores
 
 
-def _catalog_disagreements(conn: sqlite3.Connection, track_id: int, card) -> tuple[list[str], Any, Any]:
-    """(a reason per catalog disagreement, the first disagreeing catalog BPM, the first disagreeing Camelot key)."""
+def _catalog_disagreements(card, found: list[dict[str, Any]]) -> tuple[list[str], Any, Any]:
+    """(a reason per catalog disagreement, the first disagreeing catalog BPM, the first disagreeing Camelot key).
+    `found`: the track's stored lookups that found it (db.found_lookups)."""
     from . import lookup
 
     reasons, first = [], {"bpm": None, "key": None}
-    for r in db.get_lookups(conn, track_id):
+    for r in found:
         if r.get("status") != "found":
             continue
         for what, why, value in _catalog_reasons(card, r, lookup.compare(card, r)):
@@ -141,12 +143,24 @@ def _catalog_disagreements(conn: sqlite3.Connection, track_id: int, card) -> tup
     return reasons, first["bpm"], first["key"]
 
 
-def _queue_row(conn: sqlite3.Connection, track_id: int, card, marks: list[dict[str, Any]], flag: str | None,
-               settled: bool, labeled: bool) -> dict[str, Any] | None:
-    """The track's review_queue entry, or None when nothing puts it there."""
-    pat_reasons, way_off = pattern_reasons(_with_status(card, marks))
+def _reading(t: dict[str, Any]) -> SimpleNamespace:
+    """A stand-in for a card with only what the queue reads (core.bpm, core.key, the "likely right" scores,
+    source.title and artist), from a db.review_candidates row: no card is loaded or parsed."""
+    key = None
+    if t["key_tonic"] is not None and t["key_mode"]:
+        key = SimpleNamespace(tonic=t["key_tonic"], mode=t["key_mode"], name=t["key_name"], camelot=t["camelot"],
+                              likely_correct=t["key_likely"])
+    return SimpleNamespace(core=SimpleNamespace(bpm=t["bpm"], bpm_likely_correct=t["bpm_likely"], key=key),
+                           source=SimpleNamespace(title=t["title"], artist=t["artist"]))
+
+
+def _queue_row(track_id: int, card, marks: list[dict[str, Any]], pattern_card, flag: str | None, settled: bool,
+               labeled: bool, found: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The track's review_queue entry, or None when nothing puts it there. `card` is the track's reading (_reading);
+    `pattern_card` the whole card, loaded only when the track has pattern reviews (`marks`)."""
+    pat_reasons, way_off = pattern_reasons(_with_status(pattern_card, marks)) if marks else ([], 0)
     score_reasons, scores = _score_reasons(card, settled)
-    cat_reasons, cat_bpm, cat_key = _catalog_disagreements(conn, track_id, card) if not settled else ([], None, None)
+    cat_reasons, cat_bpm, cat_key = _catalog_disagreements(card, found) if not settled else ([], None, None)
     mine = flag == "flagged"
     reasons = pat_reasons + score_reasons + cat_reasons
     if mine:
@@ -169,21 +183,27 @@ def review_queue(conn: sqlite3.Connection, limit: int = 20, owner: str | None = 
 
     Pattern reviews add tracks too, labeled or not: a part you marked Way off and haven't saved the right pattern
     for, or a mark a re-analysis made stale (pattern_reasons). Way-off tracks come right after yours; `way_off`
-    counts their sections."""
+    counts their sections.
+
+    The app asks for this on every page load, so it reads the tracks table (which keeps each card's BPM, key and
+    "likely right" scores) and the stored lookups in a few queries, and loads a whole card only for a track with
+    pattern reviews."""
     labeled = {r["track_id"] for r in db.list_labels(conn, owner)}
     flags = db.review_flags(conn, owner)
     marks: dict[int, list[dict[str, Any]]] = {}
     for r in db.list_pattern_reviews(conn, owner):
         marks.setdefault(r["track_id"], []).append(r)
+    found = db.found_lookups(conn, owner)
     out = []
-    for t in db.list_tracks(conn, owner):
-        flag = flags.get(t["id"])
-        settled = t["id"] in labeled and flag != "flagged"  # its BPM and key are labeled: only pattern reasons count
-        if flag == "skipped" or (settled and t["id"] not in marks):
+    for t in db.review_candidates(conn, owner):
+        tid = t["id"]
+        flag = flags.get(tid)
+        settled = tid in labeled and flag != "flagged"  # its BPM and key are labeled: only pattern reasons count
+        if flag == "skipped" or (settled and tid not in marks):
             continue
-        card = db.load_card(conn, t["id"])
-        if card is not None and (row := _queue_row(conn, t["id"], card, marks.get(t["id"], []), flag, settled,
-                                                   t["id"] in labeled)):
+        pattern_card = db.load_card(conn, tid) if tid in marks else None
+        if row := _queue_row(tid, _reading(t), marks.get(tid, []), pattern_card, flag, settled, tid in labeled,
+                             found.get(tid, [])):
             out.append(row)
     out.sort(key=lambda r: (not r["mine"], -r["way_off"], -r["disagreements"],
                             r["chance_right"] if r["chance_right"] is not None else 1.0))

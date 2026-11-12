@@ -150,7 +150,9 @@
             <label>Uploaded <select id="lib-up"><option value="">Any time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="old">More than 30 days ago</option><option value="range">Between dates…</option></select></label>
             <label id="lib-up-range" class="lib-bpm" hidden>From <input id="lib-up-from" type="date" aria-label="Uploaded from"> to <input id="lib-up-to" type="date" aria-label="Uploaded until"></label>
             <label>Review <select id="lib-lab"><option value="">Any</option><option value="need">Needs review</option><option value="yes">Reviewed (labeled)</option><option value="no">Not reviewed yet</option></select></label>
+            <label>Engine <select id="lib-eng" title="Which version of Tastr's engine analyzed the track"><option value="">Any</option><option value="cur">Current</option><option value="old">Older</option></select></label>
           </div>
+          <p id="lib-stale" class="lib-stale" hidden></p>
           <div class="lib-count muted"><span id="lib-n" role="status" aria-live="polite"></span> <button type="button" id="lib-clear" class="linklike" hidden>Clear filters</button><button type="button" id="lib-sel" aria-pressed="false" title="Select several tracks for bulk actions (or Ctrl/Cmd-click a track)">Select</button></div>
           <div id="lib-bulk" hidden></div>
         </div>

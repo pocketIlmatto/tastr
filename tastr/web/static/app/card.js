@@ -2,7 +2,7 @@
 
 import { $, ML_REPLACES, VIBE_GROUPS, VIBE_MIN, api, currentId, groupOf, h, isNum, mlState, mlTip, mmss, nap, setCurrentId, tagHelp, vibeHelp, vibeTags } from "./core.js";
 import { bpmFilter, camelotNear, keyFilter, lib, loadTracks, renderList, syncCardFilters, vibeFilter, visibleTracks } from "./library.js";
-import { setDrumModelOn, setLookupProviders } from "./bulk.js";
+import { bulkBusy, jobs, runBulk, setDrumModelOn, setLookupProviders } from "./bulk.js";
 import { camPc, charts, labelOpen, setLabelOpen, setMarkHook } from "./labels.js";
 import { labelBar } from "./label-bar.js";
 import { DAWS, camelotParallel, daw, dawText, keyName, liveView, modeOther, setDaw } from "./daw.js";
@@ -312,6 +312,42 @@ const energyStat = (core) => h("div", { class: "stat" },
   h("span", {}, "energy"),
   h("div", { class: "meter" }, h("i", { style: `width:${isNum(core.energy) ? Math.max(0, Math.min(1, core.energy)) * 100 : 0}%` })));
 
+// A card from an older engine: one compact line after the stats, "Engine 0.5.0 · latest 0.6.0", and a ↻ button that
+// re-analyzes it (the bulk Re-analyze, for this one track). The details are in the tooltip: which stages are older,
+// what changed (engine_news), what re-analyzing keeps, or why it can't (re-analysis needs the original audio).
+const engineOld = (c) => {
+  const now = c.engine_latest || {}, mine = c.stages_run || {};
+  const lt = (a, b) => { const x = String(a).split(".").map((n) => parseInt(n, 10) || 0), y = String(b).split(".").map((n) => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(3, x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
+  return Object.keys(now).filter((k) => !mine[k] || lt(mine[k], now[k]));
+};
+function engineLine(c) {
+  const old = engineOld(c);
+  if (!old.length) return null;
+  const now = c.engine_latest, mine = c.stages_run || {}, news = c.engine_news || {}, gone = !c.has_audio;
+  const k0 = old.includes("core") ? "core" : old[0];
+  const said = old.map((k) => news[k] && news[k][now[k]]).filter(Boolean);
+  const tip = `Analyzed by an older engine (${old.map((k) => `${k} ${mine[k] || "?"}`).join(", ")}; latest ${old.map((k) => `${k} ${now[k]}`).join(", ")}).`
+    + (said.length ? ` ${said.join(". ")}.` : "") + " Its numbers may change when it's re-analyzed."
+    + (gone ? " It can't be re-analyzed: its audio was deleted. Upload the file again to update it." : " Re-analyzing keeps your labels, edits and cue points.");
+  const job = jobs.get(c.id);
+  let btn;
+  if (job && !job.error) btn = h("span", { class: "spin" + (job.active ? "" : " idle"), role: "img", "aria-label": job.text, title: job.text });
+  else {
+    const why = gone ? "Can't re-analyze: its audio was deleted" : bulkBusy ? "Wait for the bulk action to finish" : job ? `${job.text}: ${job.error}. Try again` : "Re-analyze with the latest engine";
+    btn = h("button", { type: "button", class: "eng-btn", disabled: gone || bulkBusy ? "" : null, title: why, "aria-label": why, onclick: () => {
+      const done = runBulk("reanalyze", [c.id]);
+      repaint(line);
+      done.then(() => repaint(document.querySelector("#card .eng-old")));  // after a failure (a success re-renders the whole card)
+    } }, "↻");
+  }
+  const line = h("p", { class: "eng-old" + (gone ? " gone" : ""), title: tip },
+    h("span", { class: "eng-v", tabindex: "0", "aria-label": tip }, `Engine ${mine[k0] || "?"}`, h("span", { class: "muted" }, ` · latest ${now[k0]}`)), btn);
+  // Repaint the line the card shows now (the first repaint replaces this one, so later ones look it up)
+  const repaint = (el) => { if (el && el.isConnected && currentId === c.id) { const nl = engineLine(c); if (nl) el.replaceWith(nl); else el.remove(); } };
+  return line;
+}
+
 // The card head: title and menu, artist, the stats, the catalog line, and the label bar.
 function cardHead(c) {
   const core = c.core || {};
@@ -327,6 +363,8 @@ function cardHead(c) {
   const listed = lookupLine(c);
   if (listed) head.append(listed);
   head.append(h("div", { class: "card-filter", "data-kind": "head", hidden: "" }));
+  const eng = engineLine(c);
+  if (eng) head.append(eng);
   if (labelOpen !== null && labelOpen !== c.id) setLabelOpen(null);
   head.append(labelBar(c));
   return head;

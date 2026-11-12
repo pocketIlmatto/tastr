@@ -3,6 +3,7 @@
 import pytest
 
 from tastr import db
+from tastr.engine import rust
 from tastr.engine.card import TrackCard
 from tastr.filemeta import describe, read_file_meta
 from tastr.ingest import resolve_inputs
@@ -82,7 +83,8 @@ def test_describe_groups_empty_when_no_tags(synth_wav):
     assert meta["File tags"] == {}
     assert meta["Audio"]["Format"] == "WAV" and meta["Audio"]["Sample rate"].endswith("kHz")
     assert meta["Source"] == {"Kind": "file", "File": "synth_124_Am.wav", "SHA256": "ab" * 32}
-    assert meta["Analysis"] == {"Analyzed at": "2026-10-29T01:12:00+00:00", "Stages": "core 0.3.0"}
+    current = ", ".join(f"{k} {v}" for k, v in rust.STAGES.items())  # from an older engine, so the current ones follow
+    assert meta["Analysis"] == {"Analyzed at": "2026-10-29T01:12:00+00:00", "Stages": f"core 0.3.0 (current: {current})"}
 
 
 # --- every common container, tagged through ffmpeg so the files look like ones real taggers write ---

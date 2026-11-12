@@ -120,6 +120,8 @@ Third-party pieces it uses or links to:
 - **Demucs** (stems) is MIT. It is an optional install, and its model weights
   download on first use.
 - **yt-dlp** (links) is under the Unlicense, also optional.
+- **Signalsmith Stretch** and its Python binding **python-stretch** (mash-up key lock) are MIT,
+  an optional install.
 - **Catalog lookups** (optional, your own API keys): [GetSongBPM](https://getsongbpm.com)
   requires a link back wherever its data is shown, which the card does. FreqBlog's free key
   is for non-commercial use; its answers may be stored inside Tastr but never

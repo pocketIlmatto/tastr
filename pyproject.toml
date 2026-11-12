@@ -28,6 +28,8 @@ engine = ["scipy>=1.10", "librosa>=0.10"]
 links = ["yt-dlp"]
 # Stem separation (`tastr stems`, "Separate stems" in the UI). Pulls in PyTorch, about 2 GB.
 stems = ["demucs>=4.0.1", "tastr[engine]"]
+# Key lock for mash-ups (tastr/keylock.py): Signalsmith Stretch (MIT) through python-stretch (MIT), a small wheel.
+keylock = ["python-stretch>=0.3.1", "soundfile>=0.12", "tastr[engine]"]
 # The pretrained drum model for the kick, hat, tom and cymbal lanes (docs/drums.md). PyTorch, shared with
 # `stems`; the weights (CC BY-NC-SA 4.0, about 5 MB) download on first use.
 drums = ["torch>=2.1", "tastr[engine]"]

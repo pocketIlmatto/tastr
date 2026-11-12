@@ -71,7 +71,11 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   above), Loop the drop (four bars of the drop with a filter slider), Drums only
   (every section's drums with one line to switch the kit), Half-time remix, or
   Mash-up (a second track sped to line the bars up, with the tracks that mix well
-  in key listed first). The Mash-up's "Parts by section" grid picks which parts
+  in key listed first). With key lock on the server (`pip install 'tastr[keylock]'`,
+  or Modal when hosted), the second track is time-stretched to this track's tempo
+  with its pitch kept, so speeding it up no longer pulls it out of key; until that's
+  ready, and without it, the code speeds it up like a turntable and says how far
+  that moves its pitch. The Mash-up's "Parts by section" grid picks which parts
   play in each of this track's sections: either track's full mix or its stems
   (vocals, bass, other, drums), and which of the second track's sections they come
   from. Quick picks fill it ("A's vocals over B's beat", "Trade vocals: A in

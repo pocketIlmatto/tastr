@@ -1280,7 +1280,7 @@ def first_storage_day(conn: sqlite3.Connection) -> str | None:
 
 EVENT_DAYS = 90
 # The admin log's filter groups (type) for each kind of event, and where events come from (source).
-EVENT_TYPE_OF = {"upload": "upload", "reanalyze": "analysis", "drums": "analysis", "ml_tags": "analysis", "stems": "stems", "limit": "limit",
+EVENT_TYPE_OF = {"upload": "upload", "reanalyze": "analysis", "drums": "analysis", "ml_tags": "analysis", "stems": "stems", "keylock": "stems", "limit": "limit",
                  "failed": "error", "restart": "error", "signin": "signin", "deploy": "deploy", "ci": "deploy",
                  "backup": "backup", "admin": "admin"}
 EVENT_TYPES = ("upload", "analysis", "stems", "limit", "error", "signin", "blocked", "deploy", "backup", "admin")

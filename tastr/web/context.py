@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from .. import blobs, db, drum_jobs, lookup, ml_jobs, runner, service, stems
+from .. import blobs, db, drum_jobs, keylock, lookup, ml_jobs, runner, service, stems
 from ..engine import browser_card
 from ..filemeta import describe, legacy_upload_prefix
 from .analysis_jobs import AnalysisJobs, ref
@@ -109,6 +109,7 @@ class AppContext:
                               if hosted else {})
         # Their unfinished jobs are kept in the database (tastr/markers.py), so a restart picks them up.
         self.stem_jobs = stems.Jobs(db_path)
+        self.keylock_jobs = keylock.Jobs()  # mash-up key lock: cheap, so a restart just lets the page ask again
         # Without threads to wait for a slot (the Worker), background analyses queue for one in their lane.
         self.analyses = AnalysisJobs(db_path, legacy_folder=tastr_home() / "analysis-jobs",
                                      limit=None if blocking or not hosted else settings.max_analyses)
@@ -317,6 +318,7 @@ class AppContext:
         body["has_audio"] = self.audio_path(card) is not None
         body["stems_available"] = stems.available()
         body["stems_state"] = self.stem_jobs.status(self.stems_dir(card, track_id))["state"]
+        body["keylock_available"] = keylock.available()
         body["drum_model_available"] = drum_jobs.available()
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]
         body["ml_tags"] = db.get_ml_tags(c, track_id)
@@ -340,6 +342,11 @@ class AppContext:
     @staticmethod
     def stems_dir(card, track_id: int) -> Path:
         return stems.stems_dir(card.source.sha256, track_id)
+
+    @staticmethod
+    def keylock_dir(card, track_id: int) -> Path:
+        """Every key-locked copy of the track's audio (tastr/keylock.py)."""
+        return keylock.track_dir(card.source.sha256, track_id)
 
     def card_or_404(self, track_id: int):
         with closing(self.conn()) as c:

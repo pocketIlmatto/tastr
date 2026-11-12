@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 
-from ... import blobs, covers, db, drum_jobs, ml_jobs, stems
+from ... import blobs, covers, db, drum_jobs, keylock, ml_jobs, stems
 from ..context import AppContext, _unprefixed, analysis_source, runs_on
 from ..downloads import base_name, content_disposition, stem_file_name
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
@@ -90,7 +90,9 @@ def router(ctx: AppContext) -> APIRouter:
         return _preflight(origin)
 
     @api.options("/api/tracks/{track_id}/stems/{name}", include_in_schema=False)
-    def track_stem_preflight(track_id: int, name: str, origin: str | None = Header(None)):
+    @api.options("/api/tracks/{track_id}/keylock/{ratio}/audio", include_in_schema=False)
+    @api.options("/api/tracks/{track_id}/keylock/{ratio}/stems/{name}", include_in_schema=False)
+    def track_stem_preflight(track_id: int, origin: str | None = Header(None), name: str = "", ratio: str = ""):
         return _preflight(origin)
 
     @api.get("/api/tracks/{track_id}/strudel-link")
@@ -116,9 +118,21 @@ def router(ctx: AppContext) -> APIRouter:
         _signed(token, track_id)
         return track_stem(track_id, name, origin)
 
+    @api.get(PUBLIC_PREFIX + "{token}/tracks/{track_id}/keylock/{ratio}/audio", include_in_schema=False)
+    def signed_keylock_audio(token: str, track_id: int, ratio: str, origin: str | None = Header(None)):
+        _signed(token, track_id)
+        return keylock_part(track_id, ratio, "mix", origin)
+
+    @api.get(PUBLIC_PREFIX + "{token}/tracks/{track_id}/keylock/{ratio}/stems/{name}", include_in_schema=False)
+    def signed_keylock_stem(token: str, track_id: int, ratio: str, name: str, origin: str | None = Header(None)):
+        _signed(token, track_id)
+        return keylock_stem(track_id, ratio, name, origin)
+
     @api.options(PUBLIC_PREFIX + "{token}/tracks/{track_id}/audio", include_in_schema=False)
     @api.options(PUBLIC_PREFIX + "{token}/tracks/{track_id}/stems/{name}", include_in_schema=False)
-    def signed_preflight(token: str, track_id: int, origin: str | None = Header(None), name: str = ""):
+    @api.options(PUBLIC_PREFIX + "{token}/tracks/{track_id}/keylock/{ratio}/audio", include_in_schema=False)
+    @api.options(PUBLIC_PREFIX + "{token}/tracks/{track_id}/keylock/{ratio}/stems/{name}", include_in_schema=False)
+    def signed_preflight(token: str, track_id: int, origin: str | None = Header(None), name: str = "", ratio: str = ""):
         return _preflight(origin)
 
     def _stems_status(card, track_id: int) -> dict[str, Any]:
@@ -163,6 +177,70 @@ def router(ctx: AppContext) -> APIRouter:
         if not blobs.exists(path):
             raise HTTPException(404, "This track has not been separated into stems.")
         return _serve(path, origin, "audio/flac", filename=stem_file_name(_base(card, track_id), name) if download else None)
+
+    # ---- Key lock (tastr/keylock.py): the track stretched to a mash-up's speed ratio, pitch kept ----
+    def _ratio(text: str) -> float:
+        r = keylock.parse_ratio(text)
+        if r is None:
+            raise HTTPException(422, f"The ratio must be a number from {keylock.MIN_RATIO} to {keylock.MAX_RATIO}.")
+        return r
+
+    def _keylock_status(card, track_id: int, ratio: float) -> dict[str, Any]:
+        where = keylock.folder(card.source.sha256, track_id, ratio)
+        return {**ctx.keylock_jobs.status(where), "ratio": keylock.ratio_text(ratio), "available": keylock.available()}
+
+    @api.get("/api/tracks/{track_id}/keylock/{ratio}")
+    def track_keylock(track_id: int, ratio: str):
+        """The track stretched by `ratio` with its pitch kept, for a mash-up: none, queued, running, ready or error,
+        and `parts`, the parts ready (mix and the stems that were separated when it ran)."""
+        return _keylock_status(ctx.card_or_404(track_id), track_id, _ratio(ratio))
+
+    @api.post("/api/tracks/{track_id}/keylock/{ratio}", status_code=202)
+    def start_keylock(track_id: int, ratio: str, request: Request):
+        """Stretch the track's full mix, and its stems when it has them, by `ratio` in the background. Parts already
+        stretched at this ratio are reused (the cache), so this only does the missing ones."""
+        r = _ratio(ratio)
+        card = ctx.card_or_404(track_id)
+        path = ctx.audio_path(card)
+        if path is None:
+            raise HTTPException(404, "The original audio file is not on disk, so there is nothing to stretch.")
+        if not keylock.available():
+            raise HTTPException(501, keylock.INSTALL_HINT)
+        where = keylock.folder(card.source.sha256, track_id, r)
+        sources = {"mix": path}
+        sdir = ctx.stems_dir(card, track_id)
+        if stems.is_ready(sdir):
+            sources |= {n: stems.stem_path(sdir, n) for n in stems.STEM_NAMES}
+        status = ctx.keylock_jobs.status(where)
+        if status["state"] not in ("queued", "running") and set(sources) - set(status["parts"]):
+            if ctx.hosted:
+                user = request.state.user
+                with closing(ctx.conn()) as c:
+                    most = ctx.settings.daily_keylock
+                    if db.usage_today(c, user, "keylock", today()) >= most:
+                        raise ctx.refuse(user, 429, f"You've reached today's limit of {most} key-locked mash-ups.",
+                                         f"daily key lock limit ({most})")
+                    db.add_usage(c, user, "keylock", today())
+                ctx.event(user, "keylock", f"Started key-locking 1 track at ×{keylock.ratio_text(r)}",
+                          source=runs_on(keylock.backend()))
+            ctx.keylock_jobs.start(sources, where, r)
+        return _keylock_status(card, track_id, r)
+
+    @api.get("/api/tracks/{track_id}/keylock/{ratio}/audio")
+    def keylock_part(track_id: int, ratio: str, part: str = "mix", origin: str | None = Header(None)):
+        """The key-locked full mix as FLAC, like /audio (Range support; strudel.cc may fetch it)."""
+        card = ctx.card_or_404(track_id)
+        path = keylock.part_path(keylock.folder(card.source.sha256, track_id, _ratio(ratio)), part)
+        if part not in keylock.PARTS or not blobs.exists(path):
+            raise HTTPException(404, "This track hasn't been key-locked at that ratio yet.")
+        return _serve(path, origin, "audio/flac")
+
+    @api.get("/api/tracks/{track_id}/keylock/{ratio}/stems/{name}")
+    def keylock_stem(track_id: int, ratio: str, name: str, origin: str | None = Header(None)):
+        """One key-locked stem as FLAC."""
+        if name not in stems.STEM_NAMES:
+            raise HTTPException(404, f"Stems are {', '.join(stems.STEM_NAMES)}.")
+        return keylock_part(track_id, ratio, name, origin)
 
     def _drum_model_status(track_id: int) -> dict[str, Any]:
         return {**ctx.drum_runs.status(track_id), "available": drum_jobs.available()}

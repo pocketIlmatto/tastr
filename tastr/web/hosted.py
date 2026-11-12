@@ -74,6 +74,7 @@ class Settings:
     bulk_at_once: int = 0
     daily_stems: int = 10
     daily_drums: int = 10  # "Detect drums with the model" runs per person per UTC day
+    daily_keylock: int = 40  # mash-up key lock stretches (tastr/keylock.py) per person per UTC day; cached ones are free
     daily_asks: int = 20  # "Ask Claude to change it" in Try this in > Strudel, per person per UTC day (tastr/web/claude.py)
     admins: tuple[str, ...] = ()  # emails that may open the admin view
     # Uploaded audio and stems are deleted after this many days; 0 (the default) keeps them. An admin can set
@@ -121,6 +122,7 @@ class Settings:
             daily_stems=int(env.get("TASTR_DAILY_STEMS", cls.daily_stems)),
             daily_drums=int(env.get("TASTR_DAILY_DRUMS", cls.daily_drums)),
             daily_asks=int(env.get("TASTR_DAILY_ASKS", cls.daily_asks)),
+            daily_keylock=int(env.get("TASTR_DAILY_KEYLOCK", cls.daily_keylock)),
             admins=tuple(e.strip().lower() for e in env.get("TASTR_ADMIN_EMAILS", "").split(",") if e.strip()),
             audio_days=float(env.get("TASTR_AUDIO_DAYS", cls.audio_days)),
             link_secret=env.get("TASTR_LINK_SECRET", "").strip(),
@@ -157,7 +159,7 @@ class Settings:
 
     def limits(self) -> dict:
         return {"max_upload_mb": self.max_upload_mb, "max_minutes": self.max_minutes, "max_files": self.max_files, "daily_tracks": self.daily_tracks,
-                "daily_stems": self.daily_stems, "daily_drums": self.daily_drums, "daily_asks": self.daily_asks, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses,
+                "daily_stems": self.daily_stems, "daily_drums": self.daily_drums, "daily_asks": self.daily_asks, "daily_keylock": self.daily_keylock, "storage_gb": self.storage_gb, "max_analyses": self.max_analyses,
                 "audio_days": self.audio_days}
 
 
@@ -243,10 +245,10 @@ def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[
     who keeps it longest would keep it.
     With the audio bucket on (tastr/blobs.py), its copy goes too, and its upload time decides the age.
 
-    Cards stay, so the track still shows everything but playback. Stems go too, unless another track
-    still has the same file. Returns the ids of tracks whose audio went.
+    Cards stay, so the track still shows everything but playback. Stems and key-locked copies go too, unless
+    another track still has the same file. Returns the ids of tracks whose audio went.
     """
-    from .. import stems
+    from .. import keylock, stems
 
     per_person = per_person or {}
 
@@ -282,6 +284,7 @@ def expire_audio(conn: sqlite3.Connection, root: Path, days: float, keep: tuple[
         paths = conn.execute("SELECT local_path FROM tracks WHERE sha256 = ? AND local_path IS NOT NULL", (sha,)).fetchall()
         if not any(blobs.exists(lp) for (lp,) in paths):
             stems.remove(stems.stems_dir(sha, tid))
+            keylock.remove(keylock.track_dir(sha, tid))
     return [tid for tid, _ in gone]
 
 
@@ -355,7 +358,7 @@ def stored_bytes(home: Path) -> int:
     if blobs.enabled():
         return blobs.stored_bytes()
     total = 0
-    for sub in ("uploads", "stems"):
+    for sub in ("uploads", "stems", "keylock"):
         d = home / sub
         if d.is_dir():
             total += sum(f.stat().st_size for f in d.rglob("*") if f.is_file())

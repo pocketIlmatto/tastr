@@ -256,7 +256,7 @@ pub fn tempo_from_envelopes(
     let pulse = clip(((ratio - 1.0) as f64) / PULSE_SCALE, 0.0, 1.0);
     let frames = align_to_kick(&frames, low_flux);
     if frames.len() > 1 {
-        bpm = 60.0 * sr / (hop * median(&diffs(&frames)));
+        bpm = 60.0 * sr / (hop * beat_period(&frames));
     }
     (Some(bpm), frames, 0.5 * stability + 0.5 * pulse, stability, pulse)
 }
@@ -345,11 +345,9 @@ fn periodicity(onset: &[f32], sr: f64, tempogram: &mut Option<Vec<f64>>, bpm: f6
     ac[(i - 1).max(1)..(i + 2).min(ac.len())].iter().cloned().fold(f64::NEG_INFINITY, f64::max)
 }
 
-/// _regularize: a uniform grid across the track when the tracked beats are steady.
-fn regularize(frames: &[f64], n_frames: usize) -> Vec<f64> {
-    if frames.len() < MIN_BEATS {
-        return frames.to_vec();
-    }
+/// The beat count at each tracked beat: 0 at the first, then each gap rounded to a whole number of typical
+/// beats (the mean of the gaps under 1.5x the median), so a missed beat counts as two.
+fn beat_counts(frames: &[f64]) -> Vec<f64> {
     let d = diffs(frames);
     let med = median(&d);
     let small: Vec<f64> = d.iter().cloned().filter(|&v| v < 1.5 * med).collect();
@@ -360,6 +358,32 @@ fn regularize(frames: &[f64], n_frames: usize) -> Vec<f64> {
         acc += round_half_even(v / typical).max(1.0);
         k.push(acc);
     }
+    k
+}
+
+/// The beat period in frames: the slope of a line through the beats against their beat counts. The tracker's
+/// beats sit on whole frames, so the median gap snaps to one (21 or 22 frames is 123.05 or 117.45 BPM) while
+/// the beats themselves alternate and average in between. Under MIN_BEATS beats, or when the fit fails, the
+/// median gap.
+fn beat_period(frames: &[f64]) -> f64 {
+    let med = median(&diffs(frames));
+    if frames.len() < MIN_BEATS {
+        return med;
+    }
+    let (period, _) = polyfit1(&beat_counts(frames), frames);
+    if period.is_finite() && period > 0.5 * med && period < 1.5 * med {
+        period
+    } else {
+        med
+    }
+}
+
+/// _regularize: a uniform grid across the track when the tracked beats are steady.
+fn regularize(frames: &[f64], n_frames: usize) -> Vec<f64> {
+    if frames.len() < MIN_BEATS {
+        return frames.to_vec();
+    }
+    let k = beat_counts(frames);
     let (period, offset) = polyfit1(&k, frames);
     let worst =
         frames.iter().zip(&k).map(|(f, kk)| (f - (offset + period * kk)).abs()).fold(f64::NEG_INFINITY, f64::max);
@@ -718,6 +742,21 @@ mod tests {
             assert!((percent - expected).abs() <= 2.0, "{percent} vs {expected}");
             assert!(conf > 0.8);
         }
+    }
+
+    #[test]
+    fn beat_period_reads_between_whole_frames() {
+        // ~118.8 BPM at 43.07 frames/s is 21.75 frames a beat: the tracker's whole-frame beats go 22, 22, 22, 21,
+        // so the median gap says 22 (117.45 BPM)
+        let beats: Vec<f64> = (0..200).map(|i| round_half_even(i as f64 * 21.75)).collect();
+        assert_eq!(median(&diffs(&beats)), 22.0);
+        assert!((beat_period(&beats) - 21.75).abs() < 0.01, "{}", beat_period(&beats));
+        // a missed beat (a double gap) doesn't stretch the period
+        let mut missed = beats.clone();
+        missed.remove(100);
+        assert!((beat_period(&missed) - 21.75).abs() < 0.01, "{}", beat_period(&missed));
+        // too few beats: the median gap
+        assert_eq!(beat_period(&beats[..5]), 22.0);
     }
 
     /// A grid at 87 BPM (30 frames a beat) and mid-drum hits at the given half beats of each two-beat cycle.

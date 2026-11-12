@@ -22,9 +22,14 @@ def hpss(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         return np.apply_along_axis(median_filter, axis, S, size=31, mode="reflect")
 
     harm, perc = median(1), median(0)
-    parts = (librosa.util.softmask(harm, perc, power=2.0, split_zeros=True),
-             librosa.util.softmask(perc, harm, power=2.0, split_zeros=True))
-    return tuple(librosa.istft(S * mask * phase, dtype=y.dtype, length=y.shape[-1]) for mask in parts)
+    mask_harm = librosa.util.softmask(harm, perc, power=2.0, split_zeros=True)
+    from packaging.version import Version
+
+    if Version(librosa.__version__) >= Version("1.0.1"):  # 1.0.1 takes the percussive mask as 1 - the harmonic one
+        parts = (mask_harm, 1.0 - mask_harm)
+    else:
+        parts = (mask_harm, librosa.util.softmask(perc, harm, power=2.0, split_zeros=True))
+    return tuple(librosa.istft((S * mask) * phase, dtype=y.dtype, length=y.shape[-1]) for mask in parts)
 
 
 def onset_envelope(y_perc: np.ndarray) -> np.ndarray:

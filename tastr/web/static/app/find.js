@@ -159,6 +159,7 @@ const SQL_EXAMPLES = [
   ["Longest intros", "SELECT t.title, s.end_bar - s.start_bar + 1 AS intro_bars\nFROM sections s JOIN tracks t ON t.id = s.track_id\nWHERE s.label = 'intro' ORDER BY intro_bars DESC LIMIT 10"],
   ["Drops per track", "SELECT t.title, count(s.idx) AS drops FROM tracks t\nLEFT JOIN sections s ON s.track_id = t.id AND s.label = 'drop'\nGROUP BY t.id ORDER BY drops DESC"],
   ["Recently added", "SELECT title, artist, analyzed_at FROM tracks ORDER BY analyzed_at DESC LIMIT 10"],
+  ["BPM changed on re-analysis", "SELECT t.title, h.core_version AS was_engine, h.bpm AS was_bpm, t.bpm AS now_bpm\nFROM card_history h JOIN tracks t ON t.id = h.track_id\nWHERE h.id = (SELECT max(id) FROM card_history WHERE track_id = t.id)\n  AND abs(t.bpm - h.bpm) > 1 ORDER BY abs(t.bpm - h.bpm) DESC"],
 ];
 // Saved searches: the person's own are the quick chips; the built-in examples sit in an "Examples ▾" menu.
 // The server keeps them per person (GET/PUT/DELETE /api/searches), so they follow you to another device.
@@ -250,6 +251,8 @@ const Q_SCHEMA = [
   ["suggestions", "The ideas on each card.", [["track_id, idx", "Track, and position"], ["category", "e.g. drums, bass, harmony"], ["title, body", "What the card shows"], ["data_json", "Details as JSON (use json_extract)"]]],
   ["lookups", "What online catalogs list for a track, if lookups are on.", [["track_id, provider", "Track, and catalog name"], ["status", "found, not_found, pending, no_tags or error"], ["bpm, key_name", "As the catalog lists them"],
     ["key_tonic, key_mode, camelot", "Parsed from key_name, to compare with tracks"], ["fetched_at", "ISO time"], ["result_json", "The full answer as JSON"]]],
+  ["card_history", "A track's earlier cards: each re-analysis keeps the one it replaced (the last 5 per track). Join with tracks to see what changed.", [["track_id", "→ tracks.id"], ["core_version", "The engine's core version that made it, e.g. 0.5.0"],
+    ["bpm, key_name, camelot, energy", "That card's values"], ["analyzed_at, replaced_at", "ISO times it was made and replaced"], ["stages_json", "Which analysis steps ran, and their versions", true], ["card_json", "The whole earlier card (on your own machine only)", true]]],
 ];
 function renderSchema(mine) {
   $("q-schema-body").replaceChildren(...Q_SCHEMA.map(([t, about, cols]) => h("div", { class: "q-tbl" },

@@ -114,6 +114,25 @@ CREATE TABLE IF NOT EXISTS cards (
     json           TEXT NOT NULL
 );
 
+-- A track's earlier cards: when a re-analysis replaces a card, the one it replaces is kept here, the newest
+-- CARD_HISTORY_KEEP per track. analyzed_at is when that card was made, replaced_at when the next one took its place.
+-- core_version is its core stage's version (from stages_json), so SQL can ask what changed after an engine update.
+-- card_json is the card without its waveform and spectrogram data (extras.views).
+CREATE TABLE IF NOT EXISTS card_history (
+    id           INTEGER PRIMARY KEY,
+    track_id     INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    analyzed_at  TEXT,
+    replaced_at  TEXT NOT NULL,
+    core_version TEXT,
+    bpm          REAL,
+    key_name     TEXT,
+    camelot      TEXT,
+    energy       REAL,
+    stages_json  TEXT,
+    card_json    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_card_history_track ON card_history(track_id, id);
+
 -- The user's edits to a track's drums, bass and chords (the "Drums, bass & chords" view). The row with
 -- name NULL is the current, autosaved state; named rows are versions saved to come back to. edits_json is
 -- {drums|bass|chords|drumsrc: {section idx or "all": value}}. Re-analyzing keeps them (see remap_edits).
@@ -488,6 +507,7 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
     def write() -> int:
         existing = find_track_id(conn, sha256=s.sha256, source_uri=s.uri, owner=owner)
         if existing is not None:
+            _keep_history(conn, existing, row["analyzed_at"])
             sets = ", ".join(f"{col} = :{col}" for col in row)
             conn.execute(f"UPDATE tracks SET {sets} WHERE id = :id", {**row, "id": existing})
             track_id = existing
@@ -528,6 +548,62 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
     # JavaScript, and the upload (a fetch waited on with run_sync) can't wait inside one.
     _move_views(conn, card, track_id, text)
     return track_id
+
+
+CARD_HISTORY_KEEP = 5  # earlier cards kept per track (card_history); each is a few KB without its views
+
+
+def _keep_history(conn, track_id: int, now: str) -> None:
+    """Copy the card a re-analysis is about to replace into card_history, and keep only the newest
+    CARD_HISTORY_KEEP there. Runs inside save_card's transaction, so the copy and the new card land together."""
+    t = conn.execute("SELECT analyzed_at, stages_json, bpm, key_name, camelot, energy FROM tracks WHERE id = ?",
+                     (track_id,)).fetchone()
+    if t is None:
+        return
+    analyzed_at, stages_json, bpm, key_name, camelot, energy = tuple(t)
+    r = conn.execute("SELECT json FROM cards WHERE track_id = ?", (track_id,)).fetchone()
+    card_json = None
+    if r is not None:
+        try:
+            d = json.loads(r[0])
+            (d.get("extras") or {}).pop("views", None)  # about a megabyte; the waveform doesn't change with the engine
+            card_json = json.dumps(d)
+        except ValueError:
+            card_json = None
+    try:
+        stages = json.loads(stages_json) if stages_json else {}
+    except ValueError:
+        stages = {}
+    core = stages.get("core") if isinstance(stages, dict) else None
+    conn.execute("INSERT INTO card_history (track_id, analyzed_at, replaced_at, core_version, bpm, key_name, camelot, "
+                 "energy, stages_json, card_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (track_id, analyzed_at, now, core, bpm, key_name, camelot, energy, stages_json, card_json))
+    conn.execute("DELETE FROM card_history WHERE track_id = ? AND id NOT IN "
+                 "(SELECT id FROM card_history WHERE track_id = ? ORDER BY id DESC LIMIT ?)",
+                 (track_id, track_id, CARD_HISTORY_KEEP))
+
+
+def card_history(conn: sqlite3.Connection, track_id: int, full: bool = False) -> list[dict[str, Any]]:
+    """A track's earlier cards, newest first: [{id, analyzed_at, replaced_at, stages, core_version, bpm, key_name,
+    camelot, energy}], and with `full` each one's `card` (the stored card, without its views) too."""
+    rows = conn.execute("SELECT id, analyzed_at, replaced_at, core_version, bpm, key_name, camelot, energy, "
+                        "stages_json, card_json FROM card_history WHERE track_id = ? ORDER BY id DESC", (track_id,))
+    out = []
+    for r in rows:
+        d = dict(zip(("id", "analyzed_at", "replaced_at", "core_version", "bpm", "key_name", "camelot", "energy"),
+                     tuple(r)[:8]))
+        d["stages"] = _json_or(r[8], {})
+        if full:
+            d["card"] = _json_or(r[9], None)
+        out.append(d)
+    return out
+
+
+def _json_or(text: str | None, default):
+    try:
+        return json.loads(text) if text else default
+    except ValueError:
+        return default
 
 
 def _move_views(conn, card: TrackCard, track_id: int, text: str) -> None:
@@ -1114,8 +1190,12 @@ _QUERY_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUN
 # What a friend's search on a hosted server sees (library_snapshot): these tables, their own rows only, without the
 # columns that name people or server paths.
 LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups", "track_labels",
-                  "review_flags", "pattern_reviews", "ml_tags")
+                  "review_flags", "pattern_reviews", "ml_tags", "card_history")
 _PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_json"}
+_PRIVATE_IN = ("tracks", "card_history")  # the tables that have such columns
+# Left out of every copy, an admin's too: a whole earlier card is several KB a row (it is for the API, not for SQL),
+# and it holds the source's paths.
+_NEVER_COPIED = {("card_history", "card_json")}
 
 
 def library_snapshot(path: str | os.PathLike, owner: str | None, held: tuple[str, ...] | list[str] = ()) -> bytes:
@@ -1131,7 +1211,8 @@ def library_snapshot(path: str | os.PathLike, owner: str | None, held: tuple[str
     with closing(connect(path, readonly=True)) as src, closing(sqlite3.connect(":memory:")) as dst:
         for t in LIBRARY_TABLES:
             cols = [(r[1], r[2]) for r in src.execute(f"PRAGMA table_info({t})")
-                    if t != "tracks" or owner is None or r[1] not in _PRIVATE_COLUMNS]
+                    if (t, r[1]) not in _NEVER_COPIED
+                    and (t not in _PRIVATE_IN or owner is None or r[1] not in _PRIVATE_COLUMNS)]
             names = ", ".join(f'"{c}"' for c, _ in cols)
             dst.execute(f"CREATE TABLE {t} ({', '.join(f'{chr(34)}{c}{chr(34)} {typ}' for c, typ in cols)})")
             sql = (f"SELECT {names} FROM tracks {where}" if t == "tracks" else

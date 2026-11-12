@@ -44,8 +44,11 @@ claude = ["anthropic>=2.3"]
 # Benchmarks and stem separation on Modal (docs/cloud.md). scipy: benches score their results on this machine.
 cloud = ["modal>=1.0", "scipy>=1.10"]
 # ruff is pinned so a new release cannot turn CI red on its own; bump it on purpose.
+# librosa is held below 1.0.1 for the tests: 1.0.1 derives HPSS's percussive mask as 1 - the harmonic one, which
+# differs in the last bit from the two separate softmasks that tests/librosa_ref.py and the Rust engine compute
+# (tests/test_engine.py checks the two sample for sample).
 dev = ["tastr[engine]", "pytest>=8", "pytest-xdist>=3.5", "httpx>=0.27", "pyjwt[crypto]>=2.8", "ruff==0.17.3",
-       "boto3>=1.34", "moto[s3,server]>=5", "tastr[claude]"]  # boto3: tests/test_s3.py checks our signatures
+       "librosa<1.0.1", "boto3>=1.34", "moto[s3,server]>=5", "tastr[claude]"]  # boto3: tests/test_s3.py checks our signatures
 
 [project.scripts]
 tastr = "tastr.cli:main"

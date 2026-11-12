@@ -138,6 +138,10 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   re-analyzes all of them at once. Re-analysis needs the original audio, so a track whose audio was deleted
   can't be updated (upload the file again). When a stage version goes up, add a sentence on what changed to
   `STAGE_NEWS` in `tastr/engine/rust.py`.
+- **Earlier cards are kept.** Re-analyzing a track keeps the card it replaces (its BPM, key, energy and engine
+  versions, the last 5 per track), so you can see what an engine update changed: `GET /api/tracks/{id}/history`, or
+  the `card_history` table in Explore › Find › SQL (example: "BPM changed on re-analysis"). The card doesn't show
+  them yet. Tracks re-analyzed before this have no history.
 - **Explore tab**, in two tabs:
   - **Find tracks** searches your library without code (BPM, key and the keys that mix with it, energy, vibe,
     length, sections, text, with AND/OR groups), or in read-only SQL with a table and column reference. Save

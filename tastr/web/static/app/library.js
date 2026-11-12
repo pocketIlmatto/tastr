@@ -282,6 +282,11 @@ function countLine(l, n) {
 }
 const noneRow = (l) => (l && !libActive() ? h("li", { class: "muted empty" }, "This list has no tracks left.")
   : h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
+// A row's status marks: ✓ labeled, ○ in the review list, ↻ from an older engine
+const stMarks = (t, inQ) => h("span", { class: "st-marks" },
+  labels.has(t.id) ? h("span", { class: "lb-tick", title: "You labeled this track", "aria-label": "You labeled this track" }, "✓") : null,
+  inQ.has(t.id) ? h("span", { class: "rv-dot", title: "In your review list", "aria-label": "In your review list" }) : null,
+  t.stale ? h("span", { class: "eng-mk", title: t.audio_gone ? "From an older engine. Its audio was deleted, so it can't be re-analyzed." : "From an older engine: re-analyze to update", "aria-label": "From an older engine" }, "↻") : null);
 // "↻ 40 tracks are from an older engine. Show them · Re-analyze 30. 10 can't: their audio was deleted." Re-analyze runs the
 // bulk Re-analyze over every one that still has its audio (re-analysis needs it) and isn't busy already.
 const s1 = (n, one, many) => (n === 1 ? one : many);
@@ -333,10 +338,7 @@ export function renderList() {
             job.frac != null ? progBar(job.frac, `${t.title || "Track"} progress`) : null]
           : h("div", { class: "s" }, h("span", { class: "s-txt" }, [t.artist, isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, mmss(t.duration)].filter(Boolean).join(" · ")),
             // status marks in a fixed slot next to the energy bar, so they line up whatever the text length
-            h("span", { class: "st-marks" },
-              labels.has(t.id) ? h("span", { class: "lb-tick", title: "You labeled this track", "aria-label": "You labeled this track" }, "✓") : null,
-              inQ.has(t.id) ? h("span", { class: "rv-dot", title: "In your review list", "aria-label": "In your review list" }) : null,
-              t.stale ? h("span", { class: "eng-mk", title: t.audio_gone ? "From an older engine. Its audio was deleted, so it can't be re-analyzed." : "From an older engine: re-analyze to update", "aria-label": "From an older engine" }, "↻") : null),
+            stMarks(t, inQ),
             h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` }))))));
   }
   ul.scrollTop = top;

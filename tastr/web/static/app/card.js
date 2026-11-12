@@ -337,13 +337,14 @@ function engineLine(c) {
     const why = gone ? "Can't re-analyze: its audio was deleted" : bulkBusy ? "Wait for the bulk action to finish" : job ? `${job.text}: ${job.error}. Try again` : "Re-analyze with the latest engine";
     btn = h("button", { type: "button", class: "eng-btn", disabled: gone || bulkBusy ? "" : null, title: why, "aria-label": why, onclick: () => {
       const done = runBulk("reanalyze", [c.id]);
-      repaint();
-      done.then(repaint);  // after a failure (a success re-renders the whole card)
+      repaint(line);
+      done.then(() => repaint(document.querySelector("#card .eng-old")));  // after a failure (a success re-renders the whole card)
     } }, "↻");
   }
   const line = h("p", { class: "eng-old" + (gone ? " gone" : ""), title: tip },
     h("span", { class: "eng-v", tabindex: "0", "aria-label": tip }, `Engine ${mine[k0] || "?"}`, h("span", { class: "muted" }, ` · latest ${now[k0]}`)), btn);
-  const repaint = () => { if (line.isConnected && currentId === c.id) { const nl = engineLine(c); if (nl) line.replaceWith(nl); else line.remove(); } };
+  // Repaint the line the card shows now (the first repaint replaces this one, so later ones look it up)
+  const repaint = (el) => { if (el && el.isConnected && currentId === c.id) { const nl = engineLine(c); if (nl) el.replaceWith(nl); else el.remove(); } };
   return line;
 }
 

@@ -6,7 +6,8 @@ counts failed requests. It trips when FAILED_LIMIT or more requests failed, or w
 (out of memory or CPU), which fails every request in flight.
 
 Prints a Markdown report and writes `tripped=true|false` and `failed=<n>` to $GITHUB_OUTPUT when it is set. The
-report goes into a public issue, so emails, upload names and link tokens are masked.
+report can go into a public issue (and parts of it show on the public run page), so emails, upload names and link
+tokens are masked.
 
 GitHub runs scheduled workflows late or drops them when it is busy (on 2026-11-05 the 30-minute schedule ran about
 every 6 to 8 hours), so a fixed one-hour window missed most of the time. Each check therefore reads back to the start

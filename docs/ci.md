@@ -132,16 +132,25 @@ memory or CPU time), which fails every request in flight:
 
 1. it opens an issue labeled `worker-errors` with the grouped errors and one example of each, and
 2. starts Claude Code in Actions, which traces the cause and, when the fix is clear, opens a pull request on a
-   `claude/worker-errors-<issue>` branch that closes the issue. When it needs a setting or a secret, or the cause
-   came from outside and has passed, it comments on the issue with what to do instead. It never changes
-   settings or secrets, deploys or merges.
+   `claude/worker-errors-<run id>` branch. Either way it leaves a note, which the workflow posts on the issue: the
+   pull request's link, or what to do when it needs a setting or a secret, or the cause came from outside and has
+   passed. The issue is closed only when nothing is left for the owner; close it yourself once the fix merges. It
+   never changes settings or secrets, deploys or merges.
 
-While a `worker-errors` issue is open, nothing new starts; each new report is added to it as a comment. The repo
-is public, so the report masks emails, upload names and link tokens.
+While a `worker-errors` issue is open, nothing new starts; each new report is added to it as a comment.
+
+**Where the issue goes.** With the secrets `ISSUES_REPO` (`owner/name`) and `ISSUES_TOKEN` set, the issue goes to
+that repository, for example a private one, so error reports stay out of this public repo. The repository's name is
+a secret only so that it is masked in the public run logs. The variable `ISSUES_LABELS` (comma-separated, optional)
+adds labels to each new issue there. Claude never sees `ISSUES_TOKEN`: the workflow hands it the issue as a file
+and posts its note afterwards, and its pull request doesn't link the issue. Without both secrets the issue goes to
+this repository, as before. Either way the report masks emails, upload names and link tokens, and when the issue is
+private the public run page shows only the counts.
 
 - **Secrets:** `CF_LOGS_TOKEN`, a Cloudflare API token with only Account > Workers Observability > Read (My
   Profile > API Tokens > Create Token > Custom token), and the same Claude secret as slow tests. Without
-  `CF_LOGS_TOKEN` the check only says so in the run summary.
+  `CF_LOGS_TOKEN` the check only says so in the run summary. Optional: `ISSUES_REPO` and `ISSUES_TOKEN` (a
+  fine-grained GitHub token with only Issues: Read and write, on only that repository), see above.
   If Cloudflare refuses the token, the check fails (a red run) and shows Cloudflare's reason in its log;
   no issue is opened. Check the token's permission, account and IP filtering, and that it hasn't expired.
 - **Try it:** Actions > worker-errors > Run workflow with "force" ticked ("minutes" sets a fixed window instead of

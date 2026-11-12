@@ -529,6 +529,22 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   listed at 84-92 (half time), 8 at 111-119 (about 2/3 of 174), 8 at 160-175, 2 elsewhere. So
   `beatport-tempo` Acc1 on drum & bass mostly measures the labeling (19 of 40 exact, 26 counting double / half).
   Dubstep is listed at 140, some hip-hop at 150-195 (double time).
+- Tempo from the beat grid, not the median beat gap (2026-11-12, core 0.6.0). The tracker's beats sit on whole
+  frames (43.07 fps), and when they weren't steady enough to regularize, the reported BPM was the median gap,
+  which snaps to a whole number of frames: 22 frames is 117.45 BPM, 21 is 123.05, and main's outputs repeat
+  those values (and 172.27). A track at ~118.8 BPM (beats 22, 22, 22, 21 frames apart) read 117.45, and
+  mash-ups built on it drifted a quarter beat every 5 bars. Now the BPM is the slope of a line through the beats
+  against their beat counts (`beat_period`, the fit `regularize` uses). Subsets on Modal, Acc1 / Acc2 unchanged
+  and no track's verdict changed; the gain is precision, measured on tracks right under Acc1 both times:
+
+  | Set | Tracks | Acc1 / Acc2 | Mean abs error (BPM) | Median signed error | Off by > 1 BPM |
+  |---|---|---|---|---|---|
+  | `beatport-tempo` (`--limit 100`) | 90 | 0.900 / 0.940 | 1.185 -> 0.269 | +0.075 -> +0.010 | 41 -> 4 |
+  | `giantsteps-tempo` | 33 | 0.767 / 0.884 | 1.594 -> 0.878 | -0.090 -> -0.580 | 19 -> 13 |
+
+  GiantSteps still reads 1-2 BPM low on several tracks (127 -> 124.6, 121 -> 119.7, 142 -> 140.6), so its
+  median moved down while its mean error nearly halved; the cause is not yet known. Its baseline here (0.767 /
+  0.884) differs from the earlier 0.744 / 0.907; main produced it before this change.
 - Tried and dropped (Acc1 counts as hjdb train / Beatport / GiantSteps, from 151 / 675 / 30 at 0.9):
   - Onsets from the full mix instead of the HPSS percussive part: 50:50 mix at 0.8 gives 186 / 668 / 34, full
     mix 184 / 659 / 34. Helps the fast sets, costs Beatport 7 to 16 tracks.

@@ -23,7 +23,9 @@ def hpss(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     harm, perc = median(1), median(0)
     mask_harm = librosa.util.softmask(harm, perc, power=2.0, split_zeros=True)
-    if int(librosa.__version__.split(".")[0]) >= 1:  # librosa 1.0 takes the percussive mask as 1 - the harmonic one
+    from packaging.version import Version
+
+    if Version(librosa.__version__) >= Version("1.0.1"):  # 1.0.1 takes the percussive mask as 1 - the harmonic one
         parts = (mask_harm, 1.0 - mask_harm)
     else:
         parts = (mask_harm, librosa.util.softmask(perc, harm, power=2.0, split_zeros=True))

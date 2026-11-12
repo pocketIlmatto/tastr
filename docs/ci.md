@@ -248,27 +248,30 @@ closes the issue. No Claude runs: a drop needs a person to decide whether it is 
 - **Cost:** about $0.15 of Modal compute a month, plus about 20 Actions minutes, which are free on a public
   repository.
 
-## Auto-merge for docs and tests
+## Auto-merge
 
-`.github/workflows/automerge.yml` (run from main, so a PR can't change its rules) turns on auto-merge (squash) for pull requests that only touch docs and tests.
-GitHub then merges them by itself once the required `test` check passes. A PR qualifies when all of these hold:
+`.github/workflows/automerge.yml` (run from main, so a PR can't change its rules) turns on auto-merge (squash) for the
+owner's pull requests. GitHub then merges each one by itself once the required checks pass: `test`, and
+`codex-review`, which waits for Codex's review ([above](#codex-code-reviews)). A PR qualifies when it comes from a
+branch in this repository, isn't a draft, and its author is the owner, `claude[bot]` or `pocketilmatto-bot` (the old
+agent account). Dependabot PRs never qualify.
 
-- it comes from a branch in this repository;
-- its author is the owner, `claude[bot]`, or `pocketilmatto-bot`, the owner's agent account that Claude sessions
-  work as;
-- every path it adds, changes, deletes or renames (old and new name) is under `docs/` or `tests/`, or is a Markdown
-  file. `CLAUDE.md`, `AGENTS.md` and anything under `.github/` never qualify.
-
-A later push to the PR that touches anything else turns that auto-merge off again, since a merge made with the
-workflow's token starts no deploy. An auto-merge the PR's author turned on stays on: main's ruleset requires the
-owner's approval, and Claude sessions turn on auto-merge for every PR they open so that approval is the only step.
-For that to be safe, the ruleset must also dismiss stale approvals when new commits are pushed.
-Dependabot PRs change manifests, so they never qualify.
-
+- **Code PRs** need the `AUTOMERGE_TOKEN` secret, a fine-grained token of the owner's ([settings.md](settings.md)).
+  Auto-merge turned on with it merges as the owner, so the push to main runs the tests and the deploy as usual.
+  Without it only docs-and-tests PRs auto-merge.
+- **Docs and tests only** (every path, old and new name, under `docs/` or `tests/`, or a Markdown file; `CLAUDE.md`,
+  `AGENTS.md` and anything under `.github/` never count): without the token, the workflow's own token turns on
+  auto-merge. GitHub starts no workflows for a merge made with that token, so `tests` doesn't rerun on main and
+  nothing deploys; neither is needed for docs and tests. A later push that touches anything else turns that
+  auto-merge off again.
+- **Hold a PR:** add the `hold` label. That turns auto-merge off; removing it turns it back on. Claude sessions add
+  `hold` to PRs that must wait for the owner: UI changes waiting for her design review (CLAUDE.md), and anything that
+  needs a setting or secret of hers first.
+- **Approvals:** main's ruleset needs no approving review, so the required checks are the gate. It dismisses stale
+  approvals on push.
 - **Setting:** turn on **Settings > General > Pull Requests > Allow auto-merge**. Without it the run fails with
   "auto-merge is not allowed".
-- **Note:** GitHub starts no workflows for a merge made with the workflow's token, so `tests` doesn't rerun on main
-  after such a merge. It passed on the PR head, and nothing deploys, since docs and tests never ship.
+- **Already green:** GitHub can't turn on auto-merge for a PR whose checks have all passed; merge those by hand.
 
 ## Deploy workflow
 

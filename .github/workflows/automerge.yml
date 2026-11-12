@@ -1,22 +1,26 @@
 name: automerge
-# Docs and tests only pull requests merge on their own once the required `test` check passes
-# (docs/ci.md#auto-merge-for-docs-and-tests). A PR qualifies when it comes from a branch in this repository, its
-# author is the owner, Claude (claude[bot], from the workflows that run claude-code-action) or the owner's agent account (pocketilmatto-bot,
-# which Claude sessions use instead of the owner's own account), and every file it adds, changes, deletes or
-# renames is under docs/ or tests/, or is a Markdown file other than CLAUDE.md and AGENTS.md. Nothing under
-# .github/ qualifies. A later push that touches anything else turns off an auto-merge this workflow turned on, since
-# its merges start no deploy. An auto-merge the author turned on stays: main's ruleset requires the owner's approval,
-# and Claude sessions turn it on for every PR so that approval is the only step.
-# Needs "Allow auto-merge" on in the repository settings (General > Pull Requests).
+# Turns on auto-merge (squash) for the owner's pull requests, so GitHub merges each one once the required checks
+# (`test`, and `codex-review`, which waits for Codex's review) pass (docs/ci.md#auto-merge).
 #
-# The merge is made with this workflow's token, and GitHub starts no workflows for pushes made with it: the tests
-# don't rerun on main (they already passed on the PR head) and nothing deploys (docs and tests never ship).
+# - Code PRs: only when the AUTOMERGE_TOKEN secret is set (a fine-grained token of the owner's, docs/settings.md).
+#   Auto-merge turned on with that token merges as the owner, so the push to main starts the tests and the deploy
+#   as usual. A merge made with this workflow's own token would start no workflows, so code merged that way would
+#   never deploy.
+# - Docs and tests only PRs (every path under docs/ or tests/, or a Markdown file other than CLAUDE.md and AGENTS.md;
+#   nothing under .github/): with this workflow's own token when there is no AUTOMERGE_TOKEN. Their merge needs no
+#   deploy, and the tests already passed on the PR head.
+# - The `hold` label keeps a PR for a person: adding it turns auto-merge off, removing it turns it back on. Drafts
+#   are skipped until marked ready.
+#
+# A PR qualifies when it comes from a branch in this repository and its author is the owner, Claude (claude[bot]) or
+# the owner's old agent account (pocketilmatto-bot). Needs "Allow auto-merge" on in the repository settings
+# (General > Pull Requests).
 #
 # pull_request_target, so the rules always come from main: a PR that edits this file can't loosen them for
-# itself. The job never checks out or runs the PR's code; it only reads its file list.
+# itself. The job never checks out or runs the PR's code; it only reads its file list and labels.
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
     branches: [main]
 concurrency:
   group: automerge-${{ github.event.pull_request.number }}
@@ -37,8 +41,27 @@ jobs:
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
+          OWNER_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
+          HOLD: ${{ contains(github.event.pull_request.labels.*.name, 'hold') }}
         run: |
+          by=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" -q '.auto_merge.enabled_by.login // empty')
+          if [ "$HOLD" = "true" ]; then
+            echo "Labelled hold: this one waits for a person." | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ -n "$by" ]; then
+              GH_TOKEN=${OWNER_TOKEN:-$GH_TOKEN} gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --disable-auto
+            fi
+            exit 0
+          fi
+          if [ -n "$OWNER_TOKEN" ]; then
+            echo "Merging once the required checks pass (as the owner, so main deploys)." | tee -a "$GITHUB_STEP_SUMMARY"
+            if [ "$by" = "github-actions[bot]" ]; then  # an earlier docs-only push: switch it to the owner's token
+              gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --disable-auto
+            fi
+            GH_TOKEN=$OWNER_TOKEN gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --auto --squash
+            exit 0
+          fi
+          # No owner token: docs and tests only.
           # New and old names, so a rename out of docs/ into the app does not count as docs.
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate \
             -q '.[] | .filename, (.previous_filename // empty)' > files.txt
@@ -49,11 +72,10 @@ jobs:
             echo "Docs and tests only ($(wc -l < files.txt) paths): merging once the checks pass." | tee -a "$GITHUB_STEP_SUMMARY"
             gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --auto --squash
           else
-            { echo "Not docs and tests only, so this one waits for a person. Other paths:"; echo '```'; printf '%s\n' "$other"; echo '```'; } \
-              | tee -a "$GITHUB_STEP_SUMMARY"
+            { echo "Not docs and tests only, and no AUTOMERGE_TOKEN, so this one waits for a person. Other paths:"
+              echo '```'; printf '%s\n' "$other"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
             # Turns off only an auto-merge this workflow turned on for an earlier, docs-only push: a merge made with
             # this token starts no workflows, so code merged that way would not deploy. One the author turned on stays.
-            by=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" -q '.auto_merge.enabled_by.login // empty')
             if [ "$by" = "github-actions[bot]" ]; then
               gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --disable-auto
             fi

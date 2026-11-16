@@ -12,6 +12,7 @@ def hpss(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(harmonic, percussive): librosa.effects.hpss with its defaults. The medians are taken row by row (or
     column by column), which gives librosa's 2-D median filter's values on scipy's fast 1-D path."""
     import librosa
+    from packaging.version import Version
     from scipy.ndimage import median_filter
 
     S, phase = librosa.magphase(librosa.stft(y))
@@ -23,9 +24,9 @@ def hpss(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     harm, perc = median(1), median(0)
     mask_harm = librosa.util.softmask(harm, perc, power=2.0, split_zeros=True)
-    # librosa 1.0 takes the percussive mask as 1 - the harmonic one (the same value up to float32 rounding);
+    # librosa 1.0.1 takes the percussive mask as 1 - the harmonic one (the same value up to float32 rounding);
     # earlier versions compute it as its own soft mask. Follow whichever librosa is installed.
-    if int(librosa.__version__.split(".")[0]) >= 1:
+    if Version(librosa.__version__) >= Version("1.0.1"):
         mask_perc = 1.0 - mask_harm
     else:
         mask_perc = librosa.util.softmask(perc, harm, power=2.0, split_zeros=True)

@@ -4,6 +4,8 @@ name: bench-smoke
 # (`modal run`), so the shared `tastr` app stays as deployed. .github/scripts/bench_smoke.py compares the scores
 # with the last good run and with the scores the app quotes; a drop opens a `bench-drop` issue assigned to the
 # owner, and the next good run closes it. About $0.15 of Modal compute a run.
+# The issue goes to the repository in the ISSUES_REPO secret using the ISSUES_TOKEN secret, with the labels in the
+# ISSUES_LABELS variable added, like worker-errors.yml; without them, to this repository.
 # Needs the MODAL_TOKEN_ID and MODAL_TOKEN_SECRET repository secrets (the deploy workflow's), and the `tastr-r2`
 # secret in the Modal workspace's main environment (docs/cloud.md).
 on:
@@ -94,11 +96,19 @@ jobs:
           if-no-files-found: ignore
       - name: Open or close the bench-drop issue
         env:
-          GH_TOKEN: ${{ github.token }}
+          ISSUES_REPO: ${{ secrets.ISSUES_REPO }}
+          ISSUES_TOKEN: ${{ secrets.ISSUES_TOKEN }}
+          LABELS: ${{ vars.ISSUES_LABELS }}
+          OWN_TOKEN: ${{ github.token }}
           DROP: ${{ steps.compare.outputs.drop }}
           ACCEPT: ${{ inputs.accept && 'true' || 'false' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          if [ -n "$ISSUES_REPO" ] && [ -n "$ISSUES_TOKEN" ]; then
+            export GH_REPO="$ISSUES_REPO" GH_TOKEN="$ISSUES_TOKEN"
+          else
+            export GH_REPO="$GITHUB_REPOSITORY" GH_TOKEN="$OWN_TOKEN" LABELS=""
+          fi
           open=$(gh issue list --label bench-drop --state open --json number --jq '.[0].number // empty')
           { echo "Run: $RUN_URL"; echo; cat report.md; } > body.md
           if [ "$DROP" = true ] && [ "$ACCEPT" = true ]; then
@@ -111,7 +121,7 @@ jobs:
               gh issue comment "$open" --body-file body.md
             else
               gh label create bench-drop --color B60205 --description "The monthly benchmark smoke run dropped (bench-smoke.yml)" --force
-              gh issue create --label bench-drop --assignee "$GITHUB_REPOSITORY_OWNER" \
+              gh issue create --label "bench-drop${LABELS:+,$LABELS}" --assignee "$GITHUB_REPOSITORY_OWNER" \
                 --title "Benchmark smoke run dropped ($(date -u +%Y-%m-%d))" --body-file body.md
             fi
             # A failed run is never "the last good run", so the next one still compares with the scores before the drop.

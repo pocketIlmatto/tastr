@@ -308,7 +308,8 @@ class AcousticBrainz(Provider):
         return recs
 
     def candidates(self, q: TrackQuery) -> list[dict]:
-        """MusicBrainz recordings that match the track ({mbid, artist, title, isrcs}), closest length first."""
+        """MusicBrainz recordings that match the track ({mbid, artist, title, isrcs, releases}), closest length
+        first. `releases` is the search's list of each one's releases (album art uses it, tastr/coverart.py)."""
         first = (artist_names(q.artist) or [q.artist])[0]
         recs = self.search(f"recording:{_lucene(q.title)} AND artist:{_lucene(first)}")
         hits = []
@@ -320,7 +321,8 @@ class AcousticBrainz(Provider):
             if diff is not None and diff > LENGTH_SLACK:
                 continue
             hits.append((diff if diff is not None else LENGTH_SLACK, len(hits),
-                         {"mbid": r["id"], "artist": _credit(r), "title": r.get("title"), "isrcs": r.get("isrcs") or []}))
+                         {"mbid": r["id"], "artist": _credit(r), "title": r.get("title"), "isrcs": r.get("isrcs") or [],
+                          "releases": r.get("releases")}))
         return [h for *_, h in sorted(hits, key=lambda h: h[:2])]
 
     def features(self, mbids: list[str]) -> dict[str, dict]:

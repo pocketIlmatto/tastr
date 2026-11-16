@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 
-from ... import blobs, covers, db, drum_jobs, keylock, ml_jobs, stems
+from ... import blobs, coverart, covers, db, lookup, drum_jobs, keylock, ml_jobs, stems
 from ..context import AppContext, _unprefixed, analysis_source, runs_on
 from ..downloads import base_name, content_disposition, stem_file_name
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
@@ -68,14 +68,27 @@ def router(ctx: AppContext) -> APIRouter:
         return _serve(path, origin, filename=name)
 
     @api.get("/api/tracks/{track_id}/cover")
-    def track_cover(track_id: int):
+    def track_cover(track_id: int, request: Request):
         """The album art embedded in the track's file, for a mash-up share's preview picture (routes/strudel.py);
-        404 when it has none. Read from the audio the first time, so it can take a moment then."""
+        404 when it has none. Read from the audio the first time, so it can take a moment then. For the people whose
+        links may show album art, a track without one gets the Cover Art Archive's (tastr/coverart.py), when
+        outside requests are allowed."""
         with closing(ctx.conn()) as c:
             card = db.load_card(c, track_id)
+            stored = db.get_lookups(c, track_id) if card is not None else []
         if card is None:
             raise HTTPException(404, "no such track")
-        got = covers.cover(track_id, card.source.local_path)
+        fetch = None
+        if ctx.art_allowed(ctx.owner_of(request)) and coverart.enabled():
+            def fetch():
+                # Count MusicBrainz requests in the lookup_usage table, like catalog lookups, so both share its budget.
+                with closing(ctx.conn()) as conn:
+                    token = lookup.usage_conn.set(conn)
+                    try:
+                        return coverart.fetch(lookup.query_for(card), stored)
+                    finally:
+                        lookup.usage_conn.reset(token)
+        got = covers.cover(track_id, card.source.local_path, fetch)
         if got is None:
             raise HTTPException(404, "This track has no album art.")
         return Response(got[0], media_type=got[1], headers={"Cache-Control": "private, max-age=86400"})

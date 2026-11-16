@@ -124,9 +124,10 @@ jobs:
             export GH_REPO="$GITHUB_REPOSITORY" GH_TOKEN="$OWN_TOKEN"
           fi
           mkdir -p .worker-errors
-          gh issue view "$ISSUE" --comments --json title,body,comments \
+          gh issue view "$ISSUE" --json title,body,comments \
             --jq '"# " + .title + "\n\n" + .body + ([.comments[] | "\n\n---\n\n" + .body] | join(""))' > .worker-errors/issue.md
       - uses: anthropics/claude-code-action@v1
+        id: claude
         if: steps.auth.outputs.ok == 'true'
         env:
           CF_LOGS_TOKEN: ${{ secrets.CF_LOGS_TOKEN }}  # read-only logs, for worker_errors.py --minutes
@@ -180,6 +181,7 @@ jobs:
           ISSUES_TOKEN: ${{ secrets.ISSUES_TOKEN }}
           OWN_TOKEN: ${{ github.token }}
           AUTH_OK: ${{ steps.auth.outputs.ok }}
+          CLAUDE: ${{ steps.claude.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -n "$ISSUES_REPO" ] && [ -n "$ISSUES_TOKEN" ]; then
@@ -192,7 +194,7 @@ jobs:
           elif [ -s .worker-errors/note.md ]; then
             cp .worker-errors/note.md note.md
           else
-            echo "Claude finished without leaving a note; its run: $RUN_URL" > note.md
+            echo "Claude's step ended (${CLAUDE:-not run}) without leaving a note; see the run: $RUN_URL" > note.md
           fi
           gh issue comment "$ISSUE" --body-file note.md > /dev/null
           if [ -f .worker-errors/close ]; then

@@ -17,6 +17,7 @@ early: nothing warns before it lapses.
 | Read-only Cloudflare API token in the Claude Code cloud environment (see [below](#claude-code-cloud-environment)) | 2027-01-31 | Claude sessions can no longer read the Worker's logs or settings |
 | `CLAUDE_CODE_OAUTH_TOKEN` | about a year after `claude setup-token` made it | slow-tests and worker-errors open their issue but Claude doesn't start |
 | `ISSUES_TOKEN` | the date picked when it was made | worker-errors can't open or comment on its issue, so the run goes red |
+| `AUTOMERGE_TOKEN` | the date picked when it was made | code PRs stop auto-merging, and the automerge run goes red |
 | `TASTR_GITHUB_TOKEN`, and any other fine-grained GitHub token | the date picked when it was made (GitHub shows it under **Settings > Developer settings > Fine-grained tokens**) | the Admin log's GitHub lines |
 
 The other tokens below don't expire unless one was set when it was made; check at the source if unsure.
@@ -33,9 +34,10 @@ Repository **Settings > Secrets and variables > Actions**.
 | `ISSUES_REPO`, `ISSUES_TOKEN` (optional) | `worker-errors.yml` | `ISSUES_REPO` is `owner/name` of the repository that gets the issues (a secret so the public logs mask it). `ISSUES_TOKEN` is a fine-grained token from **GitHub Settings > Developer settings > Fine-grained tokens**: only that repository, **Issues: Read and write** ([ci.md](ci.md#worker-errors)). The variable `ISSUES_LABELS` (Variables tab, optional) adds labels | New token, replace `ISSUES_TOKEN`, delete the old; note its end date in the calendar above. Without both secrets the issues go to this repository |
 | `CF_LOGS_TOKEN` | `worker-errors.yml` | Cloudflare custom token, Account > Workers Observability > Read only | New token, replace; a refused token turns the run red ([ci.md](ci.md#worker-errors)) |
 | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | `slow-tests.yml`, `worker-errors.yml`, `dependabot-fix.yml` (also under **Dependabot** secrets if that run says it can't see it) | `claude setup-token` (the owner's Claude plan), or the Anthropic Console (billed per use) | Run `claude setup-token` again and replace the secret |
+| `AUTOMERGE_TOKEN` (optional) | `automerge.yml` | GitHub **Settings > Developer settings > Fine-grained tokens**, owner's account, only `pocketIlmatto/tastr`, permissions **Contents**, **Pull requests** and **Workflows**: Read and write. Without it only docs-and-tests PRs auto-merge ([ci.md](ci.md#auto-merge)) | New token, replace the secret, revoke the old; note its expiry in the calendar above |
 
 Repository setting: **Settings > General > Pull Requests > Allow auto-merge** must be on for `automerge.yml`
-([ci.md](ci.md#auto-merge-for-docs-and-tests)).
+([ci.md](ci.md#auto-merge)).
 
 `GH_TOKEN` in the workflows is GitHub's own per-run token (`github.token`); there is nothing to set or renew.
 

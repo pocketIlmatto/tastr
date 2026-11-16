@@ -104,6 +104,16 @@ def router(ctx: AppContext) -> APIRouter:
             return RedirectResponse(url, 302, headers={"Cache-Control": "private, no-store"})
         return views
 
+    @api.get("/api/tracks/{track_id}/history")
+    def track_history(track_id: int, full: bool = False):
+        """The track's earlier cards, newest first, the ones re-analyses replaced (db.CARD_HISTORY_KEEP of them):
+        [{id, analyzed_at, replaced_at, stages, core_version, bpm, key_name, camelot, energy}]; `?full=1` adds each
+        one's whole `card` (without its views). Only the owner reaches it on a hosted server, like the card itself."""
+        with closing(ctx.conn()) as c:
+            if not db.track_owner(c, track_id)[0]:
+                raise HTTPException(404, "no such track")
+            return db.card_history(c, track_id, full=full)
+
     @api.post("/api/tracks/{track_id}/retag")
     def retag(track_id: int):
         """Re-read one file track's embedded tags and audio info (`tastr retag` for one track)."""

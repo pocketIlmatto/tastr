@@ -97,6 +97,7 @@ SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or
 - `features`: long format `(track_id, name, value)`, so new features need no migration.
 - `series`: long format `(track_id, name, idx, t, value)` for curves.
 - `cards`: the full card JSON, the source of truth for re-rendering.
+- `card_history`: `(track_id, analyzed_at, replaced_at, core_version, bpm, key_name, camelot, energy, stages_json, card_json)`, the cards re-analyses replaced, the newest 5 per track (`db.CARD_HISTORY_KEEP`), written in the same transaction as the new card. `card_json` leaves out the waveform data (`extras.views`), so a row is a few KB. Deleting the track deletes them; a copy to someone else's library doesn't take them. Searchable in Find › SQL; a hosted server's browser copy leaves out `stages_json` (admins' keep it) and `card_json` (everyone's).
 - `lookups`: `(track_id, provider, status, bpm, key_name, fetched_at, result_json)`, what online catalogs list for the track (opt-in, `tastr/lookup/`, [lookup.md](lookup.md)). Kept across re-analysis.
 - `track_labels`: `(track_id, bpm, key_name, boundaries, note, updated_at, kept, tastr_bpm, tastr_key)`, your own labels for a track (`tastr/labels.py`). `kept` marks a "Keep as is"; `tastr_bpm` / `tastr_key` are Tastr's reading when it was saved. Never touched by analysis; exported as a bench manifest.
 - `review_flags`: `(track_id, state, updated_at)`, tracks you put in the review list (`flagged`) or took out of it (`skipped`). Kept across re-analysis.
@@ -112,6 +113,9 @@ SELECT t.title FROM tracks t JOIN tags g ON g.track_id = t.id WHERE g.tag = 'dar
   AND t.id IN (SELECT track_id FROM features WHERE name = 'low_end' AND value > 0.3);
 -- Average drop length in bars
 SELECT avg(end_bar - start_bar + 1) FROM sections WHERE label = 'drop';
+-- Tracks whose BPM moved more than 1 when the core engine went past 0.5.0
+SELECT t.title, h.bpm AS was, t.bpm AS now FROM card_history h JOIN tracks t ON t.id = h.track_id
+  WHERE h.core_version = '0.5.0' AND abs(t.bpm - h.bpm) > 1;
 ```
 
 DuckDB reads the same file: `ATTACH 'tastr.db' AS t (TYPE sqlite);`.

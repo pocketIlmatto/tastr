@@ -229,7 +229,7 @@ instead ("Browser signals" in the same doc).
 **NMF (non-negative matrix factorization).** Approximates a spectrogram V (frequencies × time) as W × H: W
 holds a few spectral *templates* (what each source sounds like), H holds their *activations* over time (when
 and how loud each one plays). All entries stay non-negative, which matches how sounds add up in a spectrogram.
-Tastr's drum detector ([`tastr/engine/drums.py`](../tastr/engine/drums.py), [drums.md](drums.md)) factors the
+Tastr's drum detector ([`engine-rs/src/drums.rs`](../engine-rs/src/drums.rs), [drums.md](drums.md)) factors the
 percussive mel spectrogram into three parts (low = kick, mid = snare/clap/perc, high = hats) starting from
 hand-made templates that may adapt only partway, so a part can't drift into another drum. Each part's
 activation row is that drum's onset signal.
@@ -400,7 +400,7 @@ breakdown...) come from relative energy, as the Glossary describes.
 | Spectral centroid | Average frequency, weighted by magnitude | `brightness` = centroid / 3500 Hz |
 | HPSS | Split into sustained and percussive parts | `signals.hpss` |
 | Soft mask | Per-cell weights that split a spectrogram | HPSS (power 2) |
-| NMF | Spectrogram ≈ templates × activations | drum parts, `drums.py` |
+| NMF | Spectrogram ≈ templates × activations | drum parts, `drums.rs` |
 | Butterworth / sosfiltfilt | Flat-passband filter / run without delay | drum envelopes |
 | Envelope | Smoothed loudness outline | `drums._envelopes`: mid, air; 4 ms |
 | Onset strength / flux | How much new sound just started | `signals.onset_envelope`, `low_band_flux`, `_air_flux` |

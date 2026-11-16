@@ -5,6 +5,8 @@ Rules for anyone changing this repository, Claude in GitHub Actions included. Th
 ## Pull requests
 
 - Open every pull request against `main`. Pull requests that target another branch get stranded.
+- Pull requests auto-merge once `test` and `codex-review` pass ([docs/ci.md](docs/ci.md#auto-merge)). Add the `hold`
+  label when one must wait for the owner: UI changes (see below) or anything she has to set first.
 - Run the fast tests before pushing (`python -m pytest -q -n auto`, plus `cargo test --release --lib` in `engine-rs/`
   when the engine changed).
   Never skip, weaken or delete a test to get a green run.

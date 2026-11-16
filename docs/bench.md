@@ -139,6 +139,10 @@ and the panel to label each track ([features.md](features.md#label-and-review)).
 `GET`/`PUT /api/tracks/{id}/labels` (`kept: true` marks a "Keep as is"), `GET /api/labels` (your labels, newest
 first, with Tastr's BPM and key when each was saved), and `PUT /api/tracks/{id}/review` with
 `{"state": "flagged" | "skipped" | null}` to put a track in the list, take it out, or leave it to the queue.
+The app asks for the list on every page load, so it is built from the tracks table, which keeps each card's
+BPM, key and "likely right" scores (`bpm_likely`, `key_likely`), and the stored lookups; only tracks with pattern
+reviews have their whole card loaded. Before this it parsed every card, about half a second of CPU per load on
+the Worker.
 
 ## Key detection notes
 

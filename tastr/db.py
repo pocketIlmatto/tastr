@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     key_scale       TEXT,
     camelot         TEXT,
     key_confidence  REAL,
+    -- the card's "likely right" scores for BPM and key (core.bpm_likely_correct, core.key.likely_correct), kept
+    -- here so the review list doesn't have to load every card
+    bpm_likely      REAL,
+    key_likely      REAL,
     energy          REAL,
     loudness_db     REAL,
     stages_json     TEXT,
@@ -428,6 +432,7 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
         for col, ddl in (("kept", "INTEGER NOT NULL DEFAULT 0"), ("tastr_bpm", "REAL"), ("tastr_key", "TEXT")):
             if col not in label_cols:
                 conn.execute(f"ALTER TABLE track_labels ADD COLUMN {col} {ddl}")  # databases from before the review log
+        _add_likely_columns(conn)
         conn.execute("INSERT OR IGNORE INTO meta VALUES ('db_schema_version', ?)", (str(DB_SCHEMA_VERSION),))
         conn.commit()
         if _storage_for is not None:
@@ -435,6 +440,21 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _add_likely_columns(conn: sqlite3.Connection) -> None:
+    """Databases from before tracks kept the cards' "likely right" scores get the columns, filled once from the
+    cards (in SQLite, without parsing them in Python). The meta row says it's done, since a NULL score is real
+    on cards analyzed before calibration."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
+    for col in ("bpm_likely", "key_likely"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} REAL")
+    if conn.execute("SELECT 1 FROM meta WHERE key = 'likely_filled'").fetchone() is None:
+        conn.execute("UPDATE tracks SET "
+                     "bpm_likely = (SELECT json_extract(json, '$.core.bpm_likely_correct') FROM cards WHERE track_id = tracks.id), "
+                     "key_likely = (SELECT json_extract(json, '$.core.key.likely_correct') FROM cards WHERE track_id = tracks.id)")
+        conn.execute("INSERT OR IGNORE INTO meta VALUES ('likely_filled', '1')")
 
 
 def _add_owner_column(conn: sqlite3.Connection) -> None:
@@ -479,6 +499,8 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
         "key_scale": k.scale if k else None,
         "camelot": k.camelot if k else None,
         "key_confidence": k.confidence if k else None,
+        "bpm_likely": c.bpm_likely_correct,
+        "key_likely": k.likely_correct if k else None,
         "energy": c.energy,
         "loudness_db": c.loudness_db,
         "stages_json": json.dumps(card.stages_run),
@@ -624,6 +646,28 @@ def list_tracks(conn: sqlite3.Connection, owner: str | None = None) -> list[dict
         args,
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def review_candidates(conn: sqlite3.Connection, owner: str | None = None) -> list[dict[str, Any]]:
+    """Every track that has a card, with what the review list reads from it (labels.review_queue), straight from the
+    tracks table: title, artist, bpm, key_tonic, key_mode, key_name, camelot, bpm_likely, key_likely."""
+    where, args = ("AND owner = ?", (owner,)) if owner else ("", ())
+    rows = conn.execute(
+        "SELECT id, title, artist, bpm, key_tonic, key_mode, key_name, camelot, bpm_likely, key_likely FROM tracks "
+        f"WHERE EXISTS (SELECT 1 FROM cards WHERE track_id = tracks.id) {where} ORDER BY id", args).fetchall()
+    return [dict(r) for r in rows]
+
+
+def found_lookups(conn: sqlite3.Connection, owner: str | None = None) -> dict[int, list[dict[str, Any]]]:
+    """Track id -> its stored lookups that found the track (get_lookups' rows), by provider."""
+    sql = ("SELECT l.track_id, l.result_json, l.fetched_at FROM lookups l JOIN tracks t ON t.id = l.track_id "
+           "WHERE l.status = 'found'")
+    rows = conn.execute(sql + (" AND t.owner = ?" if owner else "") + " ORDER BY l.track_id, l.provider",
+                        (owner,) if owner else ())
+    out: dict[int, list[dict[str, Any]]] = {}
+    for tid, raw, at in rows:
+        out.setdefault(tid, []).append(json.loads(raw) | {"fetched_at": at})
+    return out
 
 
 def delete_track(conn: sqlite3.Connection, track_id: int) -> bool:

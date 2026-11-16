@@ -291,6 +291,12 @@ class AppContext:
         """Whose library a request reads and writes: the signed-in email when hosted, else everything."""
         return request.state.user if self.hosted else None
 
+    def art_allowed(self, owner: str | None) -> bool:
+        """Whether this person's mash-up links may show album art: only the admins' on a shared server (Pam's
+        call: the art is the labels', so it goes out only on links she shares), anyone's on your own machine.
+        The same people get album art fetched for tracks without any (tastr/coverart.py)."""
+        return not self.hosted or owner in self.settings.admins
+
     def results(self, rs, user: str | None = None, job: str | None = None, stages: list | None = None) -> dict[str, Any]:
         if self.hosted:  # error text can name server paths; keep it in the log
             for i, r in enumerate(rs):

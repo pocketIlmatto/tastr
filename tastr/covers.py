@@ -6,6 +6,8 @@ the 1200×630 picture from both covers (static/app/share-art.js) and sends it, s
 - `cover()` reads a track's embedded cover (MP3 APIC, M4A covr, FLAC and Ogg pictures) once and keeps it as
   `covers/<track id>` (an empty object when the file has none, so it isn't read again). Reading it brings the audio
   down from the bucket, so this happens only when a share asks for it, not at every upload.
+- When the file has none, `cover()` can fetch one instead (tastr/coverart.py, the Cover Art Archive) and keeps that
+  answer, a miss included, as `covers/fetched/<track id>`.
 - `put_art()` / `art()` keep a share's picture as `share-art/<share id>.png`.
 
 Both live in the audio bucket when there is one (TASTR_AUDIO_BUCKET, tastr/blobs.py), else under TASTR_HOME.
@@ -16,6 +18,7 @@ from __future__ import annotations
 import base64
 import logging
 from pathlib import Path
+from typing import Callable
 
 from . import blobs
 
@@ -25,6 +28,10 @@ MAX_COVER_BYTES = 4 << 20  # larger embedded pictures are skipped (a phone-photo
 MAX_ART_BYTES = 2 << 20  # a share's 1200×630 PNG is about 100-300 KB
 _MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"), (b"GIF8", "image/gif"))
 FRONT_COVER = 3  # the ID3/FLAC picture type for the front cover
+
+
+class FetchFailed(Exception):
+    """A `cover()` fetch couldn't ask this time (coverart.Unavailable), so its miss isn't kept."""
 
 
 def image_type(data: bytes) -> str | None:
@@ -114,9 +121,33 @@ def cover_key(track_id: int) -> str:
     return f"covers/{track_id}"
 
 
-def cover(track_id: int, audio: str | Path | None) -> tuple[bytes, str] | None:
+def fetched_key(track_id: int) -> str:
+    return f"covers/fetched/{track_id}"
+
+
+def cover(track_id: int, audio: str | Path | None,
+          fetch: Callable[[], tuple[bytes, str] | None] | None = None) -> tuple[bytes, str] | None:
     """The track's cover (picture, media type), read from its audio file the first time and kept; None without one.
-    `audio` is the track's stored path (tracks.local_path); when the audio is gone and nothing was kept, None."""
+    `audio` is the track's stored path (tracks.local_path); when the audio is gone and nothing was kept, None.
+    `fetch`: where to get one when the file has none (tastr/coverart.py); its answer is kept too, a miss included,
+    unless it couldn't ask (FetchFailed)."""
+    got = embedded(track_id, audio)
+    if got is not None or fetch is None:
+        return got
+    kept = _get(fetched_key(track_id))
+    if kept is not None:
+        return (kept, image_type(kept) or "application/octet-stream") if kept else None
+    try:
+        got = fetch()
+    except FetchFailed as e:
+        log.info("no fetched cover for track %s this time: %s", track_id, e)
+        return None
+    _put(fetched_key(track_id), got[0] if got else b"", got[1] if got else "application/octet-stream")
+    return got
+
+
+def embedded(track_id: int, audio: str | Path | None) -> tuple[bytes, str] | None:
+    """The cover embedded in the track's file, read the first time and kept (an empty object when it has none)."""
     kept = _get(cover_key(track_id))
     if kept is not None:
         return (kept, image_type(kept) or "application/octet-stream") if kept else None
@@ -138,6 +169,7 @@ def cover(track_id: int, audio: str | Path | None) -> tuple[bytes, str] | None:
 
 def remove_cover(track_id: int) -> None:
     _delete(cover_key(track_id))
+    _delete(fetched_key(track_id))
 
 
 def art_key(share_id: str) -> str:

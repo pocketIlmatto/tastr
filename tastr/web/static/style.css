@@ -1337,3 +1337,16 @@ h1 { white-space: nowrap; }
 #card .eng-old .eng-btn { width: 24px; height: 22px; padding: 0; min-height: 0; font-size: 13px; line-height: 1; font-weight: 700; text-transform: none; letter-spacing: normal; }
 #card .eng-old .eng-btn:disabled { opacity: .45; cursor: not-allowed; }
 .eng-old .spin { margin: 0 4px; }
+/* Earlier cards: the card line after a re-analysis moved a number, and Metadata › Earlier analyses */
+.hist-line { margin: 6px 0 0; font-size: 12px; flex-basis: 100%; }
+.hist-line s { color: var(--muted); }
+#card .hist-line button.linklike { border: 0; background: none; box-shadow: none; padding: 0; min-height: 0; text-transform: none; letter-spacing: normal; font-family: inherit; font-weight: 400; font-size: 12px; color: var(--accent); }
+.meta-hist { margin: 12px 0 4px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.meta-hist h4 { margin: 0 0 6px; }
+.hist-table { border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.hist-table th, .hist-table td { padding: 4px 12px 4px 0; text-align: left; white-space: nowrap; }
+.hist-table th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.hist-table tr.now td { font-weight: 600; }
+.hist-table td.hist-diff { color: var(--accent); font-weight: 700; }
+.hist-note { font-size: 12px; margin: 6px 0 0; }
+.hist-line[hidden], .meta-hist[hidden] { display: none; }

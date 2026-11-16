@@ -163,7 +163,13 @@ def test_the_file_s_own_cover_wins(tmp_path):
 def test_cover_route_fetches_only_for_admins_and_when_allowed(db_path, tmp_path, monkeypatch):
     a, b = two_tracks(db_path, tmp_path)  # a has an embedded cover, b none
     asked = []
-    monkeypatch.setattr(coverart, "fetch", lambda q, stored: asked.append(b) or (JPEG, "image/jpeg"))
+
+    def fetch(q, stored):
+        from tastr.lookup import usage_conn
+        assert usage_conn.get() is not None  # counted in lookup_usage, the budget catalog lookups use
+        asked.append(b)
+        return JPEG, "image/jpeg"
+    monkeypatch.setattr(coverart, "fetch", fetch)
     admin = client(db_path, admins=("friend@example.com",))
     assert admin.get(f"/api/tracks/{b}/cover", headers=GOOD).status_code == 404  # outside requests off
     monkeypatch.setenv("TASTR_LOOKUP", "freqblog")

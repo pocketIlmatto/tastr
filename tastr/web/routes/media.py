@@ -80,7 +80,14 @@ def router(ctx: AppContext) -> APIRouter:
             raise HTTPException(404, "no such track")
         fetch = None
         if ctx.art_allowed(ctx.owner_of(request)) and coverart.enabled():
-            fetch = lambda: coverart.fetch(lookup.query_for(card), stored)  # noqa: E731
+            def fetch():
+                # Count MusicBrainz requests in the lookup_usage table, like catalog lookups, so both share its budget.
+                with closing(ctx.conn()) as conn:
+                    token = lookup.usage_conn.set(conn)
+                    try:
+                        return coverart.fetch(lookup.query_for(card), stored)
+                    finally:
+                        lookup.usage_conn.reset(token)
         got = covers.cover(track_id, card.source.local_path, fetch)
         if got is None:
             raise HTTPException(404, "This track has no album art.")

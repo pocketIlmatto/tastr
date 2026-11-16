@@ -24,11 +24,30 @@ import numpy as np
 # them. Kept here so a server without the native library (the hosted web server checks browser cards against
 # it) knows them; tests/test_rust_switch.py checks them against the library.
 STAGES = {"core": "0.6.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.2.0"}
+# What changed in a stage version, in one sentence, for the card's "Engine 0.5.0 · latest 0.6.0" tooltip. Add a line
+# when a stage's version goes up with a change people would notice in their cards.
+STAGE_NEWS = {"core": {"0.6.0": "BPM now comes from a line fit through the beats, so it matches the beat grid"}}
+
 SR = 22050  # the engine's sample rate (engine-rs SR): audio handed to it must be at this rate
 _LIB_NAMES = {"darwin": "libtastr_engine.dylib", "win32": "tastr_engine.dll"}
 _lock = threading.Lock()
 _lib: ctypes.CDLL | None = None
 _lib_error: str | None = None
+
+
+def _ver(v: str) -> tuple[int, ...]:
+    out = []
+    for part in str(v).split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out + [0] * (3 - len(out)))  # "0.6" is 0.6.0
+
+
+def stale_stages(stages: dict[str, str] | None) -> list[str]:
+    """The stages (in STAGES order) a card ran at an older version than this engine's, or not at all. A card with
+    any is from an older engine: re-analyzing it brings it up to date."""
+    stages = stages or {}
+    return [k for k, v in STAGES.items() if k not in stages or _ver(stages[k]) < _ver(v)]
 
 
 class RustEngineError(RuntimeError):

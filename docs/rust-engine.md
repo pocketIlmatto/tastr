@@ -287,7 +287,8 @@ machine, the hosted server and Modal alike.
   `analyze_file` has no fallback and no stage subset (`tastr analyze --stages` is gone), `TASTR_ENGINE` only
   picks the benchmarks' engine, and without the library analysis fails with "the Rust engine library isn't
   built (cd engine-rs && cargo build --release)". `rust.STAGES` lists the stages and versions every Rust card
-  runs, for servers without the native library (browser cards are checked against it) and `tastr stages`.
+  runs, for servers without the native library (browser cards are checked against it), `tastr stages`, and the
+  app's "from an older engine" flags (`rust.stale_stages`; `STAGE_NEWS` says what changed in a version).
   Tests that analyze through the app are marked `rust` and skip without the library (`tests/conftest.py`).
   The Python tags, suggestions and views stages are gone too (TAS-47, part 2): the Rust card is checked
   against stored cards in `tests/golden/` (rewrite them with `TASTR_UPDATE_GOLDEN=1` after a deliberate

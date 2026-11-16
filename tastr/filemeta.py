@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .engine import rust
+
 log = logging.getLogger(__name__)
 
 try:
@@ -254,6 +256,8 @@ def describe(card, analyzed_at: str | None = None) -> dict[str, dict[str, str]]:
         analysis["Analyzed at"] = analyzed_at
     if card.stages_run:
         analysis["Stages"] = ", ".join(f"{k} {v}" for k, v in card.stages_run.items())
+        if rust.stale_stages(card.stages_run):  # from an older engine: name what would run now
+            analysis["Stages"] += " (current: " + ", ".join(f"{k} {v}" for k, v in rust.STAGES.items()) + ")"
     return {
         "File tags": {label: s.file_tags[k] for k, label in _TAG_LABELS if s.file_tags.get(k)},
         "Audio": audio,

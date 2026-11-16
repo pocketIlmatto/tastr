@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from contextlib import closing
 from pathlib import Path
@@ -11,6 +12,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from ... import blobs, db, keylock, lookup, service, stems
+from ...engine import rust
 from ..context import AppContext, _failure_reason, _unprefixed, log, upload_dir
 
 
@@ -19,6 +21,14 @@ class KnownBody(BaseModel):
 
 
 SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def _stages(raw: str | None) -> dict[str, str]:
+    try:
+        got = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return got if isinstance(got, dict) else {}
 
 
 def router(ctx: AppContext) -> APIRouter:
@@ -44,6 +54,9 @@ def router(ctx: AppContext) -> APIRouter:
         with closing(ctx.conn()) as c:
             rows = db.list_tracks(c, ctx.owner_of(request))
             uris = dict(c.execute("SELECT id, source_uri FROM tracks").fetchall())
+            # stages_json and local_path stay private: the list gets only whether the card is from an older engine
+            # and, for those, whether its audio is gone (so it can't be re-analyzed)
+            engine = {tid: (stages, path) for tid, stages, path in c.execute("SELECT id, stages_json, local_path FROM tracks")}
             vibes: dict[int, list[str]] = {}
             for tid, tag in c.execute("SELECT track_id, tag FROM tags ORDER BY score DESC"):
                 vibes.setdefault(tid, []).append(tag)
@@ -53,6 +66,9 @@ def router(ctx: AppContext) -> APIRouter:
             r["title"] = _unprefixed(r["title"], uris.get(r["id"]))
             r["tags"] = vibes.get(r["id"], [])
             r["ml_tags"] = ml.get(r["id"])
+            stages, path = engine.get(r["id"], (None, None))
+            r["stale"] = bool(rust.stale_stages(_stages(stages)))
+            r["audio_gone"] = r["stale"] and not blobs.exists(path)
         return rows
 
     @api.post("/api/tracks/known")

@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from .. import blobs, db, drum_jobs, keylock, lookup, ml_jobs, runner, service, stems
-from ..engine import browser_card
+from ..engine import browser_card, rust
 from ..filemeta import describe, legacy_upload_prefix
 from .analysis_jobs import AnalysisJobs, ref
 from .hosted import (AccessVerifier, AnalysisSlots, LinkSigner, Settings, file_bytes, inline_script_hashes,
@@ -316,6 +316,9 @@ class AppContext:
         views = body["extras"].pop("views", None)
         body["has_views"] = views is not None
         body["has_audio"] = self.audio_path(card) is not None
+        # The engine that would analyze it now, for the card's "Engine 0.5.0 · latest 0.6.0" line (card.stages_run)
+        body["engine_latest"] = dict(rust.STAGES)
+        body["engine_news"] = rust.STAGE_NEWS
         body["stems_available"] = stems.available()
         body["stems_state"] = self.stem_jobs.status(self.stems_dir(card, track_id))["state"]
         body["keylock_available"] = keylock.available()

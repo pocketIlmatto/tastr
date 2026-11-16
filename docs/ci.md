@@ -105,18 +105,20 @@ up to 503 s, 78 s and 90 s on the slow runs.
 
 1. it opens an issue labeled `slow-tests` with the runs and the newest run's slowest steps, and
 2. starts Claude Code in Actions (`anthropics/claude-code-action`), which compares step timings, fixes the cause
-   on a `claude/slow-tests-<issue>` branch and opens a pull request that closes the issue. It may not skip or
-   weaken tests, or raise the limit or the job timeout. If the slowness was outside the repo and has passed (a
-   mirror outage), it comments and closes the issue instead.
+   on a `claude/slow-tests-<run id>` branch and opens a pull request. It may not skip or weaken tests, or raise
+   the limit or the job timeout. Either way it leaves a note, which the workflow posts on the issue: the pull
+   request's link, or what it found when the slowness was outside the repo and has passed (a mirror outage). The
+   issue is closed only when nothing is left for the owner; close it yourself once the fix merges.
 
 While a `slow-tests` issue is open, nothing new starts, so a slow week opens one issue, not one per merge. The
-pull request runs the usual `tests` and waits for the owner to merge it.
+pull request runs the usual `tests` and waits for the owner to merge it. The issue can go to another repository;
+see [Where the alert issues go](#where-the-alert-issues-go).
 
 - **Secret:** `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` locally; uses the owner's Claude plan) or
   `ANTHROPIC_API_KEY` (billed per use), under Settings > Secrets and variables > Actions. Without either, the
   issue still opens and gets a comment saying Claude didn't start.
 - **Try it:** Actions > slow-tests > Run workflow with "force" ticked opens a test issue and starts Claude, which
-  should comment that the setup works and close it.
+  should note that the setup works and close it.
 - **Cost:** the check is one short job after each main run. Claude runs only when the tests are slow, for up to
   45 minutes and 60 turns.
 - **Change the limit:** `LIMIT_MIN` and `RUNS` in `.github/scripts/slow_tests.py`.
@@ -139,18 +141,13 @@ memory or CPU time), which fails every request in flight:
 
 While a `worker-errors` issue is open, nothing new starts; each new report is added to it as a comment.
 
-**Where the issue goes.** With the secrets `ISSUES_REPO` (`owner/name`) and `ISSUES_TOKEN` set, the issue goes to
-that repository, for example a private one, so error reports stay out of this public repo. The repository's name is
-a secret only so that it is masked in the public run logs. The variable `ISSUES_LABELS` (comma-separated, optional)
-adds labels to each new issue there. Claude never sees `ISSUES_TOKEN`: the workflow hands it the issue as a file
-and posts its note afterwards, and its pull request doesn't link the issue. Without both secrets the issue goes to
-this repository, as before. Either way the report masks emails, upload names and link tokens, and when the issue is
-private the public run page shows only the counts.
+The issue can go to another repository; see [Where the alert issues go](#where-the-alert-issues-go). When it does,
+the public run page shows only the counts. Either way the report masks emails, upload names and link tokens.
 
 - **Secrets:** `CF_LOGS_TOKEN`, a Cloudflare API token with only Account > Workers Observability > Read (My
   Profile > API Tokens > Create Token > Custom token), and the same Claude secret as slow tests. Without
-  `CF_LOGS_TOKEN` the check only says so in the run summary. Optional: `ISSUES_REPO` and `ISSUES_TOKEN` (a
-  fine-grained GitHub token with only Issues: Read and write, on only that repository), see above.
+  `CF_LOGS_TOKEN` the check only says so in the run summary. Optional: `ISSUES_REPO` and `ISSUES_TOKEN`, see
+  [Where the alert issues go](#where-the-alert-issues-go).
   If Cloudflare refuses the token, the check fails (a red run) and shows Cloudflare's reason in its log;
   no issue is opened. Check the token's permission, account and IP filtering, and that it hasn't expired.
 - **Try it:** Actions > worker-errors > Run workflow with "force" ticked ("minutes" sets a fixed window instead of
@@ -160,13 +157,28 @@ private the public run page shows only the counts.
 - **Change the limit:** `FAILED_LIMIT`, `WINDOW_MIN` and `MAX_WINDOW_MIN` in `.github/scripts/worker_errors.py`; add known noise to
   `NOISE` there.
 
+## Where the alert issues go
+
+Slow tests, worker errors, the live health check and the benchmark smoke run each open an issue (`slow-tests`,
+`worker-errors`, `site-down`, `bench-drop`). With the secrets `ISSUES_REPO` (`owner/name`) and `ISSUES_TOKEN` set,
+all four open, comment on and close their issues in that repository, for example a private one, so the reports stay
+out of this public repo. The repository's name is a secret only so that it is masked in the public run logs. The
+variable `ISSUES_LABELS` (comma-separated, optional) adds labels to each new issue there. `ISSUES_TOKEN` is a
+fine-grained GitHub token with only Issues: Read and write, on only that repository. Without both secrets the
+issues go to this repository.
+
+Claude never sees `ISSUES_TOKEN`: slow-tests and worker-errors hand it the issue as a file and post its note
+afterwards, and its pull request doesn't link the issue. An issue already open here when the secrets are set is
+not moved: close it by hand, or the workflow opens a new one there next time it trips.
+
 ## Live health check
 
 `.github/workflows/health.yml` asks the live app's `/api/health` every hour, at 41 past, through Cloudflare Access
 with a service token. It tries three times, a minute apart. When all three fail it opens a `site-down` issue
 assigned to the owner (or adds to the open one) and the run goes red, so GitHub's failed-run email arrives too.
 When the site answers again it comments and closes the issue. No Claude runs: an outage needs a person, and
-`worker-errors` already investigates failing requests.
+`worker-errors` already investigates failing requests. The issue can go to another repository; see
+[Where the alert issues go](#where-the-alert-issues-go).
 
 - **Secrets:** `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`. Make a service token in Cloudflare
   **Zero Trust > Access > Service credentials > Service Tokens** (name it `github-health`, pick a long duration),
@@ -247,7 +259,8 @@ It also flags a dataset whose run failed or lost more than 10% of its tracks.
 
 A flagged run opens a `bench-drop` issue assigned to the owner, or adds to the open one, and goes red. A red run never
 becomes "the last good run", so later runs keep comparing with the scores from before the drop. The next good run
-closes the issue. No Claude runs: a drop needs a person to decide whether it is a bug or a trade-off.
+closes the issue. No Claude runs: a drop needs a person to decide whether it is a bug or a trade-off. The issue can
+go to another repository; see [Where the alert issues go](#where-the-alert-issues-go).
 
 - **Secrets:** `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, the deploy workflow's. They are already set. The Modal
   secret `tastr-r2` (docs/cloud.md) must exist in the Modal workspace's main environment.

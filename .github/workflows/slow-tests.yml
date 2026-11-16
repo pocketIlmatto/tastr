@@ -3,6 +3,9 @@ name: slow-tests
 # After each successful `tests` run on a push to main, .github/scripts/slow_tests.py takes the median of the last
 # 5 full runs. Over 5 minutes, it opens a `slow-tests` issue and starts Claude Code (anthropics/claude-code-action),
 # which investigates and opens a pull request. While a `slow-tests` issue is open nothing new starts.
+# The issue goes to the repository in the ISSUES_REPO secret (owner/name, for example a private one) using the
+# ISSUES_TOKEN secret, with the labels in the ISSUES_LABELS variable added; without them, to this repository.
+# Claude never gets ISSUES_TOKEN: it leaves its note in a file and a later step posts it on the issue.
 # Needs one repository secret: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) or ANTHROPIC_API_KEY.
 on:
   workflow_run:
@@ -28,7 +31,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
-      issues: write
+      issues: write  # only when the issue is in this repository
       contents: read
     outputs:
       issue: ${{ steps.issue.outputs.number }}
@@ -43,19 +46,28 @@ jobs:
       - id: issue
         if: steps.median.outputs.slow == 'true' || inputs.force
         env:
-          GH_TOKEN: ${{ github.token }}
+          ISSUES_REPO: ${{ secrets.ISSUES_REPO }}
+          ISSUES_TOKEN: ${{ secrets.ISSUES_TOKEN }}
+          LABELS: ${{ vars.ISSUES_LABELS }}
+          OWN_TOKEN: ${{ github.token }}
           FORCED: ${{ inputs.force && 'true' || 'false' }}
         run: |
+          if [ -n "$ISSUES_REPO" ] && [ -n "$ISSUES_TOKEN" ]; then
+            export GH_REPO="$ISSUES_REPO" GH_TOKEN="$ISSUES_TOKEN"
+          else
+            export GH_REPO="$GITHUB_REPOSITORY" GH_TOKEN="$OWN_TOKEN" LABELS=""
+          fi
           open=$(gh issue list --label slow-tests --state open --json number --jq '.[0].number // empty')
           if [ -n "$open" ]; then
-            echo "Issue #$open is already open, so nothing new starts." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "A slow-tests issue is already open, so nothing new starts." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           gh label create slow-tests --color D93F0B --description "The tests workflow got slow (slow-tests.yml)" --force
           title="Tests are slow: median ${{ steps.median.outputs.median }} min"
           [ "$FORCED" = true ] && title="Trying the slow-tests setup (started by hand)"
-          url=$(gh issue create --label slow-tests --title "$title" --body-file report.md)
+          url=$(gh issue create --label "slow-tests${LABELS:+,$LABELS}" --title "$title" --body-file report.md)
           echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
+          echo "Opened a slow-tests issue." | tee -a "$GITHUB_STEP_SUMMARY"
 
   fix:
     needs: check
@@ -65,19 +77,18 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      issues: write
+      issues: write  # only when the issue is in this repository
       actions: read
       id-token: write
+    env:
+      ISSUE: ${{ needs.check.outputs.issue }}
     steps:
       - id: auth
         env:
           OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -z "$OAUTH$API_KEY" ]; then
-            gh issue comment "${{ needs.check.outputs.issue }}" --repo "$GITHUB_REPOSITORY" --body \
-              "Claude didn't start: add the repository secret CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY (docs/ci.md#slow-tests)."
             echo "ok=false" >> "$GITHUB_OUTPUT"
           else
             echo "ok=true" >> "$GITHUB_OUTPUT"
@@ -86,7 +97,24 @@ jobs:
         if: steps.auth.outputs.ok == 'true'
         with:
           fetch-depth: 0
+      # Claude reads the issue from a file and leaves its note in one, so it never holds the issue repository's token.
+      - name: Hand the issue to Claude
+        if: steps.auth.outputs.ok == 'true'
+        env:
+          ISSUES_REPO: ${{ secrets.ISSUES_REPO }}
+          ISSUES_TOKEN: ${{ secrets.ISSUES_TOKEN }}
+          OWN_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$ISSUES_REPO" ] && [ -n "$ISSUES_TOKEN" ]; then
+            export GH_REPO="$ISSUES_REPO" GH_TOKEN="$ISSUES_TOKEN"
+          else
+            export GH_REPO="$GITHUB_REPOSITORY" GH_TOKEN="$OWN_TOKEN"
+          fi
+          mkdir -p .slow-tests
+          gh issue view "$ISSUE" --json title,body,comments \
+            --jq '"# " + .title + "\n\n" + .body + ([.comments[] | "\n\n---\n\n" + .body] | join(""))' > .slow-tests/issue.md
       - uses: anthropics/claude-code-action@v1
+        id: claude
         if: steps.auth.outputs.ok == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -95,19 +123,19 @@ jobs:
             actions: read
           claude_args: |
             --max-turns 60
-            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh api:*),Bash(gh run:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue close:*),Bash(gh pr create:*),Bash(gh pr list:*),Bash(python3:*),Bash(ls:*),Bash(cat:*)"
+            --allowedTools "Read,Write,Edit,Glob,Grep,Bash(git:*),Bash(gh api:*),Bash(gh run:*),Bash(gh pr create:*),Bash(gh pr list:*),Bash(python3:*),Bash(ls:*),Bash(cat:*)"
           prompt: |
             REPO: ${{ github.repository }}
-            ISSUE: #${{ needs.check.outputs.issue }}
             STARTED BY HAND TO TRY THE SETUP: ${{ inputs.force && 'yes' || 'no' }}
 
             The `tests` GitHub Actions workflow (.github/workflows/test.yml) has a median run time over 5 minutes
-            across its last 5 full runs on main. The issue above holds the run list and the newest run's slowest
-            steps. Find out why and fix it in a pull request.
+            across its last 5 full runs on main. `.slow-tests/issue.md` holds the report: the run list and the
+            newest run's slowest steps. Find out why and fix it in a pull request.
 
             How to work:
             1. Read docs/ci.md first, especially "Speed pass, 2026-11-01": it records what was slow before (the
-               ffmpeg apt download, the Rust build, numba JIT warm-up) and the caches that fixed it.
+               ffmpeg apt download, the Rust build, numba JIT warm-up) and the caches that fixed it. Then read
+               `.slow-tests/issue.md`.
             2. Compare step timings of recent slow runs with older fast ones:
                `gh api repos/${{ github.repository }}/actions/workflows/test.yml/runs?branch=main&event=push&status=success&per_page=40`
                and `gh api repos/${{ github.repository }}/actions/runs/<id>/jobs`. For logs, `gh run view <id> --log`.
@@ -116,11 +144,43 @@ jobs:
                raise timeout-minutes or the 5-minute limit to get under it. Speed up the slow thing instead (a cache,
                a cheaper fixture, a narrower scope rule, parallelism).
             4. Add a dated note on the cause and the fix to docs/ci.md.
-            5. Commit on a new branch named `claude/slow-tests-${{ needs.check.outputs.issue }}`, push, and open a
-               pull request against main whose body starts with "Fixes #${{ needs.check.outputs.issue }}" and gives
-               before/after step timings. Request no reviewers; the repository owner reviews and merges.
+            5. Commit on a new branch named `claude/slow-tests-${{ github.run_id }}`, push, and open a pull request
+               against main that gives before/after step timings. The report lives elsewhere: don't link or number
+               it in the branch, commits or pull request. Request no reviewers; the repository owner reviews and
+               merges.
+            6. Last, in every case, write your note for the owner to `.slow-tests/note.md`: what you found, the
+               pull request's link if you opened one, and what the owner should do. Create the empty file
+               `.slow-tests/close` too only if nothing is left for the owner (no pull request). Never commit
+               anything under `.slow-tests/`.
 
             If the slowness came from outside this repository and has already passed (for example a GitHub or
-            Ubuntu mirror outage, and the newest runs are fast again), open no pull request: comment on the issue
-            with what you found and close it. If the run was started by hand to try the setup and the tests are not
-            slow, just comment on the issue that the setup works, with the current median, and close it.
+            Ubuntu mirror outage, and the newest runs are fast again), open no pull request: say what you found in
+            the note and create `.slow-tests/close`. If the run was started by hand to try the setup and the tests
+            are not slow, write in the note that the setup works, with the current median, and create
+            `.slow-tests/close`.
+      - name: Post Claude's note on the issue
+        if: always()
+        env:
+          ISSUES_REPO: ${{ secrets.ISSUES_REPO }}
+          ISSUES_TOKEN: ${{ secrets.ISSUES_TOKEN }}
+          OWN_TOKEN: ${{ github.token }}
+          AUTH_OK: ${{ steps.auth.outputs.ok }}
+          CLAUDE: ${{ steps.claude.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -n "$ISSUES_REPO" ] && [ -n "$ISSUES_TOKEN" ]; then
+            export GH_REPO="$ISSUES_REPO" GH_TOKEN="$ISSUES_TOKEN"
+          else
+            export GH_REPO="$GITHUB_REPOSITORY" GH_TOKEN="$OWN_TOKEN"
+          fi
+          if [ "$AUTH_OK" != true ]; then
+            echo "Claude didn't start: add the repository secret CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY (docs/ci.md#slow-tests)." > note.md
+          elif [ -s .slow-tests/note.md ]; then
+            cp .slow-tests/note.md note.md
+          else
+            echo "Claude's step ended (${CLAUDE:-not run}) without leaving a note; see the run: $RUN_URL" > note.md
+          fi
+          gh issue comment "$ISSUE" --body-file note.md > /dev/null
+          if [ -f .slow-tests/close ]; then
+            gh issue close "$ISSUE" --reason completed > /dev/null
+          fi

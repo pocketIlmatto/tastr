@@ -15,6 +15,7 @@ import { audioCtx, player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { pollStems, stemStatus, stemsBusy, trackMenu } from "./menu.js";
 import { setStatus } from "./upload.js";
 import { openGlossary } from "./glossary.js";
+import { fetchHistory, historyBlock, historyLine, loadHistory } from "./card-history.js";
 
 // A chip's color strength: the engine's from its 0.20 cut-off; ML moods and voice from 0.1; ML styles score lower (0.10-0.5), so double them.
 const chipStrength = (t) => !isNum(t.score) ? 0 : Math.max(0, Math.min(1,
@@ -162,7 +163,8 @@ export async function openTrack(id) {
   switchTo("library");
   setRoute(`track/${id}`);  // a refresh reopens this track
   try {
-    const [card] = await Promise.all([api(`/api/tracks/${id}`), loadEdits(id)]);
+    const [card, history] = await Promise.all([api(`/api/tracks/${id}`), fetchHistory(id), loadEdits(id)]);
+    if (Array.isArray(history)) card.history = history;  // its earlier cards, for the card line and Metadata
     if (currentId === id) renderCard(card);
   } catch (e) {
     $("card").replaceChildren(h("p", { class: "error" }, e.message));
@@ -348,7 +350,7 @@ function engineLine(c) {
   return line;
 }
 
-// The card head: title and menu, artist, the stats, the catalog line, and the label bar.
+// The card head: title and menu, artist, the stats, the catalog line, the engine and history lines, and the label bar.
 function cardHead(c) {
   const core = c.core || {};
   const head = h("div", { class: "card-head" },
@@ -365,6 +367,7 @@ function cardHead(c) {
   head.append(h("div", { class: "card-filter", "data-kind": "head", hidden: "" }));
   const eng = engineLine(c);
   if (eng) head.append(eng);
+  head.append(historyLine(c));  // "Changed in the core 0.6.0 update: BPM 117.45 → 118.79", when the last re-analysis moved a number
   if (labelOpen !== null && labelOpen !== c.id) setLabelOpen(null);
   head.append(labelBar(c));
   return head;
@@ -422,6 +425,7 @@ export function renderCard(c) {
   if (errs.length) root.append(h("div", { class: "errors" }, "Some stages failed: ", errs.map(([k, v]) => h("div", {}, `${k}: ${v}`))));
   placeSections();
   syncCardFilters(visibleTracks().length);
+  loadHistory(c);  // a fresh card from a re-analysis comes without its history
 }
 
 // Card sections are <details>; which are open is remembered across tracks (Metadata starts closed). Each header has a drag
@@ -491,7 +495,7 @@ function metadataSection(meta, c) {
       ? h("dl", { class: "kv" }, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))]))
       : h("p", { class: "muted meta-empty" }, "None found. The title above came from the file name.")));
   }
-  return section("meta", "Metadata", [h("div", { class: "meta-cols" }, body), lookupTable(c)], false);
+  return section("meta", "Metadata", [h("div", { class: "meta-cols" }, body), historyBlock(c), lookupTable(c)], false);
 }
 
 export function setHearDrums(v) { return (hearDrums = v); }

@@ -623,7 +623,7 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
 ## Drum lanes
 
 The drum lanes behind the detected groove (kick, snare, clap, hat, open hat,
-tom, perc; see `tastr/engine/drums.py`, and [drums.md](drums.md) for the design,
+tom, perc; see `engine-rs/src/drums.rs`, and [drums.md](drums.md) for the design,
 what was tried and dropped, and known weaknesses) have their own benchmark:
 
 `$TASTR_DATA` is your dataset folder ([local-setup.md](local-setup.md)).

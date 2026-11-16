@@ -285,6 +285,8 @@ def test_reanalyze_endpoint(client, db_path, synth_wav):
     assert body["source"]["title"] == "synth_124_Am"  # file tags re-read too
     assert body["core"]["bpm"] == pytest.approx(124, abs=2)
     assert [t["id"] for t in client.get("/api/tracks").json()].count(tid) == 1  # replaced in place, not added
+    (was,) = client.get(f"/api/tracks/{tid}/history").json()  # the replaced card is kept
+    assert was["bpm"] == card.core.bpm and was["stages"] == card.stages_run
 
     r = client.post(f"/api/tracks/{gone}/reanalyze")
     assert r.status_code == 410 and "no longer on disk" in r.json()["detail"]

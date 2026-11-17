@@ -219,6 +219,19 @@ Karaoke plays the track without its vocals (`tastr/karaoke.py`): once a track ha
 seconds; on Modal's `karaoke` function on the hosted site), and `GET /api/tracks/{id}/karaoke/audio` plays it.
 It goes with the stems and is mixed again after they are separated again.
 
+### Lyrics from the audio (experiment)
+
+For tracks LRCLIB doesn't have, `tastr/transcribe.py` listens to the vocal stem with Whisper (faster-whisper and
+the large-v3-turbo weights, both MIT) and returns timed lines in the same shape as `synced`. The same words can time
+LRCLIB's plain lyrics (`align_lines`). It isn't in the app yet. To try it on a few tracks on a Modal T4, without
+deploying anything:
+
+    modal run tastr/cloud/modal_app.py::transcribe_files --files "a.flac,b.m4a" --out ~/tastr-whisper-try
+
+It separates each file into stems first (skip with `--no-separate` for vocal stems), writes what it heard and
+LRCLIB's lyrics to `<out>/<file>.json` (keep that folder out of the repository), and prints, per track, the word
+error rate against LRCLIB's lyrics and how close each timed line starts (`score`).
+
 ## Adding a provider
 
 1. Add `tastr/lookup/<name>.py` with a `base.Provider` subclass: set `name`, `label`, `homepage` and

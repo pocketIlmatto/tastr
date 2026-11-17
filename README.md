@@ -133,6 +133,8 @@ Third-party pieces it uses or links to:
   lyrics are contributed by its users; the words belong to their writers and publishers, and LRCLIB grants no
   licence for them. Tastr shows them only to the person whose library the track is in, keeps them out of
   downloads and shared links, and never ships any (the tests use made-up lines).
+- **faster-whisper** and OpenAI's **Whisper** weights (an experiment that hears lyrics in the vocal stem,
+  `tastr/transcribe.py`) are MIT, an optional install. What it hears is the song's words, kept private like LRCLIB's.
 - **Cover Art Archive** (album art for admins' mash-up previews, when lookups are on): the images
   belong to their copyright owners, usually the labels, and the archive grants no licence for them.
   Tastr fetches one only for a preview of a link an admin shares, keeps it in the server's own storage,

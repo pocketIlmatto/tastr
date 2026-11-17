@@ -34,6 +34,8 @@ def test_modal_image_deps_match_pyproject(name):
     if "TORCH_CPU" in (ROOT / "tastr/cloud" / name).read_text():
         assert f'TORCH_CPU = ("{project["optional-dependencies"]["drums"][0]}"' in (ROOT / "tastr/cloud" / name).read_text()
     assert consts["PINS"] == _consts("modal_app.py")["PINS"]
+    if "WHISPER_DEPS" in consts:
+        assert consts["WHISPER_DEPS"] == extras["transcribe"]
 
 
 def test_every_analysis_image_has_the_rust_engine():
@@ -315,7 +317,8 @@ def test_modal_images_add_local_files_last(monkeypatch):
             return lambda f: f
 
     fake = types.SimpleNamespace(
-        Image=types.SimpleNamespace(debian_slim=lambda **kw: Image()), App=App, is_local=lambda: True,
+        Image=types.SimpleNamespace(debian_slim=lambda **kw: Image(), from_registry=lambda *a, **kw: Image()), App=App,
+        is_local=lambda: True,
         CloudBucketMount=lambda *a, **kw: None, Secret=types.SimpleNamespace(from_name=lambda name: None))
     monkeypatch.setitem(sys.modules, "modal", fake)
     monkeypatch.setenv("TASTR_R2_ENDPOINT", "https://example.r2.cloudflarestorage.com")

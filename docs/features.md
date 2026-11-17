@@ -125,6 +125,10 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   next one under it, full screen. The **Karaoke** switch (card player, Lyrics, playlist bar) plays a track with stems
   without its vocals, from the same spot; it's one setting, kept in your browser. A track without stems plays the full
   mix, and **Separate stems** makes them. See [Lyrics](lookup.md#lyrics).
+- **Lyrics by listening:** when LRCLIB doesn't have a track, **Listen for lyrics** has Whisper write down what it hears
+  in the vocals ("Heard by Whisper from the vocals. Words may be wrong."); when LRCLIB has the words without times,
+  **Time these lines** times them from the vocals, leaving lines it couldn't place unlit. Both separate the stems
+  first when needed. See [Lyrics by listening](lookup.md#lyrics-by-listening).
 - **Files you already have are skipped.** Before uploading, the page fingerprints each file (SHA-256 of its
   bytes) and leaves out the ones already in your library, so re-dropping a folder only uploads what's new.
   It matches exact bytes: the same song exported again with other tags or another encoding is a new file and is

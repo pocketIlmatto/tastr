@@ -87,6 +87,9 @@ def router(ctx: AppContext) -> APIRouter:
                 out[k] = st[k]
         if st["state"] == "ready":
             out["bytes"] = {n: _size(stems.stem_path(r["folder"], n)) for n in stems.STEM_NAMES}
+            out["made_with"] = st["made_with"]
+            if st.get("again"):
+                out["again"] = st["again"]
         return out
 
     @api.get("/api/files")
@@ -163,8 +166,7 @@ def router(ctx: AppContext) -> APIRouter:
         if not found:
             raise HTTPException(404, "no such track")
         r, folder = found[0], found[0]["folder"]
-        state = ctx.stem_jobs.status(folder)["state"]
-        if state in ("queued", "running"):
+        if ctx.stem_jobs.busy(folder):
             raise HTTPException(409, "Stems are being made for this track. Delete them once that finishes.")
         paths = [stems.stem_path(folder, n) for n in stems.STEM_NAMES]
         if not folder.is_dir() and not any(blobs.in_bucket(p) for p in paths):

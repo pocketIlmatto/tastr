@@ -61,6 +61,7 @@ def test_files_lists_sizes_and_stems(db_path, home, tmp_path):
     assert body["cap_bytes"] is None and body["free_bytes"] is None  # your own machine has no cap
     by = {t["id"]: t for t in body["tracks"]}
     assert by[a]["audio"] == {"name": "Band - Song.mp3", "format": "MP3", "bytes": 1000}
+    assert by[a]["stems"].pop("made_with")["outdated"]  # no stems.json: the older model, offered again in Files
     assert by[a]["stems"] == {"state": "ready", "bytes": {"vocals": 100, "bass": 100, "other": 100, "drums": 100}}
     assert by[b]["audio"]["name"] == "Other.wav" and by[b]["stems"] is None
 

@@ -53,6 +53,15 @@ On Modal, `run_stems` returns these settings with the stems and the server write
 when the stems never touch its disk). A folder without `stems.json` predates the record, so it counts as
 `htdemucs` with the defaults rather than being guessed from dates. `GET /api/tracks/{id}/stems` reports it for
 ready stems as `made_with`, with `recorded` (false: no `stems.json`) and `outdated` (made with another model than
-today's default), and `tastr stems ID` says which model made existing stems. Separating again (`--force`, or after
-deleting the stems) replaces the record. Stems made between the switch to `htdemucs_ft` and this record also
+today's default) and `latest` (that default), and `tastr stems ID` says which model made existing stems.
+Separating again (`--force`, `POST /api/tracks/{id}/stems?again=1`, or after deleting the stems) replaces the
+record. The app offers it for outdated sets (Files, and the Strudel stems picker; [features.md](features.md#files)).
+
+While a set is separated again the old one stays: the status stays `ready` and `again` holds the new job's state
+(queued, running, or error, in which case the old set is untouched). On this machine the new stems go to a
+`.partial` folder and are swapped in with two renames. On Modal, `run_stems` uploads to signed links under a
+staging folder (`stems/<hash>.staging/`); once all four are there the server copies them over the old keys inside
+the bucket (S3 CopyObject), writes `stems.json`, and deletes the staging copy. The old set is copied aside
+(`stems/<hash>.old/`) first, so a copy that fails partway puts it back rather than leaving a mix of old and new. A separation again counts toward
+the daily stems limit like a first one. Stems made between the switch to `htdemucs_ft` and this record also
 have no `stems.json`, so they show as `htdemucs` too; separating them again is harmless.

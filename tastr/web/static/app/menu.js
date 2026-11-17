@@ -33,10 +33,25 @@ export const stemStatus = new Map(); // track id -> latest {state: none|queued|r
 const stemListeners = new Set();
 let stemTimer = null;
 export function stemsOf(c) {
-  if (!stemStatus.has(c.id)) { stemStatus.set(c.id, { state: c.stems_state || "none" }); pollStems(); }
+  if (!stemStatus.has(c.id)) {
+    stemStatus.set(c.id, { state: c.stems_state || "none" }); pollStems();
+    // The card only says "ready"; the full status says which model made them (the line that offers the new one).
+    if (c.stems_state === "ready") api(`/api/tracks/${c.id}/stems`).then((x) => setStems(c.id, x), () => {});
+  }
   return stemStatus.get(c.id);
 }
+// A freshly loaded card's stems state, unless a job the page follows says more. A ready set also needs the full status
+// for made_with (which model made it).
+export function cardStems(c) {
+  const was = stemStatus.get(c.id) || { state: "none" };
+  if (!c.stems_state || watching(was) || (was.state === c.stems_state && (was.made_with || was.state !== "ready"))) return;
+  stemStatus.set(c.id, { state: c.stems_state }); pollStems();
+  if (c.stems_state === "ready") api(`/api/tracks/${c.id}/stems`).then((x) => setStems(c.id, x), () => {});
+}
 export const stemsBusy = (st) => st.state === "running" || st.state === "queued";
+// Stems being separated again: the current ones stay ready, and `again` is the new job's state.
+export const stemsAgain = (st) => !!(st && st.again && stemsBusy(st.again));
+const watching = (st) => stemsBusy(st) || stemsAgain(st);
 const STEM_TYPICAL = 180; // seconds for one track's separation, until the job's own progress rate is known
 // How far along a running separation is, and the seconds left. Demucs on this machine reports real progress; a Modal
 // job reports none until it ends, so that one goes by its running time against STEM_TYPICAL.
@@ -54,7 +69,7 @@ export const stemsLabel = (st) => {
 export function setStems(id, st) {
   const was = stemStatus.get(id);
   stemStatus.set(id, st);
-  const running = [...stemStatus.values()].find((x) => x.state === "running");
+  const running = [...stemStatus.values()].map((x) => (stemsAgain(x) ? x.again : x)).find((x) => x.state === "running");
   jobTitle("stems", running ? stemsEta(running).frac : null);
   for (const l of [...stemListeners]) {
     if (!l.el.isConnected) stemListeners.delete(l);
@@ -64,10 +79,10 @@ export function setStems(id, st) {
 // Calls fn(status, previous) whenever this track's stems status changes, for as long as el is on the page.
 export function onStems(el, id, fn) { stemListeners.add({ el, id, fn }); }
 export function pollStems() {
-  if (stemTimer || ![...stemStatus.values()].some(stemsBusy)) return;
+  if (stemTimer || ![...stemStatus.values()].some(watching)) return;
   stemTimer = setTimeout(async () => {
     for (const [id, st] of [...stemStatus]) {
-      if (!stemsBusy(st)) continue;
+      if (!watching(st)) continue;
       // A failed check (offline, the server waking up) keeps the last state and tries again on the next round.
       try { setStems(id, await api(`/api/tracks/${id}/stems`)); } catch (_) { /* keep polling */ }
     }
@@ -75,9 +90,41 @@ export function pollStems() {
     pollStems();
   }, 2500);
 }
-export async function startStems(c) {
-  setStems(c.id, await api(`/api/tracks/${c.id}/stems`, { method: "POST" }));
+export async function startStems(c, again = false) {
+  setStems(c.id, await api(`/api/tracks/${c.id}/stems${again ? "?again=1" : ""}`, { method: "POST" }));
   pollStems();
+}
+
+// Stems from an older separation model: the status's made_with says which model made them (no stems.json, from before
+// Tastr kept a record: htdemucs) and the latest one. Separating again costs about a cent of GPU time per track.
+const STEM_NEWS = { htdemucs_ft: "It won most often in a blind listening test on your tracks, mostly on drums." };
+export const stemsOld = (st) => !!(st && st.state === "ready" && st.made_with && st.made_with.outdated);
+export const centsText = (n) => (n < 100 ? `about ${n}¢` : `about $${(n / 100).toFixed(2)}`);
+export function stemsTip(m) {
+  const was = m.recorded ? [m.model, isNum(m.shifts) ? `${m.shifts} shift${m.shifts === 1 ? "" : "s"}` : null, m.demucs ? `demucs ${m.demucs}` : null].filter(Boolean).join(", ")
+    : `${m.model}; they were made before Tastr kept a record of the model`;
+  return `These stems are from the older model (${was}). The latest is ${m.latest}.${STEM_NEWS[m.latest] ? " " + STEM_NEWS[m.latest] : ""} `
+    + "Separating again takes about 3 minutes and costs about 1¢. Your current stems stay until the new ones are ready.";
+}
+// The line under a track's stems (Files, and the Strudel stems picker): "Model htdemucs · latest htdemucs_ft ↻". ↻ separates
+// again; while that runs it says how far along it is. Nothing for stems from the latest model. `say(message)` shows a refusal.
+export function stemModelNote(c, st, say) {
+  if (!stemsOld(st)) return null;
+  const m = st.made_with, tip = stemsTip(m), again = st.again;
+  const kids = [h("span", { class: "eng-v", tabindex: "0", "aria-label": tip }, `Model ${m.model}`, h("span", { class: "muted" }, ` · latest ${m.latest}`))];
+  if (stemsAgain(st)) {
+    kids.push(h("span", { class: "muted" }, h("span", { class: "spin" + (again.state === "queued" ? " idle" : ""), "aria-hidden": "true" }),
+      again.state === "queued" ? ` Waiting to separate again${again.position ? ` · ${again.position} ahead` : "…"}` : ` Separating again ${Math.round(stemsEta(again).frac * 100)}%`));
+  } else {
+    const btn = h("button", { type: "button", class: "eng-btn", title: `Separate again with ${m.latest} (about 1¢)`, "aria-label": `Separate again with ${m.latest}` }, "↻");
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try { await startStems(c, true); } catch (e) { btn.disabled = false; if (say) say(e.message); }
+    };
+    kids.push(btn);
+    if (again && again.state === "error") kids.push(h("span", { class: "error", title: again.error || null }, "Separating again failed"));
+  }
+  return h("span", { class: "eng-old stem-old", title: tip }, ...kids);
 }
 
 let menuNote = null;
@@ -240,7 +287,7 @@ export function init() {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden || !stemTimer) return;
     clearTimeout(stemTimer); stemTimer = null;
-    for (const [id, st] of [...stemStatus]) if (stemsBusy(st)) api(`/api/tracks/${id}/stems`).then((x) => setStems(id, x), () => {});
+    for (const [id, st] of [...stemStatus]) if (watching(st)) api(`/api/tracks/${id}/stems`).then((x) => setStems(id, x), () => {});
     pollStems();
   });
 }

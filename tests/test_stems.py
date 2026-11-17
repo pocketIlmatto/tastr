@@ -213,7 +213,82 @@ def test_stems_without_a_record_count_as_old_htdemucs(client, track, home):
         stems.stem_path(folder, n).write_bytes(b"fLaC")
     st = client.get(f"/api/tracks/{track}/stems").json()
     assert st["state"] == "ready"
-    assert st["made_with"] == {"model": "htdemucs", "shifts": 1, "overlap": 0.25, "recorded": False, "outdated": True}
+    assert st["made_with"] == {"model": "htdemucs", "shifts": 1, "overlap": 0.25, "recorded": False, "outdated": True,
+                            "latest": stems.MODEL}
+
+
+def old_stems(home):
+    """Stems from before the record existed (htdemucs), as most sets made before it are."""
+    folder = home / "stems" / ("f00d" * 4)
+    folder.mkdir(parents=True)
+    for n in stems.STEM_NAMES:
+        stems.stem_path(folder, n).write_bytes(b"OLD " + n.encode())
+    return folder
+
+
+def wait_again_done(client, tid, timeout=5.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        st = client.get(f"/api/tracks/{tid}/stems").json()
+        if not st.get("again") or st["again"]["state"] == "error":
+            return st
+        time.sleep(0.02)
+    raise AssertionError(f"the second separation never ended: {st}")
+
+
+def test_separating_again_keeps_the_old_stems_until_the_new_ones_are_ready(client, track, stub, gate, home):
+    old_stems(home)
+    assert client.post(f"/api/tracks/{track}/stems").json()["state"] == "ready" and stub == []  # no flag: nothing to do
+    gate.clear()
+    r = client.post(f"/api/tracks/{track}/stems?again=1")
+    assert r.status_code == 202
+    st = r.json()
+    assert st["state"] == "ready" and st["again"]["state"] in ("queued", "running")
+    end = time.monotonic() + 5
+    while client.get(f"/api/tracks/{track}/stems").json()["again"]["state"] != "running" and time.monotonic() < end:
+        time.sleep(0.02)
+    st = client.get(f"/api/tracks/{track}/stems").json()
+    assert st["state"] == "ready" and st["again"]["state"] == "running" and st["made_with"]["outdated"]
+    assert client.get(f"/api/tracks/{track}").json()["stems_state"] == "ready"
+    assert client.get(f"/api/tracks/{track}/stems/drums").content == b"OLD drums"  # still playable meanwhile
+    assert client.get(f"/api/tracks/{track}/stems.zip").status_code == 200  # and downloadable
+    assert client.post(f"/api/tracks/{track}/stems?again=1").status_code == 202 and len(stub) == 1  # no second job
+    assert client.delete(f"/api/tracks/{track}/stems").status_code == 409  # not while they're being replaced
+    files = client.get("/api/files").json()["tracks"][0]["stems"]
+    assert files["state"] == "ready" and files["again"]["state"] == "running" and files["made_with"]["outdated"]
+    assert files["bytes"]["drums"] == len(b"OLD drums")
+    gate.set()
+
+    st = wait_again_done(client, track)
+    assert st["state"] == "ready" and "again" not in st
+    assert st["made_with"]["model"] == stems.MODEL and not st["made_with"]["outdated"]
+    assert client.get(f"/api/tracks/{track}/stems/drums").content == b"fLaC" + b"drums" * 20
+    assert not client.get("/api/files").json()["tracks"][0]["stems"]["made_with"]["outdated"]
+
+
+def test_a_failed_second_separation_leaves_the_old_stems(client, track, monkeypatch, stub, home):
+    folder = old_stems(home)
+
+    def broken(audio_path, out_dir, progress=None):
+        out_dir.mkdir(parents=True)
+        stems.stem_path(out_dir, "vocals").write_bytes(b"x")
+        raise MemoryError("out of memory")
+
+    monkeypatch.setattr(stems, "separate", broken)
+    client.post(f"/api/tracks/{track}/stems?again=1")
+    st = wait_again_done(client, track)
+    assert st["state"] == "ready" and st["again"]["state"] == "error" and "out of memory" in st["again"]["error"]
+    assert st["made_with"]["outdated"] and client.get(f"/api/tracks/{track}/stems/vocals").content == b"OLD vocals"
+    assert not folder.with_name(folder.name + ".partial").exists()
+
+
+def test_a_second_separation_resumes_after_a_restart(db_path, track, stub, home, tmp_path):
+    folder = old_stems(home)
+    markers = stems.Jobs(db_path).markers
+    markers.put(folder.name, {"audio": str(tmp_path / "song.wav"), "again": True})  # a machine stopped mid-job
+    with TestClient(create_app(db_path)) as c:
+        st = wait_again_done(c, track)
+    assert len(stub) == 1 and markers.items() == [] and not st["made_with"]["outdated"]
 
 
 def test_an_unreadable_record_counts_as_old_htdemucs(home):
@@ -285,6 +360,17 @@ def test_ui_has_stems_menu_item_and_strudel_picker():
     for needle in ('"Separate stems"', '"Stems ready"', "/stems`", '"Full mix"', '"Stems"', "STRUDEL_STEMS", "pip install 'tastr[stems]'"):
         assert needle in js
     assert 'new Set(["vocals", "bass", "other"])' in js  # drums off by default
+
+
+def test_ui_offers_to_separate_old_stems_again():
+    """The Files line and filter, and the line with ↻ under old stems (Files and the Strudel stems picker)."""
+    js = app_js()
+    for needle in ("?again=1", "made before Tastr kept a record of the model", "stems from the older model",
+                   "Separate ${n === 1 ? \"it\" : \"them\"} again", "Separating again", "stemModelNote(c, st",
+                   "stemModelNote(f, st", 'flState.show !== "oldstems"', "Your current stems stay until the new ones are ready."):
+        assert needle in js, needle
+    html = (Path(stems.__file__).parent / "web" / "static" / "index.html").read_text()
+    assert 'data-v="oldstems"' in html and 'id="fl-oldstems"' in html
 
 
 @pytest.mark.skipif(__import__("shutil").which("ffmpeg") is None, reason="ffmpeg is not installed")

@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from ... import blobs, db, keylock, lookup, service, stems
+from ... import blobs, db, keylock, lookup, lyrics, service, stems
 from ...engine import rust
 from ..context import AppContext, _failure_reason, _unprefixed, log, upload_dir
 
@@ -179,6 +179,29 @@ def router(ctx: AppContext) -> APIRouter:
                      for r in results if r["status"] in ("limited", "recent", "error")]
             return {"card": body, "notes": notes}
 
+    @api.get("/api/tracks/{track_id}/lyrics")
+    def track_lyrics(track_id: int):
+        """The track's stored lyrics (tastr/lyrics.py): `state` none (never asked) | found | not_found | no_tags |
+        error, with `synced` ([{t, line}]) and `plain` when found; `available`: whether this server can ask."""
+        with closing(ctx.conn()) as c:
+            ctx.track_or_404(c, track_id)
+            return {**lyrics.describe(db.get_lyrics(c, track_id)), "available": lyrics.enabled() is not None}
+
+    @api.post("/api/tracks/{track_id}/lyrics")
+    def find_lyrics(track_id: int):
+        """Ask LRCLIB for the track's lyrics (again) and store the answer."""
+        if lyrics.enabled() is None:
+            raise HTTPException(400, "Lyrics aren't set up on this server. See docs/lookup.md#lyrics.")
+        with closing(ctx.conn()) as c:
+            card = db.load_card(c, track_id)
+            if card is None:
+                raise HTTPException(404, "no such track")
+            try:
+                got = lyrics.lookup_track(c, track_id, card)
+            except lookup.Limited as e:
+                raise HTTPException(429, str(e)) from None
+        return {**got, "available": True}
+
     @api.delete("/api/tracks/{track_id}", status_code=204)
     def delete_track(track_id: int):
         with closing(ctx.conn()) as c:
@@ -193,6 +216,7 @@ def router(ctx: AppContext) -> APIRouter:
         if card is not None and not shared:
             folder = ctx.stems_dir(card, track_id)
             ctx.stem_jobs.forget(folder)
+            ctx.karaoke_jobs.forget(folder)
             stems.remove(folder)
             ctx.keylock_jobs.forget(ctx.keylock_dir(card, track_id))
             keylock.remove(ctx.keylock_dir(card, track_id))

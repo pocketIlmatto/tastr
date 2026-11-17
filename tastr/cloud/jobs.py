@@ -259,6 +259,28 @@ def run_keylock(sources: dict[str, str], ratio: float, put_urls: dict[str, str])
     return out
 
 
+def run_karaoke(sources: dict[str, str], put_url: str) -> dict:
+    """Karaoke (tastr/karaoke.py): download the stems from their signed links, mix them and upload the mix to
+    `put_url`. Returns {"instrumental": bytes written}."""
+    import tempfile
+
+    from .. import karaoke
+
+    with tempfile.TemporaryDirectory() as tmp:
+        srcs = []
+        for part, url in sources.items():
+            if part not in karaoke.PARTS:
+                continue
+            src = Path(tmp) / f"{part}.flac"
+            _write_audio(url, src)
+            srcs.append(src)
+        if not srcs:
+            raise ValueError("no stems to mix")
+        dst = Path(tmp) / "instrumental.flac"
+        karaoke.mix_files(srcs, dst)
+        return {"instrumental": _put(put_url, dst)}
+
+
 def run_stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:
     """Separate one file (its bytes or a signed link to it) with the local Demucs. Returns {stem name: FLAC
     bytes}, or with `put_urls` ({stem name: signed upload link}) uploads each stem there and returns

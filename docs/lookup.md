@@ -198,6 +198,27 @@ track, a miss included, so a track is asked about once. Only the people whose li
 admins on a shared server, anyone on their own machine. The images belong to their copyright owners; the
 archive grants no licence, so they go only into those previews.
 
+## Lyrics
+
+With `TASTR_LYRICS=lrclib` (off when unset), a track's lyrics come from [LRCLIB](https://lrclib.net), timed line by
+line when it has them (`tastr/lyrics.py`). It needs no key. `POST /api/tracks/{id}/lyrics` asks it with the
+track's artist, title, album and length from its tags: first its exact match (`/api/get`, length within about
+2 s), then its search, keeping a hit whose artist and title match and whose length is within 4 s, timed lyrics
+first. The answer is stored in the `lyrics` table (`found` with `synced` lines `[{t, line}]` and `plain` text,
+`not_found`, `no_tags` or `error`) and kept across re-analysis; an error never replaces lyrics already found.
+`GET /api/tracks/{id}/lyrics` and the card (`lyrics`, `lyrics_available`) read it back. Requests go through the
+same guardrails as the catalogs, as provider `lrclib`: one at a time, at least 1 s apart, 1,000 a day
+(`TASTR_LOOKUP_LRCLIB_INTERVAL`, `TASTR_LOOKUP_LRCLIB_DAILY`).
+
+Lyrics belong to their writers and publishers, and LRCLIB, whose lyrics come from its users, grants no licence for
+them. So they are shown only to the person whose library the track is in: the `lyrics` table isn't in the library
+copy the browser downloads for searches, nor in shared links, and the tests use made-up lines.
+
+Karaoke plays the track without its vocals (`tastr/karaoke.py`): once a track has stems, `POST
+/api/tracks/{id}/karaoke` mixes its bass, drums and other stems into `stems/<hash>/instrumental.flac` (a few
+seconds; on Modal's `karaoke` function on the hosted site), and `GET /api/tracks/{id}/karaoke/audio` plays it.
+It goes with the stems and is mixed again after they are separated again.
+
 ## Adding a provider
 
 1. Add `tastr/lookup/<name>.py` with a `base.Provider` subclass: set `name`, `label`, `homepage` and

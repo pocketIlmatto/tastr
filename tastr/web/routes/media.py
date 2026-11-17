@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 
-from ... import blobs, coverart, covers, db, lookup, drum_jobs, keylock, ml_jobs, stems
+from ... import blobs, coverart, covers, db, lookup, drum_jobs, karaoke, keylock, ml_jobs, stems
 from ..context import AppContext, _unprefixed, analysis_source, runs_on
 from ..downloads import base_name, content_disposition, stem_file_name
 from ..hosted import LINK_DAYS, PUBLIC_PREFIX, today
@@ -195,6 +195,40 @@ def router(ctx: AppContext) -> APIRouter:
         if not blobs.exists(path):
             raise HTTPException(404, "This track has not been separated into stems.")
         return _serve(path, origin, "audio/flac", filename=stem_file_name(_base(card, track_id), name) if download else None)
+
+    # ---- Karaoke (tastr/karaoke.py): every stem but the vocals, mixed into one file the player can play ----
+    def _karaoke_status(card, track_id: int) -> dict[str, Any]:
+        folder = ctx.stems_dir(card, track_id)
+        return {**ctx.karaoke_jobs.status(folder), "available": karaoke.available(),
+                "stems": ctx.stem_jobs.status(folder)["state"]}
+
+    @api.get("/api/tracks/{track_id}/karaoke")
+    def track_karaoke(track_id: int):
+        """Whether the track's karaoke mix is there: none, queued, running, ready or error; `stems`: the stems'
+        state, since the mix needs them."""
+        return _karaoke_status(ctx.card_or_404(track_id), track_id)
+
+    @api.post("/api/tracks/{track_id}/karaoke", status_code=202)
+    def mix_karaoke(track_id: int):
+        """Mix the track's stems, all but the vocals, in the background (a few seconds). 409 without stems."""
+        card = ctx.card_or_404(track_id)
+        if not karaoke.available():
+            raise HTTPException(501, karaoke.INSTALL_HINT)
+        folder = ctx.stems_dir(card, track_id)
+        if not karaoke.is_ready(folder):
+            if not stems.is_ready(folder):
+                raise HTTPException(409, "Separate this track's stems first; karaoke plays them without the vocals.")
+            ctx.karaoke_jobs.start(folder)
+        return _karaoke_status(card, track_id)
+
+    @api.get("/api/tracks/{track_id}/karaoke/audio")
+    def karaoke_audio(track_id: int, origin: str | None = Header(None)):
+        """The karaoke mix as FLAC, like /audio (Range support)."""
+        card = ctx.card_or_404(track_id)
+        path = stems.instrumental_path(ctx.stems_dir(card, track_id))
+        if not blobs.exists(path):
+            raise HTTPException(404, "This track's karaoke mix hasn't been made yet.")
+        return _serve(path, origin, "audio/flac")
 
     # ---- Key lock (tastr/keylock.py): the track stretched to a mash-up's speed ratio, pitch kept ----
     def _ratio(text: str) -> float:

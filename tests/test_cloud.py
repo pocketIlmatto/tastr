@@ -368,7 +368,7 @@ def _load_modal_web(monkeypatch):
 def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
     """Like modal_app: a build step after add_local_python_source fails a deploy unless the source is copied."""
     _, images = _load_modal_web(monkeypatch)
-    assert len(images) == 7 and all(i.local for i in images)
+    assert len(images) == 8 and all(i.local for i in images)
 
 
 @pytest.fixture
@@ -471,6 +471,33 @@ def test_run_keylock_downloads_stretches_and_uploads(monkeypatch, tmp_path):
                            {"mix": "https://pm", "bass": "https://pb"})
     assert out == {"mix": 4, "bass": 4}
     assert got == [(b"https://a", 0.97), (b"https://b", 0.97)] and put == [("https://pm", b"fLaC"), ("https://pb", b"fLaC")]
+
+
+def test_remote_karaoke_over_https(modal_api):
+    from tastr.cloud import remote
+
+    modal_api.mod.karaoke = modal_api.Fn("karaoke", {"instrumental": 99})
+    got = remote.karaoke({"bass": "https://get/bass"}, "https://put/mix")
+    assert got == {"instrumental": 99}
+    assert modal_api.calls[-1] == ("karaoke", ({"bass": "https://get/bass"}, "https://put/mix"))
+    assert modal_api.sent[-1][0] == "https://modal.example/karaoke"
+    with pytest.raises(remote.RemoteError, match="422"):
+        remote._http_result("karaoke", {"sources": "nope"})
+
+
+def test_run_karaoke_mixes_every_stem_but_the_vocals(monkeypatch, tmp_path):
+    from tastr import karaoke
+    from tastr.cloud import jobs
+
+    mixed, put = [], []
+    monkeypatch.setattr(jobs, "_write_audio", lambda url, dest: dest.write_bytes(url.encode()))
+    monkeypatch.setattr(karaoke, "mix_files", lambda srcs, dst: (mixed.append([s.read_bytes() for s in srcs]),
+                                                                 dst.write_bytes(b"fLaC")))
+    monkeypatch.setattr(jobs, "_put", lambda url, path: put.append((url, path.read_bytes())) or 4)
+    out = jobs.run_karaoke({"bass": "https://b", "drums": "https://d", "vocals": "https://v", "other": "https://o"},
+                           "https://put")
+    assert out == {"instrumental": 4}
+    assert mixed == [[b"https://b", b"https://d", b"https://o"]] and put == [("https://put", b"fLaC")]
 
 
 def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):

@@ -31,6 +31,7 @@ from . import blobs, runner
 from .markers import Markers, legacy_files
 
 STEM_NAMES = ("vocals", "bass", "other", "drums")
+INSTRUMENTAL = "instrumental"  # karaoke: every stem but the vocals, mixed on request (tastr/karaoke.py)
 MODEL = "htdemucs_ft"  # four fine-tuned models, one per stem; about 2.3x the GPU time of `htdemucs`
 HF_REPO = "adefossez/HTDemucs"  # where Demucs 4.1 keeps its pretrained models on the Hugging Face Hub
 SHIFTS, OVERLAP = 1, 0.25  # Demucs' apply_model defaults, what the app uses
@@ -70,6 +71,16 @@ def legacy_marker(folder: Path) -> Path:
 
 def stem_path(folder: Path, name: str) -> Path:
     return folder / f"{name}.flac"
+
+
+def instrumental_path(folder: Path) -> Path:
+    """Karaoke's mix of every stem but the vocals (tastr/karaoke.py), kept next to the stems so it goes with them."""
+    return folder / f"{INSTRUMENTAL}.flac"
+
+
+def drop_instrumental(folder: Path) -> None:
+    """Forget the karaoke mix after the stems change; it is mixed again from the new ones when asked for."""
+    blobs.remove(instrumental_path(folder))  # here and in the bucket
 
 
 def is_ready(folder: Path) -> bool:
@@ -293,6 +304,7 @@ def separate_track(audio_path: str | Path, folder: Path, progress: Progress | No
     _forget(folder)
     for path in [stem_path(folder, n) for n in STEM_NAMES] + [info_path(folder)]:
         blobs.push(path)
+    drop_instrumental(folder)  # mixed from the old stems
 
 
 def staging_dir(folder: Path) -> Path:
@@ -339,6 +351,7 @@ def _promote(stage: Path, folder: Path, info: dict) -> None:
             for n in STEM_NAMES:
                 blobs.copy(stem_path(stage, n), stem_path(folder, n))
             _record(folder, info, bucket_only=True)
+            drop_instrumental(folder)  # mixed from the old stems
         except Exception:
             log.warning("Couldn't copy the new stems into %s; putting the old ones back", folder, exc_info=True)
             for n in old:

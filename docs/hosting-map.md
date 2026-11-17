@@ -12,7 +12,7 @@ Seven services, each with one job:
 | Cloudflare (DNS and Zero Trust Access) | DNS for your domain, HTTPS at the edge, and the login |
 | Cloudflare R2 | Uploads, stems, key-locked mash-up copies and each card's waveform data (bucket `tastr-audio`) |
 | Cloudflare D1 | The AcousticBrainz lookup's index, read only (database `tastr-acousticbrainz`, bound as `ACOUSTICBRAINZ`) |
-| Modal | Analysis, the on-request drum model, stem separation and mash-up key lock (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
+| Modal | Analysis, the on-request drum model, stem separation, mash-up key lock and karaoke's mix (app `tastr-web`, environment `friends`, `tastr/cloud/modal_web.py`) |
 | GitHub Actions | The `deploy` workflow, which ships new code to Modal and the Worker after the tests pass on main (or by hand) |
 | Anthropic (Claude API) | "Ask Claude to change it" under Try this in › Strudel, once `ANTHROPIC_API_KEY` is set (`tastr/web/claude.py`) |
 
@@ -54,6 +54,7 @@ flowchart TB
     ML[ml_tags, 2 CPUs + Essentia + MTG classifiers, if TASTR_ML_TAGS is on]
     ST[stems, T4 GPU]
     KL[keylock, 2 CPUs + Signalsmith Stretch]
+    KA[karaoke, 1 CPU: stems without the vocals]
   end
   R2A[(R2 bucket tastr-audio: uploads, stems, key-locked copies, each card's waveform data)]
   GHT[GitHub Actions: tests workflow, on each push to main]
@@ -61,6 +62,7 @@ flowchart TB
   GHL[GitHub Actions: acousticbrainz-d1 workflow, by hand, once]
   R2D[(R2 bucket tastr-data: datasets and the AcousticBrainz index file)]
   CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, ReccoBeats, MusicBrainz, Cover Art Archive])
+  LRC([LRCLIB lyrics, if TASTR_LYRICS is set])
   ANT([Claude API, if ANTHROPIC_API_KEY is set: claude-sonnet-5-5])
 
   F -->|your hostname| ACC -->|request + signed token| W
@@ -72,12 +74,13 @@ flowchart TB
   AL --> DO
   DO -.->|a copy of your own library, for searches in the browser| F
   DO -->|signed link to the upload| API
-  API --> AN & AD & ML & ST & KL
+  API --> AN & AD & ML & ST & KL & KA
   AN -->|each step, then the track card| DO
   AD -->|track card| DO
   ML -->|ML tags| DO
   ST -->|stems, to signed upload links| R2A
   R2A -->|a track's mix and stems| KL -->|stretched to a mash-up's tempo, to signed upload links| R2A
+  R2A -->|bass, drums and other stems| KA -->|their mix, to a signed upload link| R2A
   F -.->|with TASTR_DIRECT_UPLOAD: the upload itself, on a signed link| R2A
   DO -->|uploads that come through the server, each card's waveform data| R2A
   R2A -.->|signed links: audio, stems, waveform data| F
@@ -85,6 +88,7 @@ flowchart TB
   R2A -.->|signed links| PL
   R2A -->|the upload| AN
   DO -.->|artist + title| CAT
+  DO -.->|artist, title, album, length| LRC
   DO -.->|recording ids, if acousticbrainz is in TASTR_LOOKUP| D1
   R2D -->|acousticbrainz-index.sqlite| GHL -->|SQL import| D1
   DO -.->|Ask Claude: the Strudel code, the ask, BPM, key and sections| ANT
@@ -95,7 +99,7 @@ flowchart TB
 ```
 
 Every upload and stem is kept in the audio bucket (`tastr/blobs.py`) under the same path it would have under
-`TASTR_HOME` (`uploads/ab12cd34/song.mp3`, `stems/<hash>/drums.flac` and `stems/<hash>/stems.json`, the model that made them, `keylock/<hash>/<ratio>/mix.flac`), and
+`TASTR_HOME` (`uploads/ab12cd34/song.mp3`, `stems/<hash>/drums.flac` and `stems/<hash>/stems.json`, the model that made them, `stems/<hash>/instrumental.flac`, karaoke's mix, `keylock/<hash>/<ratio>/mix.flac`), and
 expiry deletes the bucket's copy.
 The Worker's own files are in memory and gone after a restart, so it keeps no local copies. Modal keeps nothing
 after a job. With `TASTR_DIRECT_UPLOAD` on, the page uploads each file straight to the bucket on a signed link,
@@ -193,7 +197,10 @@ so stems being separated again stay playable until the new set is in place. A ma
 ratio with their pitch kept (Signalsmith Stretch, CPU only, about a second per part), and uploads the results
 to signed links under `keylock/<hash>/<ratio>/`. Those are a cache: each part is stretched once per ratio, each
 track keeps its 3 latest ratios, and they go with the track or its expired audio. Key lock jobs leave no marker;
-after a restart the page just asks again. "Detect drums with the model" in a track's menu re-analyzes it through
+after a restart the page just asks again. Karaoke (`tastr/karaoke.py`) works like key lock through `karaoke`: it
+reads the bass, drums and other stems from signed links, sums them (a few seconds of CPU) and uploads the mix to
+`stems/<hash>/instrumental.flac`, next to the stems, so it goes with them; separating the stems again deletes it,
+and the next request mixes the new ones. "Detect drums with the model" in a track's menu re-analyzes it through
 `analyze_drums`, which is `analyze` plus PyTorch and the pretrained drum model's weights, kept in its own image
 so everyday uploads don't wait for PyTorch to load. A queued or running separation or drum model run leaves a
 marker in the database (`job_markers`), so it resumes after a restart. ML tags (with `TASTR_ML_TAGS=auto`, after
@@ -220,8 +227,9 @@ for the whole run. The server keeps them in the `ml_tags` table, apart from the 
 | ML tags (optional) | Modal `ml_tags` | With the Worker's `TASTR_ML_TAGS` set to `auto`, as it is in `worker/wrangler.jsonc`, every new upload gets them after its analysis, and the tracks from before got them once (`on`: only on request) (MTG's weights are non-commercial only, docs/essentia.md). Essentia (AGPL-3.0) and the weights are installed into its own image at deploy time; no Rust engine. One track at a time, about 6 s of embedding for a 5-minute track; about $1 of Modal time per 1,000 tracks. |
 | Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs (`htdemucs_ft`) on a T4 GPU. Reads the upload from a signed link and uploads each stem to a signed link of its own. |
 | Mash-up key lock | Modal `keylock` | Runs on Modal when `TASTR_STEMS_BACKEND` is `modal` and the audio bucket is on. 2 CPUs, no GPU. Reads the second track's mix and stems from signed links and uploads each one, stretched to the mash-up's tempo with its pitch kept, to a signed link of its own. `TASTR_DAILY_KEYLOCK` caps new stretches per person per day; cached ones are free. |
+| Karaoke | Modal `karaoke` | Runs on Modal when `TASTR_STEMS_BACKEND` is `modal` and the audio bucket is on. 1 CPU, no GPU. Reads a track's bass, drums and other stems from signed links and uploads their mix, the track without its vocals, to a signed link. Made once per stem set, on request. |
 | The way in to Modal | Modal `api` | A small web endpoint in front of the functions above, since the Worker can't run the Modal client. Only callers with a Modal proxy auth token get in. Every answer streams lines of JSON, with a blank line every 20 seconds so a long call stays open. The Worker calls it at `TASTR_MODAL_URL`, with the token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET` (`tastr/cloud/remote.py`). |
-| Background work | The Durable Object | `tastr/runner.py`: jobs (analyses, stems, key lock, drum model runs, ML tags) are asyncio tasks in lanes that queue them, and the repeating work (the expiry sweep every 6 hours, the GitHub watch) runs from the object's alarm, which wakes it when it is due. |
+| Background work | The Durable Object | `tastr/runner.py`: jobs (analyses, stems, key lock, karaoke mixes, drum model runs, ML tags) are asyncio tasks in lanes that queue them, and the repeating work (the expiry sweep every 6 hours, the GitHub watch) runs from the object's alarm, which wakes it when it is due. |
 | Shipping code | GitHub Actions | `.github/workflows/deploy.yml`: Modal first, then the Worker (`deploy-worker.yml`), from main. Runs after `tests` passes on a push to main when something that ships changed since the last deploy, or by hand. |
 
 ## How security works
@@ -275,7 +283,7 @@ the app's spending apart from benchmarks.
 | --- | --- |
 | `worker/wrangler.jsonc` | The Worker's name (`tastr`), the Durable Object `Library` and its SQLite migration, Static Assets, the D1 binding `ACOUSTICBRAINZ` (database `tastr-acousticbrainz`, found by name), Observability (on), the CPU limit per request (5 minutes), no `workers.dev` or preview addresses, and the plain settings (`vars`) below |
 | `worker/src/entry.py`, `worker/build.py`, `worker/check.sh` | The Worker's entry point, the bundle of static files, and the build check CI runs |
-| `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums`, `ml_tags`, `stems`, `keylock` and `api`, their images, CPU, GPU, memory and timeouts |
+| `tastr/cloud/modal_web.py` | Modal functions `analyze`, `analyze_stream`, `analyze_drums`, `ml_tags`, `stems`, `keylock`, `karaoke` and `api`, their images, CPU, GPU, memory and timeouts |
 | `.github/workflows/deploy.yml`, `.github/workflows/deploy-worker.yml` | When it deploys (after `tests` on main, which files count), the deploy order (Modal, then the Worker), which repository secrets it uses (`MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `CLOUDFLARE_API_TOKEN`), and the commit it sets as the Worker's `TASTR_COMMIT`, `TASTR_COMMIT_SUBJECT` and `TASTR_DEPLOY_RUN` |
 | `.github/workflows/acousticbrainz-d1.yml` | The one-time load of the AcousticBrainz index into D1, by hand: reads it from `tastr-data`, makes `tastr-acousticbrainz` if it's missing, imports it in parts. Uses `CLOUDFLARE_API_TOKEN` |
 
@@ -308,6 +316,7 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 | `TASTR_MODAL_URL`, `TASTR_MODAL_KEY`, `TASTR_MODAL_SECRET` | The Modal `api` endpoint's address (`modal deploy` prints it) and a Modal proxy auth token |
 | `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log: a fine-grained token with read-only Actions access to the repository. Needed even for a public repository: GitHub's limit without a token is per IP address, which Cloudflare shares, so most checks get 403. |
 | `TASTR_LOOKUP`, `FREQBLOG_API_KEY`, `FREQBLOG_STORE` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#8-catalog-lookups-optional)). FreqBlog's answers are stored unless `FREQBLOG_STORE=0`. `reccobeats` needs no key. `acousticbrainz` reads its index from the D1 database, so add it only once the acousticbrainz-d1 workflow has loaded it ([lookup.md](lookup.md#on-the-hosted-site)). Any value also turns on fetching album art for admins' mash-up previews from the Cover Art Archive; `TASTR_COVER_ART=0` turns that off on its own. |
+| `TASTR_LYRICS` (optional) | Lyrics on the card and in karaoke: `lrclib` asks [LRCLIB](https://lrclib.net) (no key) for a track's lyrics by its artist, title, album and length ([lookup.md](lookup.md#lyrics)). Off when unset. |
 | `ANTHROPIC_API_KEY` (optional) | "Ask Claude to change it" in Try this in › Strudel ([deploy.md](deploy.md#9-ask-claude-in-strudel-optional)). Tastr's own Anthropic key; each ask's tokens are counted per person and priced on the Admin tab. Without it the panel says Ask is off. |
 
 These have defaults and change only if you set a secret of the same name ([hosting.md](hosting.md#settings)):
@@ -356,9 +365,10 @@ flowchart LR
     DO -.->|signing keys, hourly| AK[Access certs<br/>/cdn-cgi/access/certs]
     AL[Durable Object alarm] -->|expiry sweep, watch| DO
     GHD[GitHub Actions: deploy, then deploy-worker] -->|pywrangler deploy| W
-    DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, ml_tags, stems, keylock)"]
+    DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, ml_tags, stems, keylock, karaoke)"]
     DO -->|signed requests| R2B[(R2 tastr-audio)]
     DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, ReccoBeats, MusicBrainz, Cover Art Archive])
+    DO -.->|HTTPS, if TASTR_LYRICS is set| LRC2([LRCLIB lyrics])
     DO -.->|"D1 binding ACOUSTICBRAINZ:<br/>recording ids, if acousticbrainz is in TASTR_LOOKUP"| D1B[(D1 tastr-acousticbrainz)]
 ```
 

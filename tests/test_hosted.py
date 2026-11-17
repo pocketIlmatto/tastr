@@ -882,11 +882,15 @@ def test_github_runs_become_log_lines(db_path, home, monkeypatch):
 
 
 def _snapshot(resp):
+    import gzip
     import sqlite3
     import tempfile
 
+    data = resp.content
+    if resp.headers["content-type"] == "application/gzip":  # ?gz=1: the page unpacks it itself
+        data = gzip.decompress(data)
     f = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    f.write(resp.content)  # the client undoes the gzip
+    f.write(data)
     f.close()
     return sqlite3.connect(f.name)
 
@@ -896,10 +900,15 @@ def test_library_snapshot_for_the_browser_is_your_own_library(db_path, home):
     mine = save(db_path, "friend@example.com", sha="a1")
     theirs = save(db_path, "other@example.com", sha="b2")
     c = make_client(db_path)
-    r = c.get("/api/query/library", headers={**GOOD, "accept-encoding": "gzip"})
-    assert r.status_code == 200 and r.headers["content-encoding"] == "gzip"
+    r = c.get("/api/query/library?gz=1", headers={**GOOD, "accept-encoding": "gzip"})
+    # Gzipped as the body, never as Content-Encoding: the Worker compressed that a second time, and the page's
+    # sql.js got a gzip file ("file is not a database").
+    assert r.status_code == 200 and r.headers["content-type"] == "application/gzip"
+    assert "content-encoding" not in r.headers and r.content[:2] == b"\x1f\x8b"
     assert r.headers["cache-control"] == "private, no-store" and int(r.headers["x-library-bytes"]) == len(r.content)
     snap = _snapshot(r)
+    plain = c.get("/api/query/library", headers={**GOOD, "accept-encoding": "gzip"})  # without ?gz=1: the file
+    assert "content-encoding" not in plain.headers and plain.content.startswith(b"SQLite format 3")
     assert snap.execute("SELECT id FROM tracks").fetchall() == [(mine,)]
     assert snap.execute("SELECT DISTINCT track_id FROM tags").fetchall() == [(mine,)]
     assert snap.execute("SELECT count(*) FROM sections WHERE track_id = ?", (theirs,)).fetchone() == (0,)

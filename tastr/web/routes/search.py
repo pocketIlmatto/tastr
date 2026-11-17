@@ -64,17 +64,21 @@ def router(ctx: AppContext) -> APIRouter:
                             headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
     @api.get("/api/query/library")
-    def query_library(request: Request, mine: bool = False):
+    def query_library(request: Request, mine: bool = False, gz: bool = False):
         """Your library as a SQLite file, for the page to run SQL on in the browser with sql.js (TAS-49): on a
         hosted server your own tracks without the columns that name people or server paths, admins everyone's
-        (`?mine=1`: only their own); on your own machine every track."""
+        (`?mine=1`: only their own); on your own machine every track.
+        `?gz=1`: the file gzipped (SQLite pages compress 3 to 5 times) as a plain application/gzip body that the
+        page unpacks itself. Not as Content-Encoding: the Cloudflare Worker compresses a body sent with that header
+        a second time, so the browser undid one layer and handed sql.js a gzip file ("file is not a database")."""
         owner = request.state.user if ctx.hosted and (mine or request.state.user not in ctx.settings.admins) else None
         data = db.library_snapshot(ctx.db_path or db.default_db_path(), owner, lookup.held_from_downloads())
+        media = "application/vnd.sqlite3"
+        if gz:
+            data, media = gzip.compress(data, compresslevel=6, mtime=0), "application/gzip"
         headers = {"Cache-Control": "private, no-store", "X-Library-Bytes": str(len(data)),
                    "Access-Control-Expose-Headers": "X-Library-Bytes"}
-        if "gzip" in request.headers.get("accept-encoding", ""):  # SQLite pages compress well (3 to 5 times)
-            data, headers["Content-Encoding"] = gzip.compress(data, compresslevel=6, mtime=0), "gzip"
-        return Response(data, media_type="application/vnd.sqlite3", headers=headers)
+        return Response(data, media_type=media, headers=headers)
 
     # Saved searches (Explore > Find tracks), each person's own: the signed-in email when hosted, else everyone's.
     @api.get("/api/searches")

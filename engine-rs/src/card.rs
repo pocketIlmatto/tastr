@@ -10,6 +10,8 @@ pub struct Key {
     pub camelot: String,
     pub confidence: f64,
     pub likely_correct: f64,
+    /// Major or minor is a guess (weak thirds, parallel key close behind); see music::mode_uncertain.
+    pub mode_uncertain: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +108,7 @@ impl Card {
                 .with("camelot", k.camelot.clone())
                 .with("confidence", k.confidence)
                 .with("likely_correct", k.likely_correct)
+                .with("mode_uncertain", k.mode_uncertain)
         });
         let core = Json::obj()
             .with("bpm", c.bpm)

@@ -3,7 +3,7 @@
 //! there as `<name>.f32` (little-endian, row-major) plus `manifest.json` ({name: [rows, cols]}). A .f32 input is
 //! raw mono audio already at 22,050 Hz and skips decoding.
 //!
-//! For checking single steps against the Python engine on the same input, a few commands take a .f32 input and
+//! For checking single steps against librosa on the same input, a few commands take a .f32 input and
 //! write their outputs the same way:
 //!
 //! - `tastr-engine rhythm <onset envelope.f32> [bpm] <out dir>`: tempogram mean, tempo, beats (and beats at the

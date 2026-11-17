@@ -1,6 +1,6 @@
 """Meter benchmark: does core tell 3/4 from 4/4, and find bar 1 in 3/4?
 
-Scores core's `_meter_score` and the 3-beat `_downbeat_phase` on the labeled beats of a "Beat This!"
+Scores core's meter score and 3-beat downbeat phase (Rust engine) on the labeled beats of a "Beat This!"
 dataset (see `bench.downbeats` for the files), so beat-tracking errors don't blur it. Tracks whose bars
 are steadily 3 or 4 beats long are scored; meter changes, 2/4, 6/8 and the rest are left out.
 
@@ -15,25 +15,31 @@ from functools import partial
 
 import numpy as np
 
-from .downbeats import FPS, bar_length, mel_freqs
+from .downbeats import FPS, bar_length
 from .downbeats import load as _load
 
 load = partial(_load, meters=(3, 4))
 
 
-def run(items) -> dict:
-    from ..stages.core import METER_THRESHOLD, _beat_cues, _downbeat_phase, _meter_score
+def meter(frames: np.ndarray, log_mel: np.ndarray) -> dict:
+    """Core's meter read of these beat frames, from the Rust engine: {score, guess (3 or 4), threshold, phase3
+    (bar 1's phase if the meter is 3/4)}."""
+    from .. import rust
 
-    freqs = mel_freqs()
+    return rust.bench("meter", log_mel, frames, bands=log_mel.shape[0], frames=log_mel.shape[1], beats=frames.size)
+
+
+def run(items) -> dict:
     rows = []
+    threshold = None
     for name, log_mel, beats, pos in items:
         frames = np.round(beats * FPS).astype(int)
-        cues = _beat_cues(frames, log_mel, freqs)
         m = bar_length(pos)
-        score = _meter_score(frames, log_mel, freqs, cues=cues)
-        row = {"name": name, "meter": m, "score": round(score, 3), "guess": 3 if score > METER_THRESHOLD else 4}
+        r = meter(frames, log_mel)
+        threshold = r["threshold"]
+        row = {"name": name, "meter": m, "score": round(r["score"], 3), "guess": r["guess"]}
         if m == 3:  # with the meter known, is bar 1 right?
-            p = _downbeat_phase(frames, log_mel, freqs, 3, cues=cues)
+            p = r["phase3"]
             row["bar1_right"] = bool((pos[p::3] == 1).mean() > 0.5)
         rows.append(row)
     three = [r for r in rows if r["meter"] == 3]
@@ -42,7 +48,7 @@ def run(items) -> dict:
     def share(rs, test):
         return round(sum(map(test, rs)) / len(rs), 3) if rs else None
 
-    return {"tracks": len(rows), "three": len(three), "four": len(four), "threshold": METER_THRESHOLD,
+    return {"tracks": len(rows), "three": len(three), "four": len(four), "threshold": threshold,
             "three_found": share(three, lambda r: r["guess"] == 3),
             "four_kept": share(four, lambda r: r["guess"] == 4),
             "three_bar1_right": share(three, lambda r: r["bar1_right"]),

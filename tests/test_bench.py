@@ -126,7 +126,7 @@ def test_meter_is_scored_per_meter():
 def test_beatport_tempo_loader(tmp_path):
     (tmp_path / "meta").mkdir()
     (tmp_path / "audio").mkdir()
-    metas = {"301": '{"id": 301, "bpm": 174}', "302": '{"id": 302, "bpm": nan, "genres": []}',
+    metas = {"301": '{"id": 301, "bpm": 174, "genres": [{"name": "Drum & Bass"}]}', "302": '{"id": 302, "bpm": nan, "genres": []}',
              "303": '{"id": 303, "bpm": 0}', "304": '{"id": 304}', "305": '{"id": 305, "bpm": 128}'}
     for sid, text in metas.items():
         (tmp_path / "meta" / f"{sid} Artist - Title (Original Mix).json").write_text(text)
@@ -135,6 +135,22 @@ def test_beatport_tempo_loader(tmp_path):
     (tmp_path / "audio" / "305 Artist - Title (Original Mix).mp3").unlink()  # no audio: skipped
     tempos = datasets.beatport_tempo(tmp_path)
     assert [(i.id, i.truth.bpm) for i in tempos] == [("bp-tempo-301", 174.0)]
+    assert tempos[0].meta == {"genre": "Drum & Bass"}
+
+
+def test_drum_and_bass_read_at_full_tempo_is_counted():
+    """Beatport lists drum & bass at 87, 116 or 174, so the report also counts how many read at 160-180."""
+    from tastr.engine.card import Source, TrackCard
+
+    rows = []
+    for genre, est in (("Drum & Bass", 172.3), ("Drum & Bass", 86.1), ("Hip-Hop / R&B", 172.3)):
+        card = TrackCard(source=Source(kind="file", uri="x"))
+        card.core.bpm = est
+        item = datasets.Item(id=f"t{len(rows)}", truth=datasets.Truth(bpm=87.0), meta={"genre": genre})
+        rows.append(runner.score_item(item, card))
+    s = runner.summarize(rows)
+    assert (s["dnb_fast"], s["dnb_n"]) == (1, 2)
+    assert "drum & bass read at 160-180 BPM: 1 of 2" in runner.format_summary({"summary": s, "seconds": 0, "review": []})
 
 
 def test_harmonix_loader(tmp_path):
@@ -187,11 +203,11 @@ def test_parallel_run_warms_up_in_parent(monkeypatch):
             return False
 
         def map(self, fn, work):
-            calls.append([w[0].id for w in work])
+            calls.append([w.id for w in work])
             return map(fn, work)
 
     monkeypatch.setattr(runner, "ProcessPoolExecutor", FakePool)
-    monkeypatch.setattr(runner, "_work", lambda w: {"id": w[0].id})
+    monkeypatch.setattr(runner, "_work", lambda w: {"id": w.id})
     items = [datasets.Item(id=f"t{i}", truth=datasets.Truth()) for i in range(3)]
     report = runner.run(items, jobs=2)
     assert calls == [["t1", "t2"]]  # t0 ran in the parent first
@@ -238,41 +254,100 @@ def _scale_tracks(rng, n):
     return out
 
 
-def test_trained_key_module_reproduces_its_fit(tmp_path):
-    import importlib.util
+def _consts_copy(tmp_path):
+    from tastr.engine.bench import consts_rs
 
+    path = tmp_path / "consts.rs"
+    path.write_text(consts_rs.PATH.read_text())
+    return path
+
+
+def test_trained_key_model_round_trips_through_consts_rs(tmp_path):
     import numpy as np
 
-    from tastr.engine import music
-    from tastr.engine.bench import train_key
+    from tastr.engine.bench import consts_rs, train_key
 
     tracks = _scale_tracks(np.random.default_rng(1), 40)
     weights, bias = train_key.fit(tracks)
     assert weights.shape == (24, 12) and bias.shape == (24,)
     assert train_key.score(tracks, weights, bias)["exact"] == 1.0
 
-    path = tmp_path / "key_model.py"
-    path.write_text(train_key.module_source(weights, bias, {"synth": len(tracks)}))
-    spec = importlib.util.spec_from_file_location("key_model_test", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert np.array_equal(mod.WEIGHTS, weights) and np.array_equal(mod.BIAS, bias)  # repr round-trips exactly
-    p = tracks[0]["profile"]
-    assert np.array_equal(music.key_probabilities(p, mod.WEIGHTS, mod.BIAS), music.key_probabilities(p, weights, bias))
+    path = _consts_copy(tmp_path)
+    before = path.read_text()
+    consts_rs.write(train_key.consts_blocks(weights, bias, {"synth": len(tracks)}), path)
+    assert np.array_equal(consts_rs.read("KEY_WEIGHTS", path), weights.ravel())  # repr round-trips exactly
+    assert np.array_equal(consts_rs.read("KEY_BIAS", path), bias)
+    after = path.read_text()
+    assert "fitted by tastr.engine.bench.train_key" in after and "synth (40 tracks)" in after
+    for other in ("BPM_KNOTS", "KEY_KNOTS"):  # the rest of the file is left alone
+        assert np.array_equal(consts_rs.read(other, path), consts_rs.read(other))
+    assert after.count("pub const ") == before.count("pub const ")
+
+
+def test_engine_key_model_is_the_one_in_consts_rs():
+    import numpy as np
+
+    from tastr.engine import rust
+    from tastr.engine.bench import key_features, train_key
+    from tastr.engine.bench.synth import make_track
+
+    weights, bias = train_key.model()
+    assert weights.shape == (24, 12) and bias.shape == (24,)
+    if not rust.available():
+        pytest.skip("needs the Rust engine built")
+    y, _ = make_track(bpm=124, tonic=9, mode="minor", bars_per_section=(4, 8, 4))
+    card = rust.card_from_samples(y)
+    est = train_key.estimate_key(key_features.features(y)["profile"], weights, bias)
+    assert (card["core"]["key"]["tonic"], card["core"]["key"]["mode"]) == (est["tonic"], est["mode"])
+    assert np.isfinite(est["confidence"])
+
+
+def test_mode_uncertain_flag_matches_the_engine():
+    """key_mode's Python copy of the flag agrees with the card's, and reads music.rs's thresholds."""
+    from tastr.engine import rust
+    from tastr.engine.bench import key_features, key_mode, train_key
+    from tastr.engine.bench.synth import make_track
+
+    third, margin = key_mode.thresholds()
+    assert 0 < third < 1 and 0 < margin < 1
+    power = [0.0] * 12
+    power[4], power[11], power[7], power[8] = 1.0, 0.8, 0.3, 0.3  # E5 power chord, G and G# equally faint
+    assert key_mode.third_contrast(power, 4) == 0.0 and key_mode.third_contrast([0.0] * 12, 0) == 0.0
+    if not rust.available():
+        pytest.skip("needs the Rust engine built")
+    for mode in ("major", "minor"):
+        y, _ = make_track(bpm=124, tonic=2, mode=mode, bars_per_section=(4, 8, 4))
+        key = rust.card_from_samples(y)["core"]["key"]
+        est = key_mode.estimate(key_features.features(y)["profile"], *train_key.model(), (third, margin))
+        assert (key["tonic"], key["mode"], key["mode_uncertain"]) == (est["tonic"], est["mode"], est["mode_uncertain"])
+
+
+def test_mode_uncertain_is_summarized_by_flag():
+    from tastr.engine.card import Key, Source, TrackCard
+
+    rows = []
+    for est_mode, flag in (("minor", True), ("major", True), ("major", False), ("major", False)):
+        card = TrackCard(source=Source(kind="file", uri="x"))
+        card.core.key = Key(tonic=0, mode=est_mode, mode_uncertain=flag)
+        rows.append(runner.score_item(datasets.Item(id="t", truth=datasets.Truth(tonic=0, mode="major")), card))
+    s = runner.summarize(rows)
+    assert s["key_mode_flagged"] == 2 and s["key_mode_flagged_parallel"] == 0.5
+    assert s["key_mode_unflagged"] == 2 and s["key_mode_unflagged_parallel"] == 0.0
+    assert "mode uncertain: 2 tracks; parallel-mode misses (tonic right) 50% flagged, 0% not" in runner.format_summary(
+        {"summary": s, "seconds": 0, "review": []})
 
 
 def test_numpy_key_model_matches_sklearn():
     import numpy as np
     from sklearn.linear_model import LogisticRegression
 
-    from tastr.engine import music
     from tastr.engine.bench import train_key
 
     tracks = _scale_tracks(np.random.default_rng(2), 30)
-    X = np.array([music.KEY_INPUT_SCALE * np.roll(t["profile"], s) for t in tracks for s in range(12)])
+    X = np.array([train_key.KEY_INPUT_SCALE * np.roll(t["profile"], s) for t in tracks for s in range(12)])
     y = np.array([((t["tonic"] + s) % 12) * 2 + (t["mode"] == "minor") for t in tracks for s in range(12)])
     clf = LogisticRegression(C=train_key.C, max_iter=2000).fit(X, y)
-    ours = np.array([music.key_probabilities(x / music.KEY_INPUT_SCALE, clf.coef_, clf.intercept_) for x in X])
+    ours = np.array([train_key.key_probabilities(x / train_key.KEY_INPUT_SCALE, clf.coef_, clf.intercept_) for x in X])
     assert np.array_equal(ours.argmax(axis=1), clf.predict(X))
     assert np.allclose(ours, clf.predict_proba(X), atol=1e-12)
 
@@ -315,27 +390,20 @@ def test_calibration_smooths_small_certain_blocks():
     assert len(knots) == 1 and knots[0][1] == round(10.5 / 11, 4)
 
 
-def test_calibration_module_round_trips(tmp_path, monkeypatch):
-    import importlib.util
+def test_calibration_knots_round_trip_through_consts_rs(tmp_path):
+    import numpy as np
 
-    from tastr.engine import calibration
-    from tastr.engine.bench import calibrate
+    from tastr.engine.bench import calibrate, consts_rs
 
     tables = {"bpm": [(0.2, 0.5, 50), (0.8, 0.9, 60)], "key": [(0.1, 0.3, 40), (0.5, 0.7, 45)]}
-    path = tmp_path / "calibration_table.py"
-    path.write_text(calibrate.module_source(tables, {"bpm": ["bp.json"], "key": ["key.json"]}))
-    spec = importlib.util.spec_from_file_location("calibration_table", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert mod.BPM == tuple(tables["bpm"]) and mod.KEY == tuple(tables["key"])
-
-    monkeypatch.setitem(__import__("sys").modules, "tastr.engine.calibration_table", mod)
-    import tastr.engine as engine
-    monkeypatch.setattr(engine, "calibration_table", mod, raising=False)
-    assert calibration.likely_correct("bpm", 0.5) == 0.7
-    assert calibration.likely_correct("bpm", 0.0) == 0.5  # flat beyond the fitted range
-    assert calibration.likely_correct("key", 0.9) == 0.7
-    assert calibration.likely_correct("bpm", None) is None
+    path = consts_rs.write(calibrate.consts_blocks(tables, {"bpm": ["bp.json"], "key": ["key.json"]}),
+                           _consts_copy(tmp_path))
+    assert np.array_equal(consts_rs.read("BPM_KNOTS", path), [0.2, 0.5, 0.8, 0.9])
+    assert np.array_equal(consts_rs.read("KEY_KNOTS", path), [0.1, 0.3, 0.5, 0.7])
+    src = path.read_text()
+    assert "pub const BPM_KNOTS: [(f64, f64); 2] = [(0.2, 0.5), (0.8, 0.9)];" in src
+    assert "from bp.json (110 tracks)" in src and "tracks per knot: 40, 45." in src
+    assert np.array_equal(consts_rs.read("KEY_WEIGHTS", path), consts_rs.read("KEY_WEIGHTS"))
 
 
 def test_calibrate_reads_reports_and_key_rows(tmp_path):

@@ -1,6 +1,6 @@
 # Drum lane detection: design notes and learnings
 
-How `tastr/engine/drums.py` finds the lanes in the detected groove, why it
+How the engine's drum lanes (`engine-rs/src/drums.rs`, first written in Python as `tastr/engine/drums.py`) find the lanes in the detected groove, why it
 works this way, and what was tried and dropped. Scores and how to run the
 benchmark are in [bench.md](bench.md#drum-lanes). Written 2026-10-29
 (PR #23).
@@ -157,13 +157,14 @@ TensorFlow checkpoint without TensorFlow (`tf_checkpoint.py`). The network,
 the madmom-style spectrogram and the peak picking in `adt.py` are written
 from ADTOF's published architecture and settings, not copied.
 
-**What it replaces.** The model supplies the kick, hat and tom lanes and
-adds a cymbal lane. Each hit is placed on the analysis frames with its
+**What it replaces.** The model supplies the kick, hat, tom and snare lanes
+and adds a cymbal lane. Each hit is placed on the analysis frames with its
 confidence (ADTOF's per-drum threshold maps to 0.5) times the level of the
 built-in part for that family, so the groove's "20% of the loudest lane"
-rule still compares like with like. Snare, clap, perc and open hat stay
-with the built-in detector (the model's hi-hats replace only the hits our
-ringing test calls closed). Because of the license, and because it is
+rule still compares like with like. Its snares go through a confidence rule
+(see "The snare trade-off" below). Clap and perc stay with the built-in
+detector. The model's hi-hats are split into closed and open hats by the
+built-in ringing test (see "Open hats" below). Because of the license, and because it is
 slower, it runs only when asked for one track: "Detect drums with the model"
 in the track's ⋯ menu (or the bulk Actions menu, or `tastr drum-model run ID`)
 re-analyzes that track with it in the background, like a stem separation, and
@@ -217,21 +218,159 @@ drops a little (0.01 to 0.04), since our open-hat lane now keeps only the
 hits the model doesn't also call a hat. Synth loses its synthetic tom, a
 sine sweep the model doesn't recognise. Each run took 38 to 87 s on Modal
 (4 CPUs). The earlier eval-adapter numbers for StemGMD and synth agreed
-within about 0.01.
+within about 0.01. The Open hat and Hats columns are from before the model's
+hi-hats were split into open and closed; see the next table for the change.
+The Tom column is from before weak model toms were dropped; see "False toms"
+below.
 
-**Open hats.** Splitting the model's hi-hats into closed and open with the
-built-in ringing test scored better on the StemGMD test kits (open hat 0.66
-against 0.48) but worse on synth (0.42 against 0.49), and MDB couldn't be
-checked. The built-in open-hat lane stays (`drums.MODEL_OPEN_HATS = False`);
-revisit with a bench option that runs MDB and IDMT both ways on Modal.
+**Open hats.** With the model there are two ways to fill the open-hat lane:
+keep the built-in open-hat lane (the model's hi-hats then replace only the
+hits our ringing test calls closed), or split the model's own hi-hats into
+closed and open with the same ringing test. `tastr drum-bench SUITE PATH
+--drum-model --open-hats built-in|model` runs either (2026-11-08, Modal,
+temporary app from the branch; onset F within 50 ms, built-in -> model;
+"Hats" counts either hat lane):
+
+| Suite | Hat | Hats (either) | Open hat (n) | Open hat P / R |
+|---|---|---|---|---|
+| MDB mixes | 0.776 -> 0.772 | 0.753 -> 0.848 | 0.209 -> 0.405 (269) | 0.13 / 0.52 -> 0.29 / 0.67 |
+| MDB drum stems | 0.831 -> 0.828 | 0.808 -> 0.867 | 0.289 -> 0.587 | 0.19 / 0.60 -> 0.50 / 0.70 |
+| StemGMD test kits | 0.682 -> 0.675 | 0.751 -> 0.740 | 0.481 -> 0.657 (300) | 0.34 / 0.84 -> 0.51 / 0.93 |
+| IDMT | 0.940 -> 0.948 | | | |
+| Synth | 0.943 -> 0.934 | | 0.686 -> 1.000 (12) | 0.52 / 1.00 -> 1.00 / 1.00 |
+
+Kick, tom and cymbal are unchanged (cymbal within 0.003). Splitting the
+model's hi-hats wins on every suite with open-hat labels, mostly by
+precision: the built-in open-hat lane fires on many hits the model knows are
+something else (snare rattle, cymbal wash), which also costs "either hat"
+on MDB. Closed hats move by 0.01 at most, and the StemGMD test kits lose
+0.011 on "either hat". So it is the default now (`drums::MODEL_OPEN_HATS`).
+This supersedes the earlier eval-adapter check (0.66 against 0.48 on
+StemGMD, worse on synth), which didn't go through the shipped lanes. One thing
+to know: the ringing test reads the air band (above 6 kHz), so a model
+hi-hat with nothing above 6 kHz (very dark or band-limited hats) reads as
+ringing and lands in the open-hat lane. Each run took 41 to 153 s on 4 CPUs
+(about 12 minutes for all ten).
 
 **The snare trade-off.** ADTOF's snare is far better on MDB and StemGMD
 (0.74 and 0.91 against 0.51 and 0.46) but worse on IDMT's sampled and
 techno kits (0.88 against 0.94; 338 false snares on hi-hats). The built-in
-snare is kept for now. Keeping ADTOF's snares only where the built-in snare
+snare was kept at first; a confidence rule that gets most of both is below,
+and is what the snare lane uses now. Keeping ADTOF's snares only where the built-in snare
 also has an onset (eval adapter) is precise but loses ADTOF's recall:
 StemGMD test kits F 0.63 (P 0.98, R 0.46) against 0.46 built-in and 0.91
 ADTOF; synth 0.82 against 0.86 and 0.89. MDB and IDMT still to measure.
+
+To settle it, every drum bench run with the model (`--drum-model`) also scores
+the snare each candidate rule would give, on the same labels, and lists them
+as "snare from ..." lines (`snare_sources` in the JSON report): `builtin`
+(today's lane), `model` (every model snare), `gated` (model snares with a
+built-in snare onset within 50 ms), `mid-0.05`, `mid-0.1` and `mid-0.2` (a
+looser gate: model snares where the built-in mid part reaches that share of
+its 99.5th percentile within 30 ms, which should drop the model's snares on
+bare hi-hats without needing a built-in onset), `confident-C` (model snares of
+confidence C or more, plus gated ones; C from 0.6 to 0.85), and `union`. The `synth-onsets`
+suite scores the synthetic loops as onsets so synth can be compared the same
+way. Before a merge, `modal run tastr/cloud/modal_app.py --kind drums-model ...`
+runs a branch's code (docs/cloud.md).
+
+**Result (2026-11-08, main 862c0f5, full suites on Modal, 30 to 90 s each).**
+Snare onset F within 50 ms (P / R where it matters); StemGMD is the 5 held-out
+test kits:
+
+| Rule | MDB mixes | MDB stems | StemGMD test | IDMT | Synth |
+|---|---|---|---|---|---|
+| builtin (today) | 0.506 (0.72 / 0.39) | 0.601 | 0.463 | 0.935 (0.95 / 0.92) | 0.864 |
+| model | 0.744 | 0.818 | 0.826 | 0.872 (0.78 / 0.98) | 0.889 |
+| gated | 0.508 (0.93 / 0.35) | 0.606 | 0.621 | 0.942 | 0.824 |
+| mid-0.05 / 0.1 / 0.2 | 0.687 / 0.664 / 0.628 | 0.748 / 0.714 / 0.668 | 0.836 / 0.809 / 0.748 | 0.883 / 0.886 / 0.909 | 0.84 / 0.83 / 0.82 |
+| confident-0.6 | 0.722 | 0.819 | 0.890 | 0.907 | 0.889 |
+| confident-0.65 | 0.700 | 0.805 | 0.896 | 0.922 | 0.889 |
+| **confident-0.7** | **0.672 (0.88 / 0.54)** | **0.789** | **0.890 (0.96 / 0.83)** | **0.929 (0.90 / 0.96)** | **0.889** |
+| confident-0.75 | 0.637 | 0.738 | 0.867 | 0.935 | 0.889 |
+| confident-0.85 | 0.563 | 0.641 | 0.744 | 0.936 | 0.832 |
+| union | 0.721 | 0.811 | 0.668 | 0.852 | 0.913 |
+
+The pick is **confident-0.7**: keep a model snare when its confidence is 0.7
+or more (ADTOF's own threshold maps to 0.5), and a weaker one only when the
+built-in snare or clap also has an onset within 50 ms. It is the only family
+that clears the bar on every suite: it beats the built-in snare by 0.17 on
+MDB mixes, 0.19 on MDB stems and 0.43 on the StemGMD test kits, and stays
+above 0.92 on IDMT (0.929 against 0.935). 0.65 is a little better on MDB but
+sits right at the IDMT floor (0.922); 0.75 and up give back MDB recall for no
+IDMT gain.
+
+What the rules taught us:
+
+- The model's false snares are mostly on hi-hats (379 on IDMT, 220 on MDB
+  mixes), and they are its low-confidence ones: the confidence cut removes
+  them far better than asking for mid-band energy (`mid-*`), because hat
+  bleed into the mid part is enough to pass any mid gate loose enough to keep
+  recall.
+- Gating by a built-in onset alone (`gated`) is precise (P 0.93 to 0.98) but
+  inherits the built-in snare's low recall on real kits (0.35 on MDB mixes);
+  the built-in lane mostly misses ghost notes and snares under cymbals.
+- The built-in snare's own false snares on StemGMD are toms (218) and the
+  cowbell (99); the model rules don't have that problem, which matters for
+  the "snares read as toms" follow-up.
+- `union` is best only on synth, where the model has no false snares and
+  the built-in lane adds the ones it misses; on real kits it adds every hat
+  error of both.
+
+**Shipped (2026-11-08).** The engine now applies this rule with the model
+on (`drums::SNARE_CONFIDENT`, `SNARE_GATE` in engine-rs/src/drums.rs; the
+built-in onset is a peak of the snare part's rise at 0.4x its 99.5th
+percentile). Through the shipped lanes, same suites, built-in -> model:
+
+| | MDB mixes | MDB stems | StemGMD test kits | IDMT | Synth (onsets) |
+|---|---|---|---|---|---|
+| Snare | 0.506 -> 0.682 (P 0.87, R 0.56) | 0.601 -> 0.784 | 0.463 -> 0.893 | 0.935 -> 0.928 | 0.864 -> 0.996 |
+
+Every other lane scored the same, except perc on the StemGMD test kits
+(0.664 -> 0.627, precision 0.996 -> 0.834) and synth (0.537 -> 0.571): perc's
+onset threshold is a share of the whole mid family, and the model's snares
+sit lower in it than the built-in snare's peaks did.
+
+**False toms (2026-11-08).** The model's toms were found but imprecise on
+real kits: P 0.25 on MDB mixes and 0.13 on stems, most false toms on snares
+(99 and 300) and kicks. With the model on, every drum bench run also scores
+the toms each candidate rule would keep (`tom_sources` in the JSON report,
+"tom from ..." lines), from the model's own onsets: `conf-C` (toms of
+confidence C or more, C from 0.6 to 0.8), `snare-veto` (no tom with a model
+snare within 30 ms), `snare-stronger` (no tom where that snare is at least as
+confident), and `snare-veto-C` / `kit-veto-C` (the same against a model snare,
+or snare or kick, unless the tom's confidence is C or more). Tom onset F,
+model onsets (IDMT: false toms per labeled hit):
+
+| Rule | MDB mixes | MDB stems | StemGMD test kits | IDMT |
+|---|---|---|---|---|
+| model (all toms) | 0.326 (P 0.21) | 0.209 (P 0.12) | 0.890 | 0.017 |
+| conf-0.6 | 0.437 | 0.316 | 0.889 | 0.007 |
+| conf-0.65 | 0.502 | 0.412 | 0.877 | 0.005 |
+| **conf-0.675** | **0.524** | **0.472** | **0.867** | **0.004** |
+| conf-0.7 | 0.538 | 0.532 | 0.851 | 0.004 |
+| conf-0.75 | 0.570 | 0.624 | 0.801 | 0.003 |
+| snare-veto | 0.360 | 0.223 | 0.837 | 0.009 |
+| snare-stronger | 0.395 | 0.222 | 0.880 | 0.010 |
+| kit-veto-0.8 | 0.461 | 0.243 | 0.765 | 0.008 |
+
+The vetoes barely help: the false toms sit where the model hears no snare at
+all (it calls the snare a tom), so there is nothing to veto against. The
+confidence cut is what works, and it trades MDB against StemGMD's grooves,
+where 43% of the toms land with a kick or snare; those are mostly the ones
+the cut loses (recall with a kick or snare 0.60 -> 0.54, alone 0.98 -> 0.95).
+The engine drops model toms under **0.675** (`drums::TOM_CONFIDENT`), the
+highest cut that keeps StemGMD at 0.86 or more; 0.75 would be better on MDB
+(0.57 and 0.62) for 0.07 on StemGMD. Through the shipped lanes, before ->
+after:
+
+| Tom | MDB mixes | MDB stems | StemGMD test kits | IDMT (false per labeled hit) |
+|---|---|---|---|---|
+| F | 0.369 -> 0.527 (P 0.25 -> 0.47, R 0.69 -> 0.60) | 0.215 -> 0.472 (P 0.13 -> 0.39) | 0.880 -> 0.865 (with kick/snare R 0.60 -> 0.54) | 0.017 -> 0.004 |
+
+False toms on MDB snares fell from 99 to 37 (mixes) and 300 to 82 (stems).
+No other lane changed. The synthetic tom (a sine sweep) is still not
+recognised. MDB has only 90 toms, so its tom scores move a lot per hit.
 
 **Speed.** About 0.6 s per minute of audio on one CPU thread once loaded,
 against about 2.5 s for the built-in lanes in the bench.

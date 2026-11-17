@@ -2,13 +2,16 @@
 
 Two parts:
 - `Default`, the Worker: /static/*, /sqljs/* (sql.js) and /engine/* (the engine's WebAssembly build) come from
-  Workers Static Assets (the files `build.py` copies to public/);
-  everything else goes to the one Durable Object.
+  Workers Static Assets (the files `build.py` copies to public/) without reaching it (wrangler.jsonc
+  `run_worker_first`), and it hands out /pub/preview.png and /pub/favicon.svg from there too; everything else goes
+  to the one Durable Object.
 - `Library`, a SQLite-backed Durable Object: the library database lives in its SQL storage (tastr/do_sqlite.py)
   and it runs the FastAPI app (tastr/web/server.py), one request at a time.
 
 Background work runs on the event loop (tastr/runner.py `Loop`): jobs as asyncio tasks, the repeating work
 (expiry, the watch) from the Durable Object's alarm, which `arm()` sets after each request and each alarm.
+
+The AcousticBrainz lookup reads its index from the D1 database bound as ACOUSTICBRAINZ (`d1_query`).
 
 Outgoing requests (Modal over HTTPS, tastr/cloud/remote.py; the audio bucket, tastr/s3.py) go through
 tastr/http.py, which here sends them with the Worker's own fetch (`fetch_request`).
@@ -19,6 +22,27 @@ import os
 import sys
 import time
 from urllib.parse import urlparse
+
+
+def quiet_unraisable(hook=sys.unraisablehook):
+    """sys.unraisablehook without one known harmless line: a ZipFile from the runtime's start-up snapshot whose
+    file is gone when it is garbage collected (EBADF in ZipFile.__del__). It went to the Worker's logs as an
+    error, hundreds a day, and buried the real ones (T31). Since Python 3.14 (the Workers runtime's Python) a
+    failing __del__ arrives with no `object`, only the message "Exception ignored while calling deallocator
+    <function ZipFile.__del__ at 0x...>", so both are checked."""
+
+    def unraisable(u):
+        if isinstance(u.exc_value, OSError) and u.exc_value.errno == errno.EBADF and (
+                getattr(u.object, "__qualname__", "") == "ZipFile.__del__"
+                or "<function ZipFile.__del__ at " in (getattr(u, "err_msg", None) or "")):
+            return
+        hook(u)
+
+    return unraisable
+
+
+# First thing, before the big imports below: the snapshot's stale ZipFile can be collected at any point after start.
+sys.unraisablehook = quiet_unraisable()
 
 os.environ.setdefault("TASTR_HOME", "/tmp/tastr")  # the in-memory file system: a cache, nothing kept
 try:
@@ -31,8 +55,20 @@ if ENGINE_WASM_ID:
 from workers import DurableObject, WorkerEntrypoint, asgi, fetch  # noqa: E402
 
 from tastr import blobs, db, http, runner  # noqa: E402
+from tastr.lookup import acousticbrainz  # noqa: E402
 from tastr.web.hosted import AccessVerifier, Settings  # noqa: E402
 from tastr.web.server import create_app  # noqa: E402
+
+# Cloudflare runs this module's top level at deploy time and snapshots the memory, so a new isolate starts with
+# everything imported here already loaded. These are otherwise imported on first use, which on the Worker means on
+# the first request of every new isolate (docs/hosting-map.md, Cold starts): PyJWT with cryptography for the
+# Access login (the biggest), the review list, ML tags and Starlette's sync-endpoint runner.
+import anyio._backends._asyncio  # noqa: E402, F401
+import jwt  # noqa: E402
+import jwt.algorithms  # noqa: E402, F401
+
+from tastr import labels  # noqa: E402, F401
+from tastr.engine import ml_tags  # noqa: E402, F401
 
 DB_PATH = "/tmp/tastr/tastr.db"  # only a name here: the database is the Durable Object's own storage
 KEYS_SECONDS = 3600
@@ -82,21 +118,6 @@ def sleep(seconds: float) -> None:
     run_sync(asyncio.sleep(seconds))
 
 
-def quiet_unraisable(hook=sys.unraisablehook):
-    """sys.unraisablehook without one known harmless line: a ZipFile from the runtime's start-up snapshot whose
-    file is gone when it is garbage collected (EBADF in ZipFile.__del__). It went to the Worker's logs as an
-    error, hundreds a day, and buried the real ones (T31)."""
-
-    def unraisable(u):
-        if isinstance(u.exc_value, OSError) and u.exc_value.errno == errno.EBADF \
-                and getattr(u.object, "__qualname__", "") == "ZipFile.__del__":
-            return
-        hook(u)
-
-    return unraisable
-
-
-sys.unraisablehook = quiet_unraisable()
 http.use(fetch_request)
 blobs.keep_copies = False  # the file system is memory: drop local copies of uploads once read
 blobs.copy_limit = 1  # and read back one at a time
@@ -143,16 +164,12 @@ class AccessKeys:
     async def refresh(self, team_domain: str) -> None:
         if self.by_kid and time.time() - self.at < KEYS_SECONDS:
             return
-        import jwt
-
         r = await fetch(f"https://{team_domain}/cdn-cgi/access/certs")
         data = await r.json()
         self.by_kid = {k["kid"]: jwt.PyJWK(k).key for k in data["keys"]}
         self.at = time.time()
 
     def get_signing_key_from_jwt(self, token: str):
-        import jwt
-
         kid = jwt.get_unverified_header(token).get("kid")
         if kid not in self.by_kid:
             raise jwt.PyJWTError("unknown signing key")
@@ -176,9 +193,36 @@ def load_env(env) -> None:
             os.environ[name] = value
 
 
+def d1_query(binding):
+    """tastr/lookup/acousticbrainz.py's D1 reader: SQL text in, rows (lists) out, from synchronous code."""
+    from pyodide.ffi import run_sync
+
+    def query(sql: str) -> list[list]:
+        return [list(r) for r in run_sync(binding.prepare(sql).raw()).to_py()]
+
+    return query
+
+
+def use_bindings(env) -> None:
+    """Hand the app the bindings it reads directly (only the AcousticBrainz database so far)."""
+    raw = getattr(env, "_env", env)
+    db_binding = getattr(raw, "ACOUSTICBRAINZ", None)
+    acousticbrainz.use_d1(d1_query(db_binding) if db_binding is not None else None)
+
+
 APP = None
 SETTINGS: Settings | None = None
 KEYS = AccessKeys()
+
+
+async def refresh_keys() -> None:
+    """Cloudflare Access's signing keys, when hosted and over an hour old (AccessKeys)."""
+    if SETTINGS is None or not SETTINGS.hosted:
+        return
+    try:
+        await KEYS.refresh(SETTINGS.access_team_domain)
+    except Exception as e:  # noqa: BLE001 - keys unreachable: the known keys (or none: every login fails) stand
+        print(f"couldn't fetch the Access signing keys: {type(e).__name__}: {e}")
 
 
 class Library(DurableObject):
@@ -188,7 +232,12 @@ class Library(DurableObject):
         storage = Storage(ctx.storage)
         db.use_storage(lambda path: storage)
         if APP is None:
+            # A cold start: a new isolate, so the request or alarm that woke it waits for this. The Worker's clock
+            # stands still while code runs (it moves only on I/O), so this can't be timed from here; the line marks
+            # the invocation whose CPU time to read in the logs (docs/hosting-map.md, Cold starts).
+            print("cold start: building the app")
             load_env(env)
+            use_bindings(env)
             SETTINGS = Settings.from_env()
             verifier = AccessVerifier(SETTINGS.access_team_domain, SETTINGS.access_aud, keys=KEYS) \
                 if SETTINGS.hosted else None
@@ -196,17 +245,15 @@ class Library(DurableObject):
             APP.state.startup()
 
     async def fetch(self, request):
-        if SETTINGS.hosted:
-            try:
-                await KEYS.refresh(SETTINGS.access_team_domain)
-            except Exception as e:  # noqa: BLE001 - keys unreachable: the known keys (or none: every login fails) stand
-                print(f"couldn't fetch the Access signing keys: {type(e).__name__}: {e}")
+        await refresh_keys()
         response = await asgi.fetch(APP, request, self.env)
         await self.arm()
         return response
 
     async def alarm(self, *_):
         RUNNER.run_due()
+        # An alarm often starts the isolate that a visitor then finds warm: fetching the keys here spares that visit.
+        await refresh_keys()
         await self.arm()
 
     async def arm(self):
@@ -218,10 +265,16 @@ class Library(DurableObject):
 
 
 ASSET_PATHS = ("/static/", "/sqljs/", "/engine/")  # the files build.py puts in public/
+# The share pages' preview image and icon (routes/strudel.py): public, so served from public/static/ by their
+# /pub/ names, which Cloudflare Access lets through, where /static/ needs the login.
+PUBLIC_ASSETS = {"/pub/preview.png": "/static/preview.png", "/pub/favicon.svg": "/static/favicon.svg"}
 
 
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
-        if urlparse(request.url).path.startswith(ASSET_PATHS):
+        url = urlparse(request.url)
+        if url.path.startswith(ASSET_PATHS):
             return await self.env.ASSETS.fetch(request)
+        if url.path in PUBLIC_ASSETS:
+            return await self.env.ASSETS.fetch(url._replace(path=PUBLIC_ASSETS[url.path], query="").geturl())
         return await self.env.LIB.getByName("library").fetch(request)

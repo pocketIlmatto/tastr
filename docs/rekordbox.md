@@ -87,10 +87,22 @@ Biggest disagreements (31 in all; label these to see who's right):
   #42 Artist - Title: Tastr 87.0 F minor, Rekordbox 174.0 F minor
 ```
 
-On the hosted server, upload the export to the audio bucket (`tastr-audio` in Cloudflare's dashboard, R2) as
-`rekordbox/collection.xml`, then open `/api/admin/rekordbox-compare?format=text` on the server (admins only;
-drop `format=text` for JSON, `key=rekordbox/other.xml` for another file, `show=N` for more disagreements). It
-compares your own tracks. Delete the export from the bucket when you're done: it lists your library's paths.
+On the hosted server, open **Admin › Rekordbox export** and drop the export there (or choose the file; up to
+50 MB). Tastr stores it in the audio bucket as `rekordbox/collection.xml`, replacing the last one, matches it to
+your own tracks and shows a preview: how many tracks matched, how often the two apps agree, and the matches
+themselves. Nothing changes on your tracks until you press **Load Rekordbox values**. That stores Rekordbox's BPM
+and key on each matched track. Each card then shows Rekordbox under "Listed elsewhere", marked where it
+disagrees (half, double, a fifth...), and the review list gains "rekordbox lists 103 BPM, not Tastr's 136"
+reasons, the same as for the online catalogs ([lookup.md](lookup.md)). Loading a newer export replaces them, and
+tracks that aren't in it lose theirs. The load is logged in the activity log. Rekordbox is never looked up:
+naming it in `TASTR_LOOKUP` does nothing. The export lists your library's paths, so delete it from the bucket
+when you no longer need it.
+
+The routes behind the panel are `POST /api/admin/rekordbox/upload` (the XML as the body: stores it and answers the
+comparison), `POST /api/admin/rekordbox/load` and `GET /api/admin/rekordbox/status`. For scripts,
+`/api/admin/rekordbox-compare?format=text` still reads the stored export (drop `format=text` for JSON,
+`key=rekordbox/other.xml` for another file, `show=N` for more disagreements, `save=1` to load as the panel does).
+All are admins only and use your own tracks.
 
 Tracks are matched by file name first, then by artist and title (with lengths within 3 s), each track once.
 Where you labeled a track in Tastr ([bench.md](bench.md#your-own-tracks)), both apps are scored against your
@@ -156,3 +168,27 @@ parallel 6, other 28. BPM octave errors: Rekordbox half 2, double 3; Tastr half 
 
 A full run (all 600 key tracks, which Rekordbox would have to analyze too) would narrow the margins; GiantSteps
 Tempo has no more tracks with audio.
+
+### 2026-11-03: Pam's library, Tastr's stored analysis vs Rekordbox 7.2.19
+
+58 tracks in both libraries (of 88 in the hosted Tastr library), house, afro house, pop and hip hop. No labels, so
+this is agreement, not accuracy.
+
+| | Agreement |
+|---|---|
+| Same BPM (within 4%) | 0.810 |
+| Same BPM incl. x2 / half | 0.845 |
+| Same key | 0.845 (49 same, 3 a fifth apart, 2 relative, 4 other) |
+| Beats line up (70 ms) | 0.590 |
+| Bar starts line up (70 ms) | 0.358 |
+
+What the 16 disagreements showed:
+
+- **Tastr's BPM is coarse.** Every Tastr BPM among them sits exactly on 60 x 22050 / 512 / n (117.45, 123.05, 129.2,
+  136.0, 143.55, 152.0, 161.5): the tempo comes from the median gap between beats counted in whole analysis frames
+  (23 ms), so near 128 BPM it can only say 123.05 or 129.2. That passes "within 4%" (ARTBAT's 128 reads 129.2) but
+  drifts a beat every few bars against a real grid, which is likely most of the low beat and bar scores.
+- **4:3 tempo errors.** Six afro house and pop tracks read about 4/3 of Rekordbox's tempo (143.55 for 107, 161.5
+  for 120, 136 for 103): the tracker locked onto the dotted-eighth pulse of a 3-3-2 rhythm. The existing 3:2 check
+  doesn't cover it.
+- One each of half and double tempo (86 vs 171, 161.5 vs 82).

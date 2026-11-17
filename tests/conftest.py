@@ -12,14 +12,9 @@ if os.environ.get("PYTEST_XDIST_WORKER"):
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Analyses in the tests run on the Rust engine, as they do in the app; they need its library built
-# (cd engine-rs && cargo build --release --lib), which CI does whenever the audio tests run. Benchmark tests use
-# the Rust engine too when it is built, else the Python reference engine. Tests of the Python reference engine's
-# stage logic call its stages directly (run_pipeline).
+# Analyses and benchmarks in the tests run on the Rust engine, as they do in the app; they need its library built
+# (cd engine-rs && cargo build --release --lib), which CI does whenever the audio tests run.
 from tastr.engine import rust as _rust  # noqa: E402
-
-os.environ.setdefault("TASTR_ENGINE", "rust" if _rust.lib_path() else "python")
-
 from synth import make_track, write_wav  # noqa: E402
 
 
@@ -61,16 +56,3 @@ def synth_wav(tmp_path_factory):
 def db_path(tmp_path):
     return tmp_path / "test.db"
 
-
-@pytest.fixture
-def truth_core(synth_wav, monkeypatch):
-    """Swap the Python reference engine's core stage for one that reports the synth track's ground truth, for
-    tests that run its stages (run_pipeline)."""
-    from synth import TruthCoreStage
-
-    from tastr.engine.pipeline import register_stage, registered_stages
-
-    original = registered_stages()["core"]
-    register_stage(TruthCoreStage(synth_wav[1]), replace=True)
-    yield
-    register_stage(original, replace=True)

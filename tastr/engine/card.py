@@ -37,6 +37,7 @@ class Key:
     camelot: str | None = None  # e.g. "8A"
     confidence: float | None = None  # 0..1, top key probability minus the runner-up's
     likely_correct: float | None = None  # 0..1, share of benchmark tracks at this confidence with the exact key
+    mode_uncertain: bool = False  # major or minor is a guess: weak thirds, parallel key close behind (music.rs)
 
     @property
     def name(self) -> str:

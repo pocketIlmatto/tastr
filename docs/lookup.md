@@ -4,6 +4,11 @@ Tastr can ask online music catalogs what BPM and key they list for a track and s
 next to its own figures ("Listed elsewhere"), marked as matching ours, half or double our tempo, a
 related key, or different. The catalogs never replace the engine's numbers.
 
+The line under the card's numbers shows only the sources that found the track. The card's **Metadata**
+section ends with a "Listed elsewhere" table that always lists every source: what it found, or why it has
+nothing yet (not looked up yet, not found, no artist and title tags, the lookup failed, not set up on this
+server, or for Rekordbox, not imported yet or not in your export).
+
 Lookups are **off by default**. When on, they send the track's **artist and title** (from its tags)
 to each provider you enabled; no audio and nothing else leaves the machine. Tracks without artist and
 title tags are skipped.
@@ -13,13 +18,13 @@ title tags are skipped.
 Set these in the shell you run `tastr serve` / `tastr analyze` from, never in the repo:
 
 ```bash
-export TASTR_LOOKUP=getsongbpm,freqblog,acousticbrainz   # providers to ask, in order
+export TASTR_LOOKUP=getsongbpm,freqblog,reccobeats,acousticbrainz   # providers to ask, in order
 export GETSONGBPM_API_KEY=...               # https://getsongbpm.com/api (free; requires a link back)
 export FREQBLOG_API_KEY=...                 # https://api.freqblog.com/docs (free tier 1,000 requests a month)
-export FREQBLOG_PLAN=paid                   # only on a paid FreqBlog plan: lets Tastr store its answers (see below)
+export FREQBLOG_STORE=0                     # optional: don't store FreqBlog's answers (stored by default; see below)
 ```
 
-AcousticBrainz needs no key but a local index of its dump; see [AcousticBrainz](#acousticbrainz)
+ReccoBeats needs nothing set up. AcousticBrainz needs no key but a local index of its dump; see [AcousticBrainz](#acousticbrainz)
 below. A provider named in `TASTR_LOOKUP` that isn't set up (no key, no index) is skipped with a
 warning.
 
@@ -29,7 +34,8 @@ Then:
   provider that already answered (found or not found), so it doesn't spend quota;
 - "Look up BPM & key online" in a track's ⋯ menu, or in the sidebar's bulk actions, asks again;
 - `tastr lookup [IDS...] [--missing] [--providers a,b]` does the same from a terminal (all tracks when
-  no ids are given); `tastr lookup --usage` shows requests used against each limit.
+  no ids are given); `tastr lookup --usage` shows requests used against each limit;
+  `tastr lookup --forget freqblog` deletes every stored answer from one provider.
 
 Results are stored per track and provider in the `lookups` table (`status`, `bpm`, `key_name` as
 listed, `key_tonic` / `key_mode` / `camelot` parsed from it, `fetched_at`, `result_json`) and survive
@@ -43,9 +49,13 @@ SELECT t.title, t.camelot, l.provider, l.camelot AS listed FROM tracks t JOIN lo
 WHERE l.status = 'found' AND l.camelot IS NOT NULL AND l.camelot <> t.camelot;
 ```
 
-A provider whose terms don't allow keeping its answers (FreqBlog on its free plan) is shown only for
-the lookup that fetched it ("Look up BPM & key online", or `tastr lookup`) and isn't stored or asked
-during analysis.
+A provider whose terms don't allow keeping its answers (FreqBlog with `FREQBLOG_STORE=0`) is shown
+only for the lookup that fetched it ("Look up BPM & key online", or `tastr lookup`) and isn't stored or
+asked during analysis.
+
+A provider can also keep a "not found" only for a while (`miss_days`; FreqBlog 7 days, or the
+`retry_after_days` it sends with the answer). Once that passes, the next analysis or `--missing` run
+asks again, since the catalog may have added the track.
 
 `status` is `found`, `not_found`, `pending` (FreqBlog queued the track for analysis; asked again next
 time), `no_tags` or `error` (the message is in `result_json`).
@@ -59,7 +69,7 @@ not a hostile visitor once Tastr is shared. Every request a provider sends goes 
 | Guardrail | Default | Override |
 |---|---|---|
 | Spacing: one request at a time per provider, at least this far apart | 1 s (AcousticBrainz 1.1 s, for MusicBrainz's one a second) | `TASTR_LOOKUP_<NAME>_INTERVAL` |
-| Requests per UTC day | FreqBlog 60, GetSongBPM 1,000 (its own limit is 3,000 an hour), AcousticBrainz 1,000 (MusicBrainz searches) | `TASTR_LOOKUP_<NAME>_DAILY` |
+| Requests per UTC day | FreqBlog 60, GetSongBPM 1,000 (its own limit is 3,000 an hour), ReccoBeats 1,000 (about 200 tracks), AcousticBrainz 1,000 (MusicBrainz searches) | `TASTR_LOOKUP_<NAME>_DAILY` |
 | Requests per calendar month | FreqBlog 900 (its free tier is 1,000), GetSongBPM none | `TASTR_LOOKUP_<NAME>_MONTHLY` |
 | The provider's own quota headers (`x-quota-used` / `x-quota-limit`, `x-ratelimit-remaining`) | pause 20 requests short of its limit until its reset time | |
 | HTTP 429 / 5xx | pause for Retry-After, else 1 min doubling to 1 h | |
@@ -81,10 +91,12 @@ scripts and curl still get through, so a server other people can reach needs rea
 | Name | What it returns | Terms to keep |
 |---|---|---|
 | `getsongbpm` | tempo, key (`key_of`), time signature, Open Key | Free with a key, sent in the `X-API-KEY` header. A visible link back to getsongbpm.com is "REQUIRED (website or store listing)", or the account can be suspended; the card links each listing to its GetSongBPM page and the README links the site, but whether that satisfies them for a local app is worth confirming with GetSongBPM. Search hits use `song_title` / `song_id` (also read: `title` / `id`). Host override: `GETSONGBPM_API_BASE`. |
-| `freqblog` | BPM, half-time BPM, key, Camelot, Open Key | Key in an `X-API-Key` header. Fields per its OpenAPI spec (`track_name`, `artist_name`, ...). It returns its closest match, so a different song is treated as not found. Unknown tracks may come back 202 "queued". Caching results is allowed only on paid plans: answers are stored only with `FREQBLOG_PLAN=paid`. Host override: `FREQBLOG_API_BASE`. |
+| `freqblog` | BPM, half-time BPM, key, Camelot, Open Key | Key in an `X-API-Key` header. Fields per its OpenAPI spec (`track_name`, `artist_name`, ...). It returns its closest match, so a different song is treated as not found. Unknown tracks may come back 202 "queued". Its [terms](https://freqblog.com/terms.html#free-use) (3 November 2026, section 6.2) let a free key store the values it returns for a non-commercial project, used inside that project only: never publish them as a file or dataset (a public repository included) or offer them as an export, API or feed (so they are left out of the library snapshot the hosted search downloads, `in_downloads = False`), and credit "Audio analysis by FreqBlog" where a user can find it. A "not found" may be cached only for a while, so it expires (see above). If the key is revoked or the project turns commercial, delete what is stored within 30 days (`tastr lookup --forget freqblog`) or move to a paid plan. One free key per person. `FREQBLOG_STORE=0` stops storing. Host override: `FREQBLOG_API_BASE`. |
+| `reccobeats` | BPM only (energy, danceability and valence kept in `result_json`) | Free, no key; its [terms](https://reccobeats.com/docs/documentation/terms-of-service) allow personal and commercial use and keeping answers, but it may block clients that send too much. No track search, so a lookup is an artist search, that artist's tracks 50 at a time (up to 10 pages) until the title matches, then the track's audio features: about five requests. A remix, live take or DJ mix only matches the same version; extended and radio cuts count as the same track, closest length first. Its key isn't used: on 38 tracks (November 2026) it matched Rekordbox's on 14, against 30 for Tastr's, while its BPM matched on 31 (Tastr's on 28). Host override: `RECCOBEATS_API_BASE`. |
 | `acousticbrainz` | BPM, key and scale (Essentia estimates from 2022 and earlier) | Public domain (CC0), so answers are stored. Looked up by MusicBrainz recording id from a local index of the dump; only the MusicBrainz search goes online. See below. |
+| `rekordbox` | BPM and key from your own Rekordbox collection export | Never looked up and not in `TASTR_LOOKUP`: stored for the tracks in both libraries by `/api/admin/rekordbox-compare?save=1` ([rekordbox.md](rekordbox.md)), then shown and compared like the others. |
 
-Both catalogs' figures are estimates too (theirs or their users'), so a disagreement means "check this
+The catalogs' figures are estimates too (theirs or their users'), so a disagreement means "check this
 track", not "Tastr is wrong". The provider modules were written from each API's published examples;
 check them against a live key after an API change.
 
@@ -118,7 +130,11 @@ once more; a second failure comes back as an error naming MusicBrainz. MusicBrai
 headers count its global load, not Tastr's requests, so the guard doesn't pause on them.
 
 In a test on a small library of mostly 2019-2022 house releases (October 2026), no track was found:
-AcousticBrainz's coverage of recent electronic releases is thin. It suits older catalogs better.
+AcousticBrainz's coverage of recent electronic releases is thin. It suits older catalogs better. A
+larger check in November 2026, on 58 tracks of a hosted library, found 8 (14%). By MusicBrainz's
+first-release year: 4 of 4 before 2015, 3 of 9 from 2015-2018, 1 of 8 from 2019-2022 and 0 of 20 from
+2023 on, which the dump can't hold. Of the 50 misses, 33 were on MusicBrainz but never analyzed and 17
+weren't on MusicBrainz at all. So expect it to answer for older tracks and rarely for new releases.
 
 Build the index once:
 
@@ -143,8 +159,44 @@ index exists.
 | `ACOUSTICBRAINZ_API_BASE` | unset. Instead of an index: a server that still speaks the AcousticBrainz API (its bulk `/api/v1/low-level` endpoint), asked for up to 25 MBIDs at once |
 | `MUSICBRAINZ_API_BASE` | `https://musicbrainz.org/ws/2` (a mirror also works) |
 
+### On the hosted site
+
+The Worker has no lasting disk, so there the index lives in a D1 database, `tastr-acousticbrainz`, bound
+as `ACOUSTICBRAINZ` (`worker/wrangler.jsonc`, [hosting-map.md](hosting-map.md)). Each lookup reads it with
+one query of up to 25 recording ids; the MusicBrainz search is the same as anywhere else. The database is
+about 0.4 GB, which Workers Paid's included D1 storage (5 GB) covers.
+
+Set it up once:
+
+1. Give the deploy token (`CLOUDFLARE_API_TOKEN`, [settings.md](settings.md)) **D1 Edit** and **Workers
+   R2 Storage Read** on the account, if it doesn't have them. A deploy needs D1 Edit: it finds the database
+   by name, or makes an empty one (wrangler's automatic provisioning).
+2. Run **Actions > acousticbrainz-d1 > Run workflow**. It reads `acousticbrainz/acousticbrainz-index.sqlite`
+   from the `tastr-data` bucket (put there by `tastr fetch acousticbrainz ... --remote`), writes it out as SQL
+   (`d1_sql` in `tastr/lookup/acousticbrainz.py`, half a million rows a file), makes the database if a deploy
+   hasn't, and imports the files one after another; about 7.6 million rows written, inside the 50 million a
+   month Workers Paid includes. Every file can be run again, so if a run stops, run it again with `from_file`
+   set to the file it stopped at. It ends by counting the rows (7,564,215).
+3. Add `acousticbrainz` to the Worker's `TASTR_LOOKUP` secret, for example
+   `freqblog,reccobeats,acousticbrainz`.
+
+With the binding but no rows loaded yet, a lookup comes back as an error naming D1 ("no such table"), so
+leave it out of `TASTR_LOOKUP` until the workflow has finished.
+
 The dump URLs and file names are in `tastr/lookup/acousticbrainz.py` (`DUMP_BASE`, `DUMP_FILES`); the
 column layout comes from AcousticBrainz's own dump code (`db/dump.py` in metabrainz/acousticbrainz-server).
+
+## Album art for mash-up previews
+
+When `TASTR_LOOKUP` names any provider (or `TASTR_COVER_ART=1`; `0` turns it off), a mash-up preview
+(the short link's picture, [features.md](features.md)) gets album art for a track whose file has none:
+`tastr/coverart.py` finds the track's MusicBrainz recording (its tags, a stored AcousticBrainz match, else
+the same search AcousticBrainz uses), the recording's releases (official ones and the tagged album first),
+then the release group's or release's front cover from the [Cover Art Archive](https://coverartarchive.org)
+at 500 px. MusicBrainz requests share AcousticBrainz's guardrails (one a second), and the answer is kept per
+track, a miss included, so a track is asked about once. Only the people whose links may show album art get it:
+admins on a shared server, anyone on their own machine. The images belong to their copyright owners; the
+archive grants no licence, so they go only into those previews.
 
 ## Adding a provider
 
@@ -153,7 +205,7 @@ column layout comes from AcousticBrainz's own dump code (`db/dump.py` in metabra
    and implement `lookup(TrackQuery) -> LookupResult` (status `found` / `not_found` /
    `pending`; raise `ProviderError` for anything else). Return the key as the provider spells it;
    `lookup_track` parses it into tonic / mode / Camelot. Override `may_store()` if the provider's terms
-   forbid keeping results, and set `min_interval` / `daily_limit` / `monthly_limit` to fit its quota. `Provider.get_json` does the HTTP with a timeout
+   forbid keeping results, set `miss_days` if they allow caching a "not found" only for a while, and set `min_interval` / `daily_limit` / `monthly_limit` to fit its quota. `Provider.get_json` does the HTTP with a timeout
    and a Tastr user agent; `base.num` and `base.same_text` help with loose fields and fuzzy matches.
 2. Call `register(MyProvider())` (from `.base`) at the bottom of the module, and add the module to the
    provider import at the top of `tastr/lookup/__init__.py`.

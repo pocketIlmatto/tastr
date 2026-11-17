@@ -62,3 +62,27 @@ export const prevStep = (q, t) => (t > 3 || q.i === 0 ? "restart" : q.i - 1);
 // The next place when a track ends or is skipped, or null after the last one.
 export const nextStep = (q) => (q.i < q.order.length - 1 ? q.i + 1 : null);
 export const markPlayed = (q) => q.played.add(q.order[q.i]);
+
+// ---- crossfade: fade into the next track over a few seconds when one ends on its own ----
+export const XF_MIN = 1;
+export const XF_MAX = 12;
+export const XF_DEFAULT = Object.freeze({ on: true, sec: 6 });
+// The settings kept in this browser (JSON in localStorage), or the defaults when missing or broken.
+export function readXf(raw) {
+  let v = null;
+  try { v = JSON.parse(raw); } catch (_) { v = null; }
+  if (!v || typeof v !== "object") return { ...XF_DEFAULT };
+  const sec = typeof v.sec === "number" && Number.isFinite(v.sec) ? Math.round(Math.min(XF_MAX, Math.max(XF_MIN, v.sec))) : XF_DEFAULT.sec;
+  return { on: typeof v.on === "boolean" ? v.on : XF_DEFAULT.on, sec };
+}
+// How long the fade lasts: the setting, but never more than a third of either track, so short tracks still play.
+export function xfLen(secs, durA, durB) {
+  const caps = [durA, durB].filter((d) => Number.isFinite(d) && d > 0).map((d) => d / 3);
+  return Math.max(0, Math.min(secs, ...caps));
+}
+// Equal-power gain curves (the sum of the two tracks' power stays level through the fade).
+export function xfCurve(rising, n = 64) {
+  const out = new Float32Array(n);
+  for (let k = 0; k < n; k++) { const x = (k / (n - 1)) * Math.PI / 2; out[k] = rising ? Math.sin(x) : Math.cos(x); }
+  return out;
+}

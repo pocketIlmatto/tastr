@@ -3,7 +3,7 @@
 ADTOF (https://github.com/MZehren/ADTOF) is a convolutional-recurrent network trained on about 360 hours
 of real music annotated from rhythm-game charts (its ADTOF-RGW and ADTOF-YT sets). It reports five
 drums per 10 ms frame: kick, snare, toms, hi-hat, and cymbals (crash and ride together). Tastr uses it
-for the kick, hat, tom and cymbal lanes when `tastr[drums]` (PyTorch) is installed; see docs/drums.md.
+for the kick, snare, hat, tom and cymbal lanes when `tastr[drums]` (PyTorch) is installed; see docs/drums.md.
 
 The weights are ADTOF's own release, CC BY-NC-SA 4.0 (non-commercial, share-alike), so they are not part
 of Tastr: the first use downloads them from a pinned commit of the ADTOF repository into

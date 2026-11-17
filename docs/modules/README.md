@@ -1,5 +1,8 @@
 # Module specs
 
+These are the v1 work orders (2026-10-28), kept as a record. The Python engine files they name
+(`tastr/engine/stages/`, `signals.py`) are gone: the engine is `engine-rs/` now ([rust-engine.md](../rust-engine.md)).
+
 Each file here is a self-contained work order for one module. They are
 written so each can be done in parallel by a separate session, including on
 smaller models.

@@ -1,6 +1,6 @@
 // The track menu, with on-demand drum model re-analysis and stem separation.
 
-import { $, api, currentId, fmtLeft, h, isNum, jobTitle, mmss, setCurrentId } from "./core.js";
+import { $, api, currentId, fmtLeft, h, isNum, jobTitle, mmss, setCurrentId, vibeTags } from "./core.js";
 import { loadTracks, refresh, renderList } from "./library.js";
 import { inReview, setInReview } from "./labels.js";
 import { beatsPerBar, renderCard } from "./card.js";
@@ -11,7 +11,7 @@ import { dropEdits, flushEdits, loadEdits } from "./groove-edits.js";
 function trackSummary(c) {
   const core = c.core || {}, k = core.key, src = c.source || {};
   const facts = [isNum(core.bpm) ? `${core.bpm.toFixed(1)} BPM` : null, beatsPerBar(c) === 3 ? "3/4" : null, k ? `${keyName(k)}${k.camelot ? ` (${k.camelot})` : ""}` : null, mmss(c.duration)];
-  const vibes = [...(c.tags || [])].sort((a, b) => b.score - a.score).map((t) => t.tag);
+  const vibes = vibeTags(c).sort((a, b) => b.score - a.score).map((t) => t.tag);
   return [`${src.title || src.uri || `Track ${c.id}`}${src.artist ? " by " + src.artist : ""}`, facts.filter(Boolean).join(" · "), vibes.length ? `Vibe: ${vibes.join(", ")}` : null].filter(Boolean).join("\n");
 }
 // A status the menu shows once its card is drawn again (reloading metadata re-renders the card).

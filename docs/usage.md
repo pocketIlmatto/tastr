@@ -69,6 +69,22 @@ its GPU, which is used automatically (as is a CUDA GPU); set `TASTR_STEMS_DEVICE
 to `cpu`, `mps` or `cuda` to choose. Stems are FLAC files in `~/.tastr/stems/` and are
 deleted with the track.
 
+## Mash-up key lock (optional)
+
+Strudel's `.speed()` moves pitch with tempo, so a Mash-up that speeds the second track up 4% also pulls it most
+of a semitone out of key. With the stretcher installed, `tastr serve` time-stretches the second track (its full
+mix, and its stems once separated) to the first track's tempo with its pitch kept, and the code plays that at
+speed 1:
+
+```bash
+python -m pip install -e '.[keylock]'
+```
+
+It uses [Signalsmith Stretch](https://signalsmith-audio.co.uk/code/stretch/) (MIT) through `python-stretch`
+(MIT), and takes about a second per part for a 7-minute track. The results are FLAC files in
+`~/.tastr/keylock/<track>/<ratio>/`, kept as a cache (each track keeps its 3 latest ratios) and deleted with the
+track. Without it the Mash-up works as before, with `.speed()`.
+
 ## Drum model (optional)
 
 "Detect drums with the model" in a track's ⋯ menu (or the bulk Actions menu)
@@ -89,6 +105,21 @@ are not part of Tastr's repository: the first run (or `tastr drum-model fetch`) 
 them (about 5 MB, from a pinned commit of ADTOF's GitHub repository, checked by SHA-256)
 into `~/.tastr/models/`. `TASTR_DRUM_MODEL=adtof` runs the model on every analysis
 instead of on request; `TASTR_DRUM_MODEL=off` switches it off.
+
+## ML tags (optional)
+
+MTG's pre-trained Essentia classifiers can add style tags (Discogs styles such as Deep House), mood tags and
+vocal/instrumental to a track. They beat the engine's own mood measures on listener labels
+([essentia.md](essentia.md)). They are off unless `TASTR_ML_TAGS` is set: `on` runs them only on the tracks you ask for; `auto` runs them on
+every new upload, and once, when the server starts, on every track that has none.
+
+```bash
+python -m pip install -e '.[ml-tags]'  # Essentia with TensorFlow (AGPL-3.0)
+TASTR_ML_TAGS=on tastr ml-tags run 1   # tag track 1; --all tags every track that has none yet
+```
+
+**MTG's weights are for non-commercial use only.** They aren't part of Tastr: the first run downloads them (about
+40 MB) into `~/.tastr/essentia-models/`. Results are kept apart from the card, so re-analysis keeps them.
 
 ## Tests
 
@@ -123,8 +154,8 @@ Tastr can also run as a small shared web app. Hosted mode (`TASTR_HOSTED=1`, the
 - each person has their own library and sees only the tracks they uploaded;
 - link analysis is off, searches run in your browser on a copy of your own library, and uploads
   and stem jobs have daily limits;
-- uploaded audio and stems are deleted after a while (30 days by default), but
-  the track cards stay;
+- uploaded audio and stems are kept, unless an admin sets how long for that person
+  (the track cards stay either way);
 - admins get an **Admin** tab with usage per person and an activity log.
 
 [docs/hosting.md](hosting.md) lists everything hosted mode changes.

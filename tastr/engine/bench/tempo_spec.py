@@ -1,6 +1,6 @@
 """Tempo benchmark on Beat This! spectrograms, for labeled sets whose audio isn't public.
 
-Runs core's tempo logic (`_tempo_and_beats`) on onset envelopes rebuilt from the
+Runs core's tempo logic (the Rust engine's `core::tempo_from_envelopes`) on onset envelopes rebuilt from the
 128-band log-mel spectrograms in the "Beat This!" release
 (https://zenodo.org/records/13922116). The reference tempo is 60 / the median
 labeled inter-beat interval. Only the original recordings are scored, not the
@@ -34,9 +34,16 @@ RATIOS = {"x2": 2.0, "/2": 0.5, "x3/2": 1.5, "x2/3": 2 / 3, "x4/3": 4 / 3, "x3/4
 
 
 def envelopes(log_mel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(onset_env, low_flux) on core's grid from a 128 x frames Beat This! log-mel spectrogram.
+    """(onset_env, low_flux) on core's grid from a 128 x frames Beat This! log-mel spectrogram."""
+    onset, low_flux, _ = envelopes_and_percussive(log_mel)
+    return onset, low_flux
 
-    Mirrors signals.onset_envelope / low_band_flux: HPSS on mel power (undoing
+
+def envelopes_and_percussive(log_mel: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(onset_env, low_flux) on core's grid from a 128 x frames Beat This! log-mel spectrogram, and the
+    percussive part's mel power on the spectrogram's own frames (for core's drum & bass check).
+
+    Mirrors the engine's onset envelope and low-band flux (engine-rs features.rs): HPSS on mel power (undoing
     log1p(1000 x)), percussive part to dB, positive flux averaged over bands
     (all bands for onsets, below 150 Hz for the kick).
     """
@@ -50,7 +57,7 @@ def envelopes(log_mel: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     low_flux = np.maximum(0.0, np.diff(low, axis=1, prepend=low[:, :1])).mean(axis=0)
     t_src = np.arange(onset.size) / FPS
     t_dst = np.arange(int(t_src[-1] * SR / HOP) + 1) * HOP / SR
-    return np.interp(t_dst, t_src, onset), np.interp(t_dst, t_src, low_flux)
+    return np.interp(t_dst, t_src, onset), np.interp(t_dst, t_src, low_flux), perc
 
 
 def tempo(log_mel: np.ndarray) -> float | None:
@@ -58,21 +65,18 @@ def tempo(log_mel: np.ndarray) -> float | None:
 
 
 def tempo_and_confidence(log_mel: np.ndarray) -> tuple[float | None, float]:
-    """Core's (bpm, bpm_confidence) for one spectrogram."""
-    from ..pipeline import AnalysisContext
-    from ..stages.core import _tempo_and_beats
+    """Core's (bpm, bpm_confidence) for one spectrogram, from the Rust engine's tempo logic."""
+    r = tempo_result(log_mel)
+    return r["bpm"], r["confidence"]
 
-    onset, low_flux = envelopes(log_mel)
-    ctx = AnalysisContext(y=np.zeros(0, dtype=np.float32), sr=SR, card=None, hop=HOP)
-    from ..stages.core import _meter_score
 
-    freqs = mel_freqs()
+def tempo_result(log_mel: np.ndarray) -> dict:
+    """The Rust engine's `tempo` bench op for one spectrogram (bpm, confidence, backbeat, beats ...)."""
+    from .. import rust
 
-    def meter_of(frames):  # core's 43 fps beat frames onto the spectrogram's 50 fps
-        return _meter_score(np.clip(np.round(frames * HOP / SR * FPS).astype(int), 0, log_mel.shape[1] - 1), log_mel, freqs)
-
-    bpm, _, conf, *_ = _tempo_and_beats(ctx, onset, low_flux, onset.size, meter_of)
-    return bpm, conf
+    onset, low_flux, perc = envelopes_and_percussive(log_mel)
+    return rust.bench("tempo", onset, low_flux, log_mel, perc, n=onset.size, bands=log_mel.shape[0],
+                      frames=log_mel.shape[1], fps=FPS, perc=1)
 
 
 def ratio_name(est: float | None, ref: float) -> str:
@@ -107,9 +111,10 @@ def load(root: str | Path, dataset: str = "hjdb", limit: int | None = None):
 def run(items) -> dict:
     rows = []
     for name, log_mel, ref, split in items:
-        est, conf = tempo_and_confidence(log_mel)
+        r = tempo_result(log_mel)
+        est, conf = r["bpm"], r["confidence"]
         rows.append({"name": name, "split": split, "ref": round(ref, 2), "est": est and round(est, 2),
-                     "bpm_confidence": round(conf, 3),
+                     "bpm_confidence": round(conf, 3), "backbeat": r["backbeat"],
                      "error": ratio_name(est, ref), **tempo_scores(est, ref)})
     summary = {}
     for split in sorted({r["split"] for r in rows}) + ["all"]:

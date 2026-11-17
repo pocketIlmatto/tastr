@@ -639,7 +639,8 @@ def test_log_links():
 def test_admin_routes_are_admins_only(db_path, home):
     plain = make_client(db_path)
     for method, path in [("get", "/api/admin/usage?range=1"), ("get", "/api/admin/events"),
-                         ("put", "/api/admin/limits/a@example.com"), ("delete", "/api/admin/limits/a@example.com")]:
+                         ("put", "/api/admin/limits/a@example.com"), ("delete", "/api/admin/limits/a@example.com"),
+                         ("put", "/api/admin/audio-days/a@example.com"), ("delete", "/api/admin/audio-days/a@example.com")]:
         kw = {"json": {"daily_tracks": 5}} if method == "put" else {}
         assert getattr(plain, method)(path, headers=GOOD, **kw).status_code == 404, path
         assert getattr(plain, method)(path, **kw).status_code == 401, path
@@ -690,6 +691,55 @@ def test_upload_and_stem_limits_use_the_override(db_path, home, tmp_path, monkey
     assert admin.post(f"/api/tracks/{track}/stems", headers=GOOD).status_code == 429
     admin.put("/api/admin/limits/friend@example.com", json={"daily_stems": 1, "scope": "standing"}, headers=GOOD)
     assert admin.post(f"/api/tracks/{track}/stems", headers=GOOD).status_code == 202
+
+
+def test_audio_is_kept_by_default_and_expires_per_person(db_path, home):
+    assert Settings.audio_days == 0  # keep everything unless TASTR_AUDIO_DAYS or an admin says otherwise
+    up = home / "uploads"
+
+    def upload_file(name, age_days):
+        p = up / name / "song.wav"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(b"x")
+        t = time.time() - age_days * 86400
+        os.utime(p, (t, t))
+        return p
+
+    files = {n: upload_file(n, 40) for n in ["sam", "kim", "lee", "copy"]}
+    ids = {n: save(db_path, f"{n}@example.com", sha=n, path=str(f), uri=str(f)) for n, f in files.items() if n != "copy"}
+    # Kim's copy of the same file as Sam's (library_copy): kept while either owner keeps it
+    save(db_path, "kim@example.com", sha="sam", path=str(files["sam"]), uri=str(files["sam"]))
+    conn = db.connect(db_path)
+    assert hosted.expire_audio(conn, up, 0) == []  # the default: nothing goes
+    db.set_audio_days(conn, "kim@example.com", 30, "pam@example.com")
+    db.set_audio_days(conn, "lee@example.com", 60, "pam@example.com")
+    db.set_audio_days(conn, "sam@example.com", 0, "pam@example.com")  # forever, even if the default changes
+    assert db.audio_days(conn) == {"kim@example.com": 30, "lee@example.com": 60, "sam@example.com": 0}
+    gone = hosted.expire_audio(conn, up, 10, per_person=db.audio_days(conn))
+    assert gone == [ids["kim"]]  # 40 days old: past Kim's 30, not Lee's 60; Sam keeps forever, and so the shared file
+    assert not files["kim"].exists() and files["lee"].exists() and files["sam"].exists()
+    db.set_audio_days(conn, "sam@example.com", None, "pam@example.com")  # back to the default (10 days here)
+    assert "sam@example.com" not in db.audio_days(conn)
+    assert sorted(hosted.expire_audio(conn, up, 10, per_person=db.audio_days(conn))) == sorted(
+        [ids["sam"], *[r[0] for r in conn.execute("SELECT id FROM tracks WHERE owner = 'kim@example.com' AND sha256 = 'sam'")]])
+    conn.close()
+
+
+def test_admin_sets_audio_days(db_path, home):
+    admin = make_client(db_path, admins=("friend@example.com",))
+    assert admin.put("/api/admin/audio-days/Sam@Example.com", json={"days": 30}, headers=GOOD).json() == {
+        "email": "sam@example.com", "audio_days": 30}
+    body = admin.get("/api/admin/usage", headers=GOOD).json()
+    assert body["limits"]["audio_days"] == 0
+    assert next(u for u in body["users"] if u["email"] == "sam@example.com")["audio_days"] == 30
+    assert next(u for u in body["users"] if u["email"] == "friend@example.com")["audio_days"] is None
+    admin.put("/api/admin/audio-days/sam@example.com", json={"days": 0}, headers=GOOD)
+    assert admin.delete("/api/admin/audio-days/sam@example.com", headers=GOOD).json()["audio_days"] is None
+    assert admin.put("/api/admin/audio-days/sam@example.com", json={"days": -1}, headers=GOOD).status_code == 422
+    assert admin.put("/api/admin/audio-days/nobody", json={"days": 1}, headers=GOOD).status_code == 400
+    log = [e["detail"] for e in admin.get("/api/admin/usage", headers=GOOD).json()["recent"] if e["kind"] == "admin"]
+    assert log == ["Set sam's audio back to the default", "Set sam's audio to be kept forever",
+                   "Set sam's audio to be kept 30 days"]
 
 
 def test_admin_events_filters(db_path, home):
@@ -915,6 +965,7 @@ def test_admin_copies_tracks_to_someone(db_path, home):
     other = save(db_path, "other@example.com", sha="o1")
     conn = db.connect(db_path)
     db.save_lookup(conn, mine[0], {"provider": "freqblog", "status": "found", "bpm": 120.0})
+    db.save_lookup(conn, mine[0], {"provider": "rekordbox", "status": "found", "bpm": 121.0})  # the admin's own
     conn.close()
     plain = make_client(db_path)
     assert plain.get("/api/admin/copy-tracks?to=t@example.com", headers=GOOD).status_code == 404
@@ -934,7 +985,8 @@ def test_admin_copies_tracks_to_someone(db_path, home):
     row = conn.execute("SELECT owner, local_path, sha256 FROM tracks WHERE id = ?", (new,)).fetchone()
     assert tuple(row) == ("t@example.com", str(path), "s0")
     assert db.load_card(conn, new).core.bpm == db.load_card(conn, mine[0]).core.bpm
-    assert conn.execute("SELECT count(*) FROM lookups WHERE track_id = ?", (new,)).fetchone()[0] == 1
+    assert [r["provider"] for r in db.get_lookups(conn, new)] == ["freqblog"]  # not the admin's Rekordbox listing
+    assert len(db.get_lookups(conn, mine[0])) == 2
     assert conn.execute("SELECT owner FROM tracks WHERE id = ?", (mine[0],)).fetchone()[0] == "friend@example.com"
     assert "Copied 2 tracks to t" in [e["detail"] for e in db.find_events(conn, "", "", "", "", "", False, 50)["events"]]
     conn.close()
@@ -1000,6 +1052,9 @@ def test_admin_rekordbox_compare_reads_the_export_from_the_bucket(db_path, home,
                 raise s3.S3Error(404, "NoSuchKey", key)
             return type("R", (), {"read": lambda self: store[key]})()
 
+        def list(self, prefix):
+            return iter(())
+
     monkeypatch.setattr(blobs, "enabled", lambda: True)
     monkeypatch.setattr(blobs, "client", lambda: Bucket())
     assert make_client(db_path).get("/api/admin/rekordbox-compare", headers=GOOD).status_code == 404  # admins only
@@ -1010,7 +1065,110 @@ def test_admin_rekordbox_compare_reads_the_export_from_the_bucket(db_path, home,
     assert rep["disagreements"][0]["track_id"] == mine
     text = c.get("/api/admin/rekordbox-compare?format=text", headers=GOOD).text
     assert "1 tracks in both" in text
+    assert db.get_lookups(db.connect(db_path), mine) == []  # comparing alone saves nothing
+    saved = c.get("/api/admin/rekordbox-compare?save=1", headers=GOOD).json()["saved"]
+    assert saved == {"saved": 1, "cleared": 0}
+    card = c.get(f"/api/tracks/{mine}", headers=GOOD).json()
+    rb = next(x for x in card["lookups"] if x["provider"] == "rekordbox")
+    assert rb["label"] == "Rekordbox" and rb["bpm"] == 60.0 and rb["compare"]["bpm"] == "half"
     assert c.get("/api/admin/rekordbox-compare?key=rekordbox/missing.xml", headers=GOOD).status_code == 404
     assert c.get("/api/admin/rekordbox-compare?key=uploads/x.xml", headers=GOOD).status_code == 400
     store["rekordbox/bad.xml"] = b"<not xml"
     assert c.get("/api/admin/rekordbox-compare?key=rekordbox/bad.xml", headers=GOOD).status_code == 400
+
+
+def test_admin_views_the_app_as_someone_else_read_only(db_path, home):
+    mine = save(db_path, "friend@example.com")
+    theirs = save(db_path, "other@example.com", sha="def")
+    admin = make_client(db_path, admins=("friend@example.com",))
+    # only someone who has used the server, and not yourself
+    assert admin.post("/api/admin/view-as", json={"email": "nobody@example.com"}, headers=GOOD).status_code == 404
+    assert admin.post("/api/admin/view-as", json={"email": "friend@example.com"}, headers=GOOD).status_code == 400
+    r = admin.post("/api/admin/view-as", json={"email": "Other@example.com"}, headers=GOOD)
+    assert r.status_code == 200 and 'tastr_view_as="other@example.com"' in r.headers["set-cookie"]
+    assert "HttpOnly" in r.headers["set-cookie"] and "Secure" in r.headers["set-cookie"]
+    admin.cookies.set("tastr_view_as", "other@example.com")  # TestClient's http:// won't resend a Secure cookie
+    cfg = admin.get("/api/config", headers=GOOD).json()
+    assert cfg["user"] == "other@example.com" and cfg["admin"] is False
+    assert cfg["viewing_as"] == {"email": "other@example.com", "by": "friend@example.com", "read_only": True}
+    assert [t["id"] for t in admin.get("/api/tracks", headers=GOOD).json()] == [theirs]
+    assert admin.get(f"/api/tracks/{mine}", headers=GOOD).status_code == 404
+    assert admin.get("/api/admin/usage", headers=GOOD).status_code == 404  # they aren't an admin
+    # nothing changes in their name
+    r = admin.delete(f"/api/tracks/{theirs}", headers=GOOD)
+    assert r.status_code == 403 and "Read-only while viewing as other@example.com" in r.json()["detail"]
+    assert admin.put(f"/api/tracks/{theirs}/edits", json={}, headers=GOOD).status_code == 403
+    assert admin.post("/api/tracks/known", json={"items": []}, headers=GOOD).status_code != 403  # reads still work
+    # switching to someone else and stopping both work while viewing
+    assert admin.post("/api/admin/view-as", json={"email": "other@example.com"}, headers=GOOD).status_code == 200
+    r = admin.delete("/api/admin/view-as", headers=GOOD)
+    assert r.status_code == 200 and 'tastr_view_as=""' in r.headers["set-cookie"]
+    admin.cookies.delete("tastr_view_as")
+    assert admin.get("/api/config", headers=GOOD).json()["user"] == "friend@example.com"
+    conn = db.connect(db_path)
+    assert db.track_owner(conn, theirs) == (True, "other@example.com")
+    assert any("Viewed the app as other" in e["detail"] for e in db.recent_events(conn))
+    conn.close()
+
+
+def test_view_as_cookie_is_ignored_for_non_admins(db_path, home):
+    save(db_path, "friend@example.com")
+    theirs = save(db_path, "other@example.com", sha="def")
+    c = make_client(db_path)
+    c.cookies.set("tastr_view_as", "other@example.com")
+    cfg = c.get("/api/config", headers=GOOD).json()
+    assert cfg["user"] == "friend@example.com" and "viewing_as" not in cfg
+    assert c.get(f"/api/tracks/{theirs}", headers=GOOD).status_code == 404
+    assert c.post("/api/admin/view-as", json={"email": "other@example.com"}, headers=GOOD).status_code == 404
+
+
+def test_admin_rekordbox_upload_previews_then_load_saves(db_path, home, monkeypatch):
+    """Admin › Rekordbox export (sandbox v203): upload stores the XML and previews; only load writes listings."""
+    from tastr import blobs, s3
+
+    mine = save(db_path, "friend@example.com", path="/up/ab/Night Shift.mp3")
+    conn = db.connect(db_path)
+    conn.execute("UPDATE tracks SET bpm = 120, key_tonic = 9, key_mode = 'minor', key_name = 'A minor'")
+    conn.commit()
+    conn.close()
+    xml = (b'<DJ_PLAYLISTS><COLLECTION><TRACK Name="Night Shift" AverageBpm="60.00" Tonality="Am" '
+           b'Location="file://localhost/Users/pam/Music/Night%20Shift.mp3"/>'
+           b'<TRACK Name="Elsewhere" AverageBpm="128.00" Tonality="Cm" Location="file://localhost/m/x.mp3"/>'
+           b'</COLLECTION></DJ_PLAYLISTS>')
+    store: dict[str, bytes] = {}
+
+    class Bucket:
+        def get(self, key):
+            if key not in store:
+                raise s3.S3Error(404, "NoSuchKey", key)
+            return type("R", (), {"read": lambda self: store[key]})()
+
+        def put(self, key, body, content_type, content_encoding=None):
+            store[key] = body
+
+        def list(self, prefix):
+            return iter(())
+
+    monkeypatch.setattr(blobs, "enabled", lambda: True)
+    monkeypatch.setattr(blobs, "client", lambda: Bucket())
+    up = "/api/admin/rekordbox/upload?name=collection.xml"
+    assert make_client(db_path).post(up, content=xml, headers=GOOD).status_code == 404  # admins only
+    c = make_client(db_path, admins=("friend@example.com",))
+    assert c.get("/api/admin/rekordbox/status", headers=GOOD).json()["tracks"] == 0
+    assert c.post("/api/admin/rekordbox/load", headers=GOOD).status_code == 404  # nothing uploaded yet
+    bad = c.post(up, content=b"<html>not it</html>", headers=GOOD)
+    assert bad.status_code == 400 and "isn't a Rekordbox collection export" in bad.json()["detail"]
+    big = c.post(up, content=b"x", headers={**GOOD, "content-length": str(51 * 1024 * 1024)})
+    assert big.status_code == 413
+    rep = c.post(up, content=xml, headers=GOOD).json()
+    assert (rep["rekordbox_tracks"], rep["matched"], rep["disagree"], rep["file"]) == (2, 1, 1, "collection.xml")
+    assert rep["rows"][0]["track_id"] == mine and rep["status"]["tracks"] == 0
+    assert store["rekordbox/collection.xml"] == xml
+    assert db.get_lookups(db.connect(db_path), mine) == []  # the preview saves nothing
+    out = c.post("/api/admin/rekordbox/load?name=collection.xml", headers=GOOD).json()
+    assert out == {"saved": 1, "cleared": 0, "disagree": 1}
+    rb = next(x for x in db.get_lookups(db.connect(db_path), mine) if x["provider"] == "rekordbox")
+    assert rb["bpm"] == 60.0
+    st = c.get("/api/admin/rekordbox/status", headers=GOOD).json()
+    assert st["tracks"] == 1 and st["file"] == "collection.xml" and st["loaded_at"]
+    assert c.post("/api/admin/rekordbox/load?name=collection.xml", headers=GOOD).json()["cleared"] == 1  # replaces

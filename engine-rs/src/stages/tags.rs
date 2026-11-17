@@ -167,6 +167,7 @@ mod tests {
             camelot: String::new(),
             confidence: 1.0,
             likely_correct: 1.0,
+            mode_uncertain: false,
         });
         for (k, v) in features {
             card.set_feature(k, *v);

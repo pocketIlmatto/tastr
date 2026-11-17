@@ -1,7 +1,10 @@
-//! Fitted constants the stages use, copied from the Python engine: the key model
-//! (tastr/engine/key_model.py) and the confidence calibration tables (tastr/engine/calibration_table.py).
-//! tests/test_rust_engine.py checks they still match. Regenerate both together after refitting.
+//! Fitted constants the stages use: the key model, written by `python -m tastr.engine.bench.train_key --write`,
+//! and the confidence calibration knots, written by `python -m tastr.engine.bench.calibrate --write`
+//! (tastr/engine/bench/consts_rs.py). This file is their only copy; refit the knots after refitting the model.
 
+/// The key model, fitted by tastr.engine.bench.train_key on 2026-10-31 from giantsteps-key (599 tracks), beatport-key
+/// (1122 tracks) and 16 synthetic progressions weighted x5; logistic regression C=1.0, every track at all 12
+/// transpositions, major keys' bias +0.35.
 /// 24 x 12: one row per key (index tonic * 2 + 1 for minor), applied to 12 x the key profile.
 pub const KEY_WEIGHTS: [[f64; 12]; 24] = [
     [
@@ -367,10 +370,13 @@ pub const KEY_BIAS: [f64; 24] = [
     0.28463143158350546,
     0.0654645726172863,
 ];
-/// (raw confidence, chance right) knots, raw ascending.
+/// BPM confidence calibration, fitted by tastr.engine.bench.calibrate on 2026-10-31 from pulse058-bp-tempo-core.json,
+/// pulse058-gs-tempo-core.json, pulse058-hjdb-tempo.json (1052 tracks).
+/// (raw confidence, chance right) knots, raw ascending; tracks per knot: 141, 109, 177, 420, 205.
 pub const BPM_KNOTS: [(f64, f64); 5] =
     [(0.617, 0.6444), (0.6978, 0.85), (0.7379, 0.9017), (0.8054, 0.9537), (0.9134, 0.9636)];
-/// (raw confidence, chance right) knots, raw ascending.
+/// KEY confidence calibration, fitted by tastr.engine.bench.calibrate on 2026-10-31 from key-oof-tas30.json (1721 tracks).
+/// (raw confidence, chance right) knots, raw ascending; tracks per knot: 83, 193, 102, 168, 110, 194, 66, 204, 199, 99, 128, 63, 49, 63.
 pub const KEY_KNOTS: [(f64, f64); 14] = [
     (0.0068, 0.2202),
     (0.0371, 0.3222),

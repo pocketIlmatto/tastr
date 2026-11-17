@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from . import blobs, do_sqlite
+from . import blobs, covers, do_sqlite
 from .engine.card import TrackCard
 
 log = logging.getLogger(__name__)
@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     key_scale       TEXT,
     camelot         TEXT,
     key_confidence  REAL,
+    -- the card's "likely right" scores for BPM and key (core.bpm_likely_correct, core.key.likely_correct), kept
+    -- here so the review list doesn't have to load every card
+    bpm_likely      REAL,
+    key_likely      REAL,
     energy          REAL,
     loudness_db     REAL,
     stages_json     TEXT,
@@ -113,6 +117,25 @@ CREATE TABLE IF NOT EXISTS cards (
     schema_version INTEGER NOT NULL,
     json           TEXT NOT NULL
 );
+
+-- A track's earlier cards: when a re-analysis replaces a card, the one it replaces is kept here, the newest
+-- CARD_HISTORY_KEEP per track. analyzed_at is when that card was made, replaced_at when the next one took its place.
+-- core_version is its core stage's version (from stages_json), so SQL can ask what changed after an engine update.
+-- card_json is the card without its waveform and spectrogram data (extras.views).
+CREATE TABLE IF NOT EXISTS card_history (
+    id           INTEGER PRIMARY KEY,
+    track_id     INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    analyzed_at  TEXT,
+    replaced_at  TEXT NOT NULL,
+    core_version TEXT,
+    bpm          REAL,
+    key_name     TEXT,
+    camelot      TEXT,
+    energy       REAL,
+    stages_json  TEXT,
+    card_json    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_card_history_track ON card_history(track_id, id);
 
 -- The user's edits to a track's drums, bass and chords (the "Drums, bass & chords" view). The row with
 -- name NULL is the current, autosaved state; named rows are versions saved to come back to. edits_json is
@@ -185,6 +208,23 @@ CREATE TABLE IF NOT EXISTS lookups (
     PRIMARY KEY (track_id, provider)
 );
 
+-- Optional ML tags (tastr/engine/ml_tags.py, TASTR_ML_TAGS=on): MTG's Essentia classifiers on the track's audio,
+-- kept across re-analysis. tags is the shown tags, comma-separated, for searches; result_json is the full result.
+CREATE TABLE IF NOT EXISTS ml_tags (
+    track_id    INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    version     INTEGER NOT NULL,
+    tags        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    result_json TEXT NOT NULL
+);
+
+-- The message of a track's last failed ML tags run, so "Try again" survives a restart (cleared when a run succeeds).
+CREATE TABLE IF NOT EXISTS ml_tag_errors (
+    track_id  INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    error     TEXT NOT NULL,
+    failed_at TEXT NOT NULL
+);
+
 -- Requests sent to each lookup provider per UTC day, for the guardrails in tastr/lookup/guard.py.
 CREATE TABLE IF NOT EXISTS lookup_usage (
     provider TEXT NOT NULL,
@@ -220,6 +260,15 @@ CREATE TABLE IF NOT EXISTS limit_overrides (
     until_day    TEXT,
     set_by       TEXT,
     set_at       TEXT NOT NULL
+);
+
+-- How long one person's uploaded audio and stems are kept (hosted only), set by an admin. days 0 = kept forever;
+-- no row = the server default (TASTR_AUDIO_DAYS).
+CREATE TABLE IF NOT EXISTS audio_keep (
+    email   TEXT PRIMARY KEY,
+    days    REAL NOT NULL,
+    set_by  TEXT,
+    set_at  TEXT NOT NULL
 );
 
 -- Bytes stored per owner ('' = no owner) at the last snapshot of each UTC day, for the admin view's Storage chart.
@@ -287,6 +336,18 @@ CREATE TABLE IF NOT EXISTS strudel_templates (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_strudel_templates_owner ON strudel_templates(owner);
+
+-- Short share links for Strudel code (TAS-100): /pub/s/<id> opens strudel.cc with `code`, its /pub/ audio and stem
+-- links signed again on each visit (tastr/web/routes/strudel.py). owner as in saved_searches; sha256 of the code
+-- gives the same link for the same code.
+CREATE TABLE IF NOT EXISTS strudel_shares (
+    id         TEXT PRIMARY KEY,
+    owner      TEXT,
+    sha256     TEXT NOT NULL,
+    code       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_strudel_shares_code ON strudel_shares(owner, sha256);
 
 -- Cue points people mark on a track's chart (GitHub #3), per person (owner as in saved_searches), at most 9
 -- per track (tastr/web/routes/edits.py). t is seconds; color indexes the page's 9 cue colors. Re-analyzing keeps
@@ -390,6 +451,7 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
         for col, ddl in (("kept", "INTEGER NOT NULL DEFAULT 0"), ("tastr_bpm", "REAL"), ("tastr_key", "TEXT")):
             if col not in label_cols:
                 conn.execute(f"ALTER TABLE track_labels ADD COLUMN {col} {ddl}")  # databases from before the review log
+        _add_likely_columns(conn)
         conn.execute("INSERT OR IGNORE INTO meta VALUES ('db_schema_version', ?)", (str(DB_SCHEMA_VERSION),))
         conn.commit()
         if _storage_for is not None:
@@ -397,6 +459,21 @@ def connect(path: str | os.PathLike | None = None, readonly: bool = False) -> sq
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _add_likely_columns(conn: sqlite3.Connection) -> None:
+    """Databases from before tracks kept the cards' "likely right" scores get the columns, filled once from the
+    cards (in SQLite, without parsing them in Python). The meta row says it's done, since a NULL score is real
+    on cards analyzed before calibration."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
+    for col in ("bpm_likely", "key_likely"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE tracks ADD COLUMN {col} REAL")
+    if conn.execute("SELECT 1 FROM meta WHERE key = 'likely_filled'").fetchone() is None:
+        conn.execute("UPDATE tracks SET "
+                     "bpm_likely = (SELECT json_extract(json, '$.core.bpm_likely_correct') FROM cards WHERE track_id = tracks.id), "
+                     "key_likely = (SELECT json_extract(json, '$.core.key.likely_correct') FROM cards WHERE track_id = tracks.id)")
+        conn.execute("INSERT OR IGNORE INTO meta VALUES ('likely_filled', '1')")
 
 
 def _add_owner_column(conn: sqlite3.Connection) -> None:
@@ -441,6 +518,8 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
         "key_scale": k.scale if k else None,
         "camelot": k.camelot if k else None,
         "key_confidence": k.confidence if k else None,
+        "bpm_likely": c.bpm_likely_correct,
+        "key_likely": k.likely_correct if k else None,
         "energy": c.energy,
         "loudness_db": c.loudness_db,
         "stages_json": json.dumps(card.stages_run),
@@ -450,6 +529,7 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
     def write() -> int:
         existing = find_track_id(conn, sha256=s.sha256, source_uri=s.uri, owner=owner)
         if existing is not None:
+            _keep_history(conn, existing, row["analyzed_at"])
             sets = ", ".join(f"{col} = :{col}" for col in row)
             conn.execute(f"UPDATE tracks SET {sets} WHERE id = :id", {**row, "id": existing})
             track_id = existing
@@ -490,6 +570,62 @@ def save_card(conn: sqlite3.Connection, card: TrackCard, owner: str | None = Non
     # JavaScript, and the upload (a fetch waited on with run_sync) can't wait inside one.
     _move_views(conn, card, track_id, text)
     return track_id
+
+
+CARD_HISTORY_KEEP = 5  # earlier cards kept per track (card_history); each is a few KB without its views
+
+
+def _keep_history(conn, track_id: int, now: str) -> None:
+    """Copy the card a re-analysis is about to replace into card_history, and keep only the newest
+    CARD_HISTORY_KEEP there. Runs inside save_card's transaction, so the copy and the new card land together."""
+    t = conn.execute("SELECT analyzed_at, stages_json, bpm, key_name, camelot, energy FROM tracks WHERE id = ?",
+                     (track_id,)).fetchone()
+    if t is None:
+        return
+    analyzed_at, stages_json, bpm, key_name, camelot, energy = tuple(t)
+    r = conn.execute("SELECT json FROM cards WHERE track_id = ?", (track_id,)).fetchone()
+    card_json = None
+    if r is not None:
+        try:
+            d = json.loads(r[0])
+            (d.get("extras") or {}).pop("views", None)  # about a megabyte; the waveform doesn't change with the engine
+            card_json = json.dumps(d)
+        except ValueError:
+            card_json = None
+    try:
+        stages = json.loads(stages_json) if stages_json else {}
+    except ValueError:
+        stages = {}
+    core = stages.get("core") if isinstance(stages, dict) else None
+    conn.execute("INSERT INTO card_history (track_id, analyzed_at, replaced_at, core_version, bpm, key_name, camelot, "
+                 "energy, stages_json, card_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (track_id, analyzed_at, now, core, bpm, key_name, camelot, energy, stages_json, card_json))
+    conn.execute("DELETE FROM card_history WHERE track_id = ? AND id NOT IN "
+                 "(SELECT id FROM card_history WHERE track_id = ? ORDER BY id DESC LIMIT ?)",
+                 (track_id, track_id, CARD_HISTORY_KEEP))
+
+
+def card_history(conn: sqlite3.Connection, track_id: int, full: bool = False) -> list[dict[str, Any]]:
+    """A track's earlier cards, newest first: [{id, analyzed_at, replaced_at, stages, core_version, bpm, key_name,
+    camelot, energy}], and with `full` each one's `card` (the stored card, without its views) too."""
+    rows = conn.execute("SELECT id, analyzed_at, replaced_at, core_version, bpm, key_name, camelot, energy, "
+                        "stages_json, card_json FROM card_history WHERE track_id = ? ORDER BY id DESC", (track_id,))
+    out = []
+    for r in rows:
+        d = dict(zip(("id", "analyzed_at", "replaced_at", "core_version", "bpm", "key_name", "camelot", "energy"),
+                     tuple(r)[:8]))
+        d["stages"] = _json_or(r[8], {})
+        if full:
+            d["card"] = _json_or(r[9], None)
+        out.append(d)
+    return out
+
+
+def _json_or(text: str | None, default):
+    try:
+        return json.loads(text) if text else default
+    except ValueError:
+        return default
 
 
 def _move_views(conn, card: TrackCard, track_id: int, text: str) -> None:
@@ -588,6 +724,28 @@ def list_tracks(conn: sqlite3.Connection, owner: str | None = None) -> list[dict
     return [dict(r) for r in rows]
 
 
+def review_candidates(conn: sqlite3.Connection, owner: str | None = None) -> list[dict[str, Any]]:
+    """Every track that has a card, with what the review list reads from it (labels.review_queue), straight from the
+    tracks table: title, artist, bpm, key_tonic, key_mode, key_name, camelot, bpm_likely, key_likely."""
+    where, args = ("AND owner = ?", (owner,)) if owner else ("", ())
+    rows = conn.execute(
+        "SELECT id, title, artist, bpm, key_tonic, key_mode, key_name, camelot, bpm_likely, key_likely FROM tracks "
+        f"WHERE EXISTS (SELECT 1 FROM cards WHERE track_id = tracks.id) {where} ORDER BY id", args).fetchall()
+    return [dict(r) for r in rows]
+
+
+def found_lookups(conn: sqlite3.Connection, owner: str | None = None) -> dict[int, list[dict[str, Any]]]:
+    """Track id -> its stored lookups that found the track (get_lookups' rows), by provider."""
+    sql = ("SELECT l.track_id, l.result_json, l.fetched_at FROM lookups l JOIN tracks t ON t.id = l.track_id "
+           "WHERE l.status = 'found'")
+    rows = conn.execute(sql + (" AND t.owner = ?" if owner else "") + " ORDER BY l.track_id, l.provider",
+                        (owner,) if owner else ())
+    out: dict[int, list[dict[str, Any]]] = {}
+    for tid, raw, at in rows:
+        out.setdefault(tid, []).append(json.loads(raw) | {"fetched_at": at})
+    return out
+
+
 def delete_track(conn: sqlite3.Connection, track_id: int) -> bool:
     with conn:
         gone = conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,)).rowcount > 0
@@ -596,6 +754,10 @@ def delete_track(conn: sqlite3.Connection, track_id: int) -> bool:
             blobs.remove_views(track_id)  # the card's waveform data, when it is in the audio bucket
         except Exception as e:  # noqa: BLE001 - an orphaned object costs a megabyte, not a failed delete
             log.warning("couldn't remove track %s's views from the bucket: %s", track_id, e)
+        try:
+            covers.remove_cover(track_id)  # its album art, if a mash-up share ever read it
+        except Exception as e:  # noqa: BLE001 - as above
+            log.warning("couldn't remove track %s's cover: %s", track_id, e)
     return gone
 
 
@@ -605,6 +767,39 @@ def save_lookup(conn: sqlite3.Connection, track_id: int, result: dict[str, Any])
         conn.execute("INSERT OR REPLACE INTO lookups VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (track_id, result["provider"], result["status"], result.get("bpm"), result.get("key"),
                       result.get("tonic"), result.get("mode"), result.get("camelot"), _now(), json.dumps(result)))
+
+
+def save_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:
+    """Store a track's ML tags result (tastr/engine/ml_tags.analyze), replacing an earlier one and any saved failure."""
+    with conn:
+        conn.execute("DELETE FROM ml_tag_errors WHERE track_id = ?", (track_id,))
+        conn.execute("INSERT OR REPLACE INTO ml_tags VALUES (?, ?, ?, ?, ?)",
+                     (track_id, result.get("version", 0), ",".join(t["tag"] for t in result.get("tags", [])), _now(),
+                      json.dumps(result)))
+
+
+def update_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:
+    """Replace a stored result's tags (drawn again with new cut-offs), keeping when it was made."""
+    with conn:
+        conn.execute("UPDATE ml_tags SET tags = ?, result_json = ? WHERE track_id = ?",
+                     (",".join(t["tag"] for t in result.get("tags", [])), json.dumps(result), track_id))
+
+
+def save_ml_tags_error(conn: sqlite3.Connection, track_id: int, error: str) -> None:
+    """Remember why a track's last ML tags run failed (the in-memory run state is lost on a restart)."""
+    with conn:
+        if conn.execute("SELECT 1 FROM tracks WHERE id = ?", (track_id,)).fetchone():
+            conn.execute("INSERT OR REPLACE INTO ml_tag_errors VALUES (?, ?, ?)", (track_id, error, _now()))
+
+
+def get_ml_tags_error(conn: sqlite3.Connection, track_id: int) -> str | None:
+    r = conn.execute("SELECT error FROM ml_tag_errors WHERE track_id = ?", (track_id,)).fetchone()
+    return r[0] if r else None
+
+
+def get_ml_tags(conn: sqlite3.Connection, track_id: int) -> dict[str, Any] | None:
+    r = conn.execute("SELECT result_json, created_at FROM ml_tags WHERE track_id = ?", (track_id,)).fetchone()
+    return json.loads(r[0]) | {"created_at": r[1]} if r else None
 
 
 def get_lookups(conn: sqlite3.Connection, track_id: int) -> list[dict[str, Any]]:
@@ -819,6 +1014,28 @@ def add_template(conn: sqlite3.Connection, owner: str | None, name: str, text: s
     return {"id": tid, "name": name, "text": text, "updated_at": now}
 
 
+def find_share(conn: sqlite3.Connection, owner: str | None, sha256: str) -> str | None:
+    """The id of `owner`'s share link for the code with this hash, if there is one."""
+    r = conn.execute("SELECT id FROM strudel_shares WHERE owner IS ? AND sha256 = ?", (owner, sha256)).fetchone()
+    return r[0] if r else None
+
+
+def count_shares(conn: sqlite3.Connection, owner: str | None) -> int:
+    return conn.execute("SELECT COUNT(*) FROM strudel_shares WHERE owner IS ?", (owner,)).fetchone()[0]
+
+
+def add_share(conn: sqlite3.Connection, share_id: str, owner: str | None, sha256: str, code: str) -> None:
+    with conn:
+        conn.execute("INSERT INTO strudel_shares (id, owner, sha256, code, created_at) VALUES (?, ?, ?, ?, ?)",
+                     (share_id, owner, sha256, code, _now()))
+
+
+def get_share(conn: sqlite3.Connection, share_id: str) -> tuple[str | None, str] | None:
+    """(owner, code) for one share link."""
+    r = conn.execute("SELECT owner, code FROM strudel_shares WHERE id = ?", (share_id,)).fetchone()
+    return (r[0], r[1]) if r else None
+
+
 def update_template(conn: sqlite3.Connection, owner: str | None, template_id: int, name: str, text: str) -> dict[str, Any] | None:
     now = _now()
     with conn:
@@ -1017,25 +1234,35 @@ _QUERY_ACTIONS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUN
 # What a friend's search on a hosted server sees (library_snapshot): these tables, their own rows only, without the
 # columns that name people or server paths.
 LIBRARY_TABLES = ("tracks", "tags", "sections", "features", "series", "suggestions", "lookups", "track_labels",
-                  "review_flags", "pattern_reviews")
+                  "review_flags", "pattern_reviews", "ml_tags", "card_history")
 _PRIVATE_COLUMNS = {"owner", "local_path", "source_uri", "stages_json", "errors_json"}
+_PRIVATE_IN = ("tracks", "card_history")  # the tables that have such columns
+# Left out of every copy, an admin's too: a whole earlier card is several KB a row (it is for the API, not for SQL),
+# and it holds the source's paths.
+_NEVER_COPIED = {("card_history", "card_json")}
 
 
-def library_snapshot(path: str | os.PathLike, owner: str | None) -> bytes:
+def library_snapshot(path: str | os.PathLike, owner: str | None, held: tuple[str, ...] | list[str] = ()) -> bytes:
     """A SQLite file of one person's library (LIBRARY_TABLES, their rows, no private columns), or with `owner`
     None every library's rows with all their columns (hosted admins), for the page to query in the browser with
     sql.js (TAS-49). Indexes on tracks are added so the page's searches stay quick. The rows are copied through a
-    connection into a database in memory (no ATTACH or temporary file), so it works on a Durable Object too."""
+    connection into a database in memory (no ATTACH or temporary file), so it works on a Durable Object too.
+    `held`: lookup providers whose stored answers stay out of it (lookup.held_from_downloads(): FreqBlog's terms
+    forbid handing its values out as a file)."""
     where, args = ("WHERE owner = ?", (owner,)) if owner is not None else ("", ())
+    held = tuple(held)
+    held_sql = f" AND provider NOT IN ({', '.join('?' * len(held))})" if held else ""
     with closing(connect(path, readonly=True)) as src, closing(sqlite3.connect(":memory:")) as dst:
         for t in LIBRARY_TABLES:
             cols = [(r[1], r[2]) for r in src.execute(f"PRAGMA table_info({t})")
-                    if t != "tracks" or owner is None or r[1] not in _PRIVATE_COLUMNS]
+                    if (t, r[1]) not in _NEVER_COPIED
+                    and (t not in _PRIVATE_IN or owner is None or r[1] not in _PRIVATE_COLUMNS)]
             names = ", ".join(f'"{c}"' for c, _ in cols)
             dst.execute(f"CREATE TABLE {t} ({', '.join(f'{chr(34)}{c}{chr(34)} {typ}' for c, typ in cols)})")
             sql = (f"SELECT {names} FROM tracks {where}" if t == "tracks" else
-                   f"SELECT {names} FROM {t} WHERE track_id IN (SELECT id FROM tracks {where})")
-            rows = [tuple(r) for r in src.execute(sql, args).fetchall()]
+                   f"SELECT {names} FROM {t} WHERE track_id IN (SELECT id FROM tracks {where})"
+                   + (held_sql if t == "lookups" else ""))
+            rows = [tuple(r) for r in src.execute(sql, (*args, *held) if t == "lookups" else args).fetchall()]
             if rows:
                 dst.executemany(f"INSERT INTO {t} VALUES ({', '.join('?' * len(cols))})", rows)
         for name, cols in (("tracks", "id"), ("tracks", "bpm"), ("tracks", "camelot"), ("tags", "tag"),
@@ -1139,6 +1366,23 @@ def daily_cap(conn: sqlite3.Connection, email: str, kind: str, day: str, default
     return default if v is None else v
 
 
+# ---- per-person audio expiry (hosted) ----
+
+def audio_days(conn: sqlite3.Connection) -> dict[str, float]:
+    """Each person an admin gave their own audio expiry: email -> days their audio is kept (0 = forever)."""
+    return {e: d for e, d in conn.execute("SELECT email, days FROM audio_keep")}
+
+
+def set_audio_days(conn: sqlite3.Connection, email: str, days: float | None, set_by: str | None) -> None:
+    """Keep `email`'s uploaded audio for `days` (0 = forever); None puts them back on the server default."""
+    with conn:
+        if days is None:
+            conn.execute("DELETE FROM audio_keep WHERE email = ?", (email,))
+        else:
+            conn.execute("INSERT OR REPLACE INTO audio_keep (email, days, set_by, set_at) VALUES (?, ?, ?, ?)",
+                         (email, days, set_by, _now()))
+
+
 # ---- storage history (hosted) ----
 
 def snapshot_storage(conn: sqlite3.Connection, day: str, by_owner: dict[str | None, int]) -> None:
@@ -1161,7 +1405,7 @@ def first_storage_day(conn: sqlite3.Connection) -> str | None:
 
 EVENT_DAYS = 90
 # The admin log's filter groups (type) for each kind of event, and where events come from (source).
-EVENT_TYPE_OF = {"upload": "upload", "reanalyze": "analysis", "drums": "analysis", "stems": "stems", "limit": "limit",
+EVENT_TYPE_OF = {"upload": "upload", "reanalyze": "analysis", "drums": "analysis", "ml_tags": "analysis", "stems": "stems", "keylock": "stems", "limit": "limit",
                  "failed": "error", "restart": "error", "signin": "signin", "deploy": "deploy", "ci": "deploy",
                  "backup": "backup", "admin": "admin"}
 EVENT_TYPES = ("upload", "analysis", "stems", "limit", "error", "signin", "blocked", "deploy", "backup", "admin")

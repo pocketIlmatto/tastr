@@ -1,12 +1,19 @@
 # CI and GitHub Actions minutes
 
-The repo is private, so every Actions minute counts against the owner's monthly quota
-(2,000 minutes on GitHub Free, 3,000 on Pro). Linux runners bill at 1x, and each job is
-rounded **up** to the next whole minute.
+The repo is public, so its Actions minutes on GitHub's standard runners are free. Until it went
+public they counted against the owner's monthly quota, which is why the audit and the speed pass below
+kept the `tests` workflow lean; run time still matters for how fast a PR gets its result.
 
-## The workflow
+Besides `tests`, the repo has workflows that deploy, watch the live app and keep things up to date; each has
+its own section below.
 
-One workflow, `.github/workflows/test.yml`, one job on `ubuntu-latest`. It runs on every
+GitHub runs `schedule` triggers late, or drops them, when it is busy. In November 2026 the 30-minute and
+hourly schedules here ran only every 6 to 8 hours or so. A scheduled check must not assume it ran on time:
+`worker-errors` reads back to its previous run.
+
+## The tests workflow
+
+`.github/workflows/test.yml`, one job on `ubuntu-latest`. It runs on every
 `pull_request` event and every push to `main`.
 
 A typical audio run (about 2.5 minutes, billed 3):
@@ -81,8 +88,8 @@ Full runs had been 2–4 minutes, then on 2026-10-31 rose to 5–12. Step timing
 - **Rust build:** only the engine's own crate recompiles each run (the cargo cache covers the dependencies), but
   with `lto = true` and one codegen unit it took ~42 s native plus ~19 s WebAssembly. CI now sets
   `CARGO_PROFILE_RELEASE_LTO=false` and 16 codegen units: about 11 s plus 10 s locally, with the native and
-  WebAssembly cards still bit-identical. The Docker build is unchanged and keeps LTO. The perf budget times the
-  Python engine, so it isn't affected.
+  WebAssembly cards still bit-identical. The Docker build is unchanged and keeps LTO. The perf budget
+  (`tests/test_core.py`) times this non-LTO build, so it is a little pessimistic.
 - **numba JIT:** every pytest worker compiled librosa's kernels into a fresh `/tmp/numba-gw*` cache, about
   10–15 s per worker at start-up. Those folders are now cached between runs (key: `pyproject.toml`). A reinstall
   of the same librosa keeps file times, so the cached kernels stay valid.
@@ -98,21 +105,195 @@ up to 503 s, 78 s and 90 s on the slow runs.
 
 1. it opens an issue labeled `slow-tests` with the runs and the newest run's slowest steps, and
 2. starts Claude Code in Actions (`anthropics/claude-code-action`), which compares step timings, fixes the cause
-   on a `claude/slow-tests-<issue>` branch and opens a pull request that closes the issue. It may not skip or
-   weaken tests, or raise the limit or the job timeout. If the slowness was outside the repo and has passed (a
-   mirror outage), it comments and closes the issue instead.
+   on a `claude/slow-tests-<run id>` branch and opens a pull request. It may not skip or weaken tests, or raise
+   the limit or the job timeout. Either way it leaves a note, which the workflow posts on the issue: the pull
+   request's link, or what it found when the slowness was outside the repo and has passed (a mirror outage). The
+   issue is closed only when nothing is left for the owner; close it yourself once the fix merges.
 
 While a `slow-tests` issue is open, nothing new starts, so a slow week opens one issue, not one per merge. The
-pull request runs the usual `tests` and waits for the owner to merge it.
+pull request runs the usual `tests` and waits for the owner to merge it. The issue can go to another repository;
+see [Where the alert issues go](#where-the-alert-issues-go).
 
 - **Secret:** `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` locally; uses the owner's Claude plan) or
   `ANTHROPIC_API_KEY` (billed per use), under Settings > Secrets and variables > Actions. Without either, the
   issue still opens and gets a comment saying Claude didn't start.
 - **Try it:** Actions > slow-tests > Run workflow with "force" ticked opens a test issue and starts Claude, which
-  should comment that the setup works and close it.
+  should note that the setup works and close it.
 - **Cost:** the check is one short job after each main run. Claude runs only when the tests are slow, for up to
   45 minutes and 60 turns.
 - **Change the limit:** `LIMIT_MIN` and `RUNS` in `.github/scripts/slow_tests.py`.
+
+## Worker errors
+
+`.github/workflows/worker-errors.yml` watches the live app without anyone watching. Every 30 minutes (on
+paper; GitHub often runs it hours late) `.github/scripts/worker_errors.py` reads the `tastr` Worker's error logs
+(Workers Observability) since the start of the previous successful check, at least an hour and at most 12 hours,
+groups the lines by request (a Python traceback arrives as one log line per traceback line) and leaves out the
+known harmless ZipFile noise (TAS-98). When 5 or more requests failed, or the Durable Object was reset (out of
+memory or CPU time), which fails every request in flight:
+
+1. it opens an issue labeled `worker-errors` with the grouped errors and one example of each, and
+2. starts Claude Code in Actions, which traces the cause and, when the fix is clear, opens a pull request on a
+   `claude/worker-errors-<run id>` branch. Either way it leaves a note, which the workflow posts on the issue: the
+   pull request's link, or what to do when it needs a setting or a secret, or the cause came from outside and has
+   passed. The issue is closed only when nothing is left for the owner; close it yourself once the fix merges. It
+   never changes settings or secrets, deploys or merges.
+
+While a `worker-errors` issue is open, nothing new starts; each new report is added to it as a comment.
+
+The issue can go to another repository; see [Where the alert issues go](#where-the-alert-issues-go). When it does,
+the public run page shows only the counts. Either way the report masks emails, upload names and link tokens.
+
+- **Secrets:** `CF_LOGS_TOKEN`, a Cloudflare API token with only Account > Workers Observability > Read (My
+  Profile > API Tokens > Create Token > Custom token), and the same Claude secret as slow tests. Without
+  `CF_LOGS_TOKEN` the check only says so in the run summary. Optional: `ISSUES_REPO` and `ISSUES_TOKEN`, see
+  [Where the alert issues go](#where-the-alert-issues-go).
+  If Cloudflare refuses the token, the check fails (a red run) and shows Cloudflare's reason in its log;
+  no issue is opened. Check the token's permission, account and IP filtering, and that it hasn't expired.
+- **Try it:** Actions > worker-errors > Run workflow with "force" ticked ("minutes" sets a fixed window instead of
+  "since the previous check").
+- **Cost:** a 15-second job every 30 minutes, free on a public repository. Claude runs only when the check trips,
+  for up to 45 minutes and 80 turns.
+- **Change the limit:** `FAILED_LIMIT`, `WINDOW_MIN` and `MAX_WINDOW_MIN` in `.github/scripts/worker_errors.py`; add known noise to
+  `NOISE` there.
+
+## Where the alert issues go
+
+Slow tests, worker errors, the live health check and the benchmark smoke run each open an issue (`slow-tests`,
+`worker-errors`, `site-down`, `bench-drop`). With the secrets `ISSUES_REPO` (`owner/name`) and `ISSUES_TOKEN` set,
+all four open, comment on and close their issues in that repository, for example a private one, so the reports stay
+out of this public repo. The repository's name is a secret only so that it is masked in the public run logs. The
+variable `ISSUES_LABELS` (comma-separated, optional) adds labels to each new issue there. `ISSUES_TOKEN` is a
+fine-grained GitHub token with only Issues: Read and write, on only that repository. Without both secrets the
+issues go to this repository.
+
+Claude never sees `ISSUES_TOKEN`: slow-tests and worker-errors hand it the issue as a file and post its note
+afterwards, and its pull request doesn't link the issue. An issue already open here when the secrets are set is
+not moved: close it by hand, or the workflow opens a new one there next time it trips.
+
+## Live health check
+
+`.github/workflows/health.yml` asks the live app's `/api/health` every hour, at 41 past, through Cloudflare Access
+with a service token. It tries three times, a minute apart. When all three fail it opens a `site-down` issue
+assigned to the owner (or adds to the open one) and the run goes red, so GitHub's failed-run email arrives too.
+When the site answers again it comments and closes the issue. No Claude runs: an outage needs a person, and
+`worker-errors` already investigates failing requests. The issue can go to another repository; see
+[Where the alert issues go](#where-the-alert-issues-go).
+
+- **Secrets:** `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`. Make a service token in Cloudflare
+  **Zero Trust > Access > Service credentials > Service Tokens** (name it `github-health`, pick a long duration),
+  then open the Tastr application in **Access > Applications**, add a policy with action **Service Auth** that
+  includes that service token, and save. The token carries no email, so it reaches only `/api/health`; every other
+  page still answers 401. Without the secrets, the run only says so.
+- **Try it:** Actions > health > Run workflow.
+- **Cost:** a few seconds an hour, free on a public repository.
+
+## Codex code reviews
+
+OpenAI Codex reviews pull requests as a second, advisory reviewer. It runs through Codex's own GitHub
+integration on the owner's ChatGPT plan, not in Actions, so it needs no secret in this repository. Codex posts a
+review with comments. It doesn't approve or block, but merges wait until it has reviewed (the `codex-review` check
+below).
+
+- **What it checks:** the "Review guidelines" in [AGENTS.md](../AGENTS.md), which also tell Codex to follow
+  CLAUDE.md.
+- **Setting:** on [chatgpt.com/codex](https://chatgpt.com/codex), connect GitHub with access to this repository,
+  then in the Codex settings turn on **Code review** for it, with automatic reviews on. Without it, nothing happens.
+- **LGTM comment:** when an automatic review finds nothing, Codex only adds a 👍 reaction to the pull request.
+  `.github/workflows/codex-lgtm.yml` reads Codex's "Codex Review Summary" comment and, once the code review of a
+  commit is completed with no findings, posts "Codex: LGTM" for that commit. It skips commits Codex already answered
+  with its own "Didn't find any major issues" comment, which manual requests get. It never checks out pull request
+  code.
+- **Merges wait for the review:** `.github/workflows/codex-review.yml` runs a `codex-review` check on every pull
+  request to main. It stays pending until Codex's summary comment says a code review is completed (findings or not;
+  a review of an earlier commit of the same PR counts, since Codex doesn't review every push), so auto-merge waits
+  for Codex. Codex skips PRs that change `.github/workflows/`; then the check says so on the PR, and a `@codex review`
+  comment gets a review. After 30 minutes (`WAIT_MIN`) without one the check passes anyway and comments that it did,
+  so nothing hangs. Drafts pass at once and are checked again when marked ready. Like `automerge.yml`, it runs from
+  main and never checks out PR code.
+  - **Setting:** the check only holds merges once it is required. In **Settings > Rules > Rulesets > main-protect >
+    Require status checks to pass**, add `codex-review` (source GitHub Actions) next to `test`. Add it only after
+    the workflow is on main, or every PR waits on a check that never runs.
+  - **Rerun:** a `@codex review` after the check has passed doesn't rerun it; rerun the job from the PR's Checks tab
+    if you want the merge to wait for that review.
+- **Try it:** comment `@codex review` on a pull request, optionally followed by what to focus on.
+- **Claude sessions** treat Codex's comments like any other review comment on their pull requests: fix what's
+  right, and reply where a comment is wrong. A fix pushed after the owner approved dismisses that approval, so the
+  owner approves again. On a PR that changes `.github/workflows/`, they comment `@codex review` right after opening
+  it, so the `codex-review` check gets a real review instead of timing out.
+- **Cost:** counts against the owner's ChatGPT plan's Codex usage. The LGTM workflow takes a few seconds per
+  review, and the `codex-review` check waits a few minutes per push (at most 30), free on a public repository.
+
+## Dependency updates
+
+`.github/dependabot.yml` asks for updates once a month, in one grouped pull request per ecosystem: Python
+(`pyproject.toml`), Rust (`engine-rs/`), the Worker's npm packages (`worker/`), the Strudel test packages and the
+GitHub Actions. Python requirements that are lower bounds are left alone unless a newer release falls outside
+them. `sql.js` is skipped, because `tastr/web/routes/search.py` and the Dockerfile name its version; bump those
+together by hand.
+
+When an update fails `tests`, `.github/workflows/dependabot-fix.yml` (which runs from main, after the failed run on a
+`dependabot/` branch; other branches' runs don't start it)
+starts Claude Code on the same branch. Claude adapts the code to the new version, runs the checks, pushes one
+commit and explains it on the pull request. If the new version looks broken, it comments instead of forcing a fix.
+It never skips tests or pins a dependency back. When the tests still fail after Claude's commit, it doesn't try
+again; it says so on the pull request and suggests `@codex`, a Claude session or closing the update.
+
+- **Secret:** the same Claude secret as slow tests. If the run says the secret isn't available, add
+  `CLAUDE_CODE_OAUTH_TOKEN` under **Settings > Secrets and variables > Dependabot** as well.
+- **Cost:** at most five update PRs a month, each with a normal `tests` run (free on a public repository); Claude
+  runs only on a failure, for up to 45 minutes and 60 turns.
+- **Skip a package:** add an `ignore` entry under its ecosystem in `.github/dependabot.yml`.
+
+## Benchmark smoke run
+
+`.github/workflows/bench-smoke.yml` runs on the 3rd of each month at 06:17 UTC. It scores main's engine on the
+first 100 tracks of GiantSteps Key (exact key) and Beatport tempo (BPM within 4%) on Modal, reading the R2 bucket.
+It uses `modal run`, a temporary app from main's code, so it measures main rather than whatever was last deployed,
+and the shared `tastr` app stays as it is. `.github/scripts/bench_smoke.py` compares the scores with two things:
+
+- the last good run on the same tracks; it flags a drop of more than 0.05;
+- the full scores the app quotes in `tastr/engine/bench_scores.json`; it flags a score more than 0.12 below.
+
+It also flags a dataset whose run failed or lost more than 10% of its tracks.
+
+A flagged run opens a `bench-drop` issue assigned to the owner, or adds to the open one, and goes red. A red run never
+becomes "the last good run", so later runs keep comparing with the scores from before the drop. The next good run
+closes the issue. No Claude runs: a drop needs a person to decide whether it is a bug or a trade-off. The issue can
+go to another repository; see [Where the alert issues go](#where-the-alert-issues-go).
+
+- **Secrets:** `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`, the deploy workflow's. They are already set. The Modal
+  secret `tastr-r2` (docs/cloud.md) must exist in the Modal workspace's main environment.
+- **Try it:** Actions > bench-smoke > Run workflow. `limit` changes the tracks per dataset, but only runs with the
+  same number are compared with each other. After an intended change that lowers a score, run it with `accept` on
+  so its scores become the new baseline, then record a full run (docs/bench.md).
+- **Cost:** about $0.15 of Modal compute a month, plus about 20 Actions minutes, which are free on a public
+  repository.
+
+## Auto-merge
+
+`.github/workflows/automerge.yml` (run from main, so a PR can't change its rules) turns on auto-merge (squash) for the
+owner's pull requests. GitHub then merges each one by itself once the required checks pass: `test`, and
+`codex-review`, which waits for Codex's review ([above](#codex-code-reviews)). A PR qualifies when it comes from a
+branch in this repository, isn't a draft, and its author is the owner, `claude[bot]` or `pocketilmatto-bot` (the old
+agent account). Dependabot PRs never qualify.
+
+- **Code PRs** need the `AUTOMERGE_TOKEN` secret, a fine-grained token of the owner's ([settings.md](settings.md)).
+  Auto-merge turned on with it merges as the owner, so the push to main runs the tests and the deploy as usual.
+  Without it only docs-and-tests PRs auto-merge.
+- **Docs and tests only** (every path, old and new name, under `docs/` or `tests/`, or a Markdown file; `CLAUDE.md`,
+  `AGENTS.md` and anything under `.github/` never count): without the token, the workflow's own token turns on
+  auto-merge. GitHub starts no workflows for a merge made with that token, so `tests` doesn't rerun on main and
+  nothing deploys; neither is needed for docs and tests. A later push that touches anything else turns that
+  auto-merge off again.
+- **Hold a PR:** add the `hold` label. That turns auto-merge off; removing it turns it back on. Claude sessions add
+  `hold` to PRs that must wait for the owner: UI changes waiting for her design review (CLAUDE.md), and anything that
+  needs a setting or secret of hers first.
+- **Approvals:** main's ruleset needs no approving review, so the required checks are the gate. It dismisses stale
+  approvals on push.
+- **Setting:** turn on **Settings > General > Pull Requests > Allow auto-merge**. Without it the run fails with
+  "auto-merge is not allowed".
+- **Already green:** GitHub can't turn on auto-merge for a PR whose checks have all passed; merge those by hand.
 
 ## Deploy workflow
 
@@ -134,6 +315,14 @@ deploys when that run passed on a push (not a PR). So a merge that breaks the te
 - **By hand:** **Actions > deploy > Run workflow** always deploys the chosen branch, with no scope check.
 - **Known gap:** the scope covers every commit since the last deploy, but the tests only ran on the newest. If an
   earlier merge failed its tests and a later docs-only merge passes, the later run deploys the earlier code.
+
+## AcousticBrainz load workflow
+
+`.github/workflows/acousticbrainz-d1.yml` loads the AcousticBrainz lookup's index into the Worker's D1
+database `tastr-acousticbrainz`. By hand only (**Actions > acousticbrainz-d1 > Run workflow**), once: the data
+is a frozen 2022 dump. It downloads the 322 MB index from the `tastr-data` bucket with wrangler, so it uses
+`CLOUDFLARE_API_TOKEN` (with D1 Edit and Workers R2 Storage Read) and no other secret. Steps and the `from_file`
+restart: [lookup.md](lookup.md#on-the-hosted-site).
 
 ## README screenshots workflow
 

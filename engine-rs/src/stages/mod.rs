@@ -1,4 +1,4 @@
-//! The pipeline stages (tastr/engine/stages/): core, sections, tags, suggestions and views, run in that order
+//! The pipeline stages: core, sections, tags, suggestions and views, run in that order
 //! over one shared set of signals, each writing its part of the card.
 
 pub mod core;
@@ -9,11 +9,11 @@ pub mod views;
 
 use crate::card::Card;
 use crate::features::{self, Matrix};
-use crate::{cqt, rhythm, spectral};
+use crate::{cqt, spectral};
 
 pub const HOP: usize = spectral::HOP;
 
-/// Everything the stages read, computed once (the Python engine's ctx.cache).
+/// Everything the stages read, computed once.
 pub struct Ctx {
     pub y: Vec<f32>,
     pub sr: f64,
@@ -39,6 +39,8 @@ pub struct Ctx {
     pub tempogram: Option<Vec<f64>>,
     /// The optional drum model's hits, run by the server (engine/adt.py); None for the built-in lanes only.
     pub drum_hits: Option<crate::drums::ModelHits>,
+    /// With the drum model, take the open-hat lane from its hi-hats (drums::MODEL_OPEN_HATS; the bench flips it).
+    pub model_open_hats: bool,
     /// Caller's meter (3 or 4) instead of detecting it.
     pub beats_per_bar: Option<i64>,
 }
@@ -92,18 +94,10 @@ impl Ctx {
             bass_cqt,
             tempogram: None,
             drum_hits: None,
+            model_open_hats: crate::drums::MODEL_OPEN_HATS,
             beats_per_bar,
             y,
         }
-    }
-
-    /// core's 384-lag tempogram mean, computed on first use.
-    pub fn tempogram(&mut self) -> &[f64] {
-        if self.tempogram.is_none() {
-            let tg = rhythm::tempogram(&self.onset, 384);
-            self.tempogram = Some(rhythm::tempogram_mean(&tg, 384, self.onset.len()));
-        }
-        self.tempogram.as_deref().unwrap()
     }
 }
 
@@ -111,14 +105,14 @@ type StageFn = fn(&mut Ctx, &mut Card) -> Result<(), String>;
 
 /// The stages in run order: (name, version, required stages, run).
 const STAGES: [(&str, &str, &[&str], StageFn); 5] = [
-    ("core", "0.4.0", &[], core::run),
+    ("core", "0.6.0", &[], core::run),
     ("sections", "0.2.0", &["core"], sections::run),
     ("tags", "0.2.0", &["core", "sections"], tags::run),
     ("suggestions", "0.5.0", &["core", "sections", "tags"], suggestions::run),
     ("views", "0.2.0", &[], views::run),
 ];
 
-/// run_pipeline: every stage over the audio; a failing stage is recorded in card.errors and the stages that
+/// Every stage over the audio; a failing stage is recorded in card.errors and the stages that
 /// need it are skipped.
 pub fn run(ctx: &mut Ctx) -> Card {
     let mut card = Card {

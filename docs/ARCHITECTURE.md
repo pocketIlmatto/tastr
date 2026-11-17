@@ -58,28 +58,15 @@ being missing (a stage can fail or be a stub).
 
 Series: `energy` (per bar, 0..1, written by core) is the one the UI draws.
 
-## Pipeline (`tastr/engine/pipeline.py`)
+## Engine (`engine-rs/`)
 
 The Rust engine (`engine-rs/`, [rust-engine.md](rust-engine.md)) makes every card, drum-model cards included
-(the server runs the model and hands Rust its hits). The Python reference engine below, which the Rust one was
-ported from, keeps only what the benchmarks score: core and sections (`run_pipeline` over
-`tastr/engine/stages/`) and the drum step grid (`drums.step_grid`, `drums.drum_grid`).
-
-A stage is any object with `name`, `version`, `requires` (tuple of stage
-names) and `run(ctx)`. `register_stage(obj)` at import time of a module in
-`tastr/engine/stages/` makes it part of the default pipeline. The registry, `AnalysisContext`, `SR` and
-`HOP` live in the leaf module `tastr/engine/context.py` (re-exported by `pipeline.py`), so stages and
-`signals.py` import them without importing the pipeline. `ctx` gives the audio
-(`ctx.y`, `ctx.sr`, `ctx.hop`), the card (`ctx.card`) and a per-track cache
-(`ctx.get(name, fn)`). Shared intermediates (HPSS, onset envelope, chroma,
-RMS) live in `tastr/engine/signals.py`; use them so they are computed once.
-
-Where the time goes (2026-10-31, a 3-minute synthetic track, 4 CPUs): the whole
-analysis took 14.5 s, 10.8 s of it HPSS, and 7.9 s of that was librosa's two 2-D
-median filters, which take scipy's slow general path. `signals.hpss` now filters
-row by row on scipy's fast 1-D path, with the same output sample for sample
-(checked against `librosa.effects.hpss`, and `tests/test_engine.py` keeps it so):
-7.1 s in all, HPSS 3.4 s. Sharing the repeated STFTs would save only about 0.3 s more.
+(the server runs the model and hands Rust its hits). Its stages run in a fixed order (core, sections, tags,
+suggestions, views, `engine-rs/src/stages/mod.rs`) over shared signals computed once per track (HPSS, onset
+envelope, chroma, RMS and the rest, `Ctx`); a failing stage is recorded in `errors` and the stages after it are
+skipped. Python reaches it through ctypes (`tastr/engine/rust.py`): `card_from_file` / `card_from_samples`
+for cards, and `bench(op, ...)` for the steps the benchmarks call on their own inputs. The Python engine it
+was ported from was deleted on 2026-11-04.
 
 ## Browser engine
 
@@ -110,6 +97,7 @@ SQLite, one file (default `~/.tastr/tastr.db`, override with `TASTR_DB` or
 - `features`: long format `(track_id, name, value)`, so new features need no migration.
 - `series`: long format `(track_id, name, idx, t, value)` for curves.
 - `cards`: the full card JSON, the source of truth for re-rendering.
+- `card_history`: `(track_id, analyzed_at, replaced_at, core_version, bpm, key_name, camelot, energy, stages_json, card_json)`, the cards re-analyses replaced, the newest 5 per track (`db.CARD_HISTORY_KEEP`), written in the same transaction as the new card. `card_json` leaves out the waveform data (`extras.views`), so a row is a few KB. Deleting the track deletes them; a copy to someone else's library doesn't take them. Searchable in Find › SQL; a hosted server's browser copy leaves out `stages_json` (admins' keep it) and `card_json` (everyone's).
 - `lookups`: `(track_id, provider, status, bpm, key_name, fetched_at, result_json)`, what online catalogs list for the track (opt-in, `tastr/lookup/`, [lookup.md](lookup.md)). Kept across re-analysis.
 - `track_labels`: `(track_id, bpm, key_name, boundaries, note, updated_at, kept, tastr_bpm, tastr_key)`, your own labels for a track (`tastr/labels.py`). `kept` marks a "Keep as is"; `tastr_bpm` / `tastr_key` are Tastr's reading when it was saved. Never touched by analysis; exported as a bench manifest.
 - `review_flags`: `(track_id, state, updated_at)`, tracks you put in the review list (`flagged`) or took out of it (`skipped`). Kept across re-analysis.
@@ -125,6 +113,9 @@ SELECT t.title FROM tracks t JOIN tags g ON g.track_id = t.id WHERE g.tag = 'dar
   AND t.id IN (SELECT track_id FROM features WHERE name = 'low_end' AND value > 0.3);
 -- Average drop length in bars
 SELECT avg(end_bar - start_bar + 1) FROM sections WHERE label = 'drop';
+-- Tracks whose BPM moved more than 1 when the core engine went past 0.5.0
+SELECT t.title, h.bpm AS was, t.bpm AS now FROM card_history h JOIN tracks t ON t.id = h.track_id
+  WHERE h.core_version = '0.5.0' AND abs(t.bpm - h.bpm) > 1;
 ```
 
 DuckDB reads the same file: `ATTACH 'tastr.db' AS t (TYPE sqlite);`.
@@ -134,17 +125,14 @@ DuckDB reads the same file: `ATTACH 'tastr.db' AS t (TYPE sqlite);`.
 ```
 tastr/engine/               the analysis engine; imports nothing else from tastr
   card.py                   TrackCard dataclasses: the contract between modules
-  pipeline.py               stage registry, dependency ordering, run_pipeline()
   audio.py                  decoding files to mono audio (librosa, ffmpeg fallback)
-  signals.py                shared intermediates (HPSS, onset envelope, chroma, RMS)
   rust.py                   the Rust engine (engine-rs/) that makes every card, through ctypes
   browser_card.py           checks cards the browser made with the WebAssembly build (TASTR_BROWSER_ENGINE)
-  music.py                  key estimation, scales, chords, Camelot
-  key_model.py              learned key model constants (generated by bench/train_key.py)
-  stages/                   the reference engine's core and sections stages (the benchmarks score them)
+  music.py                  note names, scales, Camelot, roman numerals (for Strudel and the UI)
   patterns.py               the template drum patterns per style (the Glossary lists them)
   bench/                    accuracy benchmark: dataset loaders, metrics, runner
   bench/key_features.py     cache per-track key features; bench/train_key.py fits the key model
+  bench/consts_rs.py        reads and rewrites the fitted constants in engine-rs/src/consts.rs
   bench/synth.py            synthetic tracks with known BPM/key/sections (tests/synth.py re-exports it)
 tastr/ingest.py             files/folders/links -> Sources, URL resolver registry
 tastr/resolvers/            link/playlist resolvers

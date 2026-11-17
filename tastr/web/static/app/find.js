@@ -1,19 +1,19 @@
 // Find tracks: the Simple builder and SQL.
 
-import { $, api, h, isNum, mmss, tracks } from "./core.js";
-import { refresh } from "./library.js";
+import { $, ML_REPLACES, api, h, isNum, mmss, tracks } from "./core.js";
+import { configDone, firstLoad } from "./library.js";
 import { openTrack, switchTo } from "./card.js";
 import { endStart, routeOf } from "./route.js";
 import { setServerCfg } from "./daw.js";
-import { setStatus } from "./upload.js";
 import * as qlib from "./query-lib.js";
+import { showViewAs } from "./viewas.js";
 
 // Simple builds the SQL itself and runs it through sql(): /api/query on your own machine, or on a hosted server a copy
 // of your own library in the browser (query-lib.js), so every search goes through its gate, qlib.withLib;
 // "Edit as SQL" carries a Simple search over, so people can learn from it.
 const Q_CAM = { "1A": "A♭m", "2A": "E♭m", "3A": "B♭m", "4A": "Fm", "5A": "Cm", "6A": "Gm", "7A": "Dm", "8A": "Am", "9A": "Em", "10A": "Bm", "11A": "F♯m", "12A": "C♯m",
   "1B": "B", "2B": "F♯", "3B": "D♭", "4B": "A♭", "5B": "E♭", "6B": "B♭", "7B": "F", "8B": "C", "9B": "G", "10B": "D", "11B": "A", "12B": "E" };
-const Q_SECTIONS = ["intro", "verse", "build", "chorus", "drop", "breakdown", "outro"]; // the labels tastr/engine/stages/sections.py gives
+const Q_SECTIONS = ["intro", "verse", "build", "chorus", "drop", "breakdown", "outro"]; // the labels engine-rs/src/stages/sections.rs gives
 const qMixes = (code) => { const n = parseInt(code), l = code.slice(-1), w = (k) => ((k + 11) % 12) + 1; return [code, `${w(n - 1)}${l}`, `${w(n + 1)}${l}`, `${n}${l === "A" ? "B" : "A"}`]; };
 const qTags = () => [...new Set(tracks.flatMap((t) => t.tags || []))].sort();
 const qEsc = (v) => String(v).replace(/'/g, "''");
@@ -35,12 +35,16 @@ const Q_SORTS = { bpm: ["BPM", ["bpm"]], energy: ["Energy", ["energy"]], length:
 export let qMode = "simple", qGroups = [], qJoin = "and", qSort = ["bpm", "asc"];
 const qGroup = (conds, join = "and") => ({ join, conds: conds.map((q) => ({ ...q, v: q.v.slice() })) });
 const qNew = (field, op, vals) => ({ field, op: op || Q_FIELDS[field].ops[0][0], v: (vals || Q_FIELDS[field].def).slice() });
+// A vibe's tracks, as the card shows them: the engine's tags (tags), plus ML tags (ml_tags.tags, comma-separated) for the
+// tracks that have them; there the engine vibes that ML tags replace don't count.
+const qVibeIds = (a) => ML_REPLACES[a] ? `SELECT track_id FROM tags WHERE tag = '${qEsc(a)}' AND track_id NOT IN (SELECT track_id FROM ml_tags)`
+  : `SELECT track_id FROM tags WHERE tag = '${qEsc(a)}' UNION SELECT track_id FROM ml_tags WHERE ',' || tags || ',' LIKE '%,${qEsc(a)},%'`;
 function qSqlOf(q) {
   const F = Q_FIELDS[q.field]; if (!F) return null;
   const [a, b] = q.v, k = F.scale || 1, n = (x) => +((+x || 0) * k).toFixed(2);
   if (F.kind === "num") return q.op === "between" ? `${F.col} BETWEEN ${n(Math.min(+a, +b))} AND ${n(Math.max(+a, +b))}` : q.op === "min" ? `${F.col} >= ${n(a)}` : q.op === "max" ? `${F.col} <= ${n(a)}` : `${F.col} BETWEEN ${n(a) - 3} AND ${n(a) + 3}`;
   if (q.field === "key") { if (!Q_CAM[a]) return null; return q.op === "is" ? `camelot = '${a}'` : `camelot IN (${qMixes(a).map((x) => `'${x}'`).join(", ")})`; }
-  if (q.field === "vibe") return a ? `id ${q.op === "not" ? "NOT IN" : "IN"} (SELECT track_id FROM tags WHERE tag = '${qEsc(a)}')` : null;
+  if (q.field === "vibe") return a ? `id ${q.op === "not" ? "NOT IN" : "IN"} (${qVibeIds(a)})` : null;
   if (q.field === "section") return a ? `id ${q.op === "none" ? "NOT IN" : "IN"} (SELECT track_id FROM sections WHERE label = '${qEsc(a)}')` : null;
   const t = qEsc(String(a || "").trim()); return t ? `(title LIKE '%${t}%' OR artist LIKE '%${t}%' OR album LIKE '%${t}%')` : null;
 }
@@ -141,7 +145,7 @@ export function renderSimple() {
 const SIMPLE_EXAMPLES = [  // [label, groups, sort]
   ["Mixes with 8A, 120–128 BPM", [qGroup([qNew("key", "mixes", ["8A"]), qNew("bpm", "between", [120, 128])])], ["bpm", "asc"]],
   ["Dark, over 120 BPM", [qGroup([qNew("vibe", "is", ["dark"]), qNew("bpm", "min", [120])])], ["energy", "desc"]],
-  ["Wind-down: slow or calm, and moody", [qGroup([qNew("bpm", "max", [118]), qNew("energy", "max", [0.5])], "or"), qGroup([qNew("vibe", "is", ["chill"]), qNew("vibe", "is", ["melancholic"])], "or")], ["energy", "asc"]],
+  ["Wind-down: slow or calm, and moody", [qGroup([qNew("bpm", "max", [118]), qNew("energy", "max", [0.5])], "or"), qGroup([qNew("vibe", "is", ["chill"]), qNew("vibe", "is", ["relaxed"]), qNew("vibe", "is", ["melancholic"])], "or")], ["energy", "asc"]],
   ["Peak time: 124–130 BPM, high energy", [qGroup([qNew("bpm", "between", [124, 130]), qNew("energy", "min", [0.7])])], ["energy", "desc"]],
   ["No drop", [qGroup([qNew("section", "none", ["drop"])])], ["title", "asc"]],
   ["Longest first", [qGroup([])], ["length", "desc"]],
@@ -155,6 +159,7 @@ const SQL_EXAMPLES = [
   ["Longest intros", "SELECT t.title, s.end_bar - s.start_bar + 1 AS intro_bars\nFROM sections s JOIN tracks t ON t.id = s.track_id\nWHERE s.label = 'intro' ORDER BY intro_bars DESC LIMIT 10"],
   ["Drops per track", "SELECT t.title, count(s.idx) AS drops FROM tracks t\nLEFT JOIN sections s ON s.track_id = t.id AND s.label = 'drop'\nGROUP BY t.id ORDER BY drops DESC"],
   ["Recently added", "SELECT title, artist, analyzed_at FROM tracks ORDER BY analyzed_at DESC LIMIT 10"],
+  ["BPM changed on re-analysis", "SELECT t.title, h.core_version AS was_engine, h.bpm AS was_bpm, t.bpm AS now_bpm\nFROM card_history h JOIN tracks t ON t.id = h.track_id\nWHERE h.id = (SELECT max(id) FROM card_history WHERE track_id = t.id)\n  AND abs(t.bpm - h.bpm) > 1 ORDER BY abs(t.bpm - h.bpm) DESC"],
 ];
 // Saved searches: the person's own are the quick chips; the built-in examples sit in an "Examples ▾" menu.
 // The server keeps them per person (GET/PUT/DELETE /api/searches), so they follow you to another device.
@@ -237,13 +242,17 @@ const Q_SCHEMA = [
     ["local_path", "Where the audio is stored", true], ["sha256", "Fingerprint of the audio file"], ["duration", "Seconds"], ["sample_rate", "Hz"], ["bpm, bpm_confidence", "Tempo, and 0–1 confidence"],
     ["key_name, key_tonic, key_mode", "e.g. A minor; tonic 0–11 (C = 0); major or minor"], ["key_scale", "Scale name"], ["camelot", "e.g. 8A"], ["key_confidence", "0–1"], ["energy", "0–1, whole track"],
     ["loudness_db", "Integrated loudness"], ["stages_json, errors_json", "Which analysis steps ran, and what failed", true], ["analyzed_at", "ISO time of the last analysis"], ["owner", "Who uploaded it (hosted only)", true]]],
-  ["tags", "Vibe tags, one row per tag on a track.", [["track_id", "→ tracks.id"], ["tag", "e.g. dark, chill, house tempo"], ["score", "0–1, how strongly it applies"]]],
+  ["tags", "Tastr's own vibe tags, one row per tag on a track. ML tags aren't in here: they're in ml_tags, and on a track that has them they replace driving, euphoric, hypnotic, chill and bright.", [["track_id", "→ tracks.id"], ["tag", "e.g. dark, chill, house tempo"], ["score", "0–1, how strongly it applies"]]],
+  ["ml_tags", "Tags from Essentia's trained models (ML ✦), one row per tagged track.", [["track_id", "→ tracks.id"], ["tags", "The shown tags, comma-separated, e.g. Deep House,energetic,vocal"], ["version", "Which set of models"], ["created_at", "ISO time"],
+    ["result_json", "Every tag's group and score, and the models' raw outputs, as JSON (use json_extract)"]]],
   ["sections", "Intro, build, drop and so on, in order.", [["track_id, idx", "Track, and position (0 = first)"], ["label, letter", "e.g. drop, and A/B/C for repeats"], ["start, \"end\"", "Seconds (quote \"end\", it's a keyword)"], ["start_bar, end_bar", "Bar numbers, 1-based, inclusive"], ["energy", "0–1 for that section"], ["confidence", "0–1"]]],
   ["features", "Single measurements per track.", [["track_id", "→ tracks.id"], ["name", "e.g. low_end, percussiveness, danceability"], ["value", "Number"]]],
   ["series", "Measurements over time, for the charts.", [["track_id, name", "Track, and e.g. energy"], ["idx, t", "Point number, and seconds"], ["value", "Number"]]],
   ["suggestions", "The ideas on each card.", [["track_id, idx", "Track, and position"], ["category", "e.g. drums, bass, harmony"], ["title, body", "What the card shows"], ["data_json", "Details as JSON (use json_extract)"]]],
   ["lookups", "What online catalogs list for a track, if lookups are on.", [["track_id, provider", "Track, and catalog name"], ["status", "found, not_found, pending, no_tags or error"], ["bpm, key_name", "As the catalog lists them"],
     ["key_tonic, key_mode, camelot", "Parsed from key_name, to compare with tracks"], ["fetched_at", "ISO time"], ["result_json", "The full answer as JSON"]]],
+  ["card_history", "A track's earlier cards: each re-analysis keeps the one it replaced (the last 5 per track). Join with tracks to see what changed.", [["track_id", "→ tracks.id"], ["core_version", "The engine's core version that made it, e.g. 0.5.0"],
+    ["bpm, key_name, camelot, energy", "That card's values"], ["analyzed_at, replaced_at", "ISO times it was made and replaced"], ["stages_json", "Which analysis steps ran, and their versions", true], ["card_json", "The whole earlier card (on your own machine only)", true]]],
 ];
 function renderSchema(mine) {
   $("q-schema-body").replaceChildren(...Q_SCHEMA.map(([t, about, cols]) => h("div", { class: "q-tbl" },
@@ -314,7 +323,7 @@ export function init() {
   document.querySelectorAll("#q-mode button").forEach((b) => b.addEventListener("click", () => setQMode(b.dataset.mode)));
   $("run-sql").addEventListener("click", runSql);
   qGroups = SIMPLE_EXAMPLES[0][1].map((g) => qGroup(g.conds, g.join));
-  refresh().catch((e) => setStatus(e.message, true));
+  firstLoad();  // the list shows its own loading, slow-start and error states
   // A shared (hosted) server turns off link analysis; hide it rather than let it fail. Its SQL box reads only your own library.
   // Admins of a hosted server also get the Admin tab; everyone else never sees it, and #admin stays on the library.
   api("/api/config").then((cfg) => {
@@ -328,10 +337,12 @@ export function init() {
     $("sql-scope").textContent = !cfg.query_browser ? "One read-only SELECT, stopped after 5 seconds."
       : adminCopy ? "One read-only SELECT over everyone's tracks (you're an admin), run in your browser."
         : "One read-only SELECT over your own tracks, run in your browser.";
+    showViewAs(cfg.viewing_as);
     if (cfg.admin) {
       document.querySelector("nav button[data-view=admin]").hidden = false;
       if (startView === "admin") switchTo("admin");
     }
     endStart();  // a refresh on #admin waited for this answer before showing anything
-  }).catch(endStart);
+    configDone();
+  }).catch(() => { endStart(); configDone(); });
 }

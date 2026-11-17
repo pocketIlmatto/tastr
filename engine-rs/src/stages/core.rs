@@ -1,4 +1,4 @@
-//! The core stage (tastr/engine/stages/core.py): BPM, beats and downbeats, meter, key, energy, loudness and the
+//! The core stage: BPM, beats and downbeats, meter, key, energy, loudness and the
 //! shared scalar features.
 
 use super::{Ctx, HOP};
@@ -17,12 +17,19 @@ const MAX_BPM: f64 = 180.0;
 const MIN_BEATS: usize = 8;
 const THREE_TWO_RATIO: f64 = 0.8;
 const THREE_TWO_MAX_METER: f64 = 0.0;
+/// Drum & bass read at half tempo (87 for 174) is doubled when the doubled tempo lands in DOUBLE_MIN..MAX_BPM
+/// and the snare and clap hit evenly on every beat of the slow grid (`fast_backbeat`): at least
+/// BACKBEAT_BALANCE as hard on the weaker of the two hits and BACKBEAT_CONTRAST times the half beats between
+/// them. A real 85-90 BPM backbeat hits on every other beat (docs/bench.md, "Tempo notes").
+const DOUBLE_MIN: f64 = 160.0;
+pub const BACKBEAT_BALANCE: f64 = 0.8;
+pub const BACKBEAT_CONTRAST: f64 = 2.0;
 /// Pulse clarity: (onset on the tracker's beats / mean onset - 1) / PULSE_SCALE, read before the kick
 /// alignment (core.py PULSE_SCALE).
 const PULSE_SCALE: f64 = 4.0;
 const METER_CUE_SCALES: [(&str, f64); 6] =
     [("timbre_lag", 0.1), ("bass_lag", 0.27), ("kick", 0.3), ("snare", 0.25), ("change", 0.17), ("bass_change", 0.22)];
-const METER_THRESHOLD: f64 = 1.0;
+pub const METER_THRESHOLD: f64 = 1.0;
 
 pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     let sr = ctx.sr;
@@ -162,6 +169,7 @@ fn set_key(ctx: &Ctx, card: &mut Card) {
         camelot: music::camelot(est.tonic, est.mode),
         confidence: est.confidence,
         likely_correct: music::likely_correct("key", est.confidence),
+        mode_uncertain: music::mode_uncertain(&profile, est.tonic, est.mode_margin),
     });
     let alts: Vec<Json> =
         est.alternatives.iter().map(|(k, p)| Json::obj().with("key", k.clone()).with("probability", *p)).collect();
@@ -172,31 +180,83 @@ fn diffs(x: &[f64]) -> Vec<f64> {
     x.windows(2).map(|w| w[1] - w[0]).collect()
 }
 
-fn beat_index(frames: &[f64], n_frames: usize) -> Vec<usize> {
+pub fn beat_index(frames: &[f64], n_frames: usize) -> Vec<usize> {
     frames.iter().map(|&f| clip(round_half_even(f), 0.0, n_frames as f64 - 1.0) as usize).collect()
 }
 
 /// _tempo_and_beats: (bpm, beat frames, confidence, stability, pulse clarity).
-fn tempo_and_beats(ctx: &mut Ctx, n_frames: usize) -> (Option<f64>, Vec<f64>, f64, f64, f64) {
-    let (sr, hop) = (ctx.sr, HOP as f64);
-    let onset = ctx.onset.clone();
+pub(crate) fn tempo_and_beats(ctx: &mut Ctx, n_frames: usize) -> (Option<f64>, Vec<f64>, f64, f64, f64) {
+    let Ctx { onset, low_flux, tempogram, log_mel, log_mel_freqs, mel_perc, mel_perc_freqs, air_flux, sr, .. } = ctx;
+    let meter_of = |frames: &[f64]| meter_score(&beat_index(frames, n_frames), log_mel, log_mel_freqs, None);
+    let backbeat_of = |frames: &[f64]| fast_backbeat(frames, &mid_drum_hits(mel_perc, mel_perc_freqs, air_flux));
+    tempo_from_envelopes(onset, low_flux, *sr, n_frames, tempogram, &meter_of, &backbeat_of)
+}
+
+/// The drum part between kick and hats (snare, clap, perc) as an onset strength per frame of `mel`, a
+/// percussive mel power spectrogram: drums.rs's mid part, less what the kick and hats leak into it.
+pub fn mid_drum_hits(mel: &Matrix, freqs: &[f64], air_flux: &[f32]) -> Vec<f32> {
+    let [_, mid, _] = crate::drums::Drums::new(mel, freqs, air_flux).nov;
+    mid
+}
+
+/// How evenly the mid drum part (`mid`, per frame) hits on every beat of the grid `beats` (in those frames):
+/// its strongest hit near each half beat, averaged over the four half beats of a two-beat cycle, and of the
+/// two pairs one beat apart the stronger pair's (balance, contrast): the weaker hit of the pair over the
+/// stronger, and the pair's sum over the other pair's. A backbeat on every other beat has a low balance;
+/// drum & bass at half tempo, its snare on every slow beat, a high one.
+pub fn fast_backbeat(beats: &[f64], mid: &[f32]) -> (f64, f64) {
+    if beats.len() < 2 * MIN_BEATS || mid.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut halves: Vec<usize> = Vec::with_capacity(2 * beats.len());
+    for w in beats.windows(2) {
+        for f in [w[0], (w[0] + w[1]) / 2.0] {
+            halves.push(clip(round_half_even(f), 0.0, mid.len() as f64 - 1.0) as usize);
+        }
+    }
+    let hits = sample(mid, &halves, 1);
+    let m: Vec<f64> = (0..4).map(|p| strided_mean(&hits, p, 4)).collect();
+    let (a, b) = if m[0] + m[2] >= m[1] + m[3] { (0, 1) } else { (1, 0) };
+    let (pair, other) = (m[a] + m[a + 2], m[b] + m[b + 2]);
+    if pair <= 0.0 {
+        return (0.0, 0.0);
+    }
+    (m[a].min(m[a + 2]) / m[a].max(m[a + 2]), pair / (other + 1e-9))
+}
+
+/// The tempo logic on its own: an onset envelope and low-band flux on core's frame grid (`sr` / HOP), the
+/// 384-lag tempogram mean when already computed (filled in on first use), `meter_of`, the meter score of a
+/// beat grid in those frames (the 1.5x switch is skipped when the faster beats group in 3s), and
+/// `backbeat_of`, `fast_backbeat` of a beat grid in those frames (it decides the drum & bass doubling). The
+/// spectrogram benchmarks call it on envelopes rebuilt from a log-mel spectrogram (bench.rs).
+pub fn tempo_from_envelopes(
+    onset: &[f32],
+    low_flux: &[f32],
+    sr: f64,
+    n_frames: usize,
+    tempogram: &mut Option<Vec<f64>>,
+    meter_of: &dyn Fn(&[f64]) -> f64,
+    backbeat_of: &dyn Fn(&[f64]) -> (f64, f64),
+) -> (Option<f64>, Vec<f64>, f64, f64, f64) {
+    let hop = HOP as f64;
     let max = onset.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    if n_frames < 2 || max <= 1e-6 || std_f32(&onset) < 1e-6 {
+    if n_frames < 2 || max <= 1e-6 || std_f32(onset) < 1e-6 {
         return (None, Vec::new(), 0.0, 0.0, 0.0);
     }
-    let frames = tracked_beats(&onset, sr, n_frames);
+    let frames = tracked_beats(onset, sr, n_frames);
     let bpm = 60.0 / (median(&diffs(&frames)) * hop / sr);
-    let (bpm, frames) = three_over_two(ctx, &onset, bpm, frames, n_frames);
-    let (mut bpm, frames) = fold_into_range(bpm, frames);
+    let (bpm, frames) = three_over_two(onset, sr, tempogram, meter_of, bpm, frames);
+    let (bpm, frames) = fold_into_range(bpm, frames);
+    let (mut bpm, frames) = double_for_fast_backbeat(bpm, frames, backbeat_of);
     let ibis: Vec<f64> = diffs(&frames).iter().map(|d| d * hop / sr).collect();
     let stability = if ibis.is_empty() { 0.0 } else { clip(1.0 - std(&ibis) / (mean(&ibis) + 1e-9) * 4.0, 0.0, 1.0) };
     let frames = regularize(&frames, n_frames);
     let picked: Vec<f32> = beat_index(&frames, n_frames).into_iter().map(|i| onset[i]).collect();
-    let ratio = mean_f32(&picked) / (mean_f32(&onset) + 1e-9);
+    let ratio = mean_f32(&picked) / (mean_f32(onset) + 1e-9);
     let pulse = clip(((ratio - 1.0) as f64) / PULSE_SCALE, 0.0, 1.0);
-    let frames = align_to_kick(&frames, &ctx.low_flux);
+    let frames = align_to_kick(&frames, low_flux);
     if frames.len() > 1 {
-        bpm = 60.0 * sr / (hop * median(&diffs(&frames)));
+        bpm = 60.0 * sr / (hop * beat_period(&frames));
     }
     (Some(bpm), frames, 0.5 * stability + 0.5 * pulse, stability, pulse)
 }
@@ -217,16 +277,22 @@ fn tracked_beats(onset: &[f32], sr: f64, n_frames: usize) -> Vec<f64> {
 
 /// Try 1.5x the tempo (a 3:2 error): taken when its periodicity is nearly as strong and its beats don't read as
 /// triple meter.
-fn three_over_two(ctx: &mut Ctx, onset: &[f32], bpm: f64, frames: Vec<f64>, n_frames: usize) -> (f64, Vec<f64>) {
-    if !(bpm * 1.5 < MAX_BPM && periodicity(ctx, bpm * 1.5) >= THREE_TWO_RATIO * periodicity(ctx, bpm)) {
+fn three_over_two(
+    onset: &[f32],
+    sr: f64,
+    tempogram: &mut Option<Vec<f64>>,
+    meter_of: &dyn Fn(&[f64]) -> f64,
+    bpm: f64,
+    frames: Vec<f64>,
+) -> (f64, Vec<f64>) {
+    if !(bpm * 1.5 < MAX_BPM
+        && periodicity(onset, sr, tempogram, bpm * 1.5) >= THREE_TWO_RATIO * periodicity(onset, sr, tempogram, bpm))
+    {
         return (bpm, frames);
     }
-    let faster: Vec<f64> =
-        rhythm::beat_track(onset, ctx.sr, HOP, Some(bpm * 1.5)).1.iter().map(|&b| b as f64).collect();
-    if faster.len() >= MIN_BEATS
-        && meter_score(&beat_index(&faster, n_frames), &ctx.log_mel, &ctx.log_mel_freqs, None) <= THREE_TWO_MAX_METER
-    {
-        return (60.0 / (median(&diffs(&faster)) * HOP as f64 / ctx.sr), faster);
+    let faster: Vec<f64> = rhythm::beat_track(onset, sr, HOP, Some(bpm * 1.5)).1.iter().map(|&b| b as f64).collect();
+    if faster.len() >= MIN_BEATS && meter_of(&faster) <= THREE_TWO_MAX_METER {
+        return (60.0 / (median(&diffs(&faster)) * HOP as f64 / sr), faster);
     }
     (bpm, frames)
 }
@@ -247,11 +313,27 @@ fn fold_into_range(mut bpm: f64, mut frames: Vec<f64>) -> (f64, Vec<f64>) {
     (bpm, frames)
 }
 
-/// _periodicity: the 384-lag tempogram's mean strength at `bpm`, best of the nearest three lags.
-fn periodicity(ctx: &mut Ctx, bpm: f64) -> f64 {
-    let (sr, hop) = (ctx.sr, HOP);
-    let ac = ctx.tempogram().to_vec();
-    let bpms = rhythm::tempo_frequencies(ac.len(), sr, hop);
+/// Double a tempo whose double lands in DOUBLE_MIN..MAX_BPM when the snare hits on every beat (drum & bass
+/// read at half tempo); the new beats go halfway between the old.
+fn double_for_fast_backbeat(bpm: f64, frames: Vec<f64>, backbeat_of: &dyn Fn(&[f64]) -> (f64, f64)) -> (f64, Vec<f64>) {
+    if !(2.0 * bpm >= DOUBLE_MIN && 2.0 * bpm < MAX_BPM) {
+        return (bpm, frames);
+    }
+    let (balance, contrast) = backbeat_of(&frames);
+    if balance < BACKBEAT_BALANCE || contrast < BACKBEAT_CONTRAST {
+        return (bpm, frames);
+    }
+    let mut all = frames.clone();
+    all.extend(frames.windows(2).map(|w| (w[0] + w[1]) / 2.0));
+    all.sort_by(|a, b| a.total_cmp(b));
+    (2.0 * bpm, all)
+}
+
+/// _periodicity: the 384-lag tempogram's mean strength at `bpm`, best of the nearest three lags. The
+/// tempogram is computed on first use and kept in `tempogram`.
+fn periodicity(onset: &[f32], sr: f64, tempogram: &mut Option<Vec<f64>>, bpm: f64) -> f64 {
+    let ac = tempogram.get_or_insert_with(|| rhythm::tempogram_mean(&rhythm::tempogram(onset, 384), 384, onset.len()));
+    let bpms = rhythm::tempo_frequencies(ac.len(), sr, HOP);
     let d: Vec<f64> = bpms[1..].iter().map(|b| (b - bpm).abs()).collect();
     let mut i = 0;
     for (j, &v) in d.iter().enumerate() {
@@ -263,11 +345,9 @@ fn periodicity(ctx: &mut Ctx, bpm: f64) -> f64 {
     ac[(i - 1).max(1)..(i + 2).min(ac.len())].iter().cloned().fold(f64::NEG_INFINITY, f64::max)
 }
 
-/// _regularize: a uniform grid across the track when the tracked beats are steady.
-fn regularize(frames: &[f64], n_frames: usize) -> Vec<f64> {
-    if frames.len() < MIN_BEATS {
-        return frames.to_vec();
-    }
+/// The beat count at each tracked beat: 0 at the first, then each gap rounded to a whole number of typical
+/// beats (the mean of the gaps under 1.5x the median), so a missed beat counts as two.
+fn beat_counts(frames: &[f64]) -> Vec<f64> {
     let d = diffs(frames);
     let med = median(&d);
     let small: Vec<f64> = d.iter().cloned().filter(|&v| v < 1.5 * med).collect();
@@ -278,6 +358,32 @@ fn regularize(frames: &[f64], n_frames: usize) -> Vec<f64> {
         acc += round_half_even(v / typical).max(1.0);
         k.push(acc);
     }
+    k
+}
+
+/// The beat period in frames: the slope of a line through the beats against their beat counts. The tracker's
+/// beats sit on whole frames, so the median gap snaps to one (21 or 22 frames is 123.05 or 117.45 BPM) while
+/// the beats themselves alternate and average in between. Under MIN_BEATS beats, or when the fit fails, the
+/// median gap.
+fn beat_period(frames: &[f64]) -> f64 {
+    let med = median(&diffs(frames));
+    if frames.len() < MIN_BEATS {
+        return med;
+    }
+    let (period, _) = polyfit1(&beat_counts(frames), frames);
+    if period.is_finite() && period > 0.5 * med && period < 1.5 * med {
+        period
+    } else {
+        med
+    }
+}
+
+/// _regularize: a uniform grid across the track when the tracked beats are steady.
+fn regularize(frames: &[f64], n_frames: usize) -> Vec<f64> {
+    if frames.len() < MIN_BEATS {
+        return frames.to_vec();
+    }
+    let k = beat_counts(frames);
     let (period, offset) = polyfit1(&k, frames);
     let worst =
         frames.iter().zip(&k).map(|(f, kk)| (f - (offset + period * kk)).abs()).fold(f64::NEG_INFINITY, f64::max);
@@ -377,7 +483,7 @@ fn norm_f32(v: &[f32]) -> f32 {
     pairwise_sum(&v.iter().map(|x| x * x).collect::<Vec<f32>>()).sqrt()
 }
 
-fn beat_cues(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64]) -> Cues {
+pub fn beat_cues(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64]) -> Cues {
     let n_frames = log_mel.cols;
     let frames: Vec<usize> = beat_frames.iter().map(|&f| f.min(n_frames - 1)).collect();
     let spectra = |lo: f64, hi: f64| -> Vec<Vec<f32>> {
@@ -440,7 +546,7 @@ fn per_phase(v: &[f64], m: usize) -> Vec<f64> {
     (0..m).map(|p| strided_mean(v, p, m)).collect()
 }
 
-fn downbeat_phase(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], m: usize, cues: Option<&Cues>) -> usize {
+pub fn downbeat_phase(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], m: usize, cues: Option<&Cues>) -> usize {
     if beat_frames.len() < MIN_BEATS || log_mel.cols < 2 {
         return 0;
     }
@@ -510,7 +616,7 @@ fn downbeat_phase(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], m: usi
     }
 }
 
-fn meter_score(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], cues: Option<&Cues>) -> f64 {
+pub fn meter_score(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], cues: Option<&Cues>) -> f64 {
     if beat_frames.len() < 2 * MIN_BEATS || log_mel.cols < 2 {
         return 0.0;
     }
@@ -553,7 +659,7 @@ fn meter_score(beat_frames: &[usize], log_mel: &Matrix, freqs: &[f64], cues: Opt
     total
 }
 
-/// _swing: where the off-beat 16th lands inside each beat, as (percent, confidence).
+/// Where the off-beat 16th lands inside each beat, as (percent, confidence).
 fn swing(onset: &[f32], beats: &[usize]) -> (f64, f64) {
     let (mut pos, mut w) = (Vec::new(), Vec::new());
     for p in beats.windows(2) {
@@ -615,4 +721,90 @@ fn bar_energy_series(downbeats: &[f64], rms_db: &[f32], sr: f64, duration: f64) 
         raw.iter().map(|v| clip((v - lo) / (hi - lo), 0.0, 1.0)).collect()
     };
     (downbeats.iter().map(|&t| round_dec(t, 3)).collect(), norm.iter().map(|&v| round_dec(v, 3)).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn swing_measures_the_offbeat_position() {
+        let beat = 24; // frames per beat
+        let beats: Vec<usize> = (0..40).map(|i| i * beat).collect();
+        for (sixteenth, expected) in [(6, 50.0), (8, 66.7)] {
+            // 25% vs 33% of the beat
+            let mut env = vec![0.0f32; beat * 41];
+            for &b in &beats {
+                env[b] = 1.0;
+                env[b + sixteenth] = 0.8;
+            }
+            let (percent, conf) = swing(&env, &beats);
+            assert!((percent - expected).abs() <= 2.0, "{percent} vs {expected}");
+            assert!(conf > 0.8);
+        }
+    }
+
+    #[test]
+    fn beat_period_reads_between_whole_frames() {
+        // ~118.8 BPM at 43.07 frames/s is 21.75 frames a beat: the tracker's whole-frame beats go 22, 22, 22, 21,
+        // so the median gap says 22 (117.45 BPM)
+        let beats: Vec<f64> = (0..200).map(|i| round_half_even(i as f64 * 21.75)).collect();
+        assert_eq!(median(&diffs(&beats)), 22.0);
+        assert!((beat_period(&beats) - 21.75).abs() < 0.01, "{}", beat_period(&beats));
+        // a missed beat (a double gap) doesn't stretch the period
+        let mut missed = beats.clone();
+        missed.remove(100);
+        assert!((beat_period(&missed) - 21.75).abs() < 0.01, "{}", beat_period(&missed));
+        // too few beats: the median gap
+        assert_eq!(beat_period(&beats[..5]), 22.0);
+    }
+
+    /// A grid at 87 BPM (30 frames a beat) and mid-drum hits at the given half beats of each two-beat cycle.
+    fn half_time_grid(hits: &[(usize, f32)]) -> (Vec<f64>, Vec<f32>) {
+        let beat = 30;
+        let beats: Vec<f64> = (0..40).map(|i| (i * beat) as f64).collect();
+        let mut mid = vec![0.01f32; beat * 41];
+        for cycle in 0..20 {
+            for &(half, level) in hits {
+                mid[cycle * 2 * beat + half * beat / 2] = level;
+            }
+        }
+        (beats, mid)
+    }
+
+    #[test]
+    fn fast_backbeat_tells_drum_and_bass_from_a_slow_backbeat() {
+        // drum & bass at half tempo: the snare between every pair of slow beats
+        let (beats, mid) = half_time_grid(&[(1, 1.0), (3, 0.9)]);
+        let (balance, contrast) = fast_backbeat(&beats, &mid);
+        assert!(balance >= BACKBEAT_BALANCE && contrast >= BACKBEAT_CONTRAST, "{balance} {contrast}");
+        // the same with the beats on the snares
+        let (beats, mid) = half_time_grid(&[(0, 1.0), (2, 1.0)]);
+        let (balance, contrast) = fast_backbeat(&beats, &mid);
+        assert!(balance >= BACKBEAT_BALANCE && contrast >= BACKBEAT_CONTRAST, "{balance} {contrast}");
+        // a real 87 BPM backbeat: the snare on every other beat, a little kick leak on the others
+        let (beats, mid) = half_time_grid(&[(0, 0.2), (2, 1.0)]);
+        let (balance, _) = fast_backbeat(&beats, &mid);
+        assert!(balance < BACKBEAT_BALANCE, "{balance}");
+        // snare on every half beat (busy percussion): no pair stands out
+        let (beats, mid) = half_time_grid(&[(0, 1.0), (1, 1.0), (2, 1.0), (3, 1.0)]);
+        let (_, contrast) = fast_backbeat(&beats, &mid);
+        assert!(contrast < BACKBEAT_CONTRAST, "{contrast}");
+    }
+
+    #[test]
+    fn doubles_only_into_the_drum_and_bass_range() {
+        let frames: Vec<f64> = (0..20).map(|i| (i * 30) as f64).collect();
+        let yes = |_: &[f64]| (1.0, 5.0);
+        let (bpm, doubled) = double_for_fast_backbeat(86.0, frames.clone(), &yes);
+        assert_eq!(bpm, 172.0);
+        assert_eq!(doubled.len(), 2 * frames.len() - 1);
+        assert_eq!(doubled[1], 15.0);
+        // 2 x 78 = 156 and 2 x 92 = 184 are outside 160..180
+        for slow in [78.0, 92.0] {
+            assert_eq!(double_for_fast_backbeat(slow, frames.clone(), &yes).0, slow);
+        }
+        let no = |_: &[f64]| (0.5, 5.0);
+        assert_eq!(double_for_fast_backbeat(86.0, frames, &no).0, 86.0);
+    }
 }

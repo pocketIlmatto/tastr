@@ -5,7 +5,8 @@ import { libActive, loadTracks, refresh, renderList, visibleTracks } from "./lib
 import { setInReview } from "./labels.js";
 import { renderCard } from "./card.js";
 import { serverCfg } from "./daw.js";
-import { dropEdits, flushEdits } from "./groove-edits.js";
+import { setViewsCache } from "./audio.js";
+import { dropEdits, flushEdits, loadEdits } from "./groove-edits.js";
 import { runDrumModel, setStems, stemsBusy, stemsEta, stemsLabel } from "./menu.js";
 import { LIST_NAME_MAX, addToList, lists, loadLists, saveList } from "./lists.js";
 import { pinPop } from "./pin.js";
@@ -77,6 +78,7 @@ const BULK = {
       await flushEdits(id);
       const r = await api(`/api/tracks/${id}/reanalyze`, { method: "POST" });
       dropEdits(id);
+      if (id === currentId) { setViewsCache(null); await loadEdits(id); } // the open card's new views and remapped edits, as the track menu's Re-analyze
       if (r.edits_dropped) editsGone.add(id);
       return r.card;
     } },
@@ -175,7 +177,7 @@ function bulkMenu() {
 // TASTR_MAX_ANALYSES on a hosted server (its analysis slots queue any extra) and about half the cores at home.
 // Stems and the drum model (`one`: the GPU and 4 GB jobs) go one at a time. Each lane takes the next track from a
 // shared queue until it's empty. The user can leave select mode and keep browsing meanwhile.
-async function runBulk(kind, ids) {
+export async function runBulk(kind, ids) {
   const b = BULK[kind];
   if (!ids.length || bulkBusy) return;
   bulkBusy = true;

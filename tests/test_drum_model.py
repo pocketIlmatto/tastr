@@ -6,9 +6,9 @@ import importlib.util
 import numpy as np
 import pytest
 
-from tastr.engine import adt, drums
-from tastr.engine.bench.drums import _synth_ctx
-from tastr.engine.bench.synth import make_drum_track
+from tastr.engine import adt
+from tastr.engine.bench.drums import LANES, _activations, _synth_grid
+from tastr.engine.bench.synth import SR, make_drum_track
 
 
 def no_torch(monkeypatch):
@@ -49,39 +49,36 @@ def fake_model(monkeypatch, hits):
     monkeypatch.setattr(adt, "onsets", lambda y, sr: {k: (np.asarray(t, float), np.full(len(t), 1.0)) for k, t in hits.items()})
 
 
-@pytest.mark.audio
+@pytest.mark.rust
 def test_fallback_keeps_the_built_in_lanes(monkeypatch):
     no_torch(monkeypatch)
+    monkeypatch.setenv("TASTR_DRUM_MODEL", "adtof")  # asked for, but PyTorch is missing
     y, _ = make_drum_track({"kick": "x...x...x...x...", "hat": "..x...x...x...x."}, bpm=120)
-    ctx = _synth_ctx(y, 120)
-    assert drums.model_lanes(ctx) is None
-    acts = drums.lane_activations(ctx, np.arange(10))
-    assert tuple(acts) == drums.LANES  # no cymbal lane
-    grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
-    assert set(grid) == set(drums.LANES)
+    acts, _ = _activations(y, "synth")
+    assert tuple(acts) == LANES  # no cymbal lane
+    assert set(_synth_grid(y, 120)) == set(LANES)
 
 
-@pytest.mark.audio
+@pytest.mark.rust
 def test_model_onsets_map_onto_the_groove(monkeypatch):
     bpm, step = 120, 0.125
     # the pattern tests/test_drums.py checks the built-in snare on
     y, _ = make_drum_track({"kick": "x.......x.......", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."}, bpm=bpm)
     bars = 8
     at = lambda steps: [(b * 16 + s) * step for b in range(bars) for s in steps]  # noqa: E731
-    fake_model(monkeypatch, {"kick": at([0, 8]), "snare": [], "tom": at([14]), "hat": at(range(0, 16, 2)),
+    fake_model(monkeypatch, {"kick": at([0, 8]), "snare": at([4, 12]), "tom": at([14]), "hat": at(range(0, 16, 2)),
                              "cymbal": at([0])})
-    ctx = _synth_ctx(y, bpm)
-    lanes = drums.model_lanes(ctx)
-    f = int(round(14 * step * ctx.sr / ctx.hop))
+    lanes, hop = _activations(y, "synth")
+    f = int(round(14 * step * SR / hop))
     assert lanes["tom"][f] > 0 and lanes["tom"][f - 3:f].max() == 0
-    grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
+    grid = _synth_grid(y, bpm)
     assert "cymbal" in grid
     hits = lambda g: g["pattern"].replace("o", "x") if g["detected"] else "." * 16  # noqa: E731
     assert hits(grid["tom"]) == "..............x."
     assert hits(grid["cymbal"]) == "x..............."
     assert hits(grid["kick"]) == "x.......x......."
     assert hits(grid["hat"]) == "x.x.x.x.x.x.x.x."
-    assert hits(grid["snare"]) == "....x.......x..."  # still ours
+    assert hits(grid["snare"]) == "....x.......x..."  # the model's (confident) snares
 
 
 def test_filterbank_and_spectrogram_shape():
@@ -172,3 +169,79 @@ def test_fetch_rejects_a_bad_download(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="checksum"):
         adt.fetch()
     assert not any(adt.models_dir().glob("*.index"))
+
+
+@pytest.mark.rust
+def test_open_hats_from_the_model(monkeypatch):
+    """--open-hats model splits the model's hi-hats by the ringing test; built-in keeps our open-hat lane."""
+    bpm, step = 120, 0.125
+    y, _ = make_drum_track({"kick": "x...x...x...x...", "hat": "x...x...x...x...", "open_hat": "..x...x...x...x."},
+                           bpm=bpm)
+    bars = 8
+    at = lambda steps: [(b * 16 + s) * step for b in range(bars) for s in steps]  # noqa: E731
+    fake_model(monkeypatch, {"kick": at([0, 4, 8, 12]), "snare": [], "tom": [], "hat": at(range(0, 16, 2)),
+                             "cymbal": []})
+    hits = lambda g: g["pattern"].replace("o", "x") if g["detected"] else "." * 16  # noqa: E731
+    for way in ("built-in", "model"):
+        monkeypatch.setenv("TASTR_OPEN_HATS", way)
+        grid = _synth_grid(y, bpm)
+        assert hits(grid["open_hat"]) == "..x...x...x...x.", way
+        assert hits(grid["hat"]) == "x...x...x...x...", way
+    # The model's split: a hi-hat the model calls where the air band doesn't ring stays closed, even where the
+    # built-in hat part found nothing open.
+    monkeypatch.setenv("TASTR_OPEN_HATS", "model")
+    lanes, hop = _activations(y, "synth")
+    f = int(round(4 * step * SR / hop))
+    assert lanes["hat"][f] > 0 and lanes["open_hat"][f] < 0.2 * lanes["hat"][f]
+    monkeypatch.setenv("TASTR_OPEN_HATS", "sideways")
+    with pytest.raises(ValueError, match="TASTR_OPEN_HATS"):
+        _activations(y, "synth")
+
+
+@pytest.mark.rust
+def test_bench_compares_snare_sources_with_the_model(monkeypatch):
+    from tastr.engine.bench import drums
+
+    items = drums.synth_onset_items()[:2]
+    fake_model(monkeypatch, {"kick": [], "snare": items[0][2].get("snare", [])[:2], "tom": [], "hat": [], "cymbal": []})
+    report = drums.run("synth-onsets", limit=2)
+    assert report["tracks"] == 2
+    assert {"builtin", "model", "gated", "mid-0.1", "confident-0.75", "union"} <= set(report["snare_sources"])
+    monkeypatch.setattr(adt, "wanted", lambda options: False)
+    assert report["snare_sources"]["builtin"]["f"] == drums.run("synth-onsets", limit=2)["summary"]["snare"]["f"]
+    assert "snare from model" in drums.format_report(report)
+
+
+@pytest.mark.rust
+def test_weak_model_snares_need_a_built_in_onset(monkeypatch):
+    """A model snare under drums::SNARE_CONFIDENT is kept only where the built-in mid part has an onset: the
+    model's weak snares are mostly hi-hats."""
+    bpm, step = 120, 0.125
+    y, _ = make_drum_track({"kick": "x.......x.......", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."}, bpm=bpm)
+    at = lambda steps: [(b * 16 + s) * step for b in range(8) for s in steps]  # noqa: E731
+    snare = at([4, 12, 2])  # the real snares, and a hat (step 2) the model also calls a snare
+    hits = {k: (np.asarray(t, float), np.full(len(t), 1.0, np.float32)) for k, t in
+            {"kick": at([0, 8]), "tom": [], "hat": at(range(0, 16, 2)), "cymbal": []}.items()}
+    hits["snare"] = (np.asarray(snare, float), np.full(len(snare), 0.6, np.float32))  # all weak
+    monkeypatch.setattr(adt, "wanted", lambda options: True)
+    monkeypatch.setattr(adt, "onsets", lambda y, sr: hits)
+    grid = _synth_grid(y, bpm)
+    assert grid["snare"]["pattern"].replace("o", "x") == "....x.......x..."  # the hat's weak "snare" is gone
+    hits["snare"] = (np.asarray(snare, float), np.full(len(snare), 0.9, np.float32))  # all confident: kept
+    assert grid != _synth_grid(y, bpm) and _synth_grid(y, bpm)["snare"]["pattern"][2] != "."
+
+
+@pytest.mark.rust
+def test_weak_model_toms_are_dropped(monkeypatch):
+    """Model toms under drums::TOM_CONFIDENT are dropped: on real kits they are mostly snares and kicks."""
+    bpm, step = 120, 0.125
+    y, _ = make_drum_track({"kick": "x.......x.......", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."}, bpm=bpm)
+    at = lambda steps: np.asarray([(b * 16 + s) * step for b in range(8) for s in steps], float)  # noqa: E731
+    one = lambda t, c: (t, np.full(len(t), c, np.float32))  # noqa: E731
+    hits = {"kick": one(at([0, 8]), 1.0), "snare": one(at([4, 12]), 1.0), "hat": one(at(range(0, 16, 2)), 1.0),
+            "cymbal": one(at([]), 1.0), "tom": one(at([4]), 0.65)}  # a weak "tom" on the snare
+    monkeypatch.setattr(adt, "wanted", lambda options: True)
+    monkeypatch.setattr(adt, "onsets", lambda y, sr: hits)
+    assert not _synth_grid(y, bpm)["tom"]["detected"]
+    hits["tom"] = one(at([14]), 0.9)  # a confident one stays
+    assert _synth_grid(y, bpm)["tom"]["pattern"].replace("o", "x") == "..............x."

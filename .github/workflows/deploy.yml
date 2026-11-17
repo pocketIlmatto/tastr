@@ -33,7 +33,7 @@ jobs:
       ship: ${{ steps.scope.outputs.ship }}
       ref: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The commit the tests passed on, not whatever main is by the time this starts.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -71,13 +71,15 @@ jobs:
           else
             echo "Changed since ${last:0:7}:"; echo "$ship"; echo "ship=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.scope.outputs.ship != 'false'
         with:
           python-version: "3.12"
       # Just the Modal client and the tastr source, which the Modal images upload; the engine installs there.
+      # With tastr's own light dependencies (numpy, soundfile, ...): defining the images imports tastr.engine
+      # modules (the ML-tag and Essentia weight downloads), and the tastr.engine package imports numpy.
       - if: steps.scope.outputs.ship != 'false'
-        run: pip install "modal>=1.0" && pip install --no-deps -e .
+        run: pip install "modal>=1.0" && pip install -e .
       - name: Deploy analysis and stems to Modal
         if: steps.scope.outputs.ship != 'false'
         env:

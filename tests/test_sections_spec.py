@@ -40,9 +40,13 @@ def test_sections_spec_finds_labeled_boundaries(tmp_path):
     assert report["info"]["hop"] == 1024 and report["rows"][0]["duration"] == 160.0
     best = report["best_on_tune"]
     assert best["tune"]["f_3"] > 0.9  # the timbre changes are obvious, so some setting finds them all
-    from tastr.engine.stages import sections
+    import re
+    from pathlib import Path
 
-    assert (report["current"]["seconds"], report["current"]["phrase"]) == (sections.SECONDS_PER_SECTION, sections.PHRASE_BARS)
+    src = (Path(__file__).parent.parent / "engine-rs" / "src" / "stages" / "sections.rs").read_text()
+    const = lambda name: float(re.search(rf"const {name}: \w+ = ([\d.]+);", src).group(1))  # noqa: E731
+    assert (report["current"]["seconds"], report["current"]["phrase"]) == (const("SECONDS_PER_SECTION"),
+                                                                          const("PHRASE_BARS"))
     assert "best on tune" in sections_spec.format_report(report)
 
 

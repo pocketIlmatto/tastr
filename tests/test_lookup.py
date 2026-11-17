@@ -1,12 +1,13 @@
 """Catalog lookups (tastr.lookup): providers on canned responses, storage, comparison and the API."""
 
+import sqlite3
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 
 from tastr import db, lookup
-from tastr.lookup import acousticbrainz, freqblog, getsongbpm
+from tastr.lookup import acousticbrainz, freqblog, getsongbpm, reccobeats
 from tastr.lookup.base import LookupResult, Provider, ProviderError, TrackQuery, same_artists, same_text
 from tastr.web.server import create_app
 from test_foundation import full_card
@@ -119,20 +120,46 @@ def test_freqblog_found_pending_and_missing(monkeypatch):
     assert wrong.status == "not_found" and wrong.extra["closest"] == "Daft Punk – Around the World"
 
 
-def test_freqblog_is_stored_only_on_a_paid_plan(db_path, monkeypatch):
+def test_freqblog_is_stored_unless_turned_off(db_path, monkeypatch):
     p = freqblog.FreqBlog()
-    canned(monkeypatch, p, (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "key": "F-Minor"}),
-           (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "key": "F-Minor"}))
+    found = (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "key": "F-Minor"})
+    canned(monkeypatch, p, found, found)
     conn = db.connect(db_path)
     tid = db.save_card(conn, tagged_card())
-    monkeypatch.delenv("FREQBLOG_PLAN", raising=False)
+    monkeypatch.setenv("FREQBLOG_STORE", "0")
     (r,) = lookup.lookup_track(conn, tid, tagged_card(), [p])
     assert r["transient"] and (r["tonic"], r["mode"], r["camelot"]) == (5, "minor", "4A")
     assert db.get_lookups(conn, tid) == []
     assert lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True) == []  # analysis skips it
-    monkeypatch.setenv("FREQBLOG_PLAN", "paid")
+    monkeypatch.delenv("FREQBLOG_STORE")  # stored by default (free-key terms of 3 November 2026)
     lookup.lookup_track(conn, tid, tagged_card(), [p])
     assert tuple(conn.execute("SELECT key_name, key_tonic, key_mode, camelot FROM lookups").fetchone()) == ("F-Minor", 5, "minor", "4A")
+    snap = sqlite3.connect(":memory:")
+    snap.deserialize(db.library_snapshot(db_path, None, lookup.held_from_downloads()))  # the hosted search's download leaves FreqBlog's answers out
+    assert snap.execute("SELECT count(*) FROM lookups").fetchone()[0] == 0
+    assert lookup.forget(conn, "freqblog") == 1 and db.get_lookups(conn, tid) == []
+
+
+def test_a_freqblog_miss_expires(db_path, monkeypatch):
+    """Its terms allow caching a miss only for a while: retry_after_days from the 404, else miss_days."""
+    p = freqblog.FreqBlog()
+    monkeypatch.setenv("FREQBLOG_API_KEY", "k")
+    calls = canned(monkeypatch, p, ProviderError("FreqBlog answered HTTP 404", 404, {"retry_after_days": 7}),
+                   (200, {"track_name": "One More Time", "artist_name": "Daft Punk", "bpm": 123, "key": "F-Minor"}))
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, tagged_card())
+    (r,) = lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True)
+    assert r["status"] == "not_found" and r["extra"] == {"retry_after_days": 7.0}
+    (stored,) = db.get_lookups(conn, tid)
+    assert lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True) == []  # still settled
+    now = time.time()
+    assert lookup.settled(p, stored, now + 6 * 86400) and not lookup.settled(p, stored, now + 8 * 86400)
+    assert not lookup.settled(p, stored | {"extra": {}}, now + 8 * 86400)  # miss_days (7) when none was sent
+    assert lookup.describe(tagged_card(), [stored])[0]["checked_at"] == stored["fetched_at"]  # the card says when
+    conn.execute("UPDATE lookups SET fetched_at = '2020-01-01T00:00:00+00:00'")
+    (again,) = lookup.lookup_track(conn, tid, tagged_card(), [p], only_missing=True)
+    assert again["status"] == "found" and len(calls) == 2
+    assert lookup.settled(p, db.get_lookups(conn, tid)[0], now + 1e9)  # a found answer doesn't expire
 
 
 @pytest.mark.parametrize("texts,want", [
@@ -220,6 +247,18 @@ def test_api_lookup_and_card_body(db_path, tmp_path, monkeypatch, fake):
     conn.close()
     body = client.get(f"/api/tracks/{tid}").json()
     assert body["lookups"] == [] and body["lookup_providers"] == [{"name": "fake", "label": "Fake"}]
+    # Metadata › Listed elsewhere lists every source, set up or not; Rekordbox first and always "configured"
+    sources = {s["provider"]: s for s in body["lookup_sources"]}
+    assert [s["provider"] for s in body["lookup_sources"]][:5] == ["rekordbox", "getsongbpm", "freqblog", "reccobeats",
+                                                                  "acousticbrainz"]
+    assert sources["fake"]["configured"] and sources["rekordbox"]["configured"]
+    assert not sources["getsongbpm"]["configured"] and sources["freqblog"]["homepage"]
+    assert sources["rekordbox"]["imported"] is False  # nothing loaded from an export yet
+    conn = db.connect(db_path)
+    db.save_lookup(conn, untagged, {"provider": "rekordbox", "status": "found", "bpm": 120.0})
+    conn.close()
+    body = client.get(f"/api/tracks/{tid}").json()
+    assert next(s for s in body["lookup_sources"] if s["provider"] == "rekordbox")["imported"] is True
     r = client.post(f"/api/tracks/{tid}/lookup").json()["card"]
     (row,) = r["lookups"]
     assert row["label"] == "Fake" and row["homepage"] == "https://fake.example"
@@ -543,6 +582,51 @@ def test_acousticbrainz_is_enabled_by_its_index_and_stored(ab_index, db_path, mo
     assert acousticbrainz.AcousticBrainz.min_interval >= 1.0 and p.guard.limits()["daily"] == 1000  # MusicBrainz: 1 req/s
 
 
+def test_acousticbrainz_index_as_d1_sql_loads_back_the_same(ab_index, tmp_path):
+    """d1_sql's files rebuild the index (run twice: they can be run again), and read_d1 answers like read_index."""
+    import sqlite3
+
+    files = acousticbrainz.d1_sql(acousticbrainz.default_index(), tmp_path / "sql", rows_per_file=2, rows_per_insert=1)
+    assert [f.name for f in files] == ["acousticbrainz-000.sql", "acousticbrainz-001.sql"]
+    d1 = sqlite3.connect(tmp_path / "d1.sqlite")
+    for f in files * 2:
+        d1.executescript(f.read_text())
+    assert d1.execute("SELECT COUNT(*) FROM recordings").fetchone()[0] == ab_index["recordings"]
+    sent = []
+    acousticbrainz.use_d1(lambda sql: sent.append(sql) or [list(r) for r in d1.execute(sql)])
+    try:
+        ids = [MB_ONE, MB_TWO, "nope"]
+        assert acousticbrainz.read_d1(ids) == acousticbrainz.read_index(acousticbrainz.default_index(), ids)
+        assert len(sent) == 1 and "nope" not in sent[0]
+    finally:
+        acousticbrainz.use_d1(None)
+
+
+def test_acousticbrainz_reads_d1_when_there_is_no_index_file(ab_index, tmp_path, monkeypatch):
+    import sqlite3
+
+    index = acousticbrainz.default_index()
+    monkeypatch.setenv("ACOUSTICBRAINZ_INDEX", str(tmp_path / "missing.sqlite"))
+    p = acousticbrainz.AcousticBrainz()
+    assert not p.configured() and "D1" in p.setup_hint()
+    acousticbrainz.use_d1(lambda sql: [list(r) for r in sqlite3.connect(index).execute(sql)])
+    try:
+        assert p.configured()
+        calls = canned(monkeypatch, p, mb_search(mb_rec(MB_ONE)))
+        r = p.lookup(Q)
+        assert (r.status, r.bpm, r.key) == ("found", 123.1, "C# minor") and len(calls) == 1
+
+        def not_loaded(sql):
+            raise RuntimeError("D1_ERROR: no such table: recordings")
+
+        acousticbrainz.use_d1(not_loaded)
+        canned(monkeypatch, p, mb_search(mb_rec(MB_ONE)))
+        with pytest.raises(ProviderError, match="no such table"):
+            p.lookup(Q)
+    finally:
+        acousticbrainz.use_d1(None)
+
+
 def test_fetch_acousticbrainz_downloads_the_dumps_and_builds_the_index(tmp_path, monkeypatch):
     zstandard = pytest.importorskip("zstandard")
     import io
@@ -627,3 +711,69 @@ def test_guard_ignores_musicbrainz_global_rate_headers():
     g.before_request()
     g.after_response(503, {"retry-after": "0"})
     assert g.paused_until <= time.time()  # Retry-After: 0 means no pause
+
+
+def test_card_lists_every_source_in_metadata():
+    """Metadata › Listed elsewhere (sandbox v201): a row per source with its state, even with nothing stored."""
+    from tests.ui_src import app_js
+
+    js = app_js()
+    assert "lookupTable(c)" in js and "c.lookup_sources" in js
+    for text in ("Not looked up yet.", "Not in your Rekordbox export.", "Not imported yet.", "Not set up on this server.",
+                 "Not found: it has no listing for this artist and title.", "Lookup failed: ",
+                 "Can't look up: the file has no artist and title tags.", "Measured from the audio"):
+        assert text in js
+
+
+def _rb_track(tid, title, ms=200000):
+    return {"id": tid, "trackTitle": title, "durationMs": ms, "isrc": "GBXXX0000001",
+            "artists": [{"name": "Zerb"}], "href": f"https://open.spotify.com/track/{tid}"}
+
+
+def test_reccobeats_walks_the_artist_and_lists_bpm_only(monkeypatch):
+    p = reccobeats.ReccoBeats()
+    calls = canned(monkeypatch, p,
+                   (200, {"content": [{"id": "a0", "name": "Zerbo"}, {"id": "a1", "name": "Zerb"}]}),
+                   (200, {"content": [_rb_track("t0", "Mwaki - Remix")], "totalPages": 2}),
+                   (200, {"content": [_rb_track("t1", "Mwaki", 300000), _rb_track("t2", "Mwaki (feat. Sofiya Nzau)", 190000)],
+                          "totalPages": 2}),
+                   (200, {"content": [{"id": "t2", "tempo": 120.004, "key": 7, "mode": 0, "energy": 0.64, "valence": 0.05}]}))
+    r = p.lookup(TrackQuery(artist="Zerb, Sofiya Nzau", title="Mwaki", duration=185.0))
+    assert (r.status, r.bpm, r.key, r.matched_title) == ("found", 120.0, None, "Mwaki (feat. Sofiya Nzau)")  # closest length
+    assert r.url == "https://open.spotify.com/track/t2" and r.extra["energy"] == 0.64 and "key" not in r.extra
+    assert [c[1] for c in calls] == [{"searchText": "Zerb", "page": "0", "size": "10"},
+                                     {"page": "0", "size": "50"}, {"page": "1", "size": "50"}, {"ids": "t2"}]
+    assert calls[1][0].endswith("/artist/a1/track")  # "Zerbo" isn't "Zerb"
+
+
+def test_reccobeats_not_found(monkeypatch):
+    p = reccobeats.ReccoBeats()
+    canned(monkeypatch, p, (200, {"content": []}))
+    assert p.lookup(Q).status == "not_found"
+    canned(monkeypatch, p, (200, {"content": [{"id": "a1", "name": "Daft Punk"}]}),
+           (200, {"content": [_rb_track("t1", "One More Time - Live")], "totalPages": 1}))
+    assert p.lookup(Q).status == "not_found"
+    canned(monkeypatch, p, (200, {"content": [{"id": "a1", "name": "Daft Punk"}]}),
+           (200, {"content": [_rb_track("t1", "One More Time")], "totalPages": 1}), (200, {"content": []}))
+    assert p.lookup(Q).status == "not_found"  # in the catalog, but no audio features
+
+
+@pytest.mark.parametrize("ours, theirs, same", [
+    ("Another World (Extended Mix)", "Another World", True),  # same tempo, other cut
+    ("Always On Time (Extended Mix)", "Always On Time - Extended Mix", True),
+    ("Babel (Hraach Remix)", "Babel - Hraach Remix", True),
+    ("Say My Name (feat. Zyra) (Instrumental)", "Say My Name", True),
+    ("Campeón", "Campeon", True),
+    ("Addicted", "Addicted - Joel Corry Remix", False),
+    ("Far Away Place (Instrumental)", "Far Away Place - Jody Remix", False),
+    ("Misunderstood (Extended Mix)", "Misunderstood - Mixed", False),
+    ("Say My Name", "Say My Name - Live", False),
+    ("One", "One More Time", False),
+    ("夜に駆ける", "夜に駆ける", True),  # non-Latin titles aren't dropped
+    ("夜に駆ける", "群青", False),
+    ("Song feat. Guest - Artist Remix", "Song", False),  # an unbracketed credit doesn't swallow the remix
+    ("Song feat. Guest - Artist Remix", "Song - Artist Remix", True),
+    ("Song ft. Guest (Extended Mix)", "Song", True),
+])
+def test_reccobeats_same_track(ours, theirs, same):
+    assert reccobeats.same_track(ours, theirs) is same

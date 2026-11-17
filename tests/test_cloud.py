@@ -39,9 +39,11 @@ def test_modal_image_deps_match_pyproject(name):
 def test_every_analysis_image_has_the_rust_engine():
     """The Rust engine makes every card (there is no Python fallback), so each Modal image that analyzes builds
     its library in; the build-time warm-up fails the deploy otherwise."""
-    src = (ROOT / "tastr/cloud/modal_web.py").read_text()
-    for name in ("image", "drums_image"):
-        assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), name
+    for app in ("modal_web.py", "modal_app.py"):  # the hosted app, and the benches (drums_image: the drum bench)
+        src = (ROOT / "tastr/cloud" / app).read_text()
+        for name in ("drums_image",) if app == "modal_app.py" else ("image", "drums_image"):
+            assert re.search(rf"^{name} = \(\n    with_rust_engine\(", src, re.M), f"{app}: {name}"
+    assert re.search(r"^_engine_base = \(\n    with_rust_engine\(", (ROOT / "tastr/cloud/modal_app.py").read_text(), re.M)
 
 
 @pytest.mark.audio
@@ -106,7 +108,7 @@ def test_remote_bench_calls_deployed_function(monkeypatch, tmp_path):
     calls = fake_modal(monkeypatch, jobs.run_bench("synth", None, tmp_path, limit=1))
     out = tmp_path / "r.json"
     assert main(["bench", "beatport-key", "beatport-key", "--remote", "--limit", "50", "--out", str(out)]) == 0
-    assert calls == [("bench", ("beatport-key", "beatport-key"), {"stages": None, "limit": 50, "jobs": None})]
+    assert calls == [("bench", ("beatport-key", "beatport-key"), {"limit": 50, "jobs": None})]
     assert json.loads(out.read_text())["summary"]["tracks"] == 1
 
 
@@ -238,6 +240,8 @@ def test_run_drum_bench_on_a_folder(tmp_path):
     assert jobs.run_drum_bench("mdb", tmp_path / "mdb", drums_only=True)["audio"] == "drum_only"
     with pytest.raises(ValueError, match="unknown drum suite"):
         jobs.run_drum_bench("enst", tmp_path)
+    with pytest.raises(ValueError, match="unknown open-hat source"):
+        jobs.run_drum_bench("mdb", tmp_path / "mdb", open_hats="sideways")
     with pytest.raises(ValueError, match="needs the dataset folder"):
         jobs.run_drum_bench("mdb", None)
 
@@ -270,6 +274,9 @@ def test_drum_bench_remote_with_the_drum_model(monkeypatch, tmp_path):
     calls = fake_modal(monkeypatch, report)
     assert main(["drum-bench", "idmt", "idmt-smt-drums", "--remote", "--drum-model"]) == 0
     assert calls == [("drum_bench_model", ("idmt", "idmt-smt-drums", None, False, "all"), {})]
+    calls.clear()
+    assert main(["drum-bench", "mdb", "mdb-drums", "--remote", "--drum-model", "--open-hats", "model"]) == 0
+    assert calls == [("drum_bench_model", ("mdb", "mdb-drums", None, False, "all"), {"open_hats": "model"})]
 
 
 def test_drums_extra_shares_pytorch():
@@ -361,7 +368,7 @@ def _load_modal_web(monkeypatch):
 def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
     """Like modal_app: a build step after add_local_python_source fails a deploy unless the source is copied."""
     _, images = _load_modal_web(monkeypatch)
-    assert len(images) == 5 and all(i.local for i in images)
+    assert len(images) == 7 and all(i.local for i in images)
 
 
 @pytest.fixture
@@ -440,12 +447,37 @@ def test_remote_stems_over_https_and_errors(modal_api, tmp_path):
         remote._http_result("nothing", remote._payload("https://audio", ".wav"))
 
 
+def test_remote_keylock_over_https(modal_api):
+    from tastr.cloud import remote
+
+    modal_api.mod.keylock = modal_api.Fn("keylock", {"mix": 123})
+    got = remote.keylock({"mix": "https://get/mix"}, 1.034, {"mix": "https://put/mix"})
+    assert got == {"mix": 123}
+    assert modal_api.calls[-1] == ("keylock", ({"mix": "https://get/mix"}, 1.034, {"mix": "https://put/mix"}))
+    assert modal_api.sent[-1][0] == "https://modal.example/keylock"
+    with pytest.raises(remote.RemoteError, match="422"):
+        remote._http_result("keylock", {"sources": "nope"})
+
+
+def test_run_keylock_downloads_stretches_and_uploads(monkeypatch, tmp_path):
+    from tastr import keylock
+    from tastr.cloud import jobs
+
+    got, put = [], []
+    monkeypatch.setattr(jobs, "_write_audio", lambda url, dest: dest.write_bytes(url.encode()))
+    monkeypatch.setattr(keylock, "stretch_file", lambda src, dst, r: (got.append((src.read_bytes(), r)), dst.write_bytes(b"fLaC")))
+    monkeypatch.setattr(jobs, "_put", lambda url, path: put.append((url, path.read_bytes())) or 4)
+    out = jobs.run_keylock({"mix": "https://a", "bass": "https://b", "junk": "https://c"}, 0.97,
+                           {"mix": "https://pm", "bass": "https://pb"})
+    assert out == {"mix": 4, "bass": 4}
+    assert got == [(b"https://a", 0.97), (b"https://b", 0.97)] and put == [("https://pm", b"fLaC"), ("https://pb", b"fLaC")]
+
+
 def test_analysis_backend_modal(monkeypatch, tmp_path, db_path):
     """A hosted server sends the audio to the `analyze` function of the app TASTR_MODAL_APP names."""
     from tastr import db, service
     from tastr.engine.card import Source
     from test_foundation import full_card
-    monkeypatch.delenv("TASTR_ENGINE", raising=False)  # set for the suite (conftest.py); unset, nothing extra goes
 
     remote_card = full_card()
     remote_card.source = Source(kind="file", uri="/tmp/x/track.mp3", local_path="/tmp/x/track.mp3")
@@ -523,3 +555,99 @@ def test_run_analyze_returns_a_card(synth_wav):
     path, _ = synth_wav
     card = TrackCard.from_dict(jobs.run_analyze(path.read_bytes(), ".wav", ["core"]))  # older servers still send stages
     assert card.duration and card.core.bpm
+
+
+def test_remote_ml_tags_starts_the_call_then_polls(modal_api, tmp_path, monkeypatch):
+    """ML tags don't hold a request open (a held one got a 524 after 100 s): spawn, then poll until done."""
+    from tastr import runner
+    from tastr.cloud import remote
+
+    modal = sys.modules["modal"]
+
+    class Timeout(Exception):
+        pass
+
+    answers = [Timeout(), Timeout(), {"tags": [{"tag": "Deep House"}]}]
+    spawned, slept = [], []
+
+    class Call:
+        object_id = "fc-123"
+
+        @staticmethod
+        def from_id(call_id):
+            assert call_id == "fc-123"
+            return Call()
+
+        async def _get(self, timeout=None):
+            assert timeout == 0
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+
+        get = types.SimpleNamespace(aio=lambda self=None, timeout=None: Call()._get(timeout))
+
+    async def spawn(*a):
+        spawned.append(a)
+        return Call()
+
+    modal.FunctionCall = Call
+    modal.exception = types.SimpleNamespace(TimeoutError=Timeout)
+    modal_api.mod.ml_tags = types.SimpleNamespace(spawn=types.SimpleNamespace(aio=spawn))
+    monkeypatch.setattr(runner.current(), "sleep", slept.append)
+    song = tmp_path / "a.wav"
+    song.write_bytes(b"wav")
+    assert remote.ml_tags(song) == {"tags": [{"tag": "Deep House"}]}
+    assert spawned == [(b"wav", ".wav")] and slept == [remote.POLL_SECONDS] * 2
+    assert [u for u, _ in modal_api.sent] == ["https://modal.example/spawn/ml_tags"] + ["https://modal.example/poll"] * 3
+
+    answers.append(RuntimeError("no such file"))
+    with pytest.raises(remote.RemoteError, match="no such file"):
+        remote.ml_tags(song)
+    with pytest.raises(remote.RemoteError, match="404"):
+        remote._http_json("spawn/stems", remote._payload("https://audio", ".wav"))
+
+
+def test_modal_web_imports_no_engine_package():
+    """modal_web.py is imported in every container, the api's included, which has no numpy: importing anything
+    under tastr.engine at module level (whose __init__ needs numpy) makes every api call hang until the proxy's 524."""
+    tree = ast.parse((ROOT / "tastr/cloud/modal_web.py").read_text())
+    top = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    names = [n.module for n in top if isinstance(n, ast.ImportFrom)] + [a.name for n in top if isinstance(n, ast.Import) for a in n.names]
+    assert all(n == "modal" or n == "__future__" or n.startswith("tastr.cloud.") for n in names), names
+    src = (ROOT / "tastr/engine/ml_tags.py").read_text()
+    stdlib = {"__future__", "importlib.util", "json", "os", "time", "urllib.request", "pathlib"}
+    mods = [n.module or "" for n in ast.parse(src).body if isinstance(n, ast.ImportFrom)]
+    mods += [a.name for n in ast.parse(src).body if isinstance(n, ast.Import) for a in n.names]
+    assert set(mods) <= stdlib, mods  # it is loaded on its own there, so only the standard library at the top
+
+
+def test_modal_web_loads_without_numpy(monkeypatch):
+    """The api container's view: no numpy importable."""
+    import builtins
+
+    real = builtins.__import__
+
+    def no_numpy(name, *a, **kw):
+        if name == "numpy" or name.startswith("numpy."):
+            raise ImportError("no numpy here")
+        return real(name, *a, **kw)
+
+    for m in [m for m in sys.modules if m == "numpy" or m.startswith("numpy.") or m.startswith("tastr.engine")]:
+        monkeypatch.delitem(sys.modules, m)
+    monkeypatch.setattr(builtins, "__import__", no_numpy)
+    mod, _ = _load_modal_web(monkeypatch)
+    assert "curl" in mod.download_command("/m")
+
+
+def test_modal_web_loads_from_a_copy_outside_the_package(monkeypatch, tmp_path):
+    """Modal runs modal_web.py as /root/modal_web.py, away from tastr/, so nothing in it may go by __file__."""
+    import importlib.util
+
+    _load_modal_web(monkeypatch)  # installs the fake modal module
+    copy = tmp_path / "modal_web.py"
+    copy.write_text((ROOT / "tastr/cloud/modal_web.py").read_text())
+    spec = importlib.util.spec_from_file_location("modal_web_copy", copy)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert "curl" in mod.download_command("/m")

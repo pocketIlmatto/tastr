@@ -1,4 +1,4 @@
-//! The shared signals the stages read (tastr/engine/signals.py and the band envelopes in drums.py), each
+//! The shared signals the stages read (and the drum lanes' band envelopes), each
 //! following the librosa or scipy call it replaces. Arrays are row-major: a `rows x frames` feature stores row 0's
 //! frames first.
 
@@ -235,7 +235,7 @@ pub fn dct_ortho(x: &Matrix, keep: usize) -> Matrix {
     Matrix { rows: keep, cols: x.cols, data }
 }
 
-// ---- the signals in signals.py ----
+// ---- the shared signals ----
 
 /// signals.mfcc: 13 MFCCs of the full mix, from its 128-band mel power spectrogram.
 pub fn mfcc(mel: &Matrix) -> Matrix {
@@ -413,7 +413,7 @@ pub fn band_envelope(sos: &[[f64; 6]], zi: &[[f64; 2]], y_perc: &[f32], sr: f64)
         .collect()
 }
 
-/// Everything above, by the names signals.py uses, from the audio, its default STFT magnitude and the
+/// Everything above, by the names the Python engine's signals.py used, from the audio, its default STFT magnitude and the
 /// percussive part.
 pub fn all(y: &[f32], mag: &[f32], frames: usize, perc: &[f32], sr: f64) -> Vec<(&'static str, Matrix)> {
     let row = |data: Vec<f32>| Matrix { rows: 1, cols: data.len(), data };

@@ -17,8 +17,8 @@ Heavy jobs (stem separation, benchmarks) can optionally run on a cloud GPU.
   catalogs list.
 - **Drums, bass and chords** per section: a drum grid, the bass line and the chord loop.
   Edit them, play them in the browser and export MIDI.
-- **Try this in Ableton or Strudel:** setup and programming notes for Ableton Live, and a
-  live-code [Strudel](https://strudel.cc) sketch of the track.
+- **Try this in Ableton or live code:** setup and programming notes for Ableton Live, and a
+  live-code sketch of the track for [Strudel](https://strudel.cc), Tidal or Sonic Pi.
 - **Listen and explore:** waveform, spectrogram and a live 3D view with playback, stem
   separation, a filterable library, **Find tracks** to search it without code or in SQL, and **Blend** to
   group tracks by sound, find the ones between two songs, and compare saved lists.
@@ -49,7 +49,7 @@ Highlights so far:
 | Exact key, held out | 47.6% | 60.4% | GiantSteps Key, 599 EDM previews |
 | BPM within 4% | 0.49 | 0.74 | GiantSteps Tempo, 43 tracks |
 | Bar 1 in the right place | 0.43 | 0.64 | GTZAN, 933 songs |
-| Toms found (onset F, optional model) | 0.01 | 0.37 | MDB Drums, real mixes |
+| Toms found (onset F, optional model) | 0.01 | 0.53 | MDB Drums, real mixes |
 | Section boundaries within 3 s (F) | 0.48 | 0.58 | Harmonix Set, 912 songs |
 | Danceability vs listeners (AUC) | 0.70 | 0.82 | MTG-Jamendo, 510 tracks |
 
@@ -79,8 +79,10 @@ Then open http://127.0.0.1:8000 and drop in your audio files. Run the tests with
 |---|---|
 | [features.md](docs/features.md) | everything a track card shows and what you can do with it |
 | [usage.md](docs/usage.md) | the `tastr` command, links, stems, the drum model, tests, cloud jobs |
-| [hosting.md](docs/hosting.md), [deploy.md](docs/deploy.md), [hosting-map.md](docs/hosting-map.md) | hosting for a few invited people (Cloudflare Workers and Access, Modal, R2) |
+| [hosting.md](docs/hosting.md), [deploy.md](docs/deploy.md), [hosting-map.md](docs/hosting-map.md), [settings.md](docs/settings.md) | hosting for a few invited people (Cloudflare Workers and Access, Modal, R2) |
 | [bench.md](docs/bench.md), [engine-report.md](docs/engine-report.md) | accuracy benchmarks and what they changed |
+| [rekordbox.md](docs/rekordbox.md), [lookup.md](docs/lookup.md) | Tastr vs Rekordbox, and the BPM and key other catalogs list |
+| [local-setup.md](docs/local-setup.md), [cloud.md](docs/cloud.md) | where Tastr keeps files on your machine, and running heavy jobs on Modal |
 | [audio-terms.md](docs/audio-terms.md) | audio analysis terms (STFT, chroma, HPSS, onsets...) explained, with diagrams |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md), [modules/](docs/modules/) | data flow, card fields, DB tables, code layout |
 | [ci.md](docs/ci.md) | CI, Actions minutes and how the README screenshots are made |
@@ -90,13 +92,13 @@ Then open http://127.0.0.1:8000 and drop in your audio files. Run the tests with
 Tastr's code is under the MIT License ([LICENSE](LICENSE)). Security reports: see
 [SECURITY.md](SECURITY.md).
 
-Two generated files hold numbers fitted on public datasets, so they also carry the
-datasets' terms:
+Two generated tables in `engine-rs/src/consts.rs` hold numbers fitted on public datasets, so they
+also carry the datasets' terms:
 
-- `tastr/engine/key_model.py` (the learned key model) was fitted on GiantSteps Key and
+- `KEY_WEIGHTS` and `KEY_BIAS` (the learned key model) were fitted on GiantSteps Key and
   the Beatport EDM Key dataset (Zenodo 1101082), both CC BY-SA 4.0. Treat these weights
   as derived from that data: credit the datasets and share changes to the weights alike.
-- `tastr/engine/calibration_table.py` (the "N% likely right" tables) was fitted on
+- `BPM_KNOTS` and `KEY_KNOTS` (the "N% likely right" tables) were fitted on
   GiantSteps and Beatport tempo/key results and HJDB from the Beat This! release
   (Zenodo 13922116, CC BY 4.0).
 
@@ -118,12 +120,19 @@ Third-party pieces it uses or links to:
 - **Demucs** (stems) is MIT. It is an optional install, and its model weights
   download on first use.
 - **yt-dlp** (links) is under the Unlicense, also optional.
+- **Signalsmith Stretch** and its Python binding **python-stretch** (mash-up key lock) are MIT,
+  an optional install.
 - **Catalog lookups** (optional, your own API keys): [GetSongBPM](https://getsongbpm.com)
-  requires a link back wherever its data is shown, which the card does. FreqBlog's API
-  allows storing results only on paid plans, so Tastr keeps them only with
-  `FREQBLOG_PLAN=paid`. [AcousticBrainz](https://acousticbrainz.org) dumps and
+  requires a link back wherever its data is shown, which the card does. FreqBlog's free key
+  is for non-commercial use; its answers may be stored inside Tastr but never
+  published as a dataset, and they must be credited "Audio analysis by FreqBlog". [AcousticBrainz](https://acousticbrainz.org) dumps and
   [MusicBrainz](https://musicbrainz.org) core data are public domain (CC0); Tastr reads a
-  local index of the 2022 AcousticBrainz dump. See [docs/lookup.md](docs/lookup.md).
+  local index of the 2022 AcousticBrainz dump. [ReccoBeats](https://reccobeats.com) is free
+  for personal and commercial use, with no key. See [docs/lookup.md](docs/lookup.md).
+- **Cover Art Archive** (album art for admins' mash-up previews, when lookups are on): the images
+  belong to their copyright owners, usually the labels, and the archive grants no licence for them.
+  Tastr fetches one only for a preview of a link an admin shares, keeps it in the server's own storage,
+  and never ships or redistributes it.
 - **ADTOF** (optional drum model): its code and model weights are **CC BY-NC-SA
   4.0, non-commercial and share-alike**. Tastr doesn't include either. The weights
   download on first use from the ADTOF repository; the network and preprocessing
@@ -131,6 +140,11 @@ Third-party pieces it uses or links to:
   [ADTOF](https://github.com/MZehren/ADTOF): M. Zehren, M. Alunno, P. Bientinesi,
   "High-Quality and Reproducible Automatic Drum Transcription from Crowdsourced
   Data", Signals 4(4), 2023.
+- **Essentia classifier models** (optional ML tags, off unless `TASTR_ML_TAGS` is `on` or `auto`;
+  [docs/essentia.md](docs/essentia.md)): MTG's weights are **non-commercial only** (CC BY-NC-SA
+  4.0 per the models page, CC BY-NC-ND 4.0 per their LICENSE file) and Essentia is AGPL-3.0.
+  Tastr includes neither: Essentia is an optional install (`tastr[ml-tags]`), and the weights
+  download on first use or into the Modal image.
 - **Benchmark datasets** each have their own license, listed in
   [docs/datasets.md](docs/datasets.md). Some don't allow redistribution, so
   audio and labels are never committed to this repo.

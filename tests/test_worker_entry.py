@@ -108,6 +108,35 @@ def test_storage_wrapper_and_env(entry, tmp_path, monkeypatch):
     assert os.environ.pop("TASTR_SPIKE_X") == "1"  # strings only: LIB is a binding
 
 
+def test_the_acousticbrainz_database_binding(entry, monkeypatch):
+    from tastr.lookup import acousticbrainz
+
+    class Promise:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def to_py(self):
+            return self.rows
+
+    sent = []
+
+    class D1:  # env.ACOUSTICBRAINZ, roughly: prepare(sql).raw() is a promise of rows
+        def prepare(self, sql):
+            sent.append(sql)
+            return types.SimpleNamespace(raw=lambda: Promise([("ab" * 16, 120.0, "A", "minor")]))
+
+    monkeypatch.setattr(sys.modules["pyodide.ffi"], "run_sync", lambda p: p, raising=False)
+    try:
+        entry.use_bindings(types.SimpleNamespace(_env=types.SimpleNamespace(ACOUSTICBRAINZ=D1())))
+        mbid = "abababab-abab-abab-abab-abababababab"
+        assert acousticbrainz.read_d1([mbid]) == {mbid: {"bpm": 120.0, "key_key": "A", "key_scale": "minor"}}
+        assert sent == [f"SELECT lower(hex(mbid)), bpm, key_key, key_scale FROM recordings WHERE mbid IN (X'{'ab' * 16}')"]
+        entry.use_bindings(types.SimpleNamespace(_env=types.SimpleNamespace()))  # not bound: off
+        assert acousticbrainz._d1 is None
+    finally:
+        acousticbrainz.use_d1(None)
+
+
 def test_the_alarm_is_set_for_the_next_repeating_work(entry):
     assert isinstance(runner.current(), runner.Loop)
     clock = [1000.0]
@@ -129,12 +158,62 @@ def test_the_alarm_is_set_for_the_next_repeating_work(entry):
     stop()
 
 
+def test_the_alarm_fetches_the_access_keys(entry, monkeypatch):
+    """An alarm often starts the isolate a visitor then finds warm, so it fetches the keys that visit needs."""
+    entry.fake_fetch.jwks = {"keys": []}
+
+    async def set_alarm(ms):
+        pass
+
+    lib = types.SimpleNamespace(ctx=types.SimpleNamespace(storage=types.SimpleNamespace(setAlarm=set_alarm)))
+    lib.arm = types.MethodType(entry.Library.arm, lib)
+    asyncio.run(types.MethodType(entry.Library.alarm, lib)())  # no settings yet (not hosted): nothing fetched
+    assert entry.calls == []
+    monkeypatch.setattr(entry, "SETTINGS", types.SimpleNamespace(hosted=True, access_team_domain=TEAM))
+    asyncio.run(types.MethodType(entry.Library.alarm, lib)())
+    assert entry.calls == [f"https://{TEAM}/cdn-cgi/access/certs"]
+
+
+def test_first_request_imports_are_in_the_deploy_snapshot():
+    """Modules the hosted app imports on first use are imported at the entry's top level, which Cloudflare runs
+    and snapshots at deploy time, so a new isolate's first request doesn't load them."""
+    import ast
+
+    top = set()
+    for node in ast.parse(ENTRY.read_text()).body:
+        if isinstance(node, ast.Import):
+            top |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            top |= {f"{node.module}.{a.name}" for a in node.names}
+    assert {"jwt", "jwt.algorithms", "anyio._backends._asyncio", "tastr.labels", "tastr.engine.ml_tags"} <= top
+
+
 def test_worker_pins_the_sqljs_the_app_names():
     """worker/build.py copies sql.js from npm; the version must be the one the page asks /sqljs/ for."""
     from tastr.web.routes.search import SQLJS_VERSION
 
     pkg = json.loads((ENTRY.parent.parent / "package.json").read_text())
     assert pkg["devDependencies"]["sql.js"] == SQLJS_VERSION
+
+
+def test_static_files_skip_the_worker_and_the_versioned_ones_cache(entry):
+    """wrangler.jsonc serves the Worker's static paths straight from Static Assets (a page load asks for ~50
+    files, and a cold Python Worker took seconds to start), and build.py's _headers keeps the versioned ones."""
+    import re
+
+    sys.path.insert(0, str(ENTRY.parent.parent))
+    try:
+        import build
+    finally:
+        sys.path.pop(0)
+    conf = (ENTRY.parent.parent / "wrangler.jsonc").read_text()
+    first = json.loads(re.search(r'"run_worker_first": (\[[^\]]*\])', conf).group(1))
+    assert "/*" in first
+    assert sorted(p[1:-1] for p in first if p.startswith("!")) == sorted(entry.ASSET_PATHS)
+    rules = build.asset_headers("abc123")
+    assert "/static/app-abc123/*\n  Cache-Control: public, max-age=31536000, immutable\n" in rules
+    assert "/engine/*\n  Cache-Control: public, max-age=31536000, immutable\n" in rules
+    assert "/static/*\n" not in rules  # the favicon and the unversioned files are asked for again
 
 
 def test_engine_build_id_can_come_from_the_environment(monkeypatch):
@@ -158,3 +237,33 @@ def test_only_the_snapshot_zipfile_noise_is_dropped(entry):
     hook(other)
     hook(oops := types.SimpleNamespace(exc_value=ValueError("x"), object=zip_del))
     assert seen == [other, oops]
+
+
+def test_the_zipfile_noise_is_dropped_in_python_3_14_shape(entry):
+    """Python 3.14 (the Workers runtime's) passes a failing __del__ with no object, the function only in err_msg."""
+    seen = []
+    hook = entry.quiet_unraisable(seen.append)
+
+    def unraisable(name, exc):
+        return types.SimpleNamespace(exc_value=exc, object=None,
+                                     err_msg=f"Exception ignored while calling deallocator <function {name} at 0x3205848>")
+    hook(unraisable("ZipFile.__del__", OSError(errno.EBADF, "Bad file descriptor")))
+    assert seen == []
+    hook(other := unraisable("Other.__del__", OSError(errno.EBADF, "Bad file descriptor")))
+    hook(oops := unraisable("ZipFile.__del__", ValueError("x")))
+    hook(bare := types.SimpleNamespace(exc_value=OSError(errno.EBADF, "Bad file descriptor"), object=None, err_msg=None))
+    assert seen == [other, oops, bare]
+
+
+def test_the_hook_catches_a_real_failing_del(entry):
+    """End to end through the interpreter, whichever shape this Python reports it in."""
+    seen = []
+    sys.unraisablehook = entry.quiet_unraisable(seen.append)
+
+    class ZipFile:
+        def __del__(self):
+            raise OSError(errno.EBADF, "Bad file descriptor")
+    ZipFile.__del__.__qualname__ = "ZipFile.__del__"
+    z = ZipFile()
+    del z
+    assert seen == []

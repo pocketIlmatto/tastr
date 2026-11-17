@@ -1,11 +1,10 @@
-"""Drum lanes on synthetic loops with known patterns (tastr.engine.drums and its step grid)."""
+"""Drum lanes on synthetic loops with known patterns (the Rust engine's drum grid, engine-rs/src/drums.rs)."""
 
 import json
 
 import pytest
 
-from tastr.engine import drums
-from tastr.engine.bench.drums import _synth_ctx, run_synth
+from tastr.engine.bench.drums import LANES, _synth_grid, run_synth
 from tastr.engine.bench.synth import make_drum_track
 
 pytestmark = pytest.mark.audio
@@ -19,14 +18,14 @@ def built_in_lanes(monkeypatch):
 
 def grid_for(patterns, bpm=120):
     y, _ = make_drum_track(patterns, bpm=bpm)
-    ctx = _synth_ctx(y, bpm)
-    return drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
+    return _synth_grid(y, bpm)
 
 
 def hits(g):
     return g["pattern"].replace("o", "x") if g["detected"] else "." * 16
 
 
+@pytest.mark.rust
 def test_hats_do_not_leak_into_snare():
     # The old band split read off-beat hats as snare hits.
     g = grid_for({"kick": "x...x...x...x...", "hat": "..x...x...x...x."})
@@ -35,6 +34,7 @@ def test_hats_do_not_leak_into_snare():
     assert not g["snare"]["detected"] and not g["clap"]["detected"]
 
 
+@pytest.mark.rust
 def test_snare_and_clap_told_apart():
     snare = grid_for({"kick": "x.......x.......", "snare": "....x.......x...", "hat": "x.x.x.x.x.x.x.x."})
     assert hits(snare["snare"]) == "....x.......x..."
@@ -43,22 +43,21 @@ def test_snare_and_clap_told_apart():
     assert hits(clap["clap"]) == "....x.......x..."
 
 
+@pytest.mark.rust
 def test_open_and_closed_hats():
     g = grid_for({"kick": "x...x...x...x...", "hat": "x...x...x...x...", "open_hat": "..x...x...x...x."})
     assert hits(g["open_hat"]) == "..x...x...x...x."
     assert hits(g["hat"]) == "x...x...x...x..."
 
 
+@pytest.mark.rust
 def test_toms_are_not_kicks():
     g = grid_for({"kick": "x.......x.......", "snare": "....x.......x...", "tom": "..........x...x."})
     assert hits(g["kick"]) == "x.......x......."
     assert g["tom"]["detected"] and hits(g["tom"])[10] == "x"
 
 
-def test_lane_help_covers_every_lane():
-    assert set(drums.LANE_HELP) == set(drums.LANES)
-
-
+@pytest.mark.rust
 def test_synth_suite_floor():
     """Guards against regressions; the numbers in docs/bench.md are the current scores."""
     s = run_synth(bpms=(120,))["summary"]
@@ -82,7 +81,7 @@ from tastr.engine.bench.synth import drum_sounds, write_wav  # noqa: E402
 
 def test_score_track_excuses_cymbals_and_splits_toms():
     hop, sr = 512, 22050
-    acts = {lane: np.zeros(400) for lane in drums.LANES}
+    acts = {lane: np.zeros(400) for lane in LANES}
     frame = lambda t: int(round(t * sr / hop))  # noqa: E731
     for t in (1.0, 2.0, 3.0):
         acts["kick"][frame(t)] = 1.0
@@ -223,3 +222,43 @@ def test_bench_pool_spawns_its_workers(monkeypatch):
                                                            "split": {}, "excused": 0, "unlabeled": {}})
     bench_drums.run_onsets("x", [("a", None, {}), ("b", None, {})], {}, jobs=2)
     assert seen["method"] == "spawn"
+
+
+def test_snare_sources_score_each_rule():
+    """With the drum model on, the bench scores the snare each candidate rule would give on the same labels."""
+    hop, sr = 512, 22050
+    frame = lambda t: int(round(t * sr / hop))  # noqa: E731
+    acts = {lane: np.zeros(800) for lane in LANES}
+    snares = [float(t) for t in range(1, 13)]
+    for t in snares:  # the built-in snare finds these
+        acts["snare"][frame(t)] = 1.0
+    acts["snare"][frame(13.5)] = 0.15  # this one is only a faint rise in the mid part
+    t = np.array(snares + [13.5, 15.0])  # 15.0: the model calls a hat a snare
+    conf = np.full(t.size, 0.6)
+    conf[0] = 0.9
+    ref = {"snare": snares + [13.5], "hat": [15.0]}
+    got = bench_drums._score_snare_sources(acts, {"snare": (t, conf)}, ref, bench_drums.LANE_LABELS, hop, sr)
+    assert got["builtin"]["counts"] == [12, 0, 1]
+    assert got["model"]["counts"] == [13, 1, 0] and got["model"]["fp_at"] == {"hat": 1}
+    assert got["gated"]["counts"] == [12, 0, 1]
+    assert got["mid-0.1"]["counts"] == [13, 0, 0]  # the loose gate keeps the faint one and drops the hat
+    assert got["mid-0.2"]["counts"] == [12, 0, 1]
+    assert got["confident-0.75"]["counts"] == [12, 0, 1]
+    assert got["union"]["counts"] == [13, 1, 0]
+    pooled = bench_drums._pool([{"counts": {}, "fp_at": {}, "split": {}, "unlabeled": {}, "snare_sources": got}],
+                               bench_drums.LANE_LABELS)
+    assert pooled["snare_sources"]["model"]["counts"].tolist() == [13, 1, 0]
+
+
+def test_tom_sources_score_each_rule():
+    """The tom rules read only the model's own hits: a weak tom on a snare goes, a strong one stays."""
+    model = {"tom": (np.array([1.0, 2.0, 3.0]), np.array([0.95, 0.6, 0.6])),  # 2.0 is a snare, not a tom
+             "snare": (np.array([1.0, 2.0]), np.array([0.7, 0.9])), "kick": (np.array([3.0]), np.array([0.9]))}
+    ref = {"tom": [1.0, 3.0], "snare": [2.0], "kick": [3.0]}
+    got = bench_drums._score_tom_sources(model, ref)
+    assert got["model"]["counts"] == [2, 1, 0] and got["model"]["fp_at"] == {"snare": 1}
+    assert got["snare-veto"]["counts"] == [1, 0, 1]  # loses the real tom played with a snare too
+    assert got["snare-stronger"]["counts"] == [2, 0, 0]
+    assert got["snare-veto-0.9"]["counts"] == [2, 0, 0]
+    assert got["kit-veto-0.9"]["counts"] == [1, 0, 1]  # the tom on the kick goes
+    assert got["conf-0.7"]["counts"] == [1, 0, 1]

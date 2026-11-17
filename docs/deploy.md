@@ -106,7 +106,7 @@ variable added in the dashboard is wiped by the next deploy.
 | `TASTR_DIRECT_UPLOAD` | `1`, so the page uploads straight to the bucket |
 | `TASTR_GITHUB_TOKEN` (optional) | a fine-grained token with read-only Actions access to your repository, for the Admin log ([hosting-map.md](hosting-map.md#worker-secrets)) |
 
-The other settings (daily limits, audio kept for 30 days) have defaults; [hosting.md](hosting.md#settings)
+The other settings (daily limits, audio kept until an admin sets an expiry) have defaults; [hosting.md](hosting.md#settings)
 lists them. `worker/wrangler.jsonc` already turns on hosted mode and points analysis and stems at Modal.
 
 ## 7. Your hostname
@@ -123,9 +123,11 @@ bucket's PUT rule is missing or names another hostname.
 
 "Listed elsewhere" ([lookup.md](lookup.md)) is off until `TASTR_LOOKUP` names providers. Friends' lookups
 spend your API keys, within the per-provider limits in lookup.md. For FreqBlog, set the secrets
-`TASTR_LOOKUP=freqblog` and `FREQBLOG_API_KEY=<key>`.
+`TASTR_LOOKUP=freqblog` and `FREQBLOG_API_KEY=<key>`. ReccoBeats needs no key: add it to the list
+(`TASTR_LOOKUP=freqblog,reccobeats`). It takes about five requests a track, within its own daily limit.
 
-AcousticBrainz reads a 322 MB index file, which the Worker can't hold, so it stays off there (TAS-88).
+AcousticBrainz reads its index from a D1 database on the Worker: load it once with the `acousticbrainz-d1`
+workflow, then add `acousticbrainz` to the list ([lookup.md](lookup.md#on-the-hosted-site)).
 
 ## 9. Ask Claude in Strudel (optional)
 
@@ -159,7 +161,7 @@ deploy shows up on the next page load even though Cloudflare caches static files
 
 The library database is the Durable Object's own storage, and Cloudflare keeps 30 days of point-in-time
 recovery for it ([Durable Objects docs](https://developers.cloudflare.com/durable-objects/api/storage-api/#pitr-point-in-time-recovery-api)).
-Uploads and stems are in the R2 bucket; they expire after 30 days anyway (except admins').
+Uploads and stems are in the R2 bucket; they are kept unless an admin set an expiry for that person (or `TASTR_AUDIO_DAYS`).
 
 ## Notes
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from contextlib import closing
 from pathlib import Path
@@ -10,7 +11,8 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from ... import blobs, db, lookup, service, stems
+from ... import blobs, db, keylock, lookup, service, stems
+from ...engine import rust
 from ..context import AppContext, _failure_reason, _unprefixed, log, upload_dir
 
 
@@ -19,6 +21,14 @@ class KnownBody(BaseModel):
 
 
 SHA256 = re.compile(r"[0-9a-fA-F]{64}")
+
+
+def _stages(raw: str | None) -> dict[str, str]:
+    try:
+        got = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return got if isinstance(got, dict) else {}
 
 
 def router(ctx: AppContext) -> APIRouter:
@@ -44,12 +54,21 @@ def router(ctx: AppContext) -> APIRouter:
         with closing(ctx.conn()) as c:
             rows = db.list_tracks(c, ctx.owner_of(request))
             uris = dict(c.execute("SELECT id, source_uri FROM tracks").fetchall())
+            # stages_json and local_path stay private: the list gets only whether the card is from an older engine
+            # and, for those, whether its audio is gone (so it can't be re-analyzed)
+            engine = {tid: (stages, path) for tid, stages, path in c.execute("SELECT id, stages_json, local_path FROM tracks")}
             vibes: dict[int, list[str]] = {}
             for tid, tag in c.execute("SELECT track_id, tag FROM tags ORDER BY score DESC"):
                 vibes.setdefault(tid, []).append(tag)
+            # ML tags (names), for the tracks that have them: the page swaps them in for the weak engine vibes
+            ml = {tid: [t for t in tags.split(",") if t] for tid, tags in c.execute("SELECT track_id, tags FROM ml_tags")}
         for r in rows:  # tracks uploaded before the hash moved into a folder still have it in their title
             r["title"] = _unprefixed(r["title"], uris.get(r["id"]))
             r["tags"] = vibes.get(r["id"], [])
+            r["ml_tags"] = ml.get(r["id"])
+            stages, path = engine.get(r["id"], (None, None))
+            r["stale"] = bool(rust.stale_stages(_stages(stages)))
+            r["audio_gone"] = r["stale"] and not blobs.exists(path)
         return rows
 
     @api.post("/api/tracks/known")
@@ -84,6 +103,16 @@ def router(ctx: AppContext) -> APIRouter:
                 raise HTTPException(404, "This track's waveform data is in an audio bucket this server isn't set up for.")
             return RedirectResponse(url, 302, headers={"Cache-Control": "private, no-store"})
         return views
+
+    @api.get("/api/tracks/{track_id}/history")
+    def track_history(track_id: int, full: bool = False):
+        """The track's earlier cards, newest first, the ones re-analyses replaced (db.CARD_HISTORY_KEEP of them):
+        [{id, analyzed_at, replaced_at, stages, core_version, bpm, key_name, camelot, energy}]; `?full=1` adds each
+        one's whole `card` (without its views). Only the owner reaches it on a hosted server, like the card itself."""
+        with closing(ctx.conn()) as c:
+            if not db.track_owner(c, track_id)[0]:
+                raise HTTPException(404, "no such track")
+            return db.card_history(c, track_id, full=full)
 
     @api.post("/api/tracks/{track_id}/retag")
     def retag(track_id: int):
@@ -160,10 +189,13 @@ def router(ctx: AppContext) -> APIRouter:
             shared = card is not None and c.execute(
                 "SELECT 1 FROM tracks WHERE sha256 = ?", (card.source.sha256,)).fetchone() is not None
         ctx.drum_runs.forget(track_id)
+        ctx.ml_runs.forget(track_id)
         if card is not None and not shared:
             folder = ctx.stems_dir(card, track_id)
             ctx.stem_jobs.forget(folder)
             stems.remove(folder)
+            ctx.keylock_jobs.forget(ctx.keylock_dir(card, track_id))
+            keylock.remove(ctx.keylock_dir(card, track_id))
         if ctx.hosted and card is not None:
             remove_upload(card.source.local_path)
         return Response(status_code=204)

@@ -1,4 +1,4 @@
-"""Builds the Rust engine (engine-rs/, docs/rust-engine.md) into a Modal image, for TASTR_ENGINE=rust.
+"""Builds the Rust engine (engine-rs/, docs/rust-engine.md) into a Modal image: every card and benchmark runs on it.
 
 The image copies engine-rs's sources, installs a pinned Rust toolchain, builds the library, keeps only the .so
 at /opt/tastr/libtastr_engine.so (TASTR_ENGINE_LIB points there) and removes the toolchain again, all in one

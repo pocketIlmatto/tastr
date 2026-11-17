@@ -91,3 +91,27 @@ def test_shuffle_keeps_the_played_tracks_and_off_goes_back_to_list_order():
     assert sorted(out["on"]["order"]) == [1, 2, 3, 4, 5, 6]
     assert out["off"]["order"] == [1, 2, 3, 4, 5, 6] and out["off"]["cur"] == 3
     assert out["s"] == {"i": 0, "shuffle": True, "n": 4}  # Shuffle starts at a random track
+
+
+def test_crossfade_settings_fall_back_to_the_defaults_and_stay_in_range():
+    out = run("""
+    out = { none: P.readXf(null), broken: P.readXf("{oops"), off: P.readXf('{"on":false,"sec":3}'),
+            big: P.readXf('{"on":true,"sec":40}'), small: P.readXf('{"sec":0.2}'), odd: P.readXf('{"on":"yes","sec":"x"}'),
+            dflt: P.XF_DEFAULT, range: [P.XF_MIN, P.XF_MAX] };
+    """)
+    assert out["none"] == out["broken"] == out["dflt"] == {"on": True, "sec": 6}
+    assert out["off"] == {"on": False, "sec": 3}
+    assert out["big"]["sec"] == 12 and out["small"] == {"on": True, "sec": 1}
+    assert out["odd"] == {"on": True, "sec": 6} and out["range"] == [1, 12]
+
+
+def test_crossfade_never_takes_more_than_a_third_of_a_track_and_keeps_power_level():
+    out = run("""
+    const up = P.xfCurve(true), down = P.xfCurve(false);
+    out = { full: P.xfLen(6, 240, 300), short: P.xfLen(6, 240, 9), unknown: P.xfLen(6, NaN, undefined),
+            ends: [up[0], up[up.length - 1], down[0], down[down.length - 1]],
+            power: Array.from(up, (u, k) => u * u + down[k] * down[k]) };
+    """)
+    assert out["full"] == 6 and out["short"] == 3 and out["unknown"] == 6
+    assert [round(x, 6) for x in out["ends"]] == [0, 1, 1, 0]
+    assert all(abs(p - 1) < 1e-6 for p in out["power"])

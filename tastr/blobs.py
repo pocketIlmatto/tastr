@@ -36,7 +36,7 @@ from . import runner, s3
 
 log = logging.getLogger(__name__)
 
-FOLDERS = ("uploads", "stems")  # what lives in the bucket, by its folder under TASTR_HOME
+FOLDERS = ("uploads", "stems", "keylock")  # what lives in the bucket, by its folder under TASTR_HOME (keylock: tastr/keylock.py)
 LINK_SECONDS = 3600  # signed links for playback and for Modal; a page asks again for a new one
 UPLOAD_SECONDS = 3600  # signed links a page uploads through (TASTR_DIRECT_UPLOAD); it asks again if one runs out
 # Where the disk is memory (the Cloudflare Worker sets this False, worker/src/entry.py), a local copy is dropped as
@@ -88,7 +88,7 @@ def content_type(path: str | Path) -> str:
 
 
 def key(path: str | Path) -> str | None:
-    """The bucket key for a file under TASTR_HOME's uploads or stems folder, else None (not kept in the bucket)."""
+    """The bucket key for a file under one of TASTR_HOME's FOLDERS, else None (not kept in the bucket)."""
     try:
         rel = Path(path).resolve().relative_to(home().resolve())
     except ValueError:

@@ -37,3 +37,5 @@ node_modules/
 *.onnx
 *.h5
 *.safetensors
+.worker-errors/
+.slow-tests/

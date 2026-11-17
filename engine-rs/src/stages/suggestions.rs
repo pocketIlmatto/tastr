@@ -1,5 +1,5 @@
-//! "Try this in Ableton" suggestions (tastr/engine/stages/suggestions.py): drum lanes, bass and chords on the
-//! bar grid, stored in extras, then turned into Suggestion entries with the Python engine's exact wording.
+//! "Try this in Ableton" suggestions: drum lanes, bass and chords on the
+//! bar grid, stored in extras, then turned into Suggestion entries with the wording the Python engine used.
 
 use super::{Ctx, HOP};
 use crate::card::{Card, Section, Suggestion};
@@ -1194,6 +1194,7 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     let mut model = false;
     if !sf.is_empty() {
         let mut drums = Drums::new(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux);
+        drums.model_open_hats = ctx.model_open_hats;
         if let Some(hits) = &ctx.drum_hits {
             drums.set_model(hits, ctx.sr, HOP);
             card.extras.set("drum_model", "adtof"); // re-analysis keeps using it (service.reanalyze_track)
@@ -1272,4 +1273,30 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     }
     card.suggestions = suggest(card, &grid, model, bass.as_ref(), harm.as_ref(), &by_section, &sec_bass, &sec_harm);
     Ok(())
+}
+
+/// The drum grid alone (the card's suggestions.drum_grid: lane -> pattern, velocity, detected) for a card whose
+/// core beats and downbeats are already set; the drum benchmark scores it on loops with known patterns.
+pub fn drum_grid_json(ctx: &Ctx, card: &Card) -> Result<Json, String> {
+    let sf = step_grid(card, ctx.sr, 1 + ctx.y.len() / HOP);
+    if sf.is_empty() {
+        return Ok(Json::obj());
+    }
+    let mut drums = Drums::new(&ctx.mel_perc, &ctx.mel_perc_freqs, &ctx.air_flux);
+    drums.model_open_hats = ctx.model_open_hats;
+    if let Some(hits) = &ctx.drum_hits {
+        drums.set_model(hits, ctx.sr, HOP);
+    }
+    let grid = drum_grid(ctx, card, &drums, &sf)?;
+    Ok(Json::Obj(
+        grid.iter()
+            .map(|l| {
+                let lane = Json::obj()
+                    .with("pattern", l.pattern.clone())
+                    .with("velocity", l.velocity.clone())
+                    .with("detected", l.detected);
+                (l.name.to_string(), lane)
+            })
+            .collect(),
+    ))
 }

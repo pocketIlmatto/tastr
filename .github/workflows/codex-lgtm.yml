@@ -1,0 +1,49 @@
+name: codex-lgtm
+# When Codex's review of a pull request finishes with nothing flagged, say so in a comment (docs/ci.md#codex-code-reviews).
+# Codex's automatic reviews only add a 👍 reaction when they find nothing, which is easy to miss. Codex keeps one
+# "Codex Review Summary" comment per pull request up to date, with a hidden state line; this workflow reads that line
+# each time Codex writes or edits the comment. When the code review is completed with no findings, it posts
+# "Codex: LGTM" for that commit, once. It skips a commit Codex already answered with its own "Didn't find any major
+# issues" comment (manual `@codex review` requests get one).
+#
+# issue_comment runs from main, so a pull request can't change this file for itself. The job never checks out or runs
+# pull request code, and the comment text only reaches the shell through env.
+on:
+  issue_comment:
+    types: [created, edited]
+concurrency:
+  group: codex-lgtm-${{ github.event.issue.number }}
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  lgtm:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
+      contains(github.event.comment.body, 'codex-pull-request-review-summary')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          state=$(printf '%s\n' "$BODY" | sed -n 's/^<!-- codex-review-state:v1 \(.*\) -->$/\1/p' | head -n1 \
+            | sed 's/&#123;/{/g; s/&#125;/}/g')
+          if [ -z "$state" ]; then echo "No review state in the summary comment."; exit 0; fi
+          read -r status findings sha < <(printf '%s' "$state" \
+            | jq -r '.code_review | "\(.status) \(.has_any_findings) \(.commit_sha)"')
+          echo "Code review: status=$status findings=$findings commit=$sha"
+          if [ "$status" != "completed" ] || [ "$findings" != "false" ] || [ "${#sha}" -lt 10 ]; then exit 0; fi
+          short=${sha:0:10}
+          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate -q '.[] | .body' > comments.txt
+          if grep -q "<!-- codex-lgtm $sha -->" comments.txt; then echo "Already said LGTM for $short."; exit 0; fi
+          if grep -q 'codex-review-receipt' comments.txt && grep -q "Reviewed commit:\*\* \`$short" comments.txt; then
+            echo "Codex already commented on $short."; exit 0
+          fi
+          printf '<!-- codex-lgtm %s -->\nCodex: LGTM. Its review of `%s` found nothing to flag.\n' "$sha" "$short" \
+            | gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@- --silent
+          echo "Posted LGTM for $short." | tee -a "$GITHUB_STEP_SUMMARY"

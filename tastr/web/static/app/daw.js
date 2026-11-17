@@ -4,8 +4,10 @@ import { api, cap, h, isNum, progBar } from "./core.js";
 import { sectionBus, switchTo } from "./card.js";
 import { allEdits, editedKeys } from "./groove-edits.js";
 import { laneName } from "./groove-lanes.js";
+import { sonicPiCode, tidalCode } from "./livecode.js";
 import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
-import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
+import { shareArt } from "./share-art.js";
+import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashLock, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
 
 // Suggestion text marks DAW-specific parts as {tokens}; each DAW supplies a glossary for them.
 // Ableton Live is the only glossary so far; Strudel shows generated code instead. Other DAWs show in the picker but can't be selected.
@@ -75,6 +77,8 @@ export function strudelView(c) {
   const pre = h("pre", { class: "st-code", tabindex: "0", "aria-label": "Generated Strudel code" });
   const open = h("a", { class: "btn-link", target: "_blank", rel: "noopener" }, "Open in Strudel ↗");
   const note = h("p", { class: "muted st-note" });
+  const shortBox = h("div", { class: "st-short", hidden: "", role: "status", "aria-live": "polite" });
+  let shortFor = null; // the code the short link in shortBox was made for
   const stemsRow = h("div", { class: "st-stems" });
   const srcRow = h("div", { class: "st-src", role: "radiogroup", "aria-label": "Which patterns to use" });
   const tplBox = h("div", { class: "st-tpl-box" }), edBox = h("div", { class: "st-ed-box" }), mashBox = h("div", { class: "st-mash" });
@@ -99,11 +103,16 @@ export function strudelView(c) {
     const parts = strudelUsesMashParts(text), picked = STRUDEL_STEMS.filter((x) => strudelStems.has(x));
     const useStems = !parts && !!audioUrl && strudelMix === "stems" && st.state === "ready";
     const bAudio = b && b.has_audio ? strudelAudioUrl(b, paint) : null;
+    // Key lock (T70): once B's stretched copy has the parts this code loads, B plays from it at speed 1.
+    const lock = b ? mashLock(c, b, paint) : null, mstate = b && parts ? mashStateFor(c, b) : null;
+    const bStems = mstate ? mstate.src.b === "stems" && mashCan(c, b).b : !parts && strudelMix === "stems" && mashCan(c, b || c).b;
+    const lockUrl = lock && lock.state === "ready" && bAudio && lock.parts.includes(bStems ? "bass" : "mix")
+      ? bAudio.replace(/\/audio$/, `/keylock/${lock.r.toFixed(3)}/audio`) : null;
     return { wantsAudio, audioUrl, st, useStems, stems: useStems ? picked : null, canStems: st.state === "ready",
       edits: n && strudelMine ? allEdits(c) : null, n, startBar: +startSel.value || 1,
-      b: b ? { card: b, audioUrl: bAudio, canStems: mashCan(c, b).b,
+      b: b ? { card: b, audioUrl: bAudio, canStems: mashCan(c, b).b, lock: lockUrl ? { url: lockUrl } : null, lockState: lock,
         stems: !parts && bAudio && strudelMix === "stems" && mashCan(c, b).b ? picked : null } : null,
-      mash: b && parts ? mashStateFor(c, b) : null };
+      mash: mstate };
   };
   const fillsFor = (text) => strudelFillins(c, ctxFor(text, false));
   const editor = (start) => {
@@ -135,13 +144,14 @@ export function strudelView(c) {
     pre.textContent = code;
     pre.classList.toggle("claude", changed != null);
     open.href = strudelLink(code);
+    if (shortFor !== null && shortFor !== code) { shortFor = null; shortBox.hidden = true; } // the code changed: that link is for the old code
     tplBox.replaceChildren(templatesBar((id) => { tplState.pick = id; edBox.replaceChildren(); paint(); }, editor));
     audioOpt.hidden = !full || !c.has_audio;
     startRow.hidden = startSel.options.length < 2 || !(full || tpl.text.includes("{song}"));
     paintStems(c.has_audio && ctx.wantsAudio && !strudelUsesMashParts(tpl.text), ctx.st);
     mashBox.hidden = !strudelUsesMash(tpl.text);
     if (!mashBox.hidden) {
-      mashBox.replaceChildren(...mashRow(c, ctx.b && ctx.b.card, (id) => { tplState.mashB = id; paint(); }));
+      mashBox.replaceChildren(...mashRow(c, ctx.b && ctx.b.card, (id) => { tplState.mashB = id; paint(); }, ctx.b && ctx.b.lockState));
       if (ctx.b && strudelUsesMashParts(tpl.text)) mashBox.append(mashPanel(c, ctx.b.card, paint).el);
     }
     ask.paint();
@@ -198,6 +208,45 @@ export function strudelView(c) {
   const box = h("input", { type: "checkbox", id: "st-audio", ...(strudelAudio ? { checked: "" } : {}) });
   box.addEventListener("change", () => { strudelAudio = box.checked; paint(); });
   const audioOpt = h("label", { class: "st-opt", for: "st-audio" }, box, " Include the original audio, cut into bars");
+  // A short share link (TAS-100): the server keeps the code and /pub/s/<id> opens it in strudel.cc with fresh stem links.
+  // The same code gives the same link.
+  const short = h("button", { type: "button", class: "st-short-btn", title: "Copy a short link to this sketch that you can share" }, "Copy short link");
+  short.onclick = async () => {
+    const forCode = code, mashB = ctx.b ? ctx.b.card : null;
+    short.disabled = true; short.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), "Making link…");
+    let url, err = null, art = null;
+    try {
+      const r = await api("/api/strudel/share", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: forCode, tracks: mashB ? [c.id, mashB.id] : [] }) });
+      url = location.origin + r.url;
+      // A mash-up from an admin (the server decides): its preview shows both tracks' album art. Best effort: the
+      // link works without it, with the standard preview.
+      if (r.art === "wanted") {
+        try {
+          const png = await shareArt(c, mashB);
+          if (png) { await api(r.art_url, { method: "PUT", headers: { "Content-Type": "image/png" }, body: png }); art = r.url + ".png"; }
+        } catch (_) { art = null; }
+      } else if (r.art === "have") art = r.url + ".png";
+    } catch (e) {
+      err = e.status ? e.message : "Couldn't make a link: you're offline. Try again when you're back online.";
+    }
+    short.disabled = false; short.textContent = "Copy short link";
+    if (err) { shortFor = null; shortBox.hidden = false; shortBox.className = "st-short err"; shortBox.replaceChildren(err); return; }
+    let copied = true;
+    try { await navigator.clipboard.writeText(url); } catch (_) { copied = false; }
+    shortFor = forCode;
+    const inp = h("input", { type: "text", readonly: "", value: url, "aria-label": "Short link", spellcheck: "false", onfocus: (e) => e.target.select() });
+    shortBox.hidden = false; shortBox.className = "st-short";
+    shortBox.replaceChildren(
+      h("div", { class: "st-short-head" }, h("b", {}, copied ? "✓ Short link copied" : "Short link ready: copy it from here"),
+        h("button", { type: "button", class: "linklike", "aria-label": "Close", onclick: () => { shortBox.hidden = true; } }, "×")),
+      inp,
+      h("p", { class: "muted" }, "Works for anyone with the link: it opens this code in Strudel. The audio stays playable while the track is in your library."),
+      ...(art ? [h("div", { class: "st-art" }, h("img", { src: art, width: "240", height: "126",
+        alt: `Link preview picture: ${(c.source && c.source.title) || "Untitled"} × ${(mashB.source && mashB.source.title) || "Untitled"}` }),
+        h("p", { class: "muted" }, "Chat apps show this picture with the link (album art shows only on links you share)."))] : []));
+    if (!copied) inp.focus();
+  };
   const copy = h("button", { type: "button", onclick: async () => {
     try { await navigator.clipboard.writeText(code); say.textContent = "Copied"; } catch (_) { say.textContent = "Couldn't copy here"; }
     setTimeout(() => (say.textContent = ""), 2500);
@@ -208,7 +257,69 @@ export function strudelView(c) {
       " live-code. Pick a template, or make your own with fill-ins from the track, then open it in Strudel to play and change it.",
       c.has_audio ? " Templates can use the original audio, cut into bars, to remix the real thing." : ""),
     tplBox, edBox, tplWarn, srcRow, audioOpt, stemsRow, mashBox, startRow,
-    h("div", { class: "st-actions" }, open, copy, say), pre, ask.el, note);
+    h("div", { class: "st-actions" }, open, short, copy, say), shortBox, pre, ask.el, note);
+}
+
+// The live-coding switch above the code (sandbox v207): Strudel as above, or the same sketch as Tidal or Sonic Pi code
+// (app/livecode.js). Those two have no web player, so they're read-only code to copy or download; templates, Ask Claude,
+// stems and the audio options stay Strudel-only. The pick is kept per browser, like the DAW pick.
+const LIVECODE = {
+  strudel: { name: "Strudel" },
+  tidal: { name: "Tidal", ext: "tidal", site: "https://tidalcycles.org", aria: "Generated Tidal code",
+    how: "Paste into your Tidal editor, then evaluate each block (Ctrl+Enter in most editors)." },
+  sonicpi: { name: "Sonic Pi", ext: "rb", site: "https://sonic-pi.net", aria: "Generated Sonic Pi code",
+    how: "Paste into a Sonic Pi buffer and press Run. Change anything and press Run again." },
+};
+let livecode = "strudel";
+try { const v = localStorage.getItem("tastr-livecode"); if (Object.hasOwn(LIVECODE, v)) livecode = v; } catch (_) {}
+
+export function liveView(c) {
+  const box = h("div", { class: "lc" });
+  const paint = () => {
+    const pick = h("div", { class: "lc-pick adm-seg", role: "group", "aria-label": "Live-coding language" },
+      ...Object.entries(LIVECODE).map(([k, v]) => h("button", { type: "button", "aria-pressed": String(k === livecode), onclick: () => {
+        livecode = k;
+        try { localStorage.setItem("tastr-livecode", k); } catch (_) {}
+        paint();
+      } }, v.name)));
+    box.replaceChildren(pick, livecode === "strudel" ? strudelView(c) : altLiveView(c, livecode));
+  };
+  paint();
+  return box;
+}
+
+// "Night Shift (Extended Mix)" -> night-shift-extended-mix
+const codeFileName = (c, ext) => `${((c.source && c.source.title) || "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").toLowerCase() || "track"}.${ext}`;
+
+function altLiveView(c, lang) {
+  const L = LIVECODE[lang], fname = codeFileName(c, L.ext);
+  const pre = h("pre", { class: "st-code", tabindex: "0", "aria-label": L.aria });
+  const say = h("span", { class: "muted st-say", role: "status", "aria-live": "polite" });
+  const flash = (t) => { say.textContent = t; setTimeout(() => (say.textContent = ""), 2500); };
+  let code = "";
+  // Your edits go in the way they do for Strudel, so the three languages agree.
+  const paint = () => {
+    const edits = editedKeys(allEdits(c)).length && strudelMine ? allEdits(c) : null;
+    code = lang === "tidal" ? tidalCode(c, edits) : sonicPiCode(c, edits);
+    pre.textContent = code;
+  };
+  sectionBus.addEventListener("edits", () => { if (pre.isConnected) paint(); });
+  paint();
+  const copy = h("button", { type: "button", onclick: async () => {
+    try { await navigator.clipboard.writeText(code); flash("Copied"); } catch (_) { flash("Couldn't copy here"); }
+  } }, "Copy code");
+  const dl = h("button", { type: "button", title: `Save as ${fname}`, onclick: () => {
+    const href = URL.createObjectURL(new Blob([code], { type: "text/plain" })), a = h("a", { href, download: fname, hidden: "" });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 60_000);
+    flash(`Downloaded ${fname}`);
+  } }, `Download .${L.ext}`);
+  return h("div", { class: "strudel lc-alt" },
+    h("p", { class: "st-intro" }, "This track as ", h("a", { href: L.site, target: "_blank", rel: "noopener" }, L.name),
+      " code: the detected drums, bass and chords, section by section. Run it in ", L.name, " on your computer."),
+    h("p", { class: "lc-how" }, h("b", {}, "How to run it: "), L.how),
+    h("div", { class: "st-actions" }, copy, dl, say),
+    pre);
 }
 
 // Key names as musicians spell them (the Camelot wheel's spellings: B♭ not A#), with real ♭ and ♯ signs. Display only;
@@ -218,6 +329,10 @@ export const accid = (s) => String(s).replace(/([A-G])b(?![a-z])/g, "$1♭").rep
 export function keyName(k) {
   return isNum(k.tonic) ? `${k.mode === "minor" && k.tonic % 12 === 1 ? "C♯" : KEY_SPELL[k.tonic % 12]} ${k.mode || ""}`.trim() : "–";
 }
+// The same tonic in the other mode (C major -> C minor), for keys whose mode is a guess (key.mode_uncertain).
+export const modeOther = (k) => ({ tonic: k.tonic, mode: k.mode === "minor" ? "major" : "minor" });
+// Its Camelot code: a major nB's parallel minor is (n-3)A, a minor nA's parallel major is (n+3)B (8B C major -> 5A C minor).
+export const camelotParallel = (cam) => { const m = /^(\d+)([AB])$/.exec(cam || ""); if (!m) return null; const d = m[2] === "B" ? -3 : 3; return `${((+m[1] + d + 11) % 12) + 1}${m[2] === "B" ? "A" : "B"}`; };
 
 export function setDaw(v) { return (daw = v); }
 export function setServerCfg(v) { return (serverCfg = v); }

@@ -3,8 +3,9 @@
 The web server is small (it fits in 512 MB) because the engine runs here: each upload is sent to `analyze`
 (as its bytes, or with the audio bucket on (tastr/blobs.py) as a signed link that the function downloads from),
 which returns the card, "Detect drums with the model" calls `analyze_drums` (the same analysis plus the
-pretrained drum model, in its own image so everyday analysis doesn't load PyTorch), and "Separate stems"
-calls `stems`. Kept apart from modal_app.py (benchmarks), so
+pretrained drum model, in its own image so everyday analysis doesn't load PyTorch), "Add ML tags" calls
+`ml_tags` (MTG's Essentia classifiers, docs/essentia.md), "Separate stems" calls `stems` and a mash-up's key
+lock calls `keylock` (tastr/keylock.py). Kept apart from modal_app.py (benchmarks), so
 it needs no dataset bucket or secrets and can live in its own Modal environment with its own budget:
 
     modal deploy --env friends tastr/cloud/modal_web.py
@@ -21,11 +22,31 @@ import modal
 
 from tastr.cloud.rust_image import with_rust_engine
 
+
+def _ml_tags_module():
+    """tastr/engine/ml_tags.py, loaded from its file: importing it as tastr.engine.ml_tags runs tastr/engine's
+    __init__, which needs numpy, and this module is imported in every container, the api's (no numpy) included.
+    That import is what broke every call to the api after the ML tags change."""
+    import importlib.util
+    from pathlib import Path
+
+    # Modal runs this file as /root/modal_web.py, away from the package, so find the package (without
+    # importing tastr.engine) rather than going from __file__.
+    path = Path(importlib.util.find_spec("tastr").submodule_search_locations[0]) / "engine" / "ml_tags.py"
+    spec = importlib.util.spec_from_file_location("_tastr_ml_tags_standalone", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+download_command = _ml_tags_module().download_command
+
 APP_NAME = "tastr-web"
 
 # Same as modal_app.py (tests/test_cloud.py keeps them in step).
 ENGINE_DEPS = ["numpy>=1.24", "scipy>=1.10", "librosa>=0.10", "soundfile>=0.12", "mutagen>=1.47"]
 STEMS_DEPS = ["demucs>=4.0.1"]
+KEYLOCK_DEPS = ["python-stretch==0.3.1"]  # the `keylock` extra: Signalsmith Stretch (MIT)
 # CPU-only PyTorch for the drum model: a few hundred MB instead of the 2 GB CUDA build.
 TORCH_CPU = ("torch>=2.1", "https://download.pytorch.org/whl/cpu")
 PINS = ["numpy<2.3", "numba==0.61.2", "llvmlite==0.44.0", "librosa==0.11.0", "scipy<1.16"]
@@ -77,11 +98,31 @@ drums_image = (
     .add_local_python_source("tastr", copy=True)
     .run_function(_warm_drums)
 )
+# Optional ML tags (TASTR_ML_TAGS=on, docs/essentia.md): Essentia (AGPL-3.0) and MTG's classifier weights
+# (non-commercial only), both in this private image only. No Rust engine: it reads the audio and nothing else.
+ESSENTIA_PIN = "essentia-tensorflow==2.1b6.dev1389"  # the last build with a Python 3.12 Linux wheel
+ESSENTIA_MODELS = "/opt/essentia-models"
+ml_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("curl")
+    .pip_install(ESSENTIA_PIN, "numpy<2.3")
+    .run_commands(download_command(ESSENTIA_MODELS))
+    .env({"TASTR_ESSENTIA_MODELS": ESSENTIA_MODELS})
+    .add_local_python_source("tastr")
+)
 stems_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
     .pip_install(*ENGINE_DEPS, *STEMS_DEPS, *PINS)
     .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs')\"")
+    .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
+    .add_local_python_source("tastr")
+)
+# Key lock for mash-ups (tastr/keylock.py): ffmpeg decodes m4a, the stretcher is a small wheel. CPU only.
+keylock_image = (
+    modal.Image.debian_slim(python_version="3.12")
+    .apt_install("ffmpeg", "libsndfile1")
+    .pip_install(*ENGINE_DEPS, *KEYLOCK_DEPS, *PINS)
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
     .add_local_python_source("tastr")
 )
@@ -113,6 +154,14 @@ def analyze_drums(audio: bytes | str, suffix: str, stages: list[str] | None = No
     return run_analyze(audio, suffix, stages, options)
 
 
+# ML tags for one track, only when someone asks for them: about 6 s for a 5-minute track.
+@app.function(image=ml_image, cpu=2, memory=4096, timeout=10 * 60, scaledown_window=60)
+def ml_tags(audio: bytes | str, suffix: str) -> dict:
+    from tastr.cloud.jobs import run_ml_tags
+
+    return run_ml_tags(audio, suffix)
+
+
 @app.function(image=stems_image, gpu="T4", memory=8192, timeout=15 * 60)
 def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:
     from tastr.cloud.jobs import run_stems
@@ -120,10 +169,22 @@ def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = Non
     return run_stems(audio, suffix, put_urls)
 
 
+# One track's full mix and stems stretched to a mash-up's tempo with their pitch kept: about a second of CPU per
+# part for a 7-minute track, plus the downloads and uploads.
+@app.function(image=keylock_image, cpu=2, memory=2048, timeout=10 * 60, scaledown_window=60)
+def keylock(sources: dict[str, str], ratio: float, put_urls: dict[str, str]) -> dict:
+    from tastr.cloud.jobs import run_keylock
+
+    return run_keylock(sources, ratio, put_urls)
+
+
 # A small HTTPS front for the functions above, for servers that can't run the Modal client (the Cloudflare
 # Worker). Only callers with a proxy auth token of this workspace get in (headers Modal-Key and Modal-Secret).
 # Every answer is lines of JSON, streamed: a streaming call's events, then {"result": ...} or {"error": ...};
 # a blank line every 20 seconds keeps a long call (a drum model run, stems) from timing out on the way.
+# ML tags don't hold a request open: POST /spawn/ml_tags starts the call and answers {"call_id"} at once, and
+# POST /poll {"call_id"} answers {"pending": true}, {"result": ...} or {"error": ...}, so no request stays open
+# for the whole run.
 api_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[standard]").add_local_python_source("tastr")
 KEEPALIVE = 20
 
@@ -132,34 +193,12 @@ KEEPALIVE = 20
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app(requires_proxy_auth=True)
 def api():
-    import asyncio
     import base64
-    import json
 
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse, StreamingResponse
 
     web = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-
-    def line(event: dict) -> str:
-        return json.dumps(event) + "\n"
-
-    async def answer(call):
-        """Run `call()` (a coroutine), with keep-alive lines until it ends."""
-        task = asyncio.ensure_future(call())
-        while True:
-            done, _ = await asyncio.wait({task}, timeout=KEEPALIVE)
-            if done:
-                break
-            yield "\n"
-        try:
-            result = task.result()
-        except Exception as e:  # noqa: BLE001 - the caller gets the message
-            yield line({"error": f"{type(e).__name__}: {e}"})
-            return
-        if isinstance(result, dict):  # stems without upload links: the FLAC bytes, base64-encoded
-            result = {k: base64.b64encode(v).decode() if isinstance(v, bytes) else v for k, v in result.items()}
-        yield line({"result": result})
 
     async def stream(args):
         try:
@@ -186,11 +225,96 @@ def api():
             out = answer(lambda: analyze.remote.aio(*args))
         elif name == "analyze_drums":
             out = answer(lambda: analyze_drums.remote.aio(*args))
+        elif name == "ml_tags":
+            out = answer(lambda: ml_tags.remote.aio(audio, body["suffix"]))
         elif name == "stems":
             out = answer(lambda: stems.remote.aio(audio, body["suffix"], body.get("put_urls")))
         else:
             return JSONResponse({"detail": "Not Found"}, status_code=404)
         return StreamingResponse(out, media_type="application/x-ndjson")
 
+    web.add_route("/keylock", _keylock_call, methods=["POST"])
+    web.add_route("/spawn/{name}", _spawn, methods=["POST"])
+    web.add_route("/poll", _poll, methods=["POST"])
     web.add_route("/{name}", call, methods=["POST"])
     return web
+
+
+def line(event: dict) -> str:
+    import json
+
+    return json.dumps(event) + "\n"
+
+
+async def answer(call):
+    """Run `call()` (a coroutine), with keep-alive lines until it ends."""
+    import asyncio
+    import base64
+
+    task = asyncio.ensure_future(call())
+    while True:
+        done, _ = await asyncio.wait({task}, timeout=KEEPALIVE)
+        if done:
+            break
+        yield "\n"
+    try:
+        result = task.result()
+    except Exception as e:  # noqa: BLE001 - the caller gets the message
+        yield line({"error": f"{type(e).__name__}: {e}"})
+        return
+    if isinstance(result, dict):  # stems without upload links: the FLAC bytes, base64-encoded
+        result = {k: base64.b64encode(v).decode() if isinstance(v, bytes) else v for k, v in result.items()}
+    yield line({"result": result})
+
+
+async def _keylock_call(request):
+    """POST /keylock {sources, ratio, put_urls}: several parts by link rather than one audio (tastr/keylock.py)."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+
+    body = await _json_body(request) or {}
+    sources, put_urls, ratio = body.get("sources"), body.get("put_urls"), body.get("ratio")
+    if not isinstance(sources, dict) or not isinstance(put_urls, dict) or not isinstance(ratio, (int, float)):
+        return JSONResponse({"detail": "sources, put_urls and ratio"}, status_code=422)
+    return StreamingResponse(answer(lambda: keylock.remote.aio(sources, float(ratio), put_urls)),
+                             media_type="application/x-ndjson")
+
+
+async def _json_body(request) -> dict | None:
+    try:
+        body = await request.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+async def _spawn(request):
+    """POST /spawn/ml_tags: start the call and answer {"call_id"} at once (see `api`)."""
+    import base64
+
+    from fastapi.responses import JSONResponse
+
+    if request.path_params["name"] != "ml_tags":
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    body = await _json_body(request) or {}
+    audio = body.get("audio_url") or base64.b64decode(body.get("audio_b64") or "")
+    if not audio or not isinstance(body.get("suffix"), str):
+        return JSONResponse({"detail": "audio_url or audio_b64, and suffix"}, status_code=422)
+    fc = await ml_tags.spawn.aio(audio, body["suffix"])
+    return JSONResponse({"call_id": fc.object_id})
+
+
+async def _poll(request):
+    """POST /poll {"call_id"}: {"pending": true}, {"result": ...} or {"error": ...}."""
+    import modal
+    from fastapi.responses import JSONResponse
+
+    call_id = (await _json_body(request) or {}).get("call_id")
+    if not isinstance(call_id, str) or not call_id.startswith("fc-"):
+        return JSONResponse({"detail": "a call_id"}, status_code=422)
+    try:
+        result = await modal.FunctionCall.from_id(call_id).get.aio(timeout=0)
+    except (TimeoutError, modal.exception.TimeoutError):
+        return JSONResponse({"pending": True})
+    except Exception as e:  # noqa: BLE001 - the caller gets the message
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"})
+    return JSONResponse({"result": result})

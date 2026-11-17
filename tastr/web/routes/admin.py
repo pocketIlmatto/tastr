@@ -11,17 +11,19 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from ... import blobs, db, library_copy, rekordbox_compare, s3
 from .. import claude
 from ..context import AppContext, tastr_home
-from ..hosted import stored_bytes, today
+from ..hosted import VIEW_AS_COOKIE, VIEW_AS_HOURS, VIEW_AS_PATH, stored_bytes, today
 
 EMAIL = re.compile(r"^[^@\s/]{1,64}@[^@\s/]{1,190}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 REKORDBOX_KEY = "rekordbox/collection.xml"  # where /api/admin/rekordbox-compare looks in the audio bucket by default
+REKORDBOX_MAX_MB = 50  # an export is about 1 KB a track; the XML is parsed in memory, so keep well under the Worker's limits
+REKORDBOX_LOADED = "Loaded Rekordbox values onto "  # the admin event a load logs; the panel's status line reads it back
 USAGE_RANGES = {"1": 1, "7": 7, "30": 30, "all": 365}  # the admin chart's ranges in days; "all" stops at a year
 
 
@@ -30,11 +32,24 @@ class CopyBody(BaseModel):
     track_ids: list[int] = Field(..., min_length=1, max_length=200)
 
 
+class ViewAsBody(BaseModel):
+    email: str
+
+
 class LimitsBody(BaseModel):
     daily_tracks: int | None = Field(None, ge=0, le=10_000)  # None = the server default
     daily_stems: int | None = Field(None, ge=0, le=1_000)
     daily_asks: int | None = Field(None, ge=0, le=1_000)  # Ask Claude in Strudel
     scope: Literal["today", "standing"] = "today"  # today only (ends at 00:00 UTC), or until an admin changes it
+
+
+class AudioDaysBody(BaseModel):
+    days: float | None = Field(None, ge=0, le=3650)  # days a person's uploaded audio is kept; 0 = forever, None = the server default
+
+
+def keep_words(days: float) -> str:
+    """"forever" or "30 days", for the admin log."""
+    return "forever" if days <= 0 else f"{days:g} day{'' if days == 1 else 's'}"
 
 
 def router(ctx: AppContext) -> APIRouter:
@@ -71,17 +86,19 @@ def router(ctx: AppContext) -> APIRouter:
             problems = db.recent_events(c, problems=True)
             blocked = db.blocked_on(c, day)
             changed = db.overrides(c, day)
+            keep_days = db.audio_days(c)
             series = usage_series(c, rng, day, library)
         for h in history:
             p = person(h["user"])
             if h["day"] == day:
                 p["today"][h["kind"]] = h["n"]
-        for email in [*ctx.settings.admins, *changed]:
+        for email in [*ctx.settings.admins, *changed, *keep_days]:
             person(email)
         for p in people.values():
             if p["email"]:
                 o = changed.get(p["email"])
                 p["override"] = o
+                p["audio_days"] = keep_days.get(p["email"])  # their own audio expiry (0 = forever), None = the default
                 s = ctx.settings
                 p["caps"] = {"tracks": s.daily_tracks, "stems": s.daily_stems, "asks": s.daily_asks}
                 for k in p["caps"]:
@@ -92,7 +109,7 @@ def router(ctx: AppContext) -> APIRouter:
                 "limits": ctx.settings.limits(), "recent": recent, "problems": problems, "blocked_today": blocked,
                 "log_links": ctx.settings.log_links(os.environ.get("TASTR_MODAL_APP", "tastr-web")),
                 "storage": {"used_bytes": stored_bytes(tastr_home()), "cap_bytes": int(ctx.settings.storage_gb * 1024 ** 3)},
-                "active_stem_jobs": ctx.stem_jobs.active(), "active_drum_jobs": ctx.drum_runs.active(), "analyses": ctx.slots.status(),
+                "active_stem_jobs": ctx.stem_jobs.active(), "active_drum_jobs": ctx.drum_runs.active(), "active_ml_tag_jobs": ctx.ml_runs.active(), "analyses": ctx.slots.status(),
                 "series": series,
                 # Ask Claude's cost: tokens are counted per person per day (user_usage ask_in/ask_out), priced here.
                 "claude": {"model": claude.MODEL, "price_in": claude.PRICE_IN, "price_out": claude.PRICE_OUT}}
@@ -212,12 +229,40 @@ def router(ctx: AppContext) -> APIRouter:
         return {"to": to, "copied": [{"from": a, "id": b} for a, b in made.items()],
                 "skipped": [t for t in body.track_ids if t not in made]}
 
+    @api.post(VIEW_AS_PATH)
+    def view_as(body: ViewAsBody, request: Request):
+        """See the app as someone else sees it: their library, limits and screens, read-only. Sets a cookie that the
+        login middleware honours for admins only (server.py), for VIEW_AS_HOURS; DELETE stops. Admins only; logged."""
+        admin = ctx.require_admin(request)
+        email = body.email.strip().lower()
+        if not EMAIL.match(email) or email == admin:
+            raise HTTPException(400, "Give someone else's email address.")
+        with closing(ctx.conn()) as c:
+            known = c.execute("SELECT 1 FROM tracks WHERE owner = ? UNION SELECT 1 FROM user_usage WHERE user = ? "
+                              "UNION SELECT 1 FROM events WHERE user = ? LIMIT 1", (email, email, email)).fetchone()
+        if not known:
+            raise HTTPException(404, f"{email} hasn't used Tastr yet.")
+        ctx.event(admin, "admin", f"Viewed the app as {email.split('@')[0]}")
+        r = JSONResponse({"viewing_as": {"email": email, "by": admin, "read_only": True}})
+        r.set_cookie(VIEW_AS_COOKIE, email, max_age=VIEW_AS_HOURS * 3600, path="/", secure=True, httponly=True,
+                     samesite="strict")
+        return r
+
+    @api.delete(VIEW_AS_PATH)
+    def stop_view_as(request: Request):
+        """Back to your own view. Works for anyone, so a stale cookie can always be cleared."""
+        r = JSONResponse({"viewing_as": None})
+        r.delete_cookie(VIEW_AS_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+        return r
+
     @api.get("/api/admin/rekordbox-compare")
     def rekordbox(request: Request, key: str = REKORDBOX_KEY, format: Literal["json", "text"] = "json",
-                  show: int = Query(25, ge=0, le=500)):
+                  show: int = Query(25, ge=0, le=500), save: bool = False):
         """Your tracks' stored BPM, key and beat grid next to Rekordbox's, for tracks in both libraries
         (tastr/rekordbox_compare.py, docs/rekordbox.md). Reads the Rekordbox collection XML you put in the audio
-        bucket at `key`. `format=text` for the readable summary. Admins only."""
+        bucket at `key`. `format=text` for the readable summary. `save=1` also stores Rekordbox's BPM and key on
+        each of those tracks, so its card's "Listed elsewhere" line and the review list show where Tastr disagrees
+        (replacing the last export's). Admins only."""
         admin = ctx.require_admin(request)
         if not key.startswith("rekordbox/") or not key.endswith(".xml") or ".." in key:
             raise HTTPException(400, "key is an .xml file under rekordbox/ in the audio bucket.")
@@ -232,12 +277,86 @@ def router(ctx: AppContext) -> APIRouter:
         try:
             with closing(ctx.conn()) as c:
                 rep = rekordbox_compare.compare(c, data, owner=admin)
+                if save:
+                    rep["saved"] = rekordbox_compare.save_listings(c, data, owner=admin)
         except ParseError as e:
             raise HTTPException(400, f"{key} isn't a Rekordbox XML export: {e}") from None
         if format == "text":
-            return PlainTextResponse(rekordbox_compare.format_report(rep, show))
+            text = rekordbox_compare.format_report(rep, show)
+            if save:
+                text += (f"\nSaved Rekordbox's BPM and key on {rep['saved']['saved']} tracks: their cards show it under "
+                         "Listed elsewhere, and disagreements are in the review list.")
+            return PlainTextResponse(text)
         rep["disagreements"] = rep["disagreements"][:show]
         return rep
+
+    def _rekordbox_status(c: sqlite3.Connection, admin: str) -> dict[str, Any]:
+        """The last load from the Admin panel, and how many of your tracks have a Rekordbox listing now."""
+        row = c.execute("SELECT at, detail FROM events WHERE user = ? AND kind = 'admin' AND detail LIKE ? "
+                        "ORDER BY at DESC, id DESC LIMIT 1", (admin, REKORDBOX_LOADED + "%")).fetchone()
+        n = c.execute("SELECT count(*) FROM lookups l JOIN tracks t ON t.id = l.track_id "
+                      "WHERE l.provider = ? AND t.owner IS ?", (rekordbox_compare.PROVIDER, admin)).fetchone()[0]
+        m = re.search(r" from (.+?)(?: \(\d+ disagree\))?$", row[1]) if row else None
+        return {"tracks": n, "loaded_at": row[0] if row else None, "file": m.group(1) if m else None,
+                "max_mb": REKORDBOX_MAX_MB}
+
+    @api.get("/api/admin/rekordbox/status")
+    def rekordbox_status(request: Request):
+        """For Admin › Rekordbox export: when you last loaded an export, from which file, onto how many tracks."""
+        admin = ctx.require_admin(request)
+        with closing(ctx.conn()) as c:
+            return _rekordbox_status(c, admin)
+
+    @api.post("/api/admin/rekordbox/upload")
+    async def rekordbox_upload(request: Request, name: str = Query("collection.xml", max_length=200)):
+        """Admin › Rekordbox export, step 1: the collection XML as the request body. Stored in the audio bucket as
+        rekordbox/collection.xml (replacing the last one) and compared with your library. Nothing is saved on your
+        tracks until /api/admin/rekordbox/load. Admins only."""
+        admin = ctx.require_admin(request)
+        if not blobs.enabled():
+            raise HTTPException(409, "This server has no audio bucket.")
+        limit = REKORDBOX_MAX_MB * 1024 * 1024
+        size = request.headers.get("content-length")
+        if size and size.isdigit() and int(size) > limit:
+            raise HTTPException(413, f"{name} is {int(size) / 1024 ** 2:.0f} MB. The limit is {REKORDBOX_MAX_MB} MB: "
+                                     "export a playlist or a smaller collection.")
+        data = await request.body()
+        if len(data) > limit:
+            raise HTTPException(413, f"{name} is over {REKORDBOX_MAX_MB} MB: export a playlist or a smaller collection.")
+        if not rekordbox_compare.is_export(data):
+            raise HTTPException(400, f"{name} isn't a Rekordbox collection export. In Rekordbox use File › Export "
+                                     "Collection in xml format, then pick that file.")
+        with closing(ctx.conn()) as c:
+            rep = rekordbox_compare.compare(c, data, owner=admin)
+            rep["status"] = _rekordbox_status(c, admin)
+        blobs.client().put(REKORDBOX_KEY, data, "application/xml")
+        rep["file"] = name
+        rep["disagree"] = len(rep["disagreements"])
+        rep.pop("disagreements")
+        return rep
+
+    @api.post("/api/admin/rekordbox/load")
+    def rekordbox_load(request: Request, name: str = Query("collection.xml", max_length=200)):
+        """Admin › Rekordbox export, step 2: store the uploaded export's BPM and key on your tracks in both libraries
+        (replacing the last load's), so cards show it under Listed elsewhere and disagreements reach the review
+        list. Logged as an admin change. Admins only."""
+        admin = ctx.require_admin(request)
+        if not blobs.enabled():
+            raise HTTPException(409, "This server has no audio bucket.")
+        try:
+            data = blobs.client().get(REKORDBOX_KEY).read()
+        except s3.S3Error as e:
+            if e.status == 404:
+                raise HTTPException(404, "Upload your Rekordbox export first.") from None
+            raise
+        try:
+            with closing(ctx.conn()) as c:
+                out = rekordbox_compare.save_listings(c, data, owner=admin)
+                out["disagree"] = len(rekordbox_compare.compare(c, data, owner=admin)["disagreements"])
+        except ParseError as e:
+            raise HTTPException(400, f"The stored export isn't a Rekordbox XML export: {e}") from None
+        ctx.event(admin, "admin", f"{REKORDBOX_LOADED}{out['saved']} tracks from {name} ({out['disagree']} disagree)")
+        return out
 
     @api.put("/api/admin/limits/{email}")
     def set_limits(email: str, body: LimitsBody, request: Request):
@@ -267,5 +386,28 @@ def router(ctx: AppContext) -> APIRouter:
     def reset_limits(email: str, request: Request):
         """Put one person back on the server's daily limits. Admins only."""
         return set_limits(email, LimitsBody(), request)
+
+    @api.put("/api/admin/audio-days/{email}")
+    def set_audio_days(email: str, body: AudioDaysBody, request: Request):
+        """How long one person's uploaded audio and stems are kept: days (0 = forever), or None for the server default
+        (TASTR_AUDIO_DAYS). The next expiry sweep (every 6 hours) deletes what is past it; cards stay. Logged as an
+        admin change. Admins only."""
+        admin = ctx.require_admin(request)
+        email = email.strip().lower()
+        if not EMAIL.match(email):
+            raise HTTPException(400, "That isn't an email address.")
+        with closing(ctx.conn()) as c:
+            db.set_audio_days(c, email, body.days, admin)
+        who, d = email.split("@")[0], body.days
+        if d is None:
+            ctx.event(admin, "admin", f"Set {who}'s audio back to the default")
+        else:
+            ctx.event(admin, "admin", f"Set {who}'s audio to be kept {keep_words(d)}")
+        return {"email": email, "audio_days": d}
+
+    @api.delete("/api/admin/audio-days/{email}")
+    def reset_audio_days(email: str, request: Request):
+        """Put one person back on the server's audio expiry. Admins only."""
+        return set_audio_days(email, AudioDaysBody(), request)
 
     return api

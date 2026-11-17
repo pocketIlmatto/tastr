@@ -1,0 +1,90 @@
+name: codex-review
+# Waits until Codex has reviewed the pull request, so auto-merge waits for it too once `codex-review` is a required
+# check in main's ruleset (docs/ci.md#codex-code-reviews).
+#
+# Codex keeps one "Codex Review Summary" comment per pull request up to date, with a hidden state line. The check
+# passes when that line says the latest code review is completed, findings or not: Codex's comments are still
+# advisory, and the thread that owns the PR answers them. Codex reviews when a PR opens (or is marked ready) and when
+# someone comments `@codex review`, not on every push, so a review of an earlier commit of the same PR counts. A
+# review in progress for a newer commit is waited for.
+#
+# Codex skips pull requests that change .github/workflows/ (it asks for a Codex environment instead). Then this
+# workflow says so on the PR once, and someone can comment `@codex review`. If no review is done within WAIT_MIN
+# minutes, the check passes anyway and says so on the PR, so a PR never hangs. A draft passes at once: it can't merge,
+# and marking it ready runs the check again.
+#
+# pull_request_target, so the check's rules come from main and a PR can't loosen them for itself. The job never checks
+# out or runs pull request code; it only reads the PR's comments, and their text never reaches the shell unquoted.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions: {}
+jobs:
+  codex-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          WAIT_MIN: 30
+          POLL_SEC: 30
+          BOT: chatgpt-codex-connector[bot]
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          comments() {
+            gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+              -q '.[] | {login: .user.login, type: .user.type, body: .body}' | jq -s .
+          }
+          comment_once() {  # marker, text
+            if ! jq -e --arg m "<!-- $1 -->" 'any(.[]; .body | contains($m))' all.json > /dev/null; then
+              printf '<!-- %s -->\n%s\n' "$1" "$2" \
+                | gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@- --silent
+            fi
+          }
+          if [ "$DRAFT" = "true" ]; then
+            # A draft can't merge. Codex reviews when it's marked ready, which runs this check again.
+            echo "Draft: the check runs again when the PR is marked ready for review." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          deadline=$(( $(date +%s) + WAIT_MIN * 60 ))
+          while :; do
+            if ! comments > all.json; then  # a GitHub API hiccup: try again on the next round
+              [ "$(date +%s)" -lt "$deadline" ] || exit 1
+              sleep "$POLL_SEC"; continue
+            fi
+            jq --arg bot "$BOT" '[.[] | select(.login == $bot and .type == "Bot")]' all.json > codex.json
+            # The latest summary's hidden state line, e.g. {"code_review":{"status":"completed",...}}.
+            state=$(jq -r '[.[] | .body | select(contains("codex-pull-request-review-summary"))] | last // ""' codex.json \
+              | sed -n 's/^<!-- codex-review-state:v1 \(.*\) -->$/\1/p' | head -n1 | sed 's/&#123;/{/g; s/&#125;/}/g')
+            [ -n "$state" ] || state='{}'
+            status=$(printf '%s' "$state" | jq -r '.code_review.status // "none"' 2>/dev/null || echo none)
+            if [ "$status" = "completed" ]; then
+              read -r findings sha < <(printf '%s' "$state" \
+                | jq -r '"\(.code_review.has_any_findings) \(.code_review.commit_sha // "" | .[0:10])"')
+              echo "Codex reviewed $sha (findings: $findings)." | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if jq -e 'any(.[]; .body | contains("To use Codex here"))' codex.json > /dev/null \
+               && [ "$status" = "none" ]; then
+              msg="Codex skipped its automatic review of this pull request (it does that for changes under"
+              msg+=' `.github/workflows/`). Comment `@codex review` to ask for one. The `codex-review` check waits up'
+              msg+=" to $WAIT_MIN minutes after each push, then passes without it."
+              comment_once codex-review-skipped "$msg"
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              msg="No Codex review within $WAIT_MIN minutes (last state: $status), so the codex-review check passed without one."
+              echo "::warning::$msg"; echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+              comment_once "codex-review-timeout $HEAD_SHA" "$msg"
+              exit 0
+            fi
+            echo "Waiting for Codex (state: $status)."
+            sleep "$POLL_SEC"
+          done

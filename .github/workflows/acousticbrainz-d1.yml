@@ -1,0 +1,81 @@
+name: acousticbrainz-d1
+# Loads the AcousticBrainz lookup's index into the Worker's D1 database `tastr-acousticbrainz` (docs/lookup.md,
+# docs/hosting-map.md). Run it by hand, once: the data is a frozen 2022 dump, so there is nothing to refresh.
+# It reads the index (322 MB) from the R2 bucket tastr-data, writes it out as SQL (tastr.lookup.acousticbrainz
+# d1_sql), makes the database if it doesn't exist yet, and imports the files one by one. Every file can be run
+# again, so a run that stops part way can start again from the file it stopped at (`from_file`).
+# Needs the CLOUDFLARE_API_TOKEN secret (deploy-worker's) with D1 Edit and Workers R2 Storage Read on the account.
+# About 7.6 million rows written, inside Workers Paid's included 50 million a month; about 0.4 GB stored.
+on:
+  workflow_dispatch:
+    inputs:
+      from_file:
+        description: "Start at this SQL file (0 = from the start; a re-run after a stop can skip what loaded)"
+        default: "0"
+concurrency:
+  group: acousticbrainz-d1
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  DATABASE: tastr-acousticbrainz
+  INDEX_OBJECT: tastr-data/acousticbrainz/acousticbrainz-index.sqlite
+  # The Cloudflare account id is not a secret (docs/hosting-map.md).
+  CLOUDFLARE_ACCOUNT_ID: 1c793218966f05bb509e1e76f4ba0b67
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      # The pinned wrangler from worker/package.json. The wrangler commands below run outside worker/, so they find
+      # the database by name rather than through the Worker's config.
+      - name: Install wrangler
+        working-directory: worker
+        run: npm install --no-audit --no-fund --silent
+      - name: Download the index from R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ab"
+          cd "$RUNNER_TEMP/ab"
+          "$GITHUB_WORKSPACE/worker/node_modules/.bin/wrangler" r2 object get "$INDEX_OBJECT" --remote --file index.sqlite
+          ls -l index.sqlite
+      # Only the standard library: no need to install the app.
+      - name: Write the SQL files
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE" python -c "
+          from tastr.lookup.acousticbrainz import d1_sql
+          files = d1_sql('$RUNNER_TEMP/ab/index.sqlite', '$RUNNER_TEMP/ab/sql')
+          print(len(files), 'files')"
+          ls -l "$RUNNER_TEMP/ab/sql" | head -5
+      - name: Make the database if it's missing
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          cd "$RUNNER_TEMP/ab"
+          W="$GITHUB_WORKSPACE/worker/node_modules/.bin/wrangler"
+          "$W" d1 info "$DATABASE" || "$W" d1 create "$DATABASE"
+      - name: Import
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          FROM_FILE: ${{ inputs.from_file || '0' }}
+        run: |
+          cd "$RUNNER_TEMP/ab"
+          W="$GITHUB_WORKSPACE/worker/node_modules/.bin/wrangler"
+          i=0
+          for f in sql/acousticbrainz-*.sql; do
+            if [ "$i" -ge "$FROM_FILE" ]; then
+              echo "::group::file $i: $f"
+              "$W" d1 execute "$DATABASE" --remote --yes --file "$f"
+              echo "::endgroup::"
+            fi
+            i=$((i + 1))
+          done
+          "$W" d1 execute "$DATABASE" --remote --command "SELECT COUNT(*) AS recordings FROM recordings"

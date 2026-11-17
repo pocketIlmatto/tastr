@@ -121,7 +121,49 @@ export function templateEditor(c, fillsFor, start, done) {
 
 // ---- Mash-up: the second track ----
 const bCards = new Map(); // track id -> its full card (null while it loads)
-const fitOf = (c, t) => strudelMashFit({ bpm: c.core && c.core.bpm, camelot: c.core && c.core.key && c.core.key.camelot }, { bpm: t.bpm, camelot: t.camelot });
+// With key lock on the server (tastr/keylock.py), B keeps its own key, so the ✓ and the order follow that.
+const fitOf = (c, t) => strudelMashFit({ bpm: c.core && c.core.bpm, camelot: c.core && c.core.key && c.core.key.camelot }, { bpm: t.bpm, camelot: t.camelot }, !!c.keylock_available);
+
+// ---- Mash-up: key lock (T70) ----
+// The server stretches B to A's tempo with its pitch kept; the code then plays it at speed 1. Asked for when a pair
+// is shown, polled while it works, and cached on the server per track and ratio, so reopening a pair is instant.
+const locks = new Map(); // "B id|ratio" -> { state: running | ready | error, parts: [...] }
+const ratioText = (r) => r.toFixed(3);
+const lockKey = (b, r) => `${b.id}|${ratioText(r)}`;
+const LOCK_POLL_MS = 1500;
+let lastPair = null; // the A|B|ratio last shown, to re-check a cached "ready" when the view comes back to a pair
+function lockAsk(b, r, repaint, poll = false) {
+  const k = lockKey(b, r), url = `/api/tracks/${b.id}/keylock/${ratioText(r)}`;
+  const was = locks.get(k);
+  locks.set(k, { ...(was || { parts: [] }), state: "running", asked: true });
+  api(url, poll ? {} : { method: "POST" }).then((st) => {
+    if (poll && st.state === "none") { lockAsk(b, r, repaint); return; } // the server pruned it meanwhile: stretch again
+    const done = !["queued", "running"].includes(st.state);
+    locks.set(k, { state: done ? (st.state === "ready" ? "ready" : "error") : "running", parts: st.parts || [], asked: true });
+    if (!done) setTimeout(() => lockAsk(b, r, repaint, true), LOCK_POLL_MS);
+    if (done || !was || was.state !== "running") repaint();
+  }).catch(() => { locks.set(k, { state: "error", parts: [], asked: true }); repaint(); });
+}
+// B's key-lock state for this pair: "running", "ready" or null (none needed, the server can't, or it failed).
+// ready also gives the parts. needStems: B's stems are ready and the code may use them, so they get stretched too.
+export function mashLock(a, b, repaint) {
+  if (!a || !b || !a.keylock_available || !b.has_audio) return null;
+  const ab = a.core && a.core.bpm, bb = b.core && b.core.bpm;
+  if (!isNum(ab) || !isNum(bb) || ab <= 0 || bb <= 0) return null;
+  const r = strudelSpeed(ab, bb);
+  if (Math.abs(12 * Math.log2(r)) < 0.05) return null; // same tempo: nothing to stretch
+  const needStems = stemsOf(b).state === "ready", k = lockKey(b, r), st = locks.get(k);
+  // Coming back to a pair: the server may have pruned that ratio since (it keeps 3 per track), so check again.
+  const pair = `${a.id}|${k}`, back = pair !== lastPair && st && st.state === "ready";
+  lastPair = pair;
+  if (back) { lockAsk(b, r, repaint, true); return { state: "running", r }; }
+  if (!st || (st.state === "ready" && needStems && !st.parts.includes("bass") && !st.restemmed)) {
+    if (st) st.restemmed = true;
+    lockAsk(b, r, repaint);
+    return { state: "running", r };
+  }
+  return st.state === "error" ? null : { state: st.state, r, parts: st.parts };
+}
 // Other tracks with a tempo, best fit first: Camelot-compatible after the speed change, then the smallest pitch shift.
 export const mashChoices = (c) => tracks.filter((t) => t.id !== c.id && isNum(t.bpm) && t.bpm > 0)
   .map((t) => ({ t, fit: fitOf(c, t) })).sort((a, b) => a.fit.score - b.fit.score);
@@ -136,19 +178,34 @@ export function mashCard(c, repaint) {
   }
   return bCards.get(id);
 }
-export function mashRow(c, b, onPick) {
+// The line under "Mix with" (sandbox v213, T70): [class, ...children].
+function fitLine(a, t, fx, lock) {
+  const A = (a.core && a.core.key && a.core.key.camelot) || "?", B = t.camelot || "?";
+  const up = fx.semis >= 0, amt = Math.abs(fx.semis).toFixed(1), more = " Tracks marked ✓ fit better; they're listed first.";
+  if (Math.abs(fx.semis) < 0.05) return ["st-fit " + (fx.ok ? "ok" : "bad"), `Same tempo, so it plays at normal speed. Key ${B}: ${fx.fit}.` + (fx.ok ? "" : more)];
+  if (lock && lock.state === "running") return ["st-fit wait", h("span", { class: "spin", "aria-hidden": "true" }),
+    `Key-locking B at A's tempo (×${fx.r}) so its pitch stays put… Until it's ready, the code speeds B ${up ? "up" : "down"}, which ${up ? "raises" : "lowers"} it ${amt} semitones.`];
+  if (lock && lock.state === "ready") return fx.ok ? ["st-fit ok", `B is stretched to A's tempo (×${fx.r}) with its key kept: ${B} over ${A}, ${fx.own}.`]
+    : ["st-fit bad", `B is stretched to A's tempo with its key kept, but ${B} over ${A} clashes.` + more];
+  if (fx.ok) return ["st-fit ok", `Speed ×${fx.r} lines the bars up, moving its pitch ${up ? "up" : "down"} ${amt} semitones to about ${fx.cam}: ${fx.fit}.`];
+  if (fx.own === "same key" || fx.own === "mixes well") return ["st-fit bad",
+    `${fx.own === "same key" ? `Both are ${A}` : `${B} mixes with ${A}`}, but speeding B ${up ? "up" : "down"} ×${fx.r} to match A ${up ? "raises" : "lowers"} it ${amt} semitones, so it won't sit in key.`];
+  return ["st-fit bad", (fx.between ? `Speed ×${fx.r} lines the bars up, moving its pitch ${up ? "up" : "down"} ${amt} semitones, between keys.`
+    : `Speed ×${fx.r} lines the bars up, moving its pitch ${up ? "up" : "down"} ${amt} semitones to about ${fx.cam || "an unknown key"}: ${fx.fit}.`) + more];
+}
+// lock: mashLock() for the shown pair.
+export function mashRow(c, b, onPick, lock = null) {
   const all = mashChoices(c);
   if (!all.length) return [h("span", { class: "muted" }, "Add a second track to your library to make a mash-up.")];
   const cur = b ? b.id : all.some((x) => x.t.id === tplState.mashB) ? tplState.mashB : all[0].t.id;
   const sel = h("select", { "aria-label": "Second track" }, all.map(({ t, fit }) =>
     h("option", { value: String(t.id), ...(t.id === cur ? { selected: "" } : {}) }, `${t.title || "Untitled"} · ${t.bpm.toFixed(0)} BPM · ${t.camelot || "?"}${fit.ok ? " ✓" : ""}`)));
   sel.addEventListener("change", () => onPick(+sel.value));
-  const pick = all.find((x) => x.t.id === cur), fx = pick.fit;
-  const text = !b ? "Loading the second track…"
-    : (Math.abs(fx.semis) < 0.05 ? `Same tempo, so it plays at normal speed. Key ${pick.t.camelot || "unknown"}: ${fx.fit}`
-      : `Speed ×${fx.r} lines the bars up, moving its pitch ${fx.semis >= 0 ? "up" : "down"} ${Math.abs(fx.semis).toFixed(1)} semitones to about ${fx.cam || "an unknown key"}: ${fx.fit}`)
-      + (fx.ok ? "." : ". Tracks marked ✓ fit better; they're listed first.");
-  return [h("label", { class: "st-opt" }, "Mix with ", sel), h("span", { class: "st-fit " + (!b ? "" : fx.ok ? "ok" : "bad") }, text)];
+  const pick = all.find((x) => x.t.id === cur);
+  // With a lock (working or ready) B keeps its own key; without one the speed change moves it.
+  const fx = b ? strudelMashFit({ bpm: c.core && c.core.bpm, camelot: c.core && c.core.key && c.core.key.camelot }, { bpm: pick.t.bpm, camelot: pick.t.camelot }, !!lock) : pick.fit;
+  const [cls, ...kids] = !b ? ["st-fit", "Loading the second track…"] : fitLine(c, pick.t, fx, lock);
+  return [h("label", { class: "st-opt" }, "Mix with ", sel), h("span", { class: cls, role: "status", "aria-live": "polite" }, ...kids)];
 }
 
 // ---- Mash-up: parts by section (TAS-87) ----

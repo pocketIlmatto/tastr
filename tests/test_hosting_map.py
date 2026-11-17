@@ -23,7 +23,8 @@ def _missing(names) -> list[str]:
 
 def test_map_names_worker_settings():
     w = _wrangler()
-    names = [w["name"], *w["vars"], w["durable_objects"]["bindings"][0]["class_name"]]
+    names = [w["name"], *w["vars"], w["durable_objects"]["bindings"][0]["class_name"],
+             *(v for d in w.get("d1_databases", []) for v in (d["binding"], d["database_name"]))]
     assert _missing(names) == []
 
 

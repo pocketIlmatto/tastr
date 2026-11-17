@@ -9,7 +9,7 @@ analysis and stems; see [deploy.md](deploy.md).
 tastr bench beatport-key beatport-key --remote --limit 200 --out bp-200.json
 ```
 
-With `--remote`, the dataset path is a folder in the bucket, not on disk. `--limit`, `--stages`,
+With `--remote`, the dataset path is a folder in the bucket, not on disk. `--limit`,
 `--baseline` and `--out` work as usual (see [bench.md](bench.md)); `--jobs` defaults to the container's
 8 CPUs. The report comes back to your machine; nothing is written to the bucket.
 
@@ -154,11 +154,14 @@ there, else the release's files.
 a temporary app with `modal run`, from that branch's checkout (it uploads the working tree):
 
 ```
-modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --stages core --out bp.json
+modal run tastr/cloud/modal_app.py --kind bench --dataset beatport-tempo --path beatport-key --out bp.json
 modal run tastr/cloud/modal_app.py --kind tempo --dataset hjdb --path beat-this --out hjdb.json
+modal run tastr/cloud/modal_app.py --kind drums-model --dataset idmt --path idmt-smt-drums --out idmt.json
 ```
 
-`--kind bench` is `tastr bench`; any other kind is a `tastr spec-bench` bench (tempo, downbeats, meter).
+`--kind bench` is `tastr bench`; `drums` is `tastr drum-bench`, and `drums-model` the same with the drum
+model (`drums-model-stems` scores MDB's drum stems, `drums-model-test-kits` the held-out StemGMD kits; pass
+`--path -` for `synth` and `synth-onsets`). Any other kind is a `tastr spec-bench` bench (tempo, downbeats, meter).
 The app stops when the run ends.
 
 Upload only what the loaders read (audio and annotations), not result reports or feature caches. The
@@ -210,7 +213,14 @@ rclone copy $TASTR_DATA/stemgmd-single-hits r2:tastr-data/stemgmd-single-hits \
 tastr drum-bench mdb mdb-drums --remote
 tastr drum-bench synth --remote          # needs no dataset
 tastr drum-bench mdb mdb-drums --remote --drum-model   # with the pretrained drum model (stems image)
+tastr drum-bench mdb mdb-drums --remote --drum-model --open-hats model   # open hats from the model's hi-hats
 ```
+
+`--open-hats built-in|model` picks where the open-hat lane comes from when the drum model runs (the built-in
+ringing detector, or the model's hi-hats split by the same ringing test); without it the engine's default
+holds ([drums.md](drums.md#pretrained-drum-model-adtof), "Open hats"). To score a branch before it is
+deployed: `modal run tastr/cloud/modal_app.py --kind drums --dataset mdb --path mdb-drums --drum-model
+--open-hats model` (add `--drums-only` for the stems, `--kits test` for StemGMD's held-out kits).
 
 With the bundle, a track's audio is read only when it is scored, so `--limit` reads only what it
 scores. IDMT-SMT-Drums (CC BY-NC-ND) and MDB Drums (CC BY-NC-SA) are non-commercial licenses; the
@@ -230,7 +240,7 @@ the `vibe_bench` function (8 CPUs) and `tastr vibe-fit` refits the weights local
 `tastr fetch fma-keys fma-keys --remote --archives 0` downloads FMA Keys' labels and the songs in the
 chosen zips (0 to 9; zip 0 is 4.15 GB with 695 labeled songs), checks each zip's MD5 against Zenodo and
 unpacks the mp3s to `fma-keys/audio/<folder>/<track id>.mp3`. A rerun skips songs already there, and the
-fetch writes the item index, so `tastr bench fma-keys fma-keys --remote --stages core` scores what's there.
+fetch writes the item index, so `tastr bench fma-keys fma-keys --remote` scores what's there.
 See [datasets.md](datasets.md).
 
 ### Ballroom
@@ -239,8 +249,8 @@ See [datasets.md](datasets.md).
 30 s) and tempo labels (`data2.tar.gz`) from mtg.upf.edu, plus the beat and bar labels from
 CPJKU/BallroomAnnotations on GitHub, checks each against mirdata's MD5 and unpacks to
 `ballroom/audio/<style>/<id>.wav`, `ballroom/tempo/<id>.bpm` and `ballroom/beats/<id>.beats`. mtg.upf.edu
-is refused from cloud sessions, so this runs on Modal. Then `tastr bench ballroom ballroom --remote
---stages core` scores tempo, beats, downbeats and the meter (3/4 found on the waltzes, 4/4 kept on the rest).
+is refused from cloud sessions, so this runs on Modal. Then `tastr bench ballroom ballroom --remote`
+scores tempo, beats, downbeats and the meter (3/4 found on the waltzes, 4/4 kept on the rest).
 
 ## How it fits together
 

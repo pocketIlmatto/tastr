@@ -1,9 +1,9 @@
 """Downbeat phase benchmark: does bar 1 land on the right beat?
 
-Scores only the choice of which beat starts each bar (core's `_downbeat_phase`),
+Scores only the choice of which beat starts each bar (core's `downbeat_phase` in the Rust engine),
 given the labeled beats, so beat-tracking errors don't blur it. Uses the
 "Beat This!" release (https://zenodo.org/records/13922116), which ships
-128-band log-mel spectrograms (the same bands as `signals.log_mel`, at 50 fps) and
+128-band log-mel spectrograms (the same bands as the engine's log-mel, at 50 fps) and
 beat/downbeat labels for public datasets whose audio isn't redistributable.
 
     python -m tastr.engine.bench.downbeats ~/data/beat_this --dataset gtzan --limit 200
@@ -129,15 +129,20 @@ def load(root: str | Path, dataset: str = "gtzan", limit: int | None = None, see
     return [(name, specs[key].astype(np.float32).T, t, pos) for name, key, t, pos in picked[:limit or None]]
 
 
-def run(items) -> dict:
-    from ..stages.core import _downbeat_phase
+def downbeat_phase(frames: np.ndarray, log_mel: np.ndarray, beats_per_bar: int = 4) -> int:
+    """Core's choice of bar 1 for these beat frames, from the Rust engine."""
+    from .. import rust
 
-    freqs = mel_freqs()
+    return rust.bench("downbeat_phase", log_mel, frames, bands=log_mel.shape[0], frames=log_mel.shape[1],
+                      beats=frames.size, m=beats_per_bar)["phase"]
+
+
+def run(items) -> dict:
     right = half = 0
     by_group: Counter = Counter()
     n_group: Counter = Counter()
     for name, log_mel, beats, pos in items:
-        p = _downbeat_phase(np.round(beats * FPS).astype(int), log_mel, freqs)
+        p = downbeat_phase(np.round(beats * FPS).astype(int), log_mel)
         ok = (pos[p::4] == 1).mean() > 0.5
         right += ok
         half += (pos[(p + 2) % 4::4] == 1).mean() > 0.5

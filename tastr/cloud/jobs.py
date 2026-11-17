@@ -49,32 +49,25 @@ def load_items(dataset: str, folder: Path) -> list:
     return _load(dataset, folder)
 
 
-def run_bench(dataset: str, path: str | None, root: str | Path, stages: list[str] | None = None,
-              limit: int | None = None, jobs: int = 1, progress=None, engine: str | None = None,
-              rekordbox: str | None = None) -> dict:
+def run_bench(dataset: str, path: str | None, root: str | Path, limit: int | None = None, jobs: int = 1,
+              progress=None, rekordbox: str | None = None) -> dict:
     """`tastr bench` with `path` relative to `root` (the bucket mount on Modal). Returns the report.
-    `engine`: "rust" or "python" (TASTR_ENGINE, which the worker processes inherit). `rekordbox`: a Rekordbox
-    XML export of the same tracks (relative to `root`), scored next to Tastr (docs/rekordbox.md)."""
-    import os
-
-    from ..engine import bench, rust
+    `rekordbox`: a Rekordbox XML export of the same tracks (relative to `root`), scored next to Tastr
+    (docs/rekordbox.md)."""
+    from ..engine import bench
     from ..engine.bench import runner
-
-    if engine:
-        os.environ["TASTR_ENGINE"] = engine
 
     t0 = time.time()
     items = load_items(dataset, Path(root) / path) if path else bench.load(dataset)
     if not items:
         raise ValueError(f"no labeled tracks with audio found for {dataset} at {path} in the bucket")
     load_seconds = round(time.time() - t0, 1)
-    report = runner.run(items, stages=stages, jobs=jobs, limit=limit, progress=progress)
+    report = runner.run(items, jobs=jobs, limit=limit, progress=progress)
     if rekordbox:
         from ..engine.bench import rekordbox as rb
 
         rb.add_to_report(report, items, Path(root) / rekordbox, limit)
     report["timing"] = {"load_seconds": load_seconds, "jobs": jobs}
-    report["engine"] = rust.chosen()
     return report
 
 
@@ -133,15 +126,29 @@ def run_spec_bench(bench: str, dataset: str, folder: str | Path, limit: int | No
 
 
 def run_drum_bench(suite: str, folder: str | Path | None, limit: int | None = None, jobs: int = 1,
-                   drums_only: bool = False, kits: str = "all") -> dict:
-    """A drum lane suite (`python -m tastr.engine.bench.drums`) on `folder`; returns its report."""
+                   drums_only: bool = False, kits: str = "all", open_hats: str | None = None) -> dict:
+    """A drum lane suite (`python -m tastr.engine.bench.drums`) on `folder`; returns its report. A dataset
+    suite that finds no tracks there is an error, not an empty report. `open_hats` ("built-in" or "model")
+    says where the open-hat lane comes from when the drum model is on; None keeps the engine's default."""
+    import os
+
     from ..engine.bench import drums
 
     if suite not in drums.SUITES:
         raise ValueError(f"unknown drum suite {suite!r}; choose from {', '.join(drums.SUITES)}")
+    if open_hats:
+        if open_hats not in drums.OPEN_HATS:
+            raise ValueError(f"unknown open-hat source {open_hats!r}; choose from {', '.join(drums.OPEN_HATS)}")
+        os.environ["TASTR_OPEN_HATS"] = open_hats  # read by the bench and its worker processes
+    else:
+        os.environ.pop("TASTR_OPEN_HATS", None)  # a reused Modal container may hold an earlier run's choice
     t0 = time.time()
     report = drums.run(suite, folder, limit, jobs, drums_only, kits)
+    if not suite.startswith("synth") and not report.get("tracks"):
+        raise ValueError(f"no {suite} tracks found at {folder}")
     report["timing"] = {"seconds": round(time.time() - t0, 1), "jobs": jobs}
+    if drums.open_hats():
+        report["open_hats"] = drums.open_hats()
     return report
 
 
@@ -188,6 +195,18 @@ def run_analyze(audio: bytes | str, suffix: str, stages: list[str] | None = None
         return analyze_file(src, options=options).to_dict()
 
 
+def run_ml_tags(audio: bytes | str, suffix: str) -> dict:
+    """ML tags (engine/ml_tags.py) for one file (its bytes or a signed link to it)."""
+    import tempfile
+
+    from ..engine import ml_tags
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / f"track{suffix}"
+        _write_audio(audio, src)
+        return ml_tags.analyze(src)
+
+
 def run_analyze_stream(audio: bytes | str, suffix: str, stages: list[str] | None = None, options: dict | None = None):
     """run_analyze, yielding {"stage", "i", "n"} as each stage starts and then {"card": ...}, for progress bars."""
     import queue
@@ -217,6 +236,27 @@ def run_analyze_stream(audio: bytes | str, suffix: str, stages: list[str] | None
             yield event
             if "card" in event:
                 return
+
+
+def run_keylock(sources: dict[str, str], ratio: float, put_urls: dict[str, str]) -> dict:
+    """Key lock (tastr/keylock.py): download each part from its signed link, stretch it by `ratio` with its pitch
+    kept, and upload it to its link in `put_urls`. Returns {part: bytes written}."""
+    import tempfile
+
+    from .. import keylock
+
+    out = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for part, url in sources.items():
+            if part not in keylock.PARTS or part not in put_urls:
+                continue
+            src, dst = Path(tmp) / f"{part}.src", Path(tmp) / f"{part}.flac"
+            _write_audio(url, src)
+            keylock.stretch_file(src, dst, ratio)
+            out[part] = _put(put_urls[part], dst)
+            src.unlink(missing_ok=True)
+            dst.unlink(missing_ok=True)
+    return out
 
 
 def run_stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:

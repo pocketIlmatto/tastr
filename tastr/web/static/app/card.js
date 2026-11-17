@@ -1,11 +1,11 @@
 // The track card: opening a track, its header and stats, sections and their order, Hear a key and the metadata section.
 
-import { $, VIBE_GROUPS, VIBE_MIN, api, currentId, groupOf, h, isNum, mmss, setCurrentId, tagHelp, vibeHelp } from "./core.js";
-import { bpmFilter, camelotNear, keyFilter, lib, syncCardFilters, vibeFilter, visibleTracks } from "./library.js";
-import { setDrumModelOn, setLookupProviders } from "./bulk.js";
+import { $, ML_REPLACES, VIBE_GROUPS, VIBE_MIN, api, currentId, groupOf, h, isNum, mlState, mlTip, mmss, nap, setCurrentId, tagHelp, vibeHelp, vibeTags } from "./core.js";
+import { bpmFilter, camelotNear, keyFilter, lib, loadTracks, renderList, syncCardFilters, vibeFilter, visibleTracks } from "./library.js";
+import { bulkBusy, jobs, runBulk, setDrumModelOn, setLookupProviders } from "./bulk.js";
 import { camPc, charts, labelOpen, setLabelOpen, setMarkHook } from "./labels.js";
 import { labelBar } from "./label-bar.js";
-import { DAWS, daw, dawText, keyName, setDaw, strudelView } from "./daw.js";
+import { DAWS, camelotParallel, daw, dawText, keyName, liveView, modeOther, setDaw } from "./daw.js";
 import { delay, trackAudio } from "./audio.js";
 import { energyChart } from "./chart.js";
 import { grooveView } from "./groove.js";
@@ -15,17 +15,70 @@ import { audioCtx, player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { pollStems, stemStatus, stemsBusy, trackMenu } from "./menu.js";
 import { setStatus } from "./upload.js";
 import { openGlossary } from "./glossary.js";
+import { fetchHistory, historyBlock, historyLine, loadHistory } from "./card-history.js";
 
+// A chip's color strength: the engine's from its 0.20 cut-off; ML moods and voice from 0.1; ML styles score lower (0.10-0.5), so double them.
+const chipStrength = (t) => !isNum(t.score) ? 0 : Math.max(0, Math.min(1,
+  t.src === "ml" ? (t.mlGroup === "style" ? t.score * 2 : (t.score - 0.1) / 0.9) : (t.score - VIBE_MIN) / (1 - VIBE_MIN)));
+// The note under the chips while a track's ML tags aren't in: queued, running, or failed with Try again.
+function mlNote(c) {
+  const st = mlState(c);
+  if (!st || st === "done") return null;
+  if (st === "error") return h("p", { class: "ml-state err", role: "status" }, h("b", {}, "ML tags failed"),
+    ` for this track${c.ml_tags_error ? ` (${c.ml_tags_error.replace(/\.$/, "")})` : ""}. These are Tastr's own vibes. `,
+    h("button", { type: "button", class: "linklike", onclick: () => mlRetry(c) }, "Try again"));
+  return h("p", { class: "ml-state", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }),
+    st === "running" ? "Adding ML tags: style, mood and vocals…" : "ML tags are queued for this track.",
+    h("span", { class: "muted" }, " Until they're in, these are Tastr's own vibes."));
+}
+// Swap the open card's Vibe section in place (the rest of the card, and what's playing, stay as they are).
+function redrawVibe(c) {
+  if (currentId !== c.id || shownCard !== c) return;
+  const box = document.querySelector('#card .sec[data-sec="vibe"] .sec-content');
+  if (box) { box.replaceChildren(vibeBody(c)); syncCardFilters(visibleTracks().length); }
+}
+// Polls GET /api/tracks/{id}/ml-tags while a run is queued or running, then shows the tags (or the error).
+const mlPolling = new Set();
+async function pollMl(c) {
+  if (mlPolling.has(c.id)) return;
+  mlPolling.add(c.id);
+  try {
+    for (;;) {
+      await nap(4000);
+      let st;
+      try { st = await api(`/api/tracks/${c.id}/ml-tags`); } catch (_) { continue; }
+      const was = mlState(c);
+      Object.assign(c, { ml_tags_state: st.state, ml_tags_error: st.error || null });
+      if (st.result) c.ml_tags = st.result;
+      if (mlState(c) !== was) redrawVibe(c);
+      if (st.state !== "queued" && st.state !== "running") break;
+      if (currentId !== c.id) break; // another track is open; its card polls for itself
+    }
+    if (mlState(c) === "done") { await loadTracks(); renderList(); }
+  } finally { mlPolling.delete(c.id); }
+}
+// Try again: POST /api/tracks/{id}/ml-tags starts a run (or joins one), then poll it.
+async function mlRetry(c) {
+  try {
+    const st = await api(`/api/tracks/${c.id}/ml-tags`, { method: "POST" });
+    Object.assign(c, { ml_tags_state: st.state, ml_tags_error: st.error || null });
+  } catch (e) {
+    Object.assign(c, { ml_tags_state: "error", ml_tags_error: e.message });
+  }
+  redrawVibe(c);
+  if (c.ml_tags_state === "queued" || c.ml_tags_state === "running") pollMl(c);
+}
 function vibeBody(c) {
-  const shown = [...c.tags].sort((a, b) => b.score - a.score);
+  const shown = vibeTags(c).sort((a, b) => b.score - a.score), ml = mlState(c) === "done";
   const shownSet = new Set(shown.map((t) => t.tag));
   const all = (c.extras && c.extras["tags.vibe_scores"]) || {};
-  const below = Object.entries(all).filter(([tag]) => !shownSet.has(tag)).map(([tag, score]) => ({ tag, score })).sort((a, b) => b.score - a.score);
+  // Once ML tags are in, the engine vibes they replace aren't listed, not even as hidden scores.
+  const below = Object.entries(all).filter(([tag]) => !shownSet.has(tag) && !(ml && ML_REPLACES[tag])).map(([tag, score]) => ({ tag, score })).sort((a, b) => b.score - a.score);
   const rowOf = (t, on) => h("li", { class: "vibe-row" + (on ? "" : " off"), style: `--g:${groupOf(t.tag).color}` },
-    h("span", { class: "vibe-name", tabindex: "0", "data-tip": vibeHelp(t.tag) }, h("i", { class: "vibe-dot", title: groupOf(t.tag).name }), t.tag),
+    h("span", { class: "vibe-name", tabindex: "0", "data-tip": t.src === "ml" ? `${mlTip(t.tag)} From Essentia's trained models.` : vibeHelp(t.tag) }, h("i", { class: "vibe-dot", title: groupOf(t.tag).name }), t.tag),
     h("span", { class: "vibe-bar", role: "img", "aria-label": `Score ${t.score.toFixed(2)} of 1` }, h("i", { style: `width:${t.score * 100}%` })),
     h("span", { class: "vibe-num" }, t.score.toFixed(2)),
-    h("span", { class: "vibe-state" }, on ? "Shown" : "Hidden"));
+    h("span", { class: "vibe-state" }, on ? (t.src === "ml" ? "ML" : "Shown") : "Hidden"));
   const list = h("ul", { class: "vibe-list", hidden: "" },
     h("li", { class: "vibe-head", "aria-hidden": "true" }, h("span", {}, "Vibe"), h("span", { class: "vibe-axis" }, h("span", { class: "vibe-min", style: `left:${VIBE_MIN * 100}%` }, "0.20 cut-off")), h("span", {}), h("span", {})),
     ...shown.map((t) => rowOf(t, true)), ...below.map((t) => rowOf(t, false)));
@@ -34,15 +87,20 @@ function vibeBody(c) {
   const note = h("p", { class: "vibe-note muted" },
     h("span", { class: "vibe-scale", "aria-hidden": "true" }),
     h("span", { tabindex: "0", "data-tip": `Each vibe gets a score from 0 to 1 from the track's measurements. Chips are grouped by kind of vibe (mood, energy, rhythm, sound, tempo), and each group has its own color. A stronger color means a higher score. Vibes scoring under ${VIBE_MIN.toFixed(2)} are left out, and a vibe the track doesn't qualify for at all gets no score.` }, `Stronger color = higher score. Shown from ${VIBE_MIN.toFixed(2)} up.`));
+  const st = mlState(c);
+  if ((st === "queued" || st === "running") && currentId === c.id) pollMl(c);
   return h("div", { class: "vibe" },
     VIBE_GROUPS.map((g) => ({ g, items: shown.filter((t) => groupOf(t.tag) === g) })).filter((x) => x.items.length).map(({ g, items }) =>
       h("div", { class: "vibe-group", style: `--g:${g.color}` }, h("span", { class: "vibe-glabel" }, g.name),
         h("div", { class: "chips" }, items.map((t) =>
           h("span", { class: "chip" + (lib.vibes.includes(t.tag) ? " on" : ""), role: "button", tabindex: "0", "data-tag": t.tag, "aria-pressed": String(lib.vibes.includes(t.tag)),
             onclick: () => vibeFilter(t.tag), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); vibeFilter(t.tag); } },
-            style: `--t:${isNum(t.score) ? Math.max(0, Math.min(1, (t.score - VIBE_MIN) / (1 - VIBE_MIN))) : 0}`,
-            "data-tip": `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""} Click to filter the track list; click more vibes to narrow it.`.trim() }, t.tag))))),
+            style: `--t:${chipStrength(t)}`,
+            "data-tip": `${t.src === "ml" ? `${mlTip(t.tag)} ML tag, score ${t.score.toFixed(2)}.` : `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`} Click to filter the track list; click more vibes to narrow it.`.trim() },
+            t.tag, t.src === "ml" ? h("span", { class: "ml-mk", "aria-label": "(ML)" }, "✦") : null))))),
+    mlNote(c),
     h("div", { class: "card-filter", "data-kind": "vibe", hidden: "" }),
+    ml && shown.some((t) => t.src === "ml") ? h("p", { class: "ml-src muted" }, "✦ Tagged by Essentia's trained models (ML). The rest are measured by Tastr.") : null,
     h("div", { class: "vibe-foot" }, note, h("a", { class: "link gl-link", href: "#g-vibes", onclick: (e) => { e.preventDefault(); openGlossary("g-vibes"); } }, "What the vibes mean"), btn), list);
 }
 // Hear a key: that key's tonic chord (low root, root, third, fifth, octave) alone for 2 s, then ~6 s of the track's drop or
@@ -105,7 +163,8 @@ export async function openTrack(id) {
   switchTo("library");
   setRoute(`track/${id}`);  // a refresh reopens this track
   try {
-    const [card] = await Promise.all([api(`/api/tracks/${id}`), loadEdits(id)]);
+    const [card, history] = await Promise.all([api(`/api/tracks/${id}`), fetchHistory(id), loadEdits(id)]);
+    if (Array.isArray(history)) card.history = history;  // its earlier cards, for the card line and Metadata
     if (currentId === id) renderCard(card);
   } catch (e) {
     $("card").replaceChildren(h("p", { class: "error" }, e.message));
@@ -116,7 +175,7 @@ export function switchTo(view) {
 }
 
 // "Listed elsewhere": what online catalogs say (tastr.lookup), next to ours, never instead of it.
-const LOOKUP_MARK = { agrees: ["✓", "matches ours"], double: ["×2", "double ours"], half: ["½", "half ours"],
+export const LOOKUP_MARK = { agrees: ["✓", "matches ours"], double: ["×2", "double ours"], half: ["½", "half ours"],
   relative: ["≈", "relative key of ours"], fifth: ["≈", "a fifth from ours"], parallel: ["≈", "parallel key of ours"],
   differs: ["≠", "differs from ours"] };
 function lookupLine(c) {
@@ -135,6 +194,55 @@ function lookupLine(c) {
       isNum(x.bpm) ? h("span", {}, `${Math.round(x.bpm * 10) / 10} BPM`, mark("BPM", x.compare && x.compare.bpm)) : null,
       isNum(x.bpm) && x.key ? ", " : null,
       x.key ? h("span", {}, x.key, mark("Key", x.compare && x.compare.key)) : null].filter((n) => n !== null)));
+}
+
+// Metadata › Listed elsewhere: every source, filled in or not (sandbox v201, listed-elsewhere-spec.md). The server
+// lists the sources (lookup_sources, with `configured`); a source with no stored row reads "none".
+const LOOKUP_HOW = { rekordbox: "Your Rekordbox export, matched by file name or artist and title", acousticbrainz: "Open data, by artist and title" };
+const LOOKUP_SAY = {
+  none: "Not looked up yet.", not_found: "Not found: it has no listing for this artist and title.",
+  pending: "Asked: the catalog is adding this song. Check back later.", no_tags: "Can't look up: the file has no artist and title tags.",
+  limited: "Paused: the catalog's limit was reached. It will be asked again later.",
+  rb_none: "Not in your Rekordbox export.", rb_new: "Not imported yet.", off: "Not set up on this server." };
+const fmtDay = (iso) => new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+export function lookupsFor(c) {
+  const stored = Object.fromEntries((c.lookups || []).map((x) => [x.provider, x]));
+  return (c.lookup_sources || []).map((src) => ({ ...src, status: "none", ...(stored[src.provider] || {}),
+    label: src.label, homepage: src.homepage, configured: src.configured,
+    how: LOOKUP_HOW[src.provider] || "Online catalog, by artist and title" }));
+}
+function lookupTable(c) {
+  const core = c.core || {};
+  const mark = (what, cmp) => { const m = cmp && LOOKUP_MARK[cmp]; return m ? h("span", { class: `lk-mark lk-${cmp}`, title: `${what} ${m[1]}` }, m[0]) : null; };
+  const row = (name, how, val, cls) => h("div", { class: "lk-row" + (cls ? " " + cls : ""), role: "row" },
+    h("div", { class: "lk-name", role: "rowheader" }, name, how ? h("small", { class: "muted" }, how) : null),
+    h("div", { class: "lk-val", role: "cell" }, ...val));
+  const ours = [isNum(core.bpm) ? `${core.bpm.toFixed(1)} BPM` : "no BPM",
+    core.key ? `${keyName(core.key)}${core.key.camelot ? ` (${core.key.camelot})` : ""}` : "no key"].join(" · ");
+  const rows = lookupsFor(c);
+  return h("div", { class: "meta-lookups" }, h("h4", {}, "Listed elsewhere"),
+    h("p", { class: "muted lk-intro" }, "What other sources list for this track's BPM and key, next to what Tastr measured. They never change Tastr's values."),
+    h("div", { class: "lk-table", role: "table", "aria-label": "BPM and key from other sources" },
+      row(h("b", {}, "Tastr"), "Measured from the audio", [h("span", { class: "lk-v" }, ours)], "lk-ours"),
+      ...rows.map((x) => {
+        const name = h("a", { href: x.homepage, target: "_blank", rel: "noopener", class: "lk-src" }, x.label);
+        if (x.status === "found") return row(name, x.how, [
+          h("span", { class: "lk-v" }, isNum(x.bpm) ? h("span", {}, `${Math.round(x.bpm * 10) / 10} BPM`, mark("BPM", x.compare && x.compare.bpm)) : "no BPM", " · ",
+            x.key ? h("span", {}, `${x.key}${x.camelot ? ` (${x.camelot})` : ""}`, mark("Key", x.compare && x.compare.key)) : "no key"),
+          x.url && x.url !== x.homepage ? h("a", { class: "lk-open", href: x.url, target: "_blank", rel: "noopener" }, "See the listing ↗") : null].filter(Boolean));
+        if (!x.configured) return row(name, x.how, [h("span", { class: "muted" }, LOOKUP_SAY.off), h("small", { class: "muted" }, "An admin turns it on with TASTR_LOOKUP (docs/lookup.md).")], "lk-off");
+        if (x.status === "error") return row(name, x.how, [h("span", { class: "lk-err" }, `Lookup failed: ${(x.error || "the service didn't answer").replace(/\.$/, "")}.`)], "lk-off");
+        if (x.provider === "rekordbox" && x.status === "none" && x.imported === false) return row(name, x.how, [h("span", { class: "muted" }, LOOKUP_SAY.rb_new), h("small", { class: "muted" }, "An admin loads it from your export (docs/rekordbox.md).")], "lk-off");
+        // A stored "not found" that expires (FreqBlog's terms): say when it was checked; it's asked again later.
+        if (x.status === "not_found" && x.checked_at) return row(name, x.how, [h("span", { class: "muted" }, "Not listed yet."), h("small", { class: "muted" }, `Checked ${fmtDay(x.checked_at)}. Tastr asks again after a few days.`)], "lk-off");
+        const say = x.provider === "rekordbox" && x.status === "none" ? LOOKUP_SAY.rb_none : LOOKUP_SAY[x.status] || x.status;
+        return row(name, x.how, [h("span", { class: "muted" }, say)], "lk-off");
+      })),
+    h("p", { class: "muted lk-key" }, "✓ matches Tastr · ×2 / ½ double or half · ≈ a related key (relative, fifth or parallel) · ≠ differs"),
+    // FreqBlog's terms ask for "Audio analysis by FreqBlog" where people can find it; the full list is Glossary › Credits.
+    rows.some((x) => x.provider === "freqblog" && x.configured) ? h("p", { class: "muted lk-credit" }, "Audio analysis by ",
+      h("a", { href: "https://freqblog.com", target: "_blank", rel: "noopener", class: "link" }, "FreqBlog"), ". ",
+      h("a", { href: "#g-credits", class: "link", onclick: (e) => { e.preventDefault(); openGlossary("g-credits"); } }, "All credits")) : null);
 }
 
 export function stat(value, label, title) {
@@ -181,18 +289,68 @@ function bpmStat(core) {
   return statBtn("bpm", core.bpm.toFixed(1), sure ? `BPM · ${sure.text}` : "BPM",
     [sure && sure.title, `Click to show tracks from ${Math.round(core.bpm - 5)} to ${Math.round(core.bpm + 5)} BPM.`].filter(Boolean).join(" "), () => bpmFilter(core.bpm));
 }
+// key.mode_uncertain (the thirds barely sound and the key model barely prefers this mode): major or minor is a guess.
+// Missing on older cards, which then show the key as before.
+const MODE_Q_TIP = "Major or minor is a guess for this track: its third barely sounds, so Tastr can't hear which it is. Tracks like this get the mode wrong about 1 time in 3 (about half for rock). If you know, label the key.";
 function keyStat(key) {
   const sure = key && isNum(key.likely_correct) ? sureness(key.likely_correct) : null;
   if (!key || !key.camelot) return stat(key ? `${keyName(key)}` : "–", key ? [key.scale, sure && sure.text].filter(Boolean).join(" · ") || "key" : "key", sure && sure.title);
+  if (key.mode_uncertain && isNum(key.tonic) && camelotParallel(key.camelot)) return keyUnsureStat(key, sure);
   return statBtn("key", keyName(key), [key.camelot, key.scale, sure && sure.text].filter(Boolean).join(" · "),
     [sure && sure.title, `Click to show tracks in ${key.camelot} and the keys that mix with it (${camelotNear(key.camelot).slice(1).join(", ")}).`].filter(Boolean).join(" "), () => keyFilter(key.camelot));
+}
+// "C major?" with the mode muted, and the other mode named under it: "8B · or C minor (5A)".
+function keyUnsureStat(key, sure) {
+  const o = modeOther(key), oCam = camelotParallel(key.camelot), tonic = keyName(key).replace(/ (major|minor)$/, "");
+  const click = `Click to show tracks in ${key.camelot} and the keys that mix with it.`;
+  const b = statBtn("key", h("span", {}, tonic, " ", h("span", { class: "mode-q" }, `${key.mode}?`)), [key.camelot, `or ${keyName(o)} (${oCam})`, sure && sure.text].filter(Boolean).join(" · "),
+    `${[MODE_Q_TIP, sure && sure.title].filter(Boolean).join(" ")}\n${click}`, () => keyFilter(key.camelot));
+  b.dataset.unsure = "";
+  b.setAttribute("aria-label", `Key: ${keyName(key)} or ${keyName(o)}, the mode is a guess. Show tracks in ${key.camelot} and keys that mix with it.`);
+  return b;
 }
 const energyStat = (core) => h("div", { class: "stat" },
   h("b", {}, isNum(core.energy) ? core.energy.toFixed(2) : "–"),
   h("span", {}, "energy"),
   h("div", { class: "meter" }, h("i", { style: `width:${isNum(core.energy) ? Math.max(0, Math.min(1, core.energy)) * 100 : 0}%` })));
 
-// The card head: title and menu, artist, the stats, the catalog line, and the label bar.
+// A card from an older engine: one compact line after the stats, "Engine 0.5.0 · latest 0.6.0", and a ↻ button that
+// re-analyzes it (the bulk Re-analyze, for this one track). The details are in the tooltip: which stages are older,
+// what changed (engine_news), what re-analyzing keeps, or why it can't (re-analysis needs the original audio).
+const engineOld = (c) => {
+  const now = c.engine_latest || {}, mine = c.stages_run || {};
+  const lt = (a, b) => { const x = String(a).split(".").map((n) => parseInt(n, 10) || 0), y = String(b).split(".").map((n) => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(3, x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
+  return Object.keys(now).filter((k) => !mine[k] || lt(mine[k], now[k]));
+};
+function engineLine(c) {
+  const old = engineOld(c);
+  if (!old.length) return null;
+  const now = c.engine_latest, mine = c.stages_run || {}, news = c.engine_news || {}, gone = !c.has_audio;
+  const k0 = old.includes("core") ? "core" : old[0];
+  const said = old.map((k) => news[k] && news[k][now[k]]).filter(Boolean);
+  const tip = `Analyzed by an older engine (${old.map((k) => `${k} ${mine[k] || "?"}`).join(", ")}; latest ${old.map((k) => `${k} ${now[k]}`).join(", ")}).`
+    + (said.length ? ` ${said.join(". ")}.` : "") + " Its numbers may change when it's re-analyzed."
+    + (gone ? " It can't be re-analyzed: its audio was deleted. Upload the file again to update it." : " Re-analyzing keeps your labels, edits and cue points.");
+  const job = jobs.get(c.id);
+  let btn;
+  if (job && !job.error) btn = h("span", { class: "spin" + (job.active ? "" : " idle"), role: "img", "aria-label": job.text, title: job.text });
+  else {
+    const why = gone ? "Can't re-analyze: its audio was deleted" : bulkBusy ? "Wait for the bulk action to finish" : job ? `${job.text}: ${job.error}. Try again` : "Re-analyze with the latest engine";
+    btn = h("button", { type: "button", class: "eng-btn", disabled: gone || bulkBusy ? "" : null, title: why, "aria-label": why, onclick: () => {
+      const done = runBulk("reanalyze", [c.id]);
+      repaint(line);
+      done.then(() => repaint(document.querySelector("#card .eng-old")));  // after a failure (a success re-renders the whole card)
+    } }, "↻");
+  }
+  const line = h("p", { class: "eng-old" + (gone ? " gone" : ""), title: tip },
+    h("span", { class: "eng-v", tabindex: "0", "aria-label": tip }, `Engine ${mine[k0] || "?"}`, h("span", { class: "muted" }, ` · latest ${now[k0]}`)), btn);
+  // Repaint the line the card shows now (the first repaint replaces this one, so later ones look it up)
+  const repaint = (el) => { if (el && el.isConnected && currentId === c.id) { const nl = engineLine(c); if (nl) el.replaceWith(nl); else el.remove(); } };
+  return line;
+}
+
+// The card head: title and menu, artist, the stats, the catalog line, the engine and history lines, and the label bar.
 function cardHead(c) {
   const core = c.core || {};
   const head = h("div", { class: "card-head" },
@@ -207,6 +365,9 @@ function cardHead(c) {
   const listed = lookupLine(c);
   if (listed) head.append(listed);
   head.append(h("div", { class: "card-filter", "data-kind": "head", hidden: "" }));
+  const eng = engineLine(c);
+  if (eng) head.append(eng);
+  head.append(historyLine(c));  // "Changed in the core 0.6.0 update: BPM 117.45 → 118.79", when the last re-analysis moved a number
   if (labelOpen !== null && labelOpen !== c.id) setLabelOpen(null);
   head.append(labelBar(c));
   return head;
@@ -234,7 +395,7 @@ function trySection(c, sugs) {
   const groups = {};
   for (const s of sugs) (groups[s.category || "other"] ||= []).push(s);
   const body = [];
-  if (DAWS[daw].code) body.push(strudelView(c));
+  if (DAWS[daw].code) body.push(liveView(c));
   else for (const [cat, items] of Object.entries(groups)) {
     body.push(h("h3", {}, cat));
     for (const s of items) body.push(h("div", { class: "sug" }, h("b", {}, s.title), h("p", {}, dawText(s))));
@@ -248,12 +409,12 @@ export function renderCard(c) {
   root.replaceChildren();
   root.dataset.id = c.id;
   root.append(cardHead(c));
-  if (c.metadata) root.append(metadataSection(c.metadata));
+  if (c.metadata) root.append(metadataSection(c.metadata, c));
   const energy = c.series && c.series.energy;
   if (energy && energy.times && energy.times.length > 1 || (c.sections || []).length) {
     root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration, c)]));
   }
-  if ((c.tags || []).length) root.append(section("vibe", "Vibe", [vibeBody(c)]));
+  if (vibeTags(c).length || mlState(c) === "error") root.append(section("vibe", "Vibe", [vibeBody(c)]));
   // Template drum patterns are tempo-based guesses: they live in the Drums part's Pattern picker, not as grids or in the Try list.
   const isTemplate = (s) => s.data && s.data.origin === "template";
   const templates = (c.suggestions || []).filter(isTemplate), sugs = (c.suggestions || []).filter((s) => !isTemplate(s));
@@ -264,6 +425,7 @@ export function renderCard(c) {
   if (errs.length) root.append(h("div", { class: "errors" }, "Some stages failed: ", errs.map(([k, v]) => h("div", {}, `${k}: ${v}`))));
   placeSections();
   syncCardFilters(visibleTracks().length);
+  loadHistory(c);  // a fresh card from a re-analysis comes without its history
 }
 
 // Card sections are <details>; which are open is remembered across tracks (Metadata starts closed). Each header has a drag
@@ -325,7 +487,7 @@ function dropSection(from, onto, after) {
   o.splice(at, 0, from); secOrder = o; saveSecOrder(); placeSections(); secFlash(from);
 }
 
-function metadataSection(meta) {
+function metadataSection(meta, c) {
   const body = [];
   for (const [group, kv] of Object.entries(meta)) {
     const rows = Object.entries(kv).filter(([, v]) => v != null && v !== "");
@@ -333,7 +495,7 @@ function metadataSection(meta) {
       ? h("dl", { class: "kv" }, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))]))
       : h("p", { class: "muted meta-empty" }, "None found. The title above came from the file name.")));
   }
-  return section("meta", "Metadata", [h("div", { class: "meta-cols" }, body)], false);
+  return section("meta", "Metadata", [h("div", { class: "meta-cols" }, body), historyBlock(c), lookupTable(c)], false);
 }
 
 export function setHearDrums(v) { return (hearDrums = v); }

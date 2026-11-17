@@ -1,14 +1,15 @@
 // The track list: search, sort and filters, placeholder rows while files analyze, the collapsible sidebar and quick jump.
 
-import { $, api, currentId, h, isNum, labels, mmss, progBar, reviewRows, setTracks, tracks } from "./core.js";
-import { jobs, renderBulk, sel, selecting, setSelecting, toggleSel } from "./bulk.js";
+import { $, VIBE_GROUPS, api, currentId, groupOf, h, isNum, labels, mmss, progBar, reviewRows, rowVibes, setTracks, tracks } from "./core.js";
+import { bulkBusy, jobs, renderBulk, runBulk, sel, selecting, setSelecting, toggleSel } from "./bulk.js";
+import { serverCfg } from "./daw.js";
 import { loadReview, renderReview } from "./labels.js";
 import { openTrack } from "./card.js";
 import { A_STEPS } from "./upload.js";
 import { lists, loadLists, onListsChange } from "./lists.js";
 import { exportMenu, onPlaying, playList, playingId } from "./playlist.js";
 
-export const LIB_CLEAR = () => ({ q: "", vibes: [], key: "", bmin: "", bmax: "", up: "", upFrom: "", upTo: "", lab: "" });
+export const LIB_CLEAR = () => ({ q: "", vibes: [], key: "", bmin: "", bmax: "", up: "", upFrom: "", upTo: "", lab: "", eng: "" });
 export const lib = { sort: "new", list: null, ...LIB_CLEAR() };  // list: the saved list shown (Library › List), or null for all tracks
 const shownList = () => (lib.list == null ? null : lists.find((l) => l.id === lib.list) || null);
 const listSig = () => { const l = shownList(); return l ? `${l.id}:${l.track_ids.join(",")}` : ""; };
@@ -51,7 +52,7 @@ export const SORTS = {
   energy: (a, b) => (b.energy ?? -1) - (a.energy ?? -1),
   len: (a, b) => (b.duration ?? 0) - (a.duration ?? 0),
 };
-export const filtersOn = (f) => !!(f.q || f.vibes.length || f.key || f.bmin || f.bmax || f.up || f.lab);
+export const filtersOn = (f) => !!(f.q || f.vibes.length || f.key || f.bmin || f.bmax || f.up || f.lab || f.eng);
 export const libActive = () => filtersOn(lib);
 // Search, sort and filters run in the browser, which is fine for a few hundred tracks. `f` is a filter state like `lib`.
 export function matchTracks(f, list = tracks) {
@@ -61,7 +62,8 @@ export function matchTracks(f, list = tracks) {
     (!q || `${t.title} ${t.artist || ""}`.toLowerCase().includes(q)) &&
     f.vibes.every((v) => (t.tags || []).includes(v)) && (!f.key || keyMatch(t.camelot, f)) &&
     (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi)) &&
-    upMatch(t.uploaded, f) && (!f.lab || (need ? need.has(t.id) : (f.lab === "yes") === labels.has(t.id))));
+    upMatch(t.uploaded, f) && (!f.lab || (need ? need.has(t.id) : (f.lab === "yes") === labels.has(t.id))) &&
+    (!f.eng || (f.eng === "old") === !!t.stale));  // Engine: cards from the current engine, or an older one (Files has no eng)
 }
 // A list shows in its own order (the Sort is off meanwhile); search and filters still narrow it.
 export function visibleTracks() {
@@ -99,19 +101,76 @@ function syncFilterSelects() {
 }
 function fillFilterOptions() {
   const vibes = [...new Set(tracks.flatMap((t) => t.tags || []))].sort(), keys = [...new Set(tracks.map((t) => t.camelot).filter(Boolean))].sort((a, b) => keyRank(a) - keyRank(b));
-  $("lib-vibe").replaceChildren(h("option", { value: "" }, "Any vibe"), ...vibes.map((v) => h("option", { value: v }, v)));
+  // Grouped like the card's chips (Style, Mood, Energy, Rhythm, Sound, Tempo). While the one-time ML tags pass runs, the
+  // untagged tracks still carry the engine's vibes, so both sets show here until it's done.
+  $("lib-vibe").replaceChildren(h("option", { value: "" }, "Any vibe"),
+    ...VIBE_GROUPS.map((g) => [g, vibes.filter((v) => groupOf(v) === g)]).filter(([, vs]) => vs.length)
+      .map(([g, vs]) => h("optgroup", { label: g.name }, ...vs.map((v) => h("option", { value: v }, v)))));
   $("lib-key").replaceChildren(h("option", { value: "" }, "Any key"), ...keys.map((k) => h("option", { value: k }, k)));
   syncFilterSelects();
 }
 export function syncTools() {
   $("lib-q").value = lib.q; $("lib-sort").value = lib.sort; syncFilterSelects(); $("lib-bmin").value = lib.bmin; $("lib-bmax").value = lib.bmax;
-  $("lib-up").value = lib.up; $("lib-up-from").value = lib.upFrom; $("lib-up-to").value = lib.upTo; $("lib-up-range").hidden = lib.up !== "range"; $("lib-lab").value = lib.lab;
+  $("lib-up").value = lib.up; $("lib-up-from").value = lib.upFrom; $("lib-up-to").value = lib.upTo; $("lib-up-range").hidden = lib.up !== "range"; $("lib-lab").value = lib.lab; $("lib-eng").value = lib.eng;
 }
 export async function loadTracks() {
   const [rows] = await Promise.all([api("/api/tracks"), loadReview(false)]);
   setTracks(rows);
-  for (const t of tracks) t.uploaded = Date.parse(t.created_at || t.analyzed_at) || 0; // when it was uploaded, for the list, sort and filter
+  for (const t of tracks) {
+    t.uploaded = Date.parse(t.created_at || t.analyzed_at) || 0; // when it was uploaded, for the list, sort and filter
+    t.tags = rowVibes(t); // the engine's vibes, with the weak ones swapped for ML tags once the track has them
+  }
   fillFilterOptions();
+}
+// The first load: until the first /api/tracks answers (seconds after a quiet spell, while the server starts), the
+// list shows skeleton rows and "Loading your library…", after 3 s "Waking up the server…", and if it fails the
+// error with Retry. The card shows a skeleton, and Explore, Files and Admin one line each (their .boot-line), with
+// the rest of the view hidden (style.css, html[data-loading]). Admin also waits for /api/config (configDone).
+let libLoad = null;  // null once loaded, or {phase: "loading" | "slow" | "failed", msg}
+let cfgWait = true;
+const BOOT_SAY = { loading: "Loading your library…", slow: "Waking up the server. This takes a few seconds after a quiet spell." };
+const SLOW_MS = 3000;
+const retryBtn = () => h("button", { type: "button", onclick: () => firstLoad() }, "Retry");
+function bootRows() {
+  if (libLoad.phase === "failed") return [h("li", { class: "boot-err", role: "alert" },
+    h("b", {}, "Couldn't load your library."), h("span", {}, ` ${libLoad.msg}`), retryBtn())];
+  return [h("li", { class: "boot-say", role: "status", "aria-live": "polite" }, h("span", { class: "spin", "aria-hidden": "true" }), BOOT_SAY[libLoad.phase]),
+    ...[62, 48, 70, 55, 66, 44].map((w) => h("li", { class: "skel", "aria-hidden": "true" }, h("i", { style: `width:${w}%` }), h("i", { class: "sub", style: `width:${w - 18}%` })))];
+}
+function paintBoot() {
+  const root = document.documentElement;
+  root.toggleAttribute("data-loading", !!libLoad);
+  root.toggleAttribute("data-cfg-wait", cfgWait);
+  const failed = libLoad?.phase === "failed", slow = libLoad?.phase === "slow";
+  document.querySelectorAll("[data-boot-line]").forEach((p) => {
+    const admin = !!p.closest("#view-admin"), show = !!libLoad || (admin && cfgWait);
+    p.hidden = !show; p.classList.toggle("err", failed);
+    if (!show) { p.replaceChildren(); return; }
+    p.replaceChildren(...(failed ? [`Couldn't load your library. ${libLoad.msg}`, " ", retryBtn()]
+      : [h("span", { class: "spin", "aria-hidden": "true" }), slow ? BOOT_SAY.slow : admin ? "Loading…" : p.closest("#view-files") ? "Loading your files…" : BOOT_SAY.loading]));
+  });
+  // The card: a skeleton while loading, unless a track (from the address) has already opened; the placeholders
+  // this puts there carry .boot-card, so only they are replaced afterwards.
+  const card = $("card"), mine = card.querySelector(":scope > .boot-card"), empty = mine || card.querySelector(":scope > p.muted:only-child");
+  if (!empty) return;
+  if (failed) card.replaceChildren(h("p", { class: "muted boot-card" }, "Your tracks show here once the library loads."));
+  else if (libLoad) { if (!card.querySelector(".skel-card")) card.replaceChildren(h("div", { class: "skel-card boot-card", "aria-hidden": "true" }, h("i", { class: "t" }), h("i", { class: "s" }), h("div", { class: "row" }, h("i"), h("i"), h("i"), h("i")), h("i", { class: "big" }))); }
+  else if (mine) card.replaceChildren(h("p", { class: "muted" }, "Select a track."));
+}
+// Admin's line also waits for /api/config (find.js calls this once it has answered, or failed).
+export function configDone() { cfgWait = false; paintBoot(); }
+export async function firstLoad() {
+  libLoad = { phase: "loading" }; renderList(); paintBoot();
+  const slow = setTimeout(() => { if (libLoad?.phase === "loading") { libLoad.phase = "slow"; renderList(); paintBoot(); } }, SLOW_MS);
+  try {
+    await loadTracks();
+    libLoad = null;
+  } catch (e) {
+    libLoad = { phase: "failed", msg: e.status ? e.message : "The server didn't answer. Check your connection, then retry." };
+  } finally {
+    clearTimeout(slow);
+  }
+  renderList(); paintBoot();
 }
 export async function refresh(selectId) {
   await loadTracks();
@@ -223,6 +282,28 @@ function countLine(l, n) {
 }
 const noneRow = (l) => (l && !libActive() ? h("li", { class: "muted empty" }, "This list has no tracks left.")
   : h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
+// A row's status marks: ✓ labeled, ○ in the review list, ↻ from an older engine
+const stMarks = (t, inQ) => h("span", { class: "st-marks" },
+  labels.has(t.id) ? h("span", { class: "lb-tick", title: "You labeled this track", "aria-label": "You labeled this track" }, "✓") : null,
+  inQ.has(t.id) ? h("span", { class: "rv-dot", title: "In your review list", "aria-label": "In your review list" }) : null,
+  t.stale ? h("span", { class: "eng-mk", title: t.audio_gone ? "From an older engine. Its audio was deleted, so it can't be re-analyzed." : "From an older engine: re-analyze to update", "aria-label": "From an older engine" }, "↻") : null);
+// "↻ 40 tracks are from an older engine. Show them · Re-analyze 30. 10 can't: their audio was deleted." Re-analyze runs the
+// bulk Re-analyze over every one that still has its audio (re-analysis needs it) and isn't busy already.
+const s1 = (n, one, many) => (n === 1 ? one : many);
+function staleLine() {
+  const el = $("lib-stale"), old = tracks.filter((t) => t.stale), kept = old.filter((t) => !t.audio_gone);
+  const can = kept.filter((t) => !jobs.has(t.id)), gone = old.length - kept.length;
+  el.hidden = !old.length || bulkBusy;
+  if (el.hidden) { el.replaceChildren(); return; }
+  const n = old.length, allGone = gone === n;
+  el.replaceChildren(...[h("span", { class: "eng-mk", "aria-hidden": "true" }, "↻"),
+    allGone ? `${n} ${s1(n, "track is", "tracks are")} from an older engine, but ${s1(n, "its", "their")} audio was deleted, so ${s1(n, "it", "they")} can't be re-analyzed.`
+      : `${n} ${s1(n, "track is", "tracks are")} from an older engine.`,
+    lib.eng === "old" ? null : h("button", { type: "button", class: "linklike", onclick: () => { lib.eng = "old"; syncTools(); renderList(); } }, "Show them"),
+    can.length ? h("button", { type: "button", class: "linklike", title: `Re-analyze them ${serverCfg.bulk_at_once || 1} at a time with the current engine. Your labels, edits and cue points stay.`,
+      onclick: () => runBulk("reanalyze", can.map((t) => t.id)) }, `Re-analyze ${can.length === n ? "them" : can.length}`) : null,
+    gone && !allGone ? h("span", { class: "muted" }, `${gone} can't: ${s1(gone, "its", "their")} audio was deleted.`) : null].filter(Boolean));
+}
 export function renderList() {
   const ul = $("track-list"), top = ul.scrollTop;
   // Rows are rebuilt while bulk jobs run, so put keyboard focus back on the same track afterwards.
@@ -235,8 +316,10 @@ export function renderList() {
   const l = shownList();
   $("lib-n").textContent = countLine(l, shown.length);
   $("lib-clear").hidden = !libActive();
+  staleLine();
   $("lib-tools").hidden = !tracks.length;
-  if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
+  if (libLoad) { $("lib-n").textContent = ""; $("lib-review-n").textContent = ""; ul.append(...bootRows()); }
+  else if (!tracks.length && !pending.length) ul.append(h("li", { class: "muted empty" }, "No tracks yet."));
   else if (!shown.length && !pending.length) ul.append(noneRow(l));
   for (const p of working()) ul.append(pendingLi(p));
   knownRows(ul);
@@ -255,9 +338,7 @@ export function renderList() {
             job.frac != null ? progBar(job.frac, `${t.title || "Track"} progress`) : null]
           : h("div", { class: "s" }, h("span", { class: "s-txt" }, [t.artist, isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, mmss(t.duration)].filter(Boolean).join(" · ")),
             // status marks in a fixed slot next to the energy bar, so they line up whatever the text length
-            h("span", { class: "st-marks" },
-              labels.has(t.id) ? h("span", { class: "lb-tick", title: "You labeled this track", "aria-label": "You labeled this track" }, "✓") : null,
-              inQ.has(t.id) ? h("span", { class: "rv-dot", title: "In your review list", "aria-label": "In your review list" }) : null),
+            stMarks(t, inQ),
             h("span", { class: "e-bar", "aria-hidden": "true", title: isNum(t.energy) ? `Energy ${t.energy.toFixed(2)}` : "" }, h("i", { style: `width:${isNum(t.energy) ? Math.round(t.energy * 100) : 0}%` }))))));
   }
   ul.scrollTop = top;
@@ -331,6 +412,7 @@ export function init() {
   $("lib-up-from").addEventListener("change", (e) => { lib.upFrom = e.target.value; renderList(); });
   $("lib-up-to").addEventListener("change", (e) => { lib.upTo = e.target.value; renderList(); });
   $("lib-lab").addEventListener("change", (e) => { lib.lab = e.target.value; renderList(); });
+  $("lib-eng").addEventListener("change", (e) => { lib.eng = e.target.value; renderList(); });
   $("lib-clear").addEventListener("click", clearFilters);
   $("lib-fbtn").addEventListener("click", () => { const f = $("lib-filters"), open = f.hidden; f.hidden = !open; $("lib-fbtn").setAttribute("aria-expanded", String(open)); });
   $("track-list").addEventListener("keydown", (e) => {

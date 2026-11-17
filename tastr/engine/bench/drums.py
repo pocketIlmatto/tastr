@@ -1,10 +1,10 @@
-"""Drum lane benchmark: how well tastr.engine.drums finds each kind of hit.
+"""Drum lane benchmark: how well the engine's drum lanes (engine-rs/src/drums.rs) find each kind of hit.
 
 Four suites:
 
 - `synth`: generated loops with known 16-step patterns for every lane (kick,
   snare, clap, hat, open hat, tom, perc), scored step by step on the detected
-  groove the card shows (drums.drum_grid). Exact labels, but a synthetic kit.
+  groove the card shows (its drum grid). Exact labels, but a synthetic kit.
 - `idmt`: IDMT-SMT-Drums (real, sampled and techno kits; kick, snare and hi-hat
   onsets only). Fetch it from https://zenodo.org/records/7544164 and unzip;
   pass the folder that holds `audio/` and `annotation_xml/`.
@@ -28,6 +28,11 @@ within 30 ms ("alone" or "with").
     python -m tastr.engine.bench.drums mdb ~/data/mdb-drums --jobs 4
     python -m tastr.engine.bench.drums stemgmd-mix ~/data/stemgmd-single-hits
 
+With the drum model on (TASTR_DRUM_MODEL=adtof, or `tastr drum-bench --drum-model`), `--open-hats model`
+takes the open-hat lane from the model's hi-hats split by the built-in ringing test, and `--open-hats
+built-in` keeps the built-in open-hat lane; without it the engine's default (drums::MODEL_OPEN_HATS) holds.
+It is passed on as TASTR_OPEN_HATS so the bench's worker processes see it too.
+
 `--write-bundle` saves what a remote run reads in one go next to the data:
 the annotations as one JSON file (idmt, mdb) or the trimmed mono hits as one
 npz (stemgmd-mix). Iterate on a `--limit` subset; run the full set when a
@@ -38,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -47,12 +53,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import drums
-from ..card import Source, TrackCard
-from ..pipeline import SR, AnalysisContext
+from ..rust import SR
 from .synth import DRUM_PATTERNS, _fade, drum_sounds, make_drum_track
 
-SUITES = ("synth", "idmt", "mdb", "stemgmd-mix")
+SUITES = ("synth", "synth-onsets", "idmt", "mdb", "stemgmd-mix")
+OPEN_HATS = ("built-in", "model")  # where the open-hat lane comes from with the drum model (--open-hats)
+LANES = ("kick", "snare", "clap", "hat", "open_hat", "tom", "perc")  # engine-rs drums::LANES
 TOL = 0.05  # seconds: an onset within this of a labeled one counts
 WITH_TOL = 0.03  # a tom or perc hit with a kick or snare this close "lands with" it
 FAMILY = {"kick": "low", "tom": "low", "snare": "mid", "clap": "mid", "perc": "mid", "hat": "high", "open_hat": "high",
@@ -88,27 +94,29 @@ def _prf(tp: int, fp: int, fn: int) -> dict:
             "r": round(tp / max(1, tp + fn), 3), "n": tp + fn}
 
 
-def _synth_ctx(y: np.ndarray, bpm: float) -> AnalysisContext:
-    card = TrackCard(source=Source(kind="file", uri="synth"))
-    card.duration = len(y) / SR
+def _synth_grid(y: np.ndarray, bpm: float) -> dict:
+    """The drum grid the card would show for a loop at a known tempo (beats from bar 1 at 0 s, in 4/4), from the
+    Rust engine."""
+    from .. import rust
+
     beat = 60.0 / bpm
-    card.core.bpm = bpm
-    card.core.beat_times = [i * beat for i in range(int(card.duration / beat))]
-    card.core.downbeat_times = card.core.beat_times[::4]
-    return AnalysisContext(y=y, sr=SR, card=card)
+    beats = [i * beat for i in range(int(len(y) / SR / beat))]
+    downbeats = beats[::4]
+    hits = _model_hits(y, None)
+    return rust.bench("drum_grid", y, beats, downbeats, hits, n=y.size, beats=len(beats), downbeats=len(downbeats),
+                      bpm=bpm, beats_per_bar=4, hits=hits.size, **_open_hats())
 
 
 def run_synth(bpms=(100, 128, 174)) -> dict:
     """Step-level precision/recall per lane over every pattern and tempo ("x" and "o" both count as a hit)."""
-    counts = {lane: [0, 0, 0] for lane in drums.LANES}
+    counts = {lane: [0, 0, 0] for lane in LANES}
     rows = []
     for name, pats in DRUM_PATTERNS.items():
         for bpm in bpms:
             y, _ = make_drum_track(pats, bpm=bpm)
-            ctx = _synth_ctx(y, bpm)
-            grid = drums.drum_grid(ctx, drums.step_grid(ctx, 1 + len(y) // ctx.hop))
+            grid = _synth_grid(y, bpm)
             got_all = {}
-            for lane in drums.LANES:
+            for lane in LANES:
                 want = pats.get(lane, "." * 16)
                 got = grid[lane]["pattern"] if grid[lane]["detected"] else "." * 16
                 got_all[lane] = got
@@ -234,9 +242,176 @@ def score_track(acts: dict[str, np.ndarray] | None, ref: dict[str, list[float]],
     return out
 
 
+def open_hats() -> str | None:
+    """--open-hats for this run (TASTR_OPEN_HATS), or None for the engine's default."""
+    v = os.environ.get("TASTR_OPEN_HATS") or None
+    if v is not None and v not in OPEN_HATS:
+        raise ValueError(f"TASTR_OPEN_HATS={v!r}; choose from {', '.join(OPEN_HATS)}")
+    return v
+
+
+def _open_hats() -> dict:
+    v = open_hats()
+    return {"open_hats": v} if v else {}
+
+
+def _model_onsets(y: np.ndarray, path: str | None) -> dict | None:
+    """The optional drum model's hits (adt.onsets: {drum: (seconds, confidence)}) when it is on
+    (TASTR_DRUM_MODEL, as for the app): on the original file at the model's rate when there is one. None when
+    it is off or fails, so the built-in lanes stay, as in the app."""
+    from .. import adt
+
+    if not adt.wanted(None):
+        return None
+    try:
+        if path and Path(path).is_file():
+            import librosa
+
+            return adt.onsets(librosa.load(path, sr=adt.SR, mono=True)[0], adt.SR)
+        return adt.onsets(y, SR)
+    except Exception as e:  # e.g. no network for the first download
+        print(f"drum model unavailable, using the built-in lanes: {e}", file=sys.stderr)
+        return None
+
+
+def _model_hits(y: np.ndarray, path: str | None) -> np.ndarray:
+    """_model_onsets as the flat buffer the Rust engine reads (empty without the model)."""
+    from .. import rust
+
+    return rust._hits(_model_onsets(y, path))
+
+
+def _lane_acts(y: np.ndarray, uri: str, model: dict | None) -> tuple[dict[str, np.ndarray], int]:
+    """Every lane's strength at every analysis frame from the Rust engine, with the model's hits when given."""
+    from .. import rust
+
+    hits = rust._hits(model)
+    try:
+        r = rust.bench("lane_activations", y, hits, n=y.size, hits=hits.size, **_open_hats())
+    except rust.RustEngineError as e:
+        raise RuntimeError(f"{uri}: {e}") from e
+    return {lane: np.asarray(a) for lane, a in zip(r["lanes"], r["acts"])}, r["hop"]
+
+
+def _analyze(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int, dict | None]:
+    """(lane activations, hop, the drum model's own onsets or None). (`uri` names the track for errors.)"""
+    model = _model_onsets(y, path)
+    acts, hop = _lane_acts(y, uri, model)
+    return acts, hop, model
+
+
 def _activations(y: np.ndarray, uri: str, path: str | None = None) -> tuple[dict[str, np.ndarray], int]:
-    ctx = AnalysisContext(y=y, sr=SR, card=TrackCard(source=Source(kind="file", uri=uri, local_path=path)))
-    return drums.lane_activations(ctx, np.arange(1 + len(y) // ctx.hop), slop=0), ctx.hop
+    """Every lane's strength at every analysis frame, from the Rust engine."""
+    acts, hop, _ = _analyze(y, uri, path)
+    return acts, hop
+
+
+# --- where the snare lane could come from (with the drum model) -----------------------------------
+# With the model on, the bench also scores the snare onsets each rule below would give, on the same labels, so
+# one run compares them (docs/drums.md, "The snare trade-off"). The rules read the built-in lanes (analyzed a
+# second time without the model); the shipped lane, which takes its snare from the model, is the "snare" label.
+
+MID = ("snare", "clap", "perc")
+GATE_SECONDS = 0.03  # how close the built-in mid part must be to a model snare for the mid gates
+MID_GATES = (0.05, 0.1, 0.2)  # x the 99.5th percentile of the built-in mid family
+CONFIDENT = (0.6, 0.65, 0.7, 0.75, 0.8, 0.85)  # model confidence (0.5 = ADTOF's threshold) kept without a gate
+
+
+def snare_sources(acts: dict[str, np.ndarray], model: dict, hop: int = 512, sr: int = SR) -> dict[str, np.ndarray]:
+    """Snare onset seconds per candidate rule, from the built-in lanes and the model's snare (time, confidence).
+
+    - builtin: the built-in snare and clap lanes, as the app reports them without the model;
+    - model: every snare the model reports;
+    - gated: model snares with a built-in snare or clap onset within 50 ms;
+    - mid-G: model snares where the built-in mid part (snare, clap, perc) reaches G x its 99.5th percentile
+      within 30 ms: a looser gate that only asks for some mid energy, not an onset;
+    - confident-C: model snares of confidence C or more, plus gated ones below it;
+    - union: the built-in and the model's snares together, one per hit.
+    """
+    builtin = lane_onsets(acts, ("snare", "clap")) * hop / sr
+    t, conf = (np.asarray(v, dtype=float).ravel() for v in model["snare"])
+    near = np.array([_near(x, builtin, TOL) for x in t], dtype=bool)
+    out = {"builtin": builtin, "model": t, "gated": t[near]}
+    mid = sum(np.asarray(acts[lane], dtype=float) for lane in MID if lane in acts)
+    level = float(np.percentile(mid, 99.5))
+    w = max(1, int(round(GATE_SECONDS * sr / hop)))
+    win = [mid[max(0, f - w):f + w + 1] for f in np.round(t * sr / hop).astype(int)]
+    peak = np.array([x.max() if x.size else 0.0 for x in win])
+    for g in MID_GATES:
+        out[f"mid-{g:g}"] = t[(peak >= g * level) & (level > 0)]
+    for c in CONFIDENT:
+        out[f"confident-{c:g}"] = t[(conf >= c) | near]
+    out["union"] = _merged({"a": list(builtin), "b": list(t)}, ("a", "b"))
+    return out
+
+
+def _score_snare_sources(acts, model, ref, labels, hop, sr) -> dict:
+    """{rule: {"counts": [tp, fp, fn], "fp_at": {class: n}}} for snare_sources on the snare label."""
+    classes = labels["snare"][0]
+    out = {}
+    for name, est in snare_sources(acts, model, hop, sr).items():
+        tmp = {"counts": {}, "fp_at": {}}
+        _score_label(tmp, "snare", classes, np.sort(est), ref, {})
+        out[name] = {"counts": tmp["counts"]["snare"], "fp_at": tmp["fp_at"]["snare"]}
+    return out
+
+
+TOM_NEAR = 0.03  # a model snare (or kick) this close to a model tom "lands with" it
+TOM_CONFIDENT = (0.6, 0.625, 0.65, 0.675, 0.7, 0.75, 0.8)
+TOM_KEEP = (0.7, 0.8, 0.9)
+
+
+def tom_sources(model: dict) -> dict[str, np.ndarray]:
+    """Tom onset seconds per candidate rule, from the drum model's own hits (time, confidence) only:
+
+    - model: every tom the model reports (today's lane);
+    - conf-C: toms of confidence C or more;
+    - snare-veto: no tom where the model also has a snare within 30 ms;
+    - snare-stronger: no tom where a model snare within 30 ms is at least as confident;
+    - snare-veto-C: no tom near a model snare unless the tom's confidence is C or more;
+    - kit-veto-C: the same with a model snare or kick.
+    """
+    def hits(name):
+        t, c = model.get(name, ((), ()))
+        return np.asarray(t, dtype=float).ravel(), np.asarray(c, dtype=float).ravel()
+
+    t, conf = hits("tom")
+    st, sc = hits("snare")
+    kt, _ = hits("kick")
+
+    def nearest(times, x):
+        if not len(times):
+            return None
+        i = int(np.argmin(np.abs(times - x)))
+        return i if abs(times[i] - x) <= TOM_NEAR else None
+
+    near_s = [nearest(st, x) for x in t]
+    near_snare = np.array([i is not None for i in near_s], dtype=bool)
+    near_kick = np.array([nearest(kt, x) is not None for x in t], dtype=bool)
+    stronger = np.array([i is not None and sc[i] >= c for i, c in zip(near_s, conf)], dtype=bool)
+    out = {"model": t}
+    for c in TOM_CONFIDENT:
+        out[f"conf-{c:g}"] = t[conf >= c]
+    out["snare-veto"] = t[~near_snare]
+    out["snare-stronger"] = t[~stronger]
+    for c in TOM_KEEP:
+        out[f"snare-veto-{c:g}"] = t[~near_snare | (conf >= c)]
+        out[f"kit-veto-{c:g}"] = t[~(near_snare | near_kick) | (conf >= c)]
+    return out
+
+
+def _score_tom_sources(model, ref) -> dict:
+    """{rule: {"counts": [tp, fp, fn], "fp_at": {class: n}}} for tom_sources on the tom label (all false on a
+    set without toms)."""
+    out = {}
+    for name, est in tom_sources(model).items():
+        tmp = {"counts": {}, "fp_at": {}}
+        _score_label(tmp, "tom", ("tom",), np.sort(est), ref, {})
+        out[name] = {"counts": tmp["counts"]["tom"], "fp_at": tmp["fp_at"]["tom"]}
+    return out
+
+
+SOURCES = ("snare_sources", "tom_sources")  # rule comparisons a drum-model run adds to the report
 
 
 def _work(job) -> dict:
@@ -253,8 +428,14 @@ def _work(job) -> dict:
         audio, _ = librosa.load(path, sr=SR, mono=True)
     else:
         path = None
-    acts, hop = _activations(np.asarray(audio, dtype=np.float32), item_id, path)
-    return {"id": item_id, "seconds": round(len(audio) / SR, 1)} | score_track(acts, ref, labels, excused, hop=hop)
+    acts, hop, model = _analyze(np.asarray(audio, dtype=np.float32), item_id, path)
+    row = {"id": item_id, "seconds": round(len(audio) / SR, 1)} | score_track(acts, ref, labels, excused, hop=hop)
+    if model is not None and "snare" in labels and "snare" in model:
+        builtin, _ = _lane_acts(np.asarray(audio, dtype=np.float32), item_id, None)
+        row["snare_sources"] = _score_snare_sources(builtin, model, ref, labels, hop, SR)
+    if model is not None and "tom" in model:
+        row["tom_sources"] = _score_tom_sources(model, ref)
+    return row
 
 
 def _score_all(work: list, jobs: int) -> list[dict]:
@@ -289,6 +470,14 @@ def _pool(rows: list[dict], labels: dict) -> dict:
             for cond in s:
                 split[label][cond] = [a + b for a, b in zip(split[label][cond], s[cond])]
         pooled["unlabeled"].update(r["unlabeled"])
+    for key in SOURCES:
+        sources: dict[str, dict] = {}
+        for r in rows:
+            for name, s in r.get(key, {}).items():
+                p = sources.setdefault(name, {"counts": np.zeros(3, dtype=int), "fp_at": Counter()})
+                p["counts"] += s["counts"]
+                p["fp_at"].update(s["fp_at"])
+        pooled[key] = sources
     return pooled
 
 
@@ -314,6 +503,9 @@ def run_onsets(suite: str, items: list, labels: dict, excused: dict | None = Non
             "excused_cymbal_onsets": sum(r["excused"] for r in rows),
             "unlabeled_onsets_per_ref": {lane: round(n / max(1, n_ref), 3) for lane, n in pooled["unlabeled"].items()},
             "seconds": round(time.time() - t0, 1), "audio_seconds": round(sum(r["seconds"] for r in rows), 1),
+            **{key: {name: _prf(*s["counts"]) | {"fp_at": dict(s["fp_at"].most_common(4)),
+                                                 "fires_per_ref": round(int(s["counts"][:2].sum()) / max(1, n_ref), 3)}
+                     for name, s in pooled[key].items()} for key in SOURCES if pooled[key]},
             "rows": rows}
 
 
@@ -632,6 +824,8 @@ def run(suite: str, root: str | Path | None = None, limit: int | None = None, jo
         drums_only: bool = False, kits: str = "all") -> dict:
     if suite == "synth":
         return run_synth()
+    if suite == "synth-onsets":
+        return run_onsets(suite, synth_onset_items()[:limit or None], SYNTH_LABELS, jobs=jobs)
     if root is None:
         raise ValueError(f"{suite} needs the dataset folder")
     if suite == "idmt":
@@ -657,6 +851,11 @@ def format_report(report: dict) -> str:
                      + (f"; unlabeled lanes fire per labeled onset: {extra}" if extra else ""))
         if report.get("excused_cymbal_onsets"):
             lines.append(f"hat-lane onsets on ride/crash hits (not counted): {report['excused_cymbal_onsets']}")
+        for key in SOURCES:
+            for name, v in report.get(key, {}).items():
+                fps = ", ".join(f"{c} {n}" for c, n in v["fp_at"].items())
+                lines.append(f"{key.split('_')[0]} from {name:14s} F {v['f']:.3f}  P {v['p']:.2f}  R {v['r']:.2f}  "
+                             f"fires {v['fires_per_ref']:.3f}/ref" + (f"  false at: {fps}" if fps else ""))
         for label in ("tom", "perc"):
             if report["fp_at"].get(label):
                 lines.append(f"{label} false positives at: " + ", ".join(f"{c} {n}" for c, n in report["fp_at"][label].items()))
@@ -672,9 +871,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--drums-only", action="store_true", help="mdb: score the drum stems instead of the full mixes")
     ap.add_argument("--kits", choices=KIT_SPLITS, default="all", help="stemgmd-mix: all kits, or the train / test half")
     ap.add_argument("--write-bundle", action="store_true", help="save the file a remote run reads, next to the data")
+    ap.add_argument("--open-hats", choices=OPEN_HATS, help="with the drum model: the open-hat lane from the built-in "
+                                                           "detector or from the model's hi-hats")
     ap.add_argument("--out", help="write the full report as JSON")
     args = ap.parse_args(argv)
-    if args.suite != "synth" and not args.path:
+    if args.open_hats:
+        os.environ["TASTR_OPEN_HATS"] = args.open_hats
+    if not args.suite.startswith("synth") and not args.path:
         ap.error(f"{args.suite} needs the dataset folder")
     if args.write_bundle:
         print(f"wrote {write_bundle(args.suite, args.path)}")

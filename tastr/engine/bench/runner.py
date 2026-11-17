@@ -1,4 +1,4 @@
-"""Run the analysis pipeline over a labeled dataset and score it.
+"""Run the engine over a labeled dataset and score it.
 
     report = run(datasets.load("giantsteps-key", "~/data/giantsteps-key"), jobs=4)
     print(format_summary(report))
@@ -18,28 +18,10 @@ from pathlib import Path
 
 from .. import __version__
 from ..card import Source, TrackCard
-from ..pipeline import SR, registered_stages, run_pipeline
+from ..rust import SR
 from . import metrics
 from .datasets import Item
 
-DEFAULT_STAGES = ["core", "sections"]
-
-
-def analyze_item(item: Item, stages: list[str] | None = None) -> TrackCard:
-    """The card for one bench track. With TASTR_ENGINE=rust (the default), the Rust engine makes the whole card
-    (every stage; rust_card); with python, the reference engine runs `stages` (default core and sections)."""
-    from .. import rust
-
-    if rust.chosen() == "rust":
-        return rust_card(item)
-    if item.synth is not None:
-        y = item.synth()
-    else:
-        from ..audio import load_audio
-
-        y = load_audio(item.path, SR)
-    card = TrackCard(source=Source(kind="file", uri=item.path or item.id, local_path=item.path, title=item.id))
-    return run_pipeline(y, SR, card, stages=stages or DEFAULT_STAGES)
 
 
 def rust_card(item: Item) -> TrackCard:
@@ -68,9 +50,12 @@ def score_item(item: Item, card: TrackCard) -> dict:
     t, c = item.truth, card.core
     row: dict = {"id": item.id, "path": item.path, "errors": dict(card.errors)}
     row["est_bpm"] = c.bpm
+    if item.meta.get("genre"):
+        row["genre"] = item.meta["genre"]
     row["bpm_confidence"] = c.bpm_confidence
     row["est_key"] = c.key.name if c.key else None
     row["key_confidence"] = c.key.confidence if c.key else None
+    row["key_mode_uncertain"] = c.key.mode_uncertain if c.key else None
     if t.bpm:
         row["ref_bpm"] = t.bpm
         row.update(metrics.tempo_scores(c.bpm, t.bpm))
@@ -92,17 +77,18 @@ def score_item(item: Item, card: TrackCard) -> dict:
     return row
 
 
-def _work(args) -> dict:
-    item, stages = args
+def _work(item: Item) -> dict:
     t0 = time.time()
     try:
-        row = score_item(item, analyze_item(item, stages))
+        row = score_item(item, rust_card(item))
     except Exception as e:  # one unreadable file shouldn't sink a 600-track run
         row = {"id": item.id, "path": item.path, "errors": {"bench": f"{type(e).__name__}: {e}"}}
     row["seconds"] = round(time.time() - t0, 2)
     return row
 
 
+DRUM_AND_BASS = "Drum & Bass"  # Beatport's genre name
+FAST_RANGE = (160.0, 181.0)  # drum & bass at its DJ tempo
 SUMMARY_METRICS = ["acc1", "acc2", "key_weighted", "key_correct", "beat_f", "downbeat_f", "boundary_f_0.5", "boundary_f_3",
                    "meter_correct"]
 
@@ -117,11 +103,23 @@ def summarize(rows: list[dict]) -> dict:
     cats = [r["key_category"] for r in rows if "key_category" in r]
     if cats:
         out["key_categories"] = {k: cats.count(k) for k in sorted(set(cats))}
+        # the "mode uncertain" flag: how often it's raised, and how often the mode is wrong (parallel) with and
+        # without it among tracks whose tonic is right
+        for flag, name in ((True, "flagged"), (False, "unflagged")):
+            cs = [r["key_category"] for r in rows if "key_category" in r and r.get("key_mode_uncertain") is flag]
+            right = [c for c in cs if c in ("correct", "parallel")]
+            out[f"key_mode_{name}"] = len(cs)
+            if right:
+                out[f"key_mode_{name}_parallel"] = round(right.count("parallel") / len(right), 4)
     for m in (3, 4):  # 3/4 found, and 4/4 kept as 4/4
         hits = [r["meter_correct"] for r in rows if r.get("ref_meter") == m]
         if hits:
             out[f"meter_{m}_correct"] = round(metrics.mean(hits), 4)
             out[f"meter_{m}_n"] = len(hits)
+    dnb = [r for r in rows if r.get("genre") == DRUM_AND_BASS]
+    if dnb:  # Beatport lists drum & bass at 87, 116 or 174; the card should say ~174 (docs/bench.md, Tempo notes)
+        out["dnb_fast"] = sum(1 for r in dnb if FAST_RANGE[0] <= (r.get("est_bpm") or 0) < FAST_RANGE[1])
+        out["dnb_n"] = len(dnb)
     octaves = [r["octave"] for r in rows if r.get("octave")]
     if octaves:
         out["tempo_octave_errors"] = {k: octaves.count(k) for k in sorted(set(octaves))}
@@ -142,21 +140,18 @@ def review_queue(rows: list[dict], n: int = 20) -> list[dict]:
 
     bad = sorted((r for r in rows if wrong(r)), key=conf, reverse=True)
     unsure = sorted((r for r in rows if not wrong(r)), key=conf)
-    keep = ("id", "path", "est_bpm", "ref_bpm", "est_key", "ref_key", "key_category", "octave", "bpm_confidence", "key_confidence")
+    keep = ("id", "path", "est_bpm", "ref_bpm", "est_key", "ref_key", "key_category", "octave", "bpm_confidence", "key_confidence",
+            "key_mode_uncertain")
     return [{k: r[k] for k in keep if k in r} | {"reason": "wrong" if wrong(r) else "low confidence"}
             for r in (bad + unsure)[:n]]
 
 
-def _engine_name() -> str:
+def run(items: list[Item], jobs: int = 1, limit: int | None = None, progress=None) -> dict:
+    """Every item's card from the Rust engine (every stage), scored."""
     from .. import rust
 
-    return f"rust {rust.version()}" if rust.chosen() == "rust" else "python"
-
-
-def run(items: list[Item], stages: list[str] | None = None, jobs: int = 1, limit: int | None = None,
-        progress=None) -> dict:
     items = items[:limit] if limit else items
-    work = [(it, stages) for it in items]
+    work = list(items)
     rows: list[dict] = []
     t0 = time.time()
     if jobs > 1 and work:
@@ -175,12 +170,10 @@ def run(items: list[Item], stages: list[str] | None = None, jobs: int = 1, limit
             rows.append(_work(w))
             if progress:
                 progress(len(rows), len(items), rows[-1])
-    versions = {name: st.version for name, st in registered_stages().items()}
     return {
         "engine_version": __version__,
-        "engine": _engine_name(),
-        "stage_versions": versions,
-        "stages": stages or DEFAULT_STAGES,
+        "engine": f"rust {rust.version()}",
+        "stage_versions": dict(rust.STAGES),
         "seconds": round(time.time() - t0, 1),
         "summary": summarize(rows),
         "review": review_queue(rows),
@@ -206,9 +199,15 @@ def _detail_lines(s: dict) -> list[str]:
     lines = []
     if "key_categories" in s:
         lines.append("  key results: " + ", ".join(f"{k} {v}" for k, v in s["key_categories"].items()))
+    if s.get("key_mode_flagged"):
+        par = lambda n: f"{s[n]:.0%}" if n in s else "-"  # noqa: E731
+        lines.append(f"  mode uncertain: {s['key_mode_flagged']} tracks; parallel-mode misses (tonic right) "
+                     f"{par('key_mode_flagged_parallel')} flagged, {par('key_mode_unflagged_parallel')} not")
     if "meter_3_n" in s or "meter_4_n" in s:
         lines.append("  meter: " + ", ".join(f"{m}/4 right {s[f'meter_{m}_correct']:.3f} (n={s[f'meter_{m}_n']})"
                                              for m in (3, 4) if f"meter_{m}_n" in s))
+    if "dnb_n" in s:
+        lines.append(f"  drum & bass read at 160-180 BPM: {s['dnb_fast']} of {s['dnb_n']}")
     if "tempo_octave_errors" in s:
         lines.append("  BPM octave errors: " + ", ".join(f"{k} {v}" for k, v in s["tempo_octave_errors"].items()))
     return lines

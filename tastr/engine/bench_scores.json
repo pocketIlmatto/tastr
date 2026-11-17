@@ -7,10 +7,10 @@
       "run": "2026-11-01"
     },
     "beatport-tempo": {
-      "exact": 0.897,
+      "exact": 0.885,
       "tracks": 774,
       "what": "tracks, BPM within 4%",
-      "run": "2026-10-31"
+      "run": "2026-11-08"
     },
     "downbeat": {
       "exact": 0.643,
@@ -31,10 +31,10 @@
       "run": "2026-11-01"
     },
     "giantsteps-tempo": {
-      "exact": 0.744,
+      "exact": 0.791,
       "tracks": 43,
       "what": "tracks, BPM within 4%",
-      "run": "2026-10-31"
+      "run": "2026-11-08"
     },
     "sections": {
       "exact": 0.582,

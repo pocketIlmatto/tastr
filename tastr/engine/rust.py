@@ -2,8 +2,7 @@
 
 analyze_file hands every analysis to the Rust library, which decodes the file and makes the card itself; for
 formats it can't decode (Opus), Python decodes and passes it the audio. The card says which build made it in
-extras["engine"]. The Python engine (tastr/engine/stages/) is only the benchmarks' reference: they pick it with
-TASTR_ENGINE=python (`chosen`).
+extras["engine"]. The benchmarks call it too, for whole cards and, through `bench`, for single steps.
 
 The library is engine-rs's cdylib, loaded with ctypes through its small C interface (the same one the
 WebAssembly build exports). It is found at TASTR_ENGINE_LIB, else next to this file, else in engine-rs's
@@ -21,15 +20,34 @@ from pathlib import Path
 
 import numpy as np
 
-ENGINES = ("python", "rust")
 # The stages every Rust card runs, with their versions (engine-rs/src/stages/mod.rs), as card.stages_run lists
 # them. Kept here so a server without the native library (the hosted web server checks browser cards against
 # it) knows them; tests/test_rust_switch.py checks them against the library.
-STAGES = {"core": "0.4.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.2.0"}
+STAGES = {"core": "0.6.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.2.0"}
+# What changed in a stage version, in one sentence, for the card's "Engine 0.5.0 · latest 0.6.0" tooltip. Add a line
+# when a stage's version goes up with a change people would notice in their cards.
+STAGE_NEWS = {"core": {"0.6.0": "BPM now comes from a line fit through the beats, so it matches the beat grid"}}
+
+SR = 22050  # the engine's sample rate (engine-rs SR): audio handed to it must be at this rate
 _LIB_NAMES = {"darwin": "libtastr_engine.dylib", "win32": "tastr_engine.dll"}
 _lock = threading.Lock()
 _lib: ctypes.CDLL | None = None
 _lib_error: str | None = None
+
+
+def _ver(v: str) -> tuple[int, ...]:
+    out = []
+    for part in str(v).split("."):
+        digits = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out + [0] * (3 - len(out)))  # "0.6" is 0.6.0
+
+
+def stale_stages(stages: dict[str, str] | None) -> list[str]:
+    """The stages (in STAGES order) a card ran at an older version than this engine's, or not at all. A card with
+    any is from an older engine: re-analyzing it brings it up to date."""
+    stages = stages or {}
+    return [k for k, v in STAGES.items() if k not in stages or _ver(stages[k]) < _ver(v)]
 
 
 class RustEngineError(RuntimeError):
@@ -78,6 +96,8 @@ def _load() -> ctypes.CDLL:
             fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int32, ctypes.c_void_p, ctypes.c_size_t]
         lib.tastr_card_ptr.restype = ctypes.c_void_p
         lib.tastr_card_ptr.argtypes = []
+        lib.tastr_bench.restype = ctypes.c_int32
+        lib.tastr_bench.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
         lib.tastr_version.restype = ctypes.c_void_p
         lib.tastr_version_len.restype = ctypes.c_size_t
         _lib = lib
@@ -97,14 +117,6 @@ def version() -> str:
     return ctypes.string_at(lib.tastr_version(), lib.tastr_version_len()).decode()
 
 
-def chosen(options: dict | None = None) -> str:
-    """Which engine a benchmark run asks for: options["engine"], else TASTR_ENGINE, else rust. "python" picks
-    the reference engine (tastr/engine/stages/), which the benchmarks compare against. Cards for the app always
-    come from Rust (analyze_file)."""
-    name = str((options or {}).get("engine") or os.environ.get("TASTR_ENGINE") or "rust").strip().lower()
-    return name if name in ENGINES else "rust"
-
-
 def _meter(beats_per_bar) -> int:
     return int(beats_per_bar) if beats_per_bar in (3, 4) else 0
 
@@ -117,7 +129,7 @@ def _result(lib: ctypes.CDLL, n: int, what: str) -> dict:
     return json.loads(ctypes.string_at(lib.tastr_card_ptr(), n).decode())
 
 
-MODEL_LANES = ("kick", "hat", "tom", "cymbal")  # engine-rs drums::MODEL_LANES, the order drum hits go in
+MODEL_LANES = ("kick", "hat", "tom", "cymbal", "snare")  # engine-rs drums::MODEL_LANES, the order drum hits go in
 
 
 def _hits(drum_hits: dict | None) -> np.ndarray:
@@ -153,6 +165,20 @@ def card_from_samples(y: np.ndarray, beats_per_bar=None, drum_hits: dict | None 
     h = _hits(drum_hits)
     return _result(lib, lib.tastr_card_f32_hits(ptr, y.size, _meter(beats_per_bar), h.ctypes.data, h.size),
                    "the samples")
+
+
+def bench(op: str, *arrays, **params) -> dict:
+    """One benchmark step in the Rust engine (engine-rs/src/bench.rs lists the ops and what each reads): the
+    arrays go in as one float64 buffer, in order (matrices row-major); `params` become `key=value` words."""
+    lib = _load()
+    line = " ".join([op] + [f"{k}={v}" for k, v in params.items()]).encode()
+    parts = [np.asarray(a, dtype=float).ravel() for a in arrays]
+    data = np.ascontiguousarray(np.concatenate(parts) if parts else np.zeros(0), dtype="<f8")
+    n = lib.tastr_bench(line, len(line), data.ctypes.data, data.size)
+    if n < 0:
+        why = ctypes.string_at(lib.tastr_card_ptr(), -n - 1).decode(errors="replace")
+        raise RustEngineError(f"{op}: {why}")
+    return json.loads(ctypes.string_at(lib.tastr_card_ptr(), n).decode())
 
 
 # --- The WebAssembly build, for the browser (TASTR_BROWSER_ENGINE) ---

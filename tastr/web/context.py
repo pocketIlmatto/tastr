@@ -14,14 +14,16 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from .. import blobs, db, drum_jobs, lookup, runner, service, stems
-from ..engine import browser_card
+from .. import blobs, db, drum_jobs, keylock, lookup, ml_jobs, runner, service, stems
+from ..engine import browser_card, rust
 from ..filemeta import describe, legacy_upload_prefix
 from .analysis_jobs import AnalysisJobs, ref
 from .hosted import (AccessVerifier, AnalysisSlots, LinkSigner, Settings, file_bytes, inline_script_hashes,
                      security_headers, today)
 
 log = logging.getLogger("tastr.web.server")  # the name these lines had before the routes moved out of server.py
+ML_BACKFILL_KEY = "ml_tags_backfill"  # meta: which one-time ML tags pass over the library was last queued
+ML_BACKFILL_PASS = "3"  # bump to queue the untagged tracks once more (passes 1 and 2 failed: the api was down)
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -107,10 +109,12 @@ class AppContext:
                               if hosted else {})
         # Their unfinished jobs are kept in the database (tastr/markers.py), so a restart picks them up.
         self.stem_jobs = stems.Jobs(db_path)
+        self.keylock_jobs = keylock.Jobs()  # mash-up key lock: cheap, so a restart just lets the page ask again
         # Without threads to wait for a slot (the Worker), background analyses queue for one in their lane.
         self.analyses = AnalysisJobs(db_path, legacy_folder=tastr_home() / "analysis-jobs",
                                      limit=None if blocking or not hosted else settings.max_analyses)
         self.drum_runs = drum_jobs.Jobs(self.run_drum_model, db_path)
+        self.ml_runs = drum_jobs.Jobs(self.run_ml_tags, db_path, kind="ml-tags", label="ML tags")
         self.last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
         self.snapshot_day = ""  # the UTC day storage was last recorded for (storage_days)
 
@@ -129,6 +133,80 @@ class AppContext:
                 log.warning("drum model run for track %s failed: %s", track_id, result.error)
                 raise RuntimeError("Couldn't analyze the file with the drum model.")
             raise RuntimeError(f"Couldn't analyze the file with the drum model: {result.error}")
+
+    def run_ml_tags(self, track_id: int) -> None:
+        """Add ML tags to one track (an ml_runs job); raises with a message for the UI. A failure's message is also
+        kept in the database, so the card still offers Try again after a restart."""
+        with closing(self.conn()) as c:
+            try:
+                try:
+                    result = ml_jobs.tag_track(c, track_id)
+                except FileNotFoundError as e:
+                    raise RuntimeError("The original audio file is no longer on disk.") from e
+                except Exception as e:
+                    if self.hosted:
+                        log.warning("ML tags for track %s failed: %s", track_id, e)
+                        raise RuntimeError("Couldn't add ML tags to this track.") from e
+                    raise RuntimeError(f"Couldn't add ML tags: {e}") from e
+            except RuntimeError as e:
+                db.save_ml_tags_error(c, track_id, str(e))
+                raise
+            if result is None:
+                raise LookupError("The track was deleted.")
+
+    def ml_run_status(self, c: sqlite3.Connection, track_id: int) -> dict:
+        """The ML tags run's state; after a restart, a track whose last run failed is still "error"."""
+        st = self.ml_runs.status(track_id)
+        if st["state"] == "none":
+            err = db.get_ml_tags_error(c, track_id)
+            if err:
+                return {"state": "error", "error": err}
+        return st
+
+    def auto_ml_tags(self, rs) -> None:
+        """With TASTR_ML_TAGS=auto, queue ML tags for each track these analysis results added. Never fails an upload."""
+        try:
+            if ml_jobs.automatic():
+                for r in rs:
+                    if r.track_id is not None and not r.error and not r.already:
+                        self.ml_runs.start(r.track_id)
+        except Exception:  # noqa: BLE001 - the upload itself went fine; the log has the rest
+            log.exception("couldn't queue ML tags for new tracks")
+
+    def backfill_ml_tags(self) -> int:
+        """With TASTR_ML_TAGS=auto, queue ML tags once for every track that has none (the library from before it
+        was switched on). Queued runs survive restarts (their markers), so this happens once per database and
+        ML_BACKFILL_PASS."""
+        try:
+            if not ml_jobs.automatic():
+                return 0
+            with closing(self.conn()) as c:
+                if db.get_meta(c, ML_BACKFILL_KEY) == ML_BACKFILL_PASS:
+                    return 0
+                ids = ml_jobs.untagged(c)
+                for tid in ids:
+                    self.ml_runs.start(tid)
+                db.set_meta(c, ML_BACKFILL_KEY, ML_BACKFILL_PASS)
+            if ids:
+                self.event(None, "ml_tags", f"Started adding ML tags to {len(ids)} tracks (one-time pass over the library)",
+                           source=analysis_source())
+            return len(ids)
+        except Exception:  # noqa: BLE001 - the server still starts; the next start tries again
+            log.exception("couldn't queue ML tags for the library")
+            return 0
+
+    def retag_ml_tags(self) -> int:
+        """Stored ML tags drawn again after a cut-off change (ml_jobs.retag); never stops the server starting."""
+        try:
+            with closing(self.conn()) as c:
+                n = ml_jobs.retag(c)
+            if n:
+                self.event(None, "ml_tags", f"Redrew the ML tags of {n} tracks with the new cut-offs",
+                           source=analysis_source())
+            return n
+        except Exception:  # noqa: BLE001 - the old tags stay; the next start tries again
+            log.exception("couldn't redraw the stored ML tags")
+            return 0
 
     def analysis_slot(self):
         return self.slots or nullcontext()
@@ -213,6 +291,12 @@ class AppContext:
         """Whose library a request reads and writes: the signed-in email when hosted, else everything."""
         return request.state.user if self.hosted else None
 
+    def art_allowed(self, owner: str | None) -> bool:
+        """Whether this person's mash-up links may show album art: only the admins' on a shared server (Pam's
+        call: the art is the labels', so it goes out only on links she shares), anyone's on your own machine.
+        The same people get album art fetched for tracks without any (tastr/coverart.py)."""
+        return not self.hosted or owner in self.settings.admins
+
     def results(self, rs, user: str | None = None, job: str | None = None, stages: list | None = None) -> dict[str, Any]:
         if self.hosted:  # error text can name server paths; keep it in the log
             for i, r in enumerate(rs):
@@ -238,17 +322,40 @@ class AppContext:
         views = body["extras"].pop("views", None)
         body["has_views"] = views is not None
         body["has_audio"] = self.audio_path(card) is not None
+        # The engine that would analyze it now, for the card's "Engine 0.5.0 · latest 0.6.0" line (card.stages_run)
+        body["engine_latest"] = dict(rust.STAGES)
+        body["engine_news"] = rust.STAGE_NEWS
         body["stems_available"] = stems.available()
         body["stems_state"] = self.stem_jobs.status(self.stems_dir(card, track_id))["state"]
+        body["keylock_available"] = keylock.available()
         body["drum_model_available"] = drum_jobs.available()
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]
+        body["ml_tags"] = db.get_ml_tags(c, track_id)
+        body["ml_tags_available"] = ml_jobs.available()
+        ml_run = self.ml_run_status(c, track_id)
+        body["ml_tags_state"] = ml_run["state"]
+        if ml_run.get("error"):
+            body["ml_tags_error"] = ml_run["error"]
         body["lookups"] = lookup.describe(card, db.get_lookups(c, track_id))
-        body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in lookup.enabled()]
+        on = lookup.enabled()
+        body["lookup_providers"] = [{"name": p.name, "label": p.label} for p in on]
+        body["lookup_sources"] = lookup.sources(on)
+        # Rekordbox has no row until /api/admin/rekordbox-compare?save=1 loads this owner's export
+        imported = c.execute("SELECT 1 FROM lookups l JOIN tracks t ON t.id = l.track_id WHERE l.provider = 'rekordbox' "
+                             "AND t.owner IS (SELECT owner FROM tracks WHERE id = ?) LIMIT 1", (track_id,)).fetchone()
+        for s in body["lookup_sources"]:
+            if s["provider"] == "rekordbox":
+                s["imported"] = imported is not None
         return body
 
     @staticmethod
     def stems_dir(card, track_id: int) -> Path:
         return stems.stems_dir(card.source.sha256, track_id)
+
+    @staticmethod
+    def keylock_dir(card, track_id: int) -> Path:
+        """Every key-locked copy of the track's audio (tastr/keylock.py)."""
+        return keylock.track_dir(card.source.sha256, track_id)
 
     def card_or_404(self, track_id: int):
         with closing(self.conn()) as c:

@@ -2,8 +2,11 @@
 
 import { $, api, h, svg } from "./core.js";
 import { fmtUpLong } from "./library.js";
-import { stat } from "./card.js";
+import { LOOKUP_MARK, stat, switchTo } from "./card.js";
+import { fmtBytes } from "./files.js";
+import { loadReview, reviewOn } from "./labels.js";
 import { serverCfg } from "./daw.js";
+import { startViewAs } from "./viewas.js";
 
 // GET /api/admin/usage?range= and /api/admin/events, fetched each time the tab opens (no polling). Days are UTC days, like the limits.
 // Cloud cost is an estimate: Modal bills about $0.001 per analysis and $0.008 per stem job (T4, ~50 s), against the
@@ -39,6 +42,7 @@ export async function loadAdmin() {
     renderAdmin();
   } catch (e) { $("adm-error").textContent = e.message; }
   loadEvents();
+  loadRb();
 }
 // "When": today and the last 7 or 30 days count back from today's UTC day; "Between dates" uses the From and To days.
 function actQuery() {
@@ -166,13 +170,19 @@ function renderPeople(A, all, P) {
       admMeter(capN ? n / capN : 1, n >= capN),
       n >= capN && !raised ? h("button", { type: "button", class: "linklike adm-raise", onclick: (e) => { e.stopPropagation(); admEdit = p.email; renderAdmin(); } }, "Raise") : null);
   };
+  const keepCell = (p) => {
+    if (p.admin) return h("span", { class: "muted", title: "Admins' audio is always kept" }, "Forever");
+    const set = p.email && p.audio_days != null, d = set ? p.audio_days : L.audio_days;
+    return set ? h("span", { title: d ? `Uploads and stems are deleted ${daysText(d).toLowerCase()} after upload. The cards stay.` : "Kept forever, set for this person" }, daysText(d))
+      : h("span", { class: "muted", title: `The server default (TASTR_AUDIO_DAYS${L.audio_days ? `, ${daysText(L.audio_days).toLowerCase()}` : ", keep everything"})` }, daysText(d));
+  };
   const seen = (p) => (p.last_seen ? admAgo(p.last_seen).replace(/^(\d.*)$/, "$1 ago") : p.lastDay != null ? admDaysAgo(29 - p.lastDay) : "–");
   $("adm-people").replaceChildren(
-    h("thead", {}, h("tr", {}, ...["Person", "Last seen", "Visits today", "Tracks today", "Stems today", "Claude asks today", "Tracks, 30 d", "Library", "Storage", "Cost, 30 d", ""]
-      .map((t, i) => h("th", { class: i === 2 || (i > 5 && i < 10) ? "num" : "" }, t, i === 10 ? h("span", { class: "sr-only" }, "Limits") : null)))),
+    h("thead", {}, h("tr", {}, ...["Person", "Last seen", "Visits today", "Tracks today", "Stems today", "Claude asks today", "Tracks, 30 d", "Library", "Storage", "Keep audio", "Cost, 30 d", ""]
+      .map((t, i) => h("th", { class: i === 2 || (i > 5 && i < 9) || i === 10 ? "num" : "" }, t, i === 11 ? h("span", { class: "sr-only" }, "Limits and audio") : null)))),
     h("tbody", {}, ...all.flatMap((p) => {
       if (!p.email) return [h("tr", { class: "adm-none" }, h("td", {}, "No owner", h("span", { class: "muted" }, " · added before sharing")), h("td", { colspan: "6" }),
-        h("td", { class: "num" }, String(p.tracks)), h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td"), h("td"))];
+        h("td", { class: "num" }, String(p.tracks)), h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", {}, keepCell(p)), h("td"), h("td"))];
       const j = P.indexOf(p), pick = () => { admFocus = admFocus === j ? null : j; renderAdmin(); };
       const tr = h("tr", { class: admFocus === j ? "sel" : "", tabindex: "0", title: "Pick out in the chart", onclick: pick,
         onkeydown: (e) => { if (e.target === tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); pick(); } } },
@@ -180,12 +190,17 @@ function renderPeople(A, all, P) {
         h("td", {}, seen(p)), h("td", { class: "num" }, String(p.today.visits)),
         h("td", {}, quota(p, "tracks", p.today.tracks)), h("td", {}, quota(p, "stems", p.today.stems)), h("td", {}, quota(p, "asks", p.today.asks || 0)),
         h("td", { class: "num" }, String(p.tracks30)), h("td", { class: "num" }, String(p.tracks)),
-        h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", { class: "num", title: p.claude ? `$${p.claude.toFixed(2)} of it Ask Claude` : null }, `$${p.cost.toFixed(2)}`),
-        h("td", {}, h("button", { type: "button", class: "adm-lim-btn", "aria-expanded": String(admEdit === p.email), title: `Change ${p.email}'s daily limits`,
-          "aria-label": `Change ${p.email}'s daily limits`, onclick: (e) => { e.stopPropagation(); admEdit = admEdit === p.email ? null : p.email; renderAdmin(); } }, "✎")));
+        h("td", { class: "num", title: "audio + stems" }, admGB(p.bytes)), h("td", {}, keepCell(p)), h("td", { class: "num", title: p.claude ? `$${p.claude.toFixed(2)} of it Ask Claude` : null }, `$${p.cost.toFixed(2)}`),
+        h("td", {}, h("div", { class: "adm-acts" }, p.email !== serverCfg.user ? h("button", { type: "button", class: "adm-va-btn",
+          title: `See Tastr exactly as ${p.email.split("@")[0]} sees it. Read-only: you can't change anything while viewing.`,
+          onclick: (e) => { e.stopPropagation(); startViewAs(p.email).catch((err) => { $("adm-error").textContent = err.message; }); } }, "View as") : null,
+          h("button", { type: "button", class: "adm-lim-btn", "aria-expanded": String(admEdit === p.email), title: editTitle(p), "aria-label": editTitle(p), onclick: (e) => { e.stopPropagation(); admEdit = admEdit === p.email ? null : p.email; renderAdmin(); } }, "✎"))));
       return admEdit === p.email ? [tr, limitRow(p, L)] : [tr];
     })));
 }
+const editTitle = (p) => `Change ${p.email.split("@")[0]}'s daily limits${p.admin ? "" : " and how long their audio is kept"}`;
+// "Forever", "30 days", "1 year": how long audio is kept (0 = forever).
+const daysText = (d) => (!d ? "Forever" : d % 365 === 0 ? (d === 365 ? "1 year" : `${d / 365} years`) : `${d} day${d === 1 ? "" : "s"}`);
 // The inline row under a person: their daily caps (empty = the server default), today only or until changed.
 function limitRow(p, L) {
   const o = p.override || {};
@@ -206,14 +221,55 @@ function limitRow(p, L) {
     send({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ daily_tracks: t, daily_stems: st, daily_asks: ak, scope: until.value }) });
   };
   setTimeout(() => tIn.focus(), 0);
-  return h("tr", { class: "adm-lim-row" }, h("td", { colspan: "11" },
+  return h("tr", { class: "adm-lim-row" }, h("td", { colspan: "12" },
     h("div", { class: "adm-lim", onkeydown: (e) => { if (e.key === "Enter" && e.target.tagName === "INPUT") save(); if (e.key === "Escape") { admEdit = null; renderAdmin(); } } },
       h("b", {}, `Daily limits for ${p.email}`),
       h("label", {}, "Tracks per day", tIn), h("label", {}, "Stem jobs per day", sIn), h("label", {}, "Claude asks per day", aIn), h("label", {}, "For", until),
       h("button", { type: "button", class: "primary", onclick: save }, "Save"),
       p.override ? h("button", { type: "button", class: "linklike", onclick: () => send({ method: "DELETE" }) }, "Back to defaults") : null,
       h("button", { type: "button", class: "linklike", onclick: () => { admEdit = null; renderAdmin(); } }, "Cancel"),
-      h("span", { class: "muted" }, `Empty means the server default (${L.daily_tracks} tracks, ${L.daily_stems} stem jobs, ${L.daily_asks ?? 20} Claude asks, from TASTR_DAILY_*). Only this person changes.`), err)));
+      h("span", { class: "muted" }, `Empty means the server default (${L.daily_tracks} tracks, ${L.daily_stems} stem jobs, ${L.daily_asks ?? 20} Claude asks, from TASTR_DAILY_*). Only this person changes.`), err),
+    keepBlock(p, L)));
+}
+// How long a person's uploaded audio is kept, with its own Save: the limits' "Today only / Until I change it" doesn't
+// apply here. PUT /api/admin/audio-days/{email} {days} (0 = forever); DELETE = back to the server default.
+function keepBlock(p, L) {
+  const who = p.email.split("@")[0];
+  if (p.admin) return h("div", { class: "adm-lim adm-keep" }, h("b", {}, "Keep audio"), h("span", { class: "muted" }, "Admins' audio is always kept."));
+  const set = p.audio_days != null, cur = set ? p.audio_days : L.audio_days || 0;
+  const PRE = [[0, "Forever"], [7, "7 days"], [30, "30 days"], [90, "90 days"], [365, "1 year"]];
+  const sel = h("select", { "aria-label": `Keep ${who}'s audio for` }, ...PRE.map(([v, l]) => h("option", { value: String(v) }, l)), h("option", { value: "custom" }, "Custom…"));
+  const num = h("input", { type: "number", min: "1", max: "3650", step: "1", "aria-label": "Days" });
+  const daysLbl = h("span", {}, "days");
+  if (PRE.some(([v]) => v === cur)) sel.value = String(cur); else { sel.value = "custom"; num.value = String(cur); }
+  const warn = h("p", { class: "adm-keep-warn", role: "status", "aria-live": "polite" }), err = h("span", { class: "error", role: "alert" });
+  const pick = () => (sel.value === "custom" ? (num.value === "" ? NaN : +num.value) : +sel.value);
+  const upd = () => {
+    num.hidden = daysLbl.hidden = sel.value !== "custom"; err.textContent = "";
+    const d = pick(), shorter = Number.isInteger(d) && d > 0 && (cur === 0 || d < cur), span = daysText(d).toLowerCase();
+    warn.textContent = shorter ? `${who}'s audio older than ${span} will be deleted within 6 hours. From then on it's deleted ${span} after upload; the cards stay.` : "";
+    warn.hidden = !shorter;
+  };
+  const url = `/api/admin/audio-days/${encodeURIComponent(p.email)}`;
+  const send = async (opts) => {
+    try { await api(url, opts); admEdit = null; await loadAdmin(); }
+    catch (e) { err.textContent = e.message; }
+  };
+  sel.onchange = () => { upd(); if (sel.value === "custom") num.focus(); };
+  num.oninput = upd;
+  const save = () => {
+    const d = pick();
+    if (!Number.isInteger(d) || d < 0 || d > 3650 || (sel.value === "custom" && d < 1)) { err.textContent = "Days are a whole number from 1 to 3650."; return; }
+    send({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ days: d }) });
+  };
+  upd();
+  return h("div", { class: "adm-lim adm-keep", onkeydown: (e) => { if (e.key === "Enter" && e.target === num) save(); } },
+    h("b", {}, `Keep audio for ${p.email}`),
+    h("label", {}, "Keep audio for", sel), h("label", { class: "adm-keep-days" }, num, daysLbl),
+    h("button", { type: "button", class: "primary", onclick: save }, "Save"),
+    set ? h("button", { type: "button", class: "linklike", onclick: () => send({ method: "DELETE" }) }, "Back to default") : null,
+    warn, err,
+    h("span", { class: "muted" }, `The server default is ${daysText(L.audio_days || 0).toLowerCase()} (TASTR_AUDIO_DAYS). When the time is up, their uploads and stems are deleted: playback, the waveform, stems and re-analysis go. The cards stay.`));
 }
 // Recent activity: filtered on the server by type, person, source and time (AND), each line with its source.
 function fillActFilters() {
@@ -271,4 +327,100 @@ export function init() {
     try { admData = await api(`/api/admin/usage?range=${admRange}`); renderAdmin(); } catch (e) { $("adm-error").textContent = e.message; }
   }));
   window.addEventListener("resize", () => { if (!$("view-admin").hidden) renderAdmin(); });
+}
+
+/* Admin › Rekordbox export (sandbox v203, rekordbox-upload-spec.md). POST /api/admin/rekordbox/upload (the XML as the
+   body) stores it and answers the comparison without saving anything; POST /api/admin/rekordbox/load then stores
+   Rekordbox's BPM and key on the matched tracks. Both match against your own library. */
+let rbStatus = null, rbStep = { s: "idle" };
+async function loadRb() {
+  try { rbStatus = await api("/api/admin/rekordbox/status"); } catch (_) { rbStatus = null; }
+  renderRb();
+}
+const RB_FMT = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC" });
+// A compare row's marks, as the card shows them: the listing (Rekordbox) relative to ours.
+const rbBpmMark = (r) => (r.acc1 === 1 ? "agrees" : r.octave === "x2" ? "half" : r.octave === "/2" ? "double" : "differs");
+const rbKeyMark = (r) => ({ correct: "agrees", other: "differs" })[r.key_category] || r.key_category || null;
+const rbMark = (cmp) => (cmp && LOOKUP_MARK[cmp] ? h("span", { class: `lk-mark lk-${cmp}`, title: LOOKUP_MARK[cmp][1] }, LOOKUP_MARK[cmp][0]) : null);
+const rbVal = (bpm, key) => [bpm != null ? `${Math.round(bpm * 10) / 10}` : "no BPM", key || "no key"];
+function renderRb() {
+  const box = $("adm-rb"); if (!box) return;
+  const st = rbStep, kids = [], maxMb = (rbStatus && rbStatus.max_mb) || 50;
+  const pct = (a, b) => (b ? Math.round((100 * a) / b) : 0);
+  const idle = () => { rbStep = { s: "idle" }; renderRb(); };
+  const loaded = rbStatus && rbStatus.tracks > 0;
+  kids.push(loaded
+    ? h("p", { class: "rb-now" }, h("b", {}, "Loaded "), rbStatus.loaded_at ? `${RB_FMT.format(new Date(rbStatus.loaded_at))} UTC${rbStatus.file ? ` from ${rbStatus.file}` : ""}: ` : "", `${rbStatus.tracks} of your tracks show Rekordbox's BPM and key.`)
+    : h("p", { class: "rb-now" }, h("b", {}, "Not loaded yet. "), "No track shows Rekordbox's values until you load an export."));
+  if (st.s === "idle" || st.s === "error") {
+    const fileIn = h("input", { type: "file", accept: ".xml,application/xml,text/xml", hidden: "" });
+    const start = async (file) => {
+      if (file.size > maxMb * 1024 ** 2) { rbStep = { s: "error", msg: `${file.name} is ${fmtBytes(file.size)}. The limit is ${maxMb} MB: export a playlist or a smaller collection.` }; return renderRb(); }
+      rbStep = { s: "busy", say: `Uploading ${file.name} (${fmtBytes(file.size)})…` }; renderRb();
+      try {
+        const up = fetch(`/api/admin/rekordbox/upload?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file, headers: { "Content-Type": "application/xml" } });
+        setTimeout(() => { if (rbStep.s === "busy") { rbStep = { s: "busy", say: "Reading the export and matching it to your library…" }; renderRb(); } }, 600);
+        const r = await up;
+        if (!r.ok) { let d = null; try { d = (await r.json()).detail; } catch (_) {} throw new Error(d || `The upload failed (${r.status} ${r.statusText}).`); }
+        rbStep = { s: "preview", p: await r.json() };
+      } catch (e) { rbStep = { s: "error", msg: e.message }; }
+      renderRb();
+    };
+    fileIn.addEventListener("change", () => { if (fileIn.files[0]) start(fileIn.files[0]); });
+    const pick = h("div", { class: "rb-drop", tabindex: "0", role: "button", "aria-label": "Choose a Rekordbox export (.xml)",
+      onclick: () => fileIn.click(), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileIn.click(); } },
+      ondragenter: (e) => { e.preventDefault(); e.stopPropagation(); }, ondragover: (e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add("over"); },
+      ondragleave: (e) => e.currentTarget.classList.remove("over"),
+      ondrop: (e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) start(f); } },
+      h("b", {}, "Drop your export here"), " or ", h("span", { class: "link" }, "choose the .xml file"), fileIn);
+    kids.push(h("p", { class: "muted rb-how" }, "In Rekordbox: ", h("b", {}, "File › Export Collection in xml format"), ". Tastr reads each track's BPM and key and matches it to your library by file name, or by artist and title. Your export isn't shared with anyone."), pick);
+    if (st.s === "error") kids.push(h("p", { class: "rb-err", role: "alert" }, st.msg));
+  } else if (st.s === "busy") {
+    kids.push(h("p", { class: "rb-busy", role: "status" }, h("span", { class: "spin", "aria-hidden": "true" }), st.say));
+  } else if (st.s === "preview") {
+    const p = st.p, m = p.rows, byFile = p.matched_by["file name"] || 0;
+    const okB = m.filter((x) => x.acc1 === 1).length, okK = m.filter((x) => x.key_correct === 1).length;
+    if (!m.length) {
+      kids.push(h("div", { class: "rb-pre" }, h("h3", {}, `Nothing to load from ${p.file}`),
+        h("p", {}, `None of the ${p.rekordbox_tracks.toLocaleString()} tracks in the export match a track in your Tastr library, by file name or by artist and title.`),
+        h("p", { class: "muted" }, "Check it's the right Rekordbox library, or upload those tracks to Tastr first."),
+        h("div", { class: "menu-confirm-btns" }, h("button", { type: "button", onclick: idle }, "Choose another file"))));
+    } else {
+      const list = h("details", { class: "rb-list" }, h("summary", {}, `Show the ${m.length} matches`),
+        h("div", { class: "table-wrap" }, h("table", {}, h("thead", {}, h("tr", {}, ...["Track", "Tastr", "Rekordbox", "Matched by"].map((t) => h("th", {}, t)))),
+          h("tbody", {}, ...m.map((x) => {
+            const [tb, tk] = rbVal(x.tastr_bpm, x.tastr_key), [rbb, rbk] = rbVal(x.rekordbox_bpm, x.rekordbox_key);
+            return h("tr", { class: x.acc1 === 0 || x.key_correct === 0 ? "rb-dis" : "" }, h("td", {}, x.title), h("td", {}, `${tb} · ${tk}`),
+              h("td", {}, rbb, rbMark(x.rekordbox_bpm != null ? rbBpmMark(x) : null), ` · ${rbk}`, rbMark(rbKeyMark(x))), h("td", { class: "muted" }, x.matched_by));
+          })))));
+      const load = h("button", { type: "button", class: "primary" }, `Load Rekordbox values onto ${m.length} tracks`);
+      load.onclick = async () => {
+        load.disabled = true; load.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), "Loading…");
+        try {
+          const r = await api(`/api/admin/rekordbox/load?name=${encodeURIComponent(p.file)}`, { method: "POST" });
+          rbStep = { s: "done", n: r.saved, dis: r.disagree };
+          try { rbStatus = await api("/api/admin/rekordbox/status"); } catch (_) {}
+          loadReview(); loadEvents();
+        } catch (e) { rbStep = { s: "error", msg: e.message }; }
+        renderRb();
+      };
+      const before = p.status && p.status.tracks;
+      kids.push(h("div", { class: "rb-pre" }, h("h3", {}, `Ready to load ${p.file}`),
+        h("ul", { class: "rb-sum" },
+          h("li", {}, h("b", {}, p.rekordbox_tracks.toLocaleString()), " tracks in the export"),
+          h("li", {}, h("b", {}, String(m.length)), ` are in your Tastr library (${byFile} by file name, ${m.length - byFile} by artist and title). The other ${(p.rekordbox_tracks - m.length).toLocaleString()} aren't, so they're skipped.`),
+          h("li", {}, `Rekordbox agrees with Tastr on BPM for ${okB} (${pct(okB, m.length)}%) and on key for ${okK} (${pct(okK, m.length)}%).`),
+          h("li", {}, h("b", {}, String(p.disagree)), " disagree. They'll show in your Review list with Rekordbox's values.")),
+        list,
+        h("p", { class: "muted" }, before ? `This replaces the Rekordbox values from your last load (${before} tracks). Tracks that aren't in this export lose theirs.` : "Nothing has been loaded before, so nothing is replaced."),
+        h("div", { class: "menu-confirm-btns" }, h("button", { type: "button", onclick: idle }, "Cancel"), load)));
+    }
+  } else if (st.s === "done") {
+    kids.push(h("div", { class: "rb-pre rb-done", role: "status" }, h("h3", {}, h("span", { class: "rb-tick", "aria-hidden": "true" }, "✓"), `Loaded Rekordbox values onto ${st.n} tracks`),
+      h("p", {}, "Their cards show Rekordbox under Listed elsewhere, in the line under the stats and in Metadata.", st.dis ? ` ${st.dis} that disagree are in your Review list.` : ""),
+      h("div", { class: "menu-confirm-btns" },
+        st.dis ? h("button", { type: "button", onclick: () => { switchTo("library"); if (!reviewOn) $("lib-review").click(); } }, "Open Review") : null,
+        h("button", { type: "button", class: "primary", onclick: idle }, "Done"))));
+  }
+  box.replaceChildren(...kids);
 }

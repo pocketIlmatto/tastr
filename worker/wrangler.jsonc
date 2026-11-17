@@ -9,9 +9,12 @@
   // is reachable only there (docs/hosting-map.md).
   "workers_dev": false,
   "preview_urls": false,
-  // The browser files (python worker/build.py puts them here). The Worker answers first, so it decides which paths
-  // are static (only /static/*) and everything else reaches the app.
-  "assets": {"directory": "./public", "binding": "ASSETS", "run_worker_first": true},
+  // The browser files (python worker/build.py puts them here). /static/*, /sqljs/* and /engine/* are served straight
+  // from Static Assets, without starting the (Python) Worker: a page load asks for about 50 of them, and the cold
+  // Worker took seconds to start. Cloudflare Access still checks the login first. Everything else, and a static
+  // path with no file, reaches the Worker. public/_headers (build.py) lets the browser keep the versioned ones.
+  "assets": {"directory": "./public", "binding": "ASSETS",
+             "run_worker_first": ["/*", "!/static/*", "!/sqljs/*", "!/engine/*"]},
   // Logs and errors in the dashboard (Workers > tastr > Observability). A deploy sets this from here, so it stays on.
   "observability": {"enabled": true},
   // CPU time per request (Workers Paid allows up to 5 minutes; the default is 30 s). Raised for the one-time import
@@ -20,13 +23,19 @@
   // The library: one SQLite-backed Durable Object holds the database and runs the app.
   "durable_objects": {"bindings": [{"name": "LIB", "class_name": "Library"}]},
   "migrations": [{"tag": "v1", "new_sqlite_classes": ["Library"]}],
+  // The AcousticBrainz lookup's index (tastr/lookup/acousticbrainz.py): 7.56M recordings, about 0.4 GB, read by
+  // recording id. No database_id: a deploy finds the database by name, or makes an empty one (wrangler's automatic
+  // provisioning), and the acousticbrainz-d1 workflow loads it once. The deploy token needs D1 Edit for this.
+  "d1_databases": [{"binding": "ACOUSTICBRAINZ", "database_name": "tastr-acousticbrainz"}],
   // Settings (docs/hosting.md); secrets go in with `pywrangler secret put NAME`. A deploy resets these
   // to what's here, so a setting changed in the dashboard must be a Secret.
   // TASTR_MODAL_URL (the tastr-web app's api endpoint), TASTR_MODAL_KEY and TASTR_MODAL_SECRET are secrets.
   // The rest is for the Admin tab: its log links (this Worker's logs, the Modal app, the Access dashboard) and the
   // GitHub Actions runs it shows. deploy-worker.yml adds TASTR_COMMIT, TASTR_COMMIT_SUBJECT and TASTR_DEPLOY_RUN.
+  // TASTR_ML_TAGS=auto adds ML tags to every new upload, and once to the library (Modal ml_tags; MTG's weights are non-commercial only, docs/essentia.md).
   "vars": {"TASTR_HOSTED": "1", "TASTR_ANALYSIS_BACKEND": "modal", "TASTR_STEMS_BACKEND": "modal",
            "TASTR_WORKER_NAME": "tastr", "TASTR_CF_ACCOUNT_ID": "1c793218966f05bb509e1e76f4ba0b67",
            "TASTR_MODAL_APP": "tastr-web", "MODAL_ENVIRONMENT": "friends",
-           "TASTR_GITHUB_REPO": "pocketIlmatto/tastr", "TASTR_GITHUB_WORKFLOWS": "tests,deploy"}
+           "TASTR_GITHUB_REPO": "pocketIlmatto/tastr", "TASTR_GITHUB_WORKFLOWS": "tests,deploy",
+           "TASTR_ML_TAGS": "auto"}
 }

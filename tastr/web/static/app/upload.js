@@ -15,7 +15,7 @@ export function setStatus(msg, isErr, busy) {
 // with the results straight away still works, without steps.
 const A_TYPICAL = 40;  // seconds per track to start the time left from (hosted on Modal, upload included); then the running average
 const UP_SHARE = 0.15; // the part of a row's bar the upload takes
-// [stage, step name, share of the analysis, "while ..."]: the engine's stages (tastr/engine/stages) and the steps around them
+// [stage, step name, share of the analysis, "while ..."]: the engine's stages (engine-rs/src/stages) and the steps around them
 export const A_STEPS = [["waiting", "Waiting for a worker", 0.06, "waiting for a worker"], ["decode", "Decoding audio", 0.08, "decoding the audio"],
   ["core", "Finding tempo, key and beats", 0.34, "finding tempo, key and beats"], ["sections", "Finding sections", 0.2, "finding sections"],
   ["tags", "Tagging vibes", 0.1, "tagging vibes"], ["suggestions", "Writing patterns", 0.16, "writing patterns"], ["views", "Drawing views", 0.06, "drawing views"]];

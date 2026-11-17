@@ -238,7 +238,8 @@ def beatport_tempo(root: str | Path) -> list[Item]:
     Reads <root>/meta/<id> <name>.json (from original_metadata.zip in Zenodo record 1101082)
     and matches audio named "<id> <name>.mp3" anywhere under <root>, as beatport_key does.
     Tracks with a missing, zero or NaN bpm are skipped. Beatport's bpm is the DJ tempo, and
-    drum & bass is often listed at half time (~87), see docs/bench.md.
+    drum & bass is often listed at half time (~87), see docs/bench.md; each item's meta has its first genre, so
+    the report can count drum & bass read at full tempo.
     """
     root = Path(root)
     audio = {}
@@ -254,7 +255,9 @@ def beatport_tempo(root: str | Path) -> list[Item]:
         sid = str(meta.get("id") or f.name.split(" ")[0])
         if not bpm or sid not in audio:
             continue
-        items.append(Item(id=f"bp-tempo-{sid}", path=str(audio[sid]), truth=Truth(bpm=float(bpm))))
+        genre = next((g.get("name") for g in meta.get("genres") or [] if g.get("name")), None)
+        items.append(Item(id=f"bp-tempo-{sid}", path=str(audio[sid]), truth=Truth(bpm=float(bpm)),
+                          meta={"genre": genre} if genre else {}))
     return items
 
 

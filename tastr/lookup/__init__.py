@@ -19,7 +19,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from . import acousticbrainz, freqblog, getsongbpm  # noqa: F401  registers the built-in providers
+from . import acousticbrainz, freqblog, getsongbpm, reccobeats, rekordbox  # noqa: F401  registers the built-in providers
 from .base import PROVIDERS, LookupResult, Provider, ProviderError, TrackQuery, parse_listed_key, register  # noqa: F401
 from .guard import Limited, usage_conn
 
@@ -41,6 +41,20 @@ def enabled() -> list[Provider]:
         else:
             out.append(p)
     return out
+
+
+SOURCE_ORDER = ("rekordbox", "getsongbpm", "freqblog", "reccobeats", "acousticbrainz")  # the card's "Listed elsewhere" table
+
+
+def sources(on: list[Provider] | None = None) -> list[dict[str, Any]]:
+    """Every registered provider for the card's "Listed elsewhere" table, set up or not. `configured`: this server
+    asks it (named in TASTR_LOOKUP and set up). Rekordbox is never asked; its rows come from your export, so it
+    always counts as configured and a missing row means the track isn't in that export. `on`: enabled(), if known."""
+    names = {p.name for p in (enabled() if on is None else on)}
+    order = {n: i for i, n in enumerate(SOURCE_ORDER)}
+    ps = sorted(PROVIDERS.values(), key=lambda p: order.get(p.name, len(order)))
+    return [{"provider": p.name, "label": p.label, "homepage": p.homepage,
+             "configured": p.name == "rekordbox" or p.name in names} for p in ps]
 
 
 def query_for(card) -> TrackQuery | None:
@@ -67,6 +81,33 @@ def _refresh_seconds() -> float:
         return 60 * float(os.environ.get("TASTR_LOOKUP_REFRESH_MINUTES", REFRESH_MINUTES))
     except ValueError:
         return 60 * REFRESH_MINUTES
+
+
+def settled(p: Provider, r: dict | None, now: float | None = None) -> bool:
+    """Whether a stored answer can stand without asking again: "found", or a "not_found" that hasn't expired (a
+    provider's miss_days, or the retry_after_days it sent with that answer)."""
+    status = (r or {}).get("status")
+    if status not in SETTLED:
+        return False
+    days = (r.get("extra") or {}).get("retry_after_days") or p.miss_days
+    if status == "found" or days is None:
+        return True
+    try:
+        fetched = datetime.fromisoformat(r["fetched_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (time.time() if now is None else now) - fetched < float(days) * 86400
+
+
+def held_from_downloads() -> list[str]:
+    """Providers whose stored answers must not leave the server in a downloaded file (Provider.in_downloads)."""
+    return [p.name for p in PROVIDERS.values() if not p.in_downloads]
+
+
+def forget(conn: sqlite3.Connection, provider: str) -> int:
+    """Delete every stored answer from one provider (e.g. FreqBlog's, if its key goes away); returns how many."""
+    with conn:
+        return conn.execute("DELETE FROM lookups WHERE provider = ?", (provider,)).rowcount
 
 
 def _recently_asked(stored: dict[str, dict], track_id: int, p: Provider, now: float) -> bool:
@@ -100,7 +141,7 @@ def lookup_track(conn: sqlite3.Connection, track_id: int, card, providers: list[
     providers = enabled() if providers is None else providers
     stored = {r["provider"]: r for r in db.get_lookups(conn, track_id)}
     if only_missing:
-        providers = [p for p in providers if stored.get(p.name, {}).get("status") not in SETTLED and p.may_store()]
+        providers = [p for p in providers if not settled(p, stored.get(p.name)) and p.may_store()]
     q = query_for(card)
     out = []
     token = usage_conn.set(conn)
@@ -162,8 +203,11 @@ def describe(card, stored: list[dict]) -> list[dict]:
     out = []
     for r in stored:
         p = PROVIDERS.get(r["provider"])
-        out.append(r | {"label": p.label if p else r["provider"], "homepage": p.homepage if p else None,
-                        "compare": compare(card, r) if r.get("status") == "found" else None})
+        row = r | {"label": p.label if p else r["provider"], "homepage": p.homepage if p else None,
+                   "compare": compare(card, r) if r.get("status") == "found" else None}
+        if r.get("status") == "not_found" and p and p.miss_days and r.get("fetched_at"):
+            row["checked_at"] = r["fetched_at"]  # a miss that expires: the card says when it was checked
+        out.append(row)
     return out
 
 

@@ -9,21 +9,24 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
 
 - **Tempo and key.** BPM with how likely it is to be right (calibrated on the benchmarks), a beat and bar grid, and the
   key from a small learned model trained on GiantSteps and Beatport (shown with
-  its Camelot code for mixing). Drum & bass is read at its real tempo, not
+  its Camelot code for mixing). When the third barely sounds, so major or minor is a guess, the key shows as
+  "C major?" with the other mode under it ("8B · or C minor (5A)"). Drum & bass is read at its real tempo, not
   half or two thirds of it.
 - **Time signature.** Bars of 4 beats (4/4) or 3 (3/4, waltz time), detected
   from how the beats group. Grids, MIDI and Strudel follow it. When it's wrong,
-  change it from the track's ⋯ menu; `TASTR_METER=4/4` turns 3/4 detection off.
+  change it from the track's ⋯ menu.
   6/8 and songs that change meter are read as 4/4 or 3/4.
 - **Energy and sections.** An energy curve with rough section boundaries
   (intro, build, drop, chorus, outro...). Sections that sound alike share a
   letter, so `Drop B` and `Outro B` are the same part.
 - **Vibe tags.** Scored tags such as bass-heavy, dark or percussive, grouped by
   kind (energy, mood, rhythm, sound...) and tinted by how strongly they apply.
+  Where ML tags are on, Essentia's trained models add a style (e.g. Deep House), moods and vocal/instrumental,
+  marked ✦, and replace Tastr's weakest moods ([essentia.md](essentia.md)).
 - **File tags.** Title, artist and album from MP3, FLAC and m4a tags.
 - **Listed elsewhere (optional).** The BPM and key that [GetSongBPM](https://getsongbpm.com)
-  and FreqBlog (your own API keys) or AcousticBrainz's public-domain dump list for the
-  track, shown next to Tastr's figures with a mark when they disagree. Off by default; see
+  and FreqBlog (your own API keys), ReccoBeats (BPM only, no key) or AcousticBrainz's public-domain dump
+  list for the track, shown next to Tastr's figures with a mark when they disagree. Off by default; see
   [lookup.md](lookup.md).
 
 ## Drums, bass and chords
@@ -32,7 +35,7 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
 
 - **Drum lanes** for kick, snare, clap, hat, open hat, tom and perc, as a
   16-step grid per section (12 steps in 3/4). Template patterns that fit the
-  tempo (waltz patterns in 3/4) are one click away. Ask for the optional [drum model](usage.md#drum-model-optional) on a track and kick, hat and tom come from
+  tempo (waltz patterns in 3/4) are one click away. Ask for the optional [drum model](usage.md#drum-model-optional) on a track and kick, snare, hat and tom come from
   [ADTOF](https://github.com/MZehren/ADTOF), a network trained on annotated
   real music that finds toms the built-in detector misses, and a cymbal lane
   (crash and ride) is added.
@@ -48,7 +51,7 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   a version to come back to later. Re-analyzing keeps your edits for sections
   that didn't move.
 
-## Try this in Ableton or Strudel
+## Try this in Ableton, Strudel, Tidal or Sonic Pi
 
 - **Ableton Live:** setup (tempo, scale, Camelot), drum rack programming, bass
   and chord moves, scales to play over each chord, an arrangement map and mix
@@ -59,11 +62,20 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   filter sliders and a punchcard under the code. It can use your edits and the
   original audio cut into bars, either the full mix or separated stems, and start
   from any section. "Open in Strudel" opens it in strudel.cc, ready to play and remix.
+- **[Tidal](https://tidalcycles.org) and [Sonic Pi](https://sonic-pi.net):** a
+  switch above the Strudel code (Strudel, Tidal, Sonic Pi) writes the same sketch,
+  each section's drums, bass and chords with your edits, as TidalCycles or Sonic Pi
+  code. Neither has a web player, so it's code to copy or download (`.tidal`, `.rb`)
+  and run in the app on your computer. The pick is remembered per browser.
 - **Strudel templates:** pick a template above the code: Full sketch (the sketch
   above), Loop the drop (four bars of the drop with a filter slider), Drums only
   (every section's drums with one line to switch the kit), Half-time remix, or
   Mash-up (a second track sped to line the bars up, with the tracks that mix well
-  in key listed first). The Mash-up's "Parts by section" grid picks which parts
+  in key listed first). With key lock on the server (`pip install 'tastr[keylock]'`,
+  or Modal when hosted), the second track is time-stretched to this track's tempo
+  with its pitch kept, so speeding it up no longer pulls it out of key; until that's
+  ready, and without it, the code speeds it up like a turntable and says how far
+  that moves its pitch. The Mash-up's "Parts by section" grid picks which parts
   play in each of this track's sections: either track's full mix or its stems
   (vocals, bass, other, drums), and which of the second track's sections they come
   from. Quick picks fill it ("A's vocals over B's beat", "Trade vocals: A in
@@ -74,6 +86,13 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   `{loop}`, filled from the open track. The editor lists every fill-in with its
   value and previews the result live; templates are saved with your account and
   move between servers with Export all / Import….
+- **Short links:** "Copy short link" gives a short `/pub/s/…` link to the code that
+  anyone can open; chat apps show a Tastr preview card for it. A mash-up's link from
+  an admin (or from your own machine) shows both tracks' album art instead, read
+  from the files' embedded covers. A track without one gets its release's front cover
+  from the [Cover Art Archive](https://coverartarchive.org), found through MusicBrainz
+  (when catalog lookups are on), and a drum-pad tile when neither has one. Other
+  people's links keep the standard card, since cover art belongs to the labels.
 - **Ask Claude to change it:** type what you want ("make the drums half-time and
   add a filter sweep into the drop") and Claude rewrites the code; you see what
   changed, and can undo it or save it as a template. On a shared server each person
@@ -84,6 +103,9 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
 
 ## Listen and explore
 
+- **First load:** until your library arrives, the track list and card show placeholder rows and "Loading your
+  library…". After 3 s the list says the server is waking up (a hosted server starts from cold after a quiet spell),
+  and if loading fails it shows why, with **Retry**. Explore, Files and Admin show one loading line meanwhile.
 - **Energy, waveform and spectrogram views** with playback. Click a section to
   play from there, drag the playhead to scrub (you hear it as you drag), and
   scroll to zoom. The spectrogram redraws sharp at your screen's resolution as you zoom.
@@ -111,6 +133,17 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   separate stems or delete, for one track or a whole selection. Bulk reload, re-analyze and look up run a few
   tracks at a time (`TASTR_BULK_AT_ONCE`; on a hosted server it follows `TASTR_MAX_ANALYSES`, at home about
   half the CPU cores); stems and the drum model run one at a time.
+- **Cards from an older engine.** A card keeps the results of the engine version that made it until it's
+  re-analyzed. Such a card shows "Engine 0.5.0 · latest 0.6.0" under its stats, with what changed in the tooltip
+  and a ↻ button that re-analyzes it; its row in the list has a ↻ mark. Filters › Engine shows only current or
+  only older cards, and the line under the filters ("3 tracks are from an older engine. Show them · Re-analyze 2")
+  re-analyzes all of them at once. Re-analysis needs the original audio, so a track whose audio was deleted
+  can't be updated (upload the file again). When a stage version goes up, add a sentence on what changed to
+  `STAGE_NEWS` in `tastr/engine/rust.py`.
+- **Earlier cards are kept.** Re-analyzing a track keeps the card it replaces (its BPM, key, energy and engine
+  versions, the last 5 per track), so you can see what an engine update changed: `GET /api/tracks/{id}/history`, or
+  the `card_history` table in Explore › Find › SQL (example: "BPM changed on re-analysis"). The card doesn't show
+  them yet. Tracks re-analyzed before this have no history.
 - **Explore tab**, in two tabs:
   - **Find tracks** searches your library without code (BPM, key and the keys that mix with it, energy, vibe,
     length, sections, text, with AND/OR groups), or in read-only SQL with a table and column reference. Save
@@ -137,7 +170,9 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   analysis and can play the audio; your edits, labels, cues and lists stay yours.
 - **Play and export lists:** Library › List shows one list in its own order, with **Play**, **Shuffle** and
   **Export**. The player bar at the bottom streams each track in turn (previous, play/pause, next, shuffle,
-  seek), and the keyboard's media keys work too. Starting a card's playback pauses the list. Export saves the
+  seek), and the keyboard's media keys work too. When a track ends on its own, the next one fades in over
+  6 seconds; the bar's crossfade button turns that off or sets 1 to 12 seconds, kept in this browser (next and
+  previous still cut straight away). Starting a card's playback pauses the list. Export saves the
   list as M3U8, XSPF or PLS, whose entries point at the tracks' audio on your Tastr server (on a shared server,
   links that work for 7 days), or as a zip with the audio and an .m3u8 that plays anywhere. Blend's list chips
   have the same ▶ and ⤓ buttons.
@@ -169,7 +204,7 @@ the music you actually use, and every label also scores future engine changes
   - BPM: Tastr's, half or double in one click, a drag box (a whole BPM per notch, Shift for 0.1), or **Tap**
     along to the beat.
   - Key: Tastr's key, its relative and the fifths above and below (Tastr's most common misses), or any of the
-    24. A "catalog" tag marks the one a catalog lists.
+    24. When the mode is a guess, **Other mode** (the same tonic in minor or major) comes right after Tastr's key. A "catalog" tag marks the one a catalog lists.
   - 🔊 next to each key plays its chord alone for 2 seconds, then brings the track's drop in under it: the right
     key blends in, a wrong one clashes. **🥁 Drums off** plays only the track's harmonic part (HPSS, worked out
     in the browser for the clip), which is what the key detector listens to. A slider sets the chord's level.
@@ -230,9 +265,17 @@ When Tastr is hosted for friends, the people in `TASTR_ADMIN_EMAILS` get an **Ad
 - **Usage chart:** pick Today (24 UTC hours, with a "now" line), 7 days, 30 days or All time, and show
   Tracks, Stem jobs, Visits, Storage (GB per person at the end of each day) or Cost (estimated from Modal run
   time). Bars stack per person; click a person in the table to pick them out.
+- **View as:** the **View as** button on a person's row reloads the app as they see it: their library, lists,
+  limits and screens, with no Admin tab. It's read-only: an orange banner says whose view it is, uploads are
+  off, and anything that would change their data is refused with a message. **Exit** in the banner takes you
+  back to the Admin tab; the view also ends by itself after 2 hours.
 - **Daily limits per person:** the ✎ at the end of a person's row changes their tracks and stem jobs per
   day, for today only (back to the default at 00:00 UTC) or until you change it. Their quota shows the raised
   cap with ↑, and someone at their cap gets a **Raise** link. Each change is logged.
+- **Keep audio per person:** the **Keep audio** column shows how long each person's uploads and stems are kept
+  (Forever by default). Under the ✎, **Keep audio for** sets forever, 7, 30 or 90 days, a year or a custom number
+  of days; picking a shorter time warns that older audio goes within 6 hours. The cards stay. Admins' audio is
+  always kept.
 - **Recent activity filters:** filter the log by what happened, who, where (Tastr, Modal, Fly.io, GitHub,
   Cloudflare, R2) and when (today, 7 or 30 days, or between two dates). Filters combine; **Problems** shows
   only what went wrong. Each line names its source. GitHub Actions runs on main show up on their own,

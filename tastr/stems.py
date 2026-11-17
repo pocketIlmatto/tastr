@@ -81,7 +81,7 @@ def is_ready(folder: Path) -> bool:
 def remove(folder: Path) -> None:
     shutil.rmtree(folder, ignore_errors=True)
     blobs.remove_tree(folder)
-    _made_with.pop(folder, None)
+    _forget(folder)
 
 
 def info_path(folder: Path) -> Path:
@@ -100,16 +100,29 @@ def settings(model_name: str = MODEL, shifts: int = SHIFTS, overlap: float = OVE
 
 
 _made_with: dict[Path, dict] = {}  # folder -> its record, read once (the bucket's copy costs a request)
+# How often each folder's record was forgotten, so a read that started before a forget (a page polling the status
+# while a separation swaps the new set in) doesn't put the old record back after it.
+_forgotten: dict[Path, int] = {}
+_made_with_lock = threading.Lock()
+
+
+def _forget(folder: Path) -> None:
+    with _made_with_lock:
+        _made_with.pop(folder, None)
+        _forgotten[folder] = _forgotten.get(folder, 0) + 1
 
 
 def made_with(folder: Path) -> dict:
     """The model and settings that made the folder's stems, from its `stems.json`, plus `recorded` (False: there
     was no record, so they are LEGACY htdemucs stems) and `outdated` (made with another model than MODEL). Only
     meaningful once the stems are ready. `latest`: MODEL, what separating again would use."""
-    info = _made_with.get(folder)
+    with _made_with_lock:
+        info, seen = _made_with.get(folder), _forgotten.get(folder, 0)
     if info is None:
         info = _read_info(folder)
-        _made_with[folder] = info
+        with _made_with_lock:
+            if _forgotten.get(folder, 0) == seen:
+                _made_with[folder] = info
     return {**info, "outdated": info.get("model") != MODEL, "latest": MODEL}
 
 
@@ -140,7 +153,7 @@ def _record(folder: Path, info: dict, *, bucket_only: bool = False) -> None:
         blobs.reset_listings()
     else:
         path.write_bytes(body)
-    _made_with.pop(folder, None)
+    _forget(folder)
 
 
 def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None, *,
@@ -277,7 +290,7 @@ def separate_track(audio_path: str | Path, folder: Path, progress: Progress | No
         shutil.rmtree(old, ignore_errors=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    _made_with.pop(folder, None)
+    _forget(folder)
     for path in [stem_path(folder, n) for n in STEM_NAMES] + [info_path(folder)]:
         blobs.push(path)
 
@@ -332,7 +345,7 @@ def _promote(stage: Path, folder: Path, info: dict) -> None:
                 blobs.copy(backup / n, folder / n)
             if INFO_NAME not in old:
                 blobs.remove(info_path(folder))
-            _made_with.pop(folder, None)
+            _forget(folder)
             raise
     finally:
         blobs.remove_tree(backup)

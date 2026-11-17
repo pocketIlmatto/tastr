@@ -4,9 +4,9 @@
 // complexity caps how tangled one function can get (TAS-36 split energyChart, grooveView, labelBar, renderCard and
 // strudelCode, which were up to 101); the ceiling is library.js renderList, so lower it when that one is split.
 // CI runs it with `npx eslint@10.12.0` only when a script changes; see .github/workflows/test.yml.
-const BROWSER = ["Audio", "Blob", "CustomEvent", "Event", "EventTarget", "FormData", "Image", "TextEncoder", "URL",
+const BROWSER = ["Audio", "Blob", "CustomEvent", "DecompressionStream", "Event", "EventTarget", "FormData", "Image", "TextEncoder", "URL",
   "URLSearchParams", "Worker", "XMLHttpRequest", "atob", "cancelAnimationFrame", "clearInterval", "clearTimeout", "console",
-  "document", "fetch", "history", "innerWidth", "localStorage", "location", "matchMedia", "navigator", "performance",
+  "document", "fetch", "history", "innerWidth", "localStorage", "location", "matchMedia", "navigator", "performance", "Response",
   "requestAnimationFrame", "setInterval", "setTimeout", "window"];
 const PLAIN_SCRIPTS = ["STRUDEL_STEMS", "strudelCode", "strudelLink", "hpssHarmonic", // strudel.js, hpss.js
   "STRUDEL_TEMPLATES", "STRUDEL_NEW_TEXT", "strudelFillins", "strudelFill", "strudelUnfill", "strudelDiff", "strudelHunks",

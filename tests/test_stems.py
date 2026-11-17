@@ -291,6 +291,23 @@ def test_a_second_separation_resumes_after_a_restart(db_path, track, stub, home,
     assert len(stub) == 1 and markers.items() == [] and not st["made_with"]["outdated"]
 
 
+def test_a_record_read_while_a_new_set_moves_in_is_not_kept(home, monkeypatch):
+    """A page polling the status reads the record while separate_track swaps the new set in; the old answer it read
+    must not stay cached after the swap forgets it (the stems would read as outdated until a restart)."""
+    folder = old_stems(home)
+    real = stems._read_info
+
+    def slow_read(f):
+        old = real(f)  # the folder as it was: no record, so old htdemucs
+        stems._record(f, {"model": stems.MODEL})  # meanwhile the new set and its record move in, and forget it
+        return old
+
+    monkeypatch.setattr(stems, "_read_info", slow_read)
+    assert stems.made_with(folder)["outdated"]  # this one read raced
+    monkeypatch.setattr(stems, "_read_info", real)
+    assert not stems.made_with(folder)["outdated"]  # the next one reads the new record
+
+
 def test_an_unreadable_record_counts_as_old_htdemucs(home):
     folder = home / "stems" / "bad"
     folder.mkdir(parents=True)

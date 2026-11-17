@@ -51,8 +51,23 @@ async function startWorker() {
   workerHas = true;
 }
 
+// The library comes gzipped as a plain body (?gz=1), not as Content-Encoding: the Worker compressed that a second
+// time, so the browser undid one layer and sql.js got a gzip file ("file is not a database"). Anything starting
+// with gzip's magic bytes is unpacked here, however many layers a proxy added.
+async function gunzip(buf) {
+  let b = new Uint8Array(buf);
+  for (let i = 0; i < 3 && b.length > 2 && b[0] === 0x1f && b[1] === 0x8b; i++) {
+    b = new Uint8Array(await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer());
+  }
+  return b.buffer;
+}
+
 async function download() {
-  const r = await fetch("/api/query/library");
+  return gunzip(await fetchLibrary());
+}
+
+async function fetchLibrary() {
+  const r = await fetch("/api/query/library?gz=1");
   if (!r.ok) throw new Error(r.status === 401 ? "you're signed out; reload the page" : `the server answered ${r.status}`);
   const total = +r.headers.get("X-Library-Bytes") || 0;
   lib.kb = Math.max(1, Math.round(total / 1024)); paint();

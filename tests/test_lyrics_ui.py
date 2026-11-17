@@ -52,3 +52,47 @@ out = [a.src, a.t, b.src, b.t, calls];"""
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == ["pl", 10, "card", 42, ["pl", "card", "card-seek"]]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_guessed_lines_never_light_up():
+    """Lyrics timed by listening (tastr/listen.py): a line it couldn't place has `guess: true` and is skipped."""
+    src = (APP / "lyrics.js").read_text()
+    src = re.sub(r"^import .*?;\n", "", src, flags=re.M).replace("export ", "")
+    body = """
+const L = { state: "found", timed_by: "whisper", synced: [{ t: 2, line: "Paper lanterns" }, { t: 6, line: "guessed", guess: true },
+            { t: 10, line: "counting lights" }] };
+out = [lineAt(L, 5), lineAt(L, 7), lineAt(L, 11), heard(L), heard({ source: "whisper" })];"""
+    stubs = "const localStorage = { getItem: () => null, setItem() {} };\n"
+    r = subprocess.run(["node", "-e", stubs + src + "\nlet out;\n" + body + "\nconsole.log(JSON.stringify(out));"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [0, 0, 2, False, True]
+
+
+def test_listening_is_wired():
+    src = (APP / "lyrics.js").read_text()
+    assert "/lyrics/listen`, { method: \"POST\" }" in src
+    for text in ("Listen for lyrics", "Time these lines", "Waiting for another listen to finish…",
+                 "Heard by Whisper from the vocals. Words may be wrong.", "Look on LRCLIB again",
+                 "Timed by listening to the vocals.", "Lyrics from LRCLIB · timed by listening",
+                 "Couldn't listen to this track. "):
+        assert text in src, text
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_drawing_the_same_card_again_keeps_a_newer_listen():
+    src = (APP / "lyrics.js").read_text()
+    src = re.sub(r"^import .*?;\n", "", src, flags=re.M).replace("export ", "")
+    body = """
+const c = { id: 5, lyrics: { state: "not_found" }, lyrics_available: true, listen_available: true };
+cardLyrics(c);
+lyrics.set(5, { state: "found", source: "whisper", synced: [{ t: 1, line: "made up" }] }); // the listen finished
+cardLyrics(c); const a = lyricsOf(5).state;
+cardLyrics({ ...c, lyrics: { state: "not_found" } }); // a fresh answer from the server wins
+out = [a, lyricsOf(5).state];"""
+    stubs = "const localStorage = { getItem: () => null, setItem() {} };\n"
+    r = subprocess.run(["node", "-e", stubs + src + "\nlet out;\n" + body + "\nconsole.log(JSON.stringify(out));"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == ["found", "not_found"]

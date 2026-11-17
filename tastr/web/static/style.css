@@ -1371,6 +1371,13 @@ h1 { white-space: nowrap; }
 .ly-plain { white-space: pre-line; font-size: 15px; line-height: 1.5; max-height: 280px; overflow-y: auto; padding: 4px 0; }
 .ly-hint, .ly-credit { font-size: 12px; margin: 6px 0 0; }
 .ly-state { margin: 4px 0; font-size: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+/* Listening for lyrics (Whisper): the job's line, the action, the heard-lyrics credit and lines it couldn't place */
+.ly-work { display: block; }
+.ly-listen { margin: 8px 0 4px; font-size: 13px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.ly-listen .tp-btn { font-size: 13px; padding: 4px 10px; }
+.ly-heard b { font-weight: 600; color: var(--fg); }
+#card .ly-lines li.untimed .ly-line, .ly-lines li.untimed .ly-line { display: block; padding: 3px 6px; font-size: 15px; line-height: 1.45; color: var(--muted); font-style: italic; cursor: default; }
+.spin.idle { animation: none; border-color: var(--line); }
 .warn-t { color: var(--warn); }
 #pl-bar .pl-btn.pl-sing { font-size: 17px; }
 body.sing-open { overflow: hidden; }

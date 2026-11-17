@@ -34,3 +34,21 @@ out = [lineAt(L, 0), lineAt(L, 1.9), lineAt(L, 2), lineAt(L, 7), lineAt(L, 99), 
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == [-1, 0, 0, 1, 2, True, True, False, True, False, False]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_playing_card_wins_over_a_paused_playlist_on_the_same_track():
+    src = (APP / "lyrics.js").read_text()
+    src = re.sub(r"^import .*?;\n", "", src, flags=re.M).replace("export ", "")
+    stubs = """const localStorage = { getItem: () => null, setItem() {} };
+let cardPlaying = false; const calls = [];
+const charts = new Map([[7, { el: { isConnected: true }, now: () => 42, isPlaying: () => cardPlaying, toggle: () => calls.push("card"), seek: () => calls.push("card-seek") }]]);
+"""
+    body = """setListClock({ id: () => 7, now: () => 10, playing: () => false, seek: () => calls.push("pl-seek"), toggle: () => calls.push("pl") });
+const a = lyrClock(7); lyrToggle(7);
+cardPlaying = true; const b = lyrClock(7); lyrToggle(7); lyrSeek(7, 5);
+out = [a.src, a.t, b.src, b.t, calls];"""
+    r = subprocess.run(["node", "-e", stubs + src + "\nlet out;\n" + body + "\nconsole.log(JSON.stringify(out));"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == ["pl", 10, "card", 42, ["pl", "card", "card-seek"]]

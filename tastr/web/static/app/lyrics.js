@@ -47,26 +47,34 @@ export function karaokeUrl(id) {
   }
   return mixes.get(id);
 }
-// New stems make a new mix; forget the old answer.
-export function forgetMix(id) { mixes.delete(id); }
+// New stems make a new mix; forget the old answer (here and in whoever registered, e.g. the playlist bar).
+const forgetHooks = new Set();
+export const onForgetMix = (fn) => forgetHooks.add(fn);
+export function forgetMix(id) { mixes.delete(id); forgetHooks.forEach((fn) => fn(id)); }
 
 // ---- where the track is in playback: the playlist bar if it's playing this track, else the card's chart ----
 let list = null; // playlist.js registers { id(), now(), playing(), seek(t), toggle() }
 export const setListClock = (c) => { list = c; };
+// Who has the track: a card player that's playing it, else the playlist bar on it (playing or paused), else the card.
+function owner(id) {
+  const k = charts.get(id), card = k && k.el.isConnected && k.isPlaying ? k : null;
+  if (card && card.isPlaying()) return { card };
+  if (list && list.id() === id) return { list };
+  return { card };
+}
 export function lyrClock(id) {
-  if (list && list.id() === id) return { t: list.now(), playing: list.playing(), src: "pl" };
-  const k = charts.get(id);
-  return k && k.el.isConnected && k.isPlaying ? { t: k.now(), playing: k.isPlaying(), src: "card" } : { t: 0, playing: false, src: null };
+  const o = owner(id);
+  if (o.list) return { t: o.list.now(), playing: o.list.playing(), src: "pl" };
+  return o.card ? { t: o.card.now(), playing: o.card.isPlaying(), src: "card" } : { t: 0, playing: false, src: null };
 }
 function lyrSeek(id, t) {
-  if (list && list.id() === id) { list.seek(t); if (!list.playing()) list.toggle(); return; }
-  const k = charts.get(id);
-  if (k && k.el.isConnected && k.seek) k.seek(t, true);
+  const o = owner(id);
+  if (o.list) { o.list.seek(t); if (!o.list.playing()) o.list.toggle(); }
+  else if (o.card) o.card.seek(t, true);
 }
 function lyrToggle(id) {
-  if (list && list.id() === id) { list.toggle(); return; }
-  const k = charts.get(id);
-  if (k && k.el.isConnected && k.toggle) k.toggle();
+  const o = owner(id);
+  if (o.list) o.list.toggle(); else if (o.card) o.card.toggle();
 }
 
 // One animation loop for every lyrics view on the page.
@@ -186,7 +194,10 @@ export function lyricsBody(c) {
     lines.querySelectorAll("li[data-k]").forEach((li) => { const k = +li.dataset.k; li.classList.toggle("now", k === i); li.classList.toggle("past", k < i); });
     const cur = lines.querySelector("li.now");
     // keep it in view inside the list, never scroll the page; leave it alone for 3 s after the reader scrolls it
-    if (cur && ck.playing && Date.now() - userScrolled > 3000) lines.scrollTo({ top: cur.offsetTop - lines.clientHeight / 2 + cur.offsetHeight / 2, behavior: "smooth" });
+    if (cur && ck.playing && Date.now() - userScrolled > 3000) {
+      const at = cur.getBoundingClientRect().top - lines.getBoundingClientRect().top + lines.scrollTop; // the line's place inside the list
+      lines.scrollTo({ top: at - lines.clientHeight / 2 + cur.offsetHeight / 2, behavior: "smooth" });
+    }
   };
   const key = () => { const L = lyrics.get(c.id); return `${L ? L.state : "none"}|${L ? L.fetched_at : ""}`; };
   onBus(box, () => { const k = key(); if (box.dataset.st !== k) { box.dataset.st = k; paint(); } });

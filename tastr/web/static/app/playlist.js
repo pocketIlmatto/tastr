@@ -7,7 +7,7 @@ import { $, api, h, httpError, isNum, mmss, tracks } from "./core.js";
 import { openTrack, switchTo } from "./card.js";
 import { player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { pinPop } from "./pin.js";
-import { karaBus, karaCtl, karaokeOn, karaokeUrl, loadLyrics, lyricsShown, openSing, setListClock } from "./lyrics.js";
+import { karaBus, karaCtl, karaokeOn, karaokeUrl, loadLyrics, onForgetMix, lyricsShown, openSing, setListClock } from "./lyrics.js";
 import { setStems, stemStatus } from "./menu.js";
 import { XF_MAX, XF_MIN, markPlayed, newQueue, nextStep, prevStep, queueId, readXf, toggleShuffle, xfCurve, xfLen } from "./playlist-core.js";
 
@@ -107,10 +107,12 @@ const audioUrl = (id) => `/api/tracks/${id}/audio`;
 // Karaoke (lyrics.js): a track's mix without the vocals while the switch is on, the full mix for one without stems.
 const karaUrls = new Map(); // track id -> its karaoke URL, or null: no stems, so the full mix
 const srcFor = (id) => (karaokeOn() && karaUrls.get(id)) || audioUrl(id);
+// A failed mix isn't kept: this time it plays the full mix, and the next play asks again.
 function resolveKara(id) {
   if (!karaokeOn() || karaUrls.has(id)) return Promise.resolve();
-  return karaokeUrl(id).then((u) => { karaUrls.set(id, u); }, () => { karaUrls.set(id, null); });
+  return karaokeUrl(id).then((u) => { karaUrls.set(id, u); }, () => {});
 }
+onForgetMix((id) => karaUrls.delete(id)); // the track got (new) stems
 const spare = () => els.find((a) => a !== el);
 function load(a, id) { if (a.getAttribute("src") !== srcFor(id)) { a.src = srcFor(id); a.load(); } }
 function unload(a) { if (a && a.getAttribute("src")) { a.removeAttribute("src"); a.load(); } }

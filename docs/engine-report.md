@@ -15,7 +15,7 @@ the Brier score.
 |---|---|---|---|---|
 | Key | exact key, held out | 47.6% | 60.4% | GiantSteps Key, 599 EDM previews |
 | Key | exact key, held out | 46.7% | 51.5% | Beatport EDM Key, 1,122 previews |
-| Tempo | BPM within 4% | 0.488 | 0.744 | GiantSteps Tempo, 43 tracks |
+| Tempo | BPM within 4% | 0.488 | 0.767 | GiantSteps Tempo, 43 tracks |
 | Tempo | BPM within 4% | 0.829 | 0.971 | hjdb (jungle / hardcore), 35 held-out tracks |
 | Bar 1 | right phase | 0.43 | 0.64 | GTZAN, 933 songs in 4/4 |
 | 3/4 time | waltzes found | none | 0.86 | GTZAN, 49 songs in 3/4 |
@@ -82,7 +82,9 @@ tracks. Details: [bench.md, Tempo notes](bench.md#tempo-notes).
 median gap, which snapped to whole frames (117.45 or 123.05 for a track at 118.8), and is then checked against
 the whole track's pulse: the period within 2.5% whose beat and half-beat Fourier components over the whole onset
 envelope are strongest. That fixes tracks where the beat tracker dropped beats in quiet parts and the line fit
-read up to 1.4 BPM low. Most of GiantSteps' remaining "low" readings were its corrected labels, which are 1-2 BPM
+read up to 1.4 BPM low. On Modal subsets no track's Acc1 changed; on tracks already right, Beatport's mean
+error went from 0.27 to 0.03 BPM (none off by more than 1 BPM, from 4) and GiantSteps' median from -0.58 to
+-0.02. Most of GiantSteps' remaining "low" readings were its corrected labels, which are 1-2 BPM
 off on about half of the tracks checked (121 for a 120.0 track, 127 for 126.0). Details:
 [bench.md, Tempo notes](bench.md#tempo-notes).
 

@@ -210,6 +210,14 @@ def karaoke(sources: dict[str, str], put_url: str) -> dict:
     return _call("karaoke", sources, put_url)
 
 
+def transcribe(audio_url: str, suffix: str) -> dict:
+    """Whisper on a vocal stem (a signed link to it) in the Modal `transcribe` function (tastr/listen.py). Returns
+    tastr/transcribe.transcribe's answer."""
+    if http_enabled():
+        return _http_result("transcribe", {"audio": audio_url, "suffix": suffix})
+    return _call("transcribe", audio_url, suffix)
+
+
 POLL_SECONDS, POLL_TRIES = 5, 15 * 60 // 5  # the ml_tags function times out after 10 minutes
 
 

@@ -281,6 +281,19 @@ def run_karaoke(sources: dict[str, str], put_url: str) -> dict:
         return {"instrumental": _put(put_url, dst)}
 
 
+def run_transcribe(audio: bytes | str, suffix: str, language: str | None = None) -> dict:
+    """Lyrics by listening (tastr/listen.py): Whisper on a vocal stem, its bytes or a signed link to it, on the
+    GPU. Returns tastr/transcribe.transcribe's answer."""
+    import tempfile
+
+    from .. import transcribe
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / f"vocals{suffix}"
+        _write_audio(audio, src)
+        return transcribe.transcribe(src, language=language, device="cuda")
+
+
 def run_stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:
     """Separate one file (its bytes or a signed link to it) with the local Demucs. Returns {stem name: FLAC
     bytes}, or with `put_urls` ({stem name: signed upload link}) uploads each stem there and returns

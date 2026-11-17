@@ -171,18 +171,12 @@ whisper_image = (
 )
 
 
-# About 30-60 s of T4 time for a 4-minute vocal stem, plus loading the model (estimates; transcribe_files measures).
+# 4-8 s of T4 time for a vocal stem in the trial (2026-11-17), plus loading the model on a cold start.
 @app.function(image=whisper_image, gpu="T4", memory=8192, timeout=15 * 60)
 def transcribe(audio: bytes, suffix: str, language: str | None = None) -> dict:
-    import tempfile
-    from pathlib import Path
+    from tastr.cloud.jobs import run_transcribe
 
-    from tastr import transcribe as tr
-
-    with tempfile.TemporaryDirectory() as tmp:
-        src = Path(tmp) / f"vocals{suffix}"
-        src.write_bytes(audio)
-        return tr.transcribe(src, language=language, device="cuda")
+    return run_transcribe(audio, suffix, language)
 
 
 @app.local_entrypoint()

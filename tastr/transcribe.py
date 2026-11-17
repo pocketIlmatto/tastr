@@ -1,4 +1,4 @@
-"""Lyrics from the audio itself: Whisper speech recognition on a track's vocal stem (an experiment, not in the app).
+"""Lyrics from the audio itself: Whisper speech recognition on a track's vocal stem (tastr/listen.py uses it).
 
 For tracks LRCLIB doesn't have, or has without times. `transcribe` runs faster-whisper (MIT) with OpenAI's
 Whisper large-v3-turbo weights (MIT) and returns timed lines in the same shape as tastr/lyrics.py's `synced`.
@@ -78,11 +78,12 @@ def lines_from_words(words: list[dict]) -> list[dict]:
 
 def _break(g: list[dict], i: int) -> float:
     """How much a new line looks like it starts at g[i]: the pause before it in seconds, plus 0.5 after a full stop,
-    question or exclamation mark (0.3 after a comma), 0.25 for a capital that isn't "I", 0.3 for a new segment."""
+    question or exclamation mark (0.1 after a comma: Whisper puts commas inside sung lines too), 0.4 for a capital that
+    isn't "I" (Whisper starts most sung lines with one), 0.3 for a new segment. Tuned on the trial's tracks."""
     prev, w = g[i - 1]["w"], g[i]["w"]
     s = max(0.0, g[i]["t"] - g[i - 1]["end"])
-    s += 0.5 if prev.endswith((".", "?", "!")) else 0.3 if prev.endswith((",", ";", ":")) else 0.0
-    s += 0.25 if w[:1].isupper() and not re.match(r"I\b|I'", w) else 0.0
+    s += 0.5 if prev.endswith((".", "?", "!")) else 0.1 if prev.endswith((",", ";", ":")) else 0.0
+    s += 0.4 if w[:1].isupper() and not re.match(r"I\b|I'", w) else 0.0
     s += 0.3 if g[i].get("seg") is not None and g[i].get("seg") != g[i - 1].get("seg") else 0.0
     return s
 

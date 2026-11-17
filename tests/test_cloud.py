@@ -357,7 +357,7 @@ def _load_modal_web(monkeypatch):
             return lambda f: f
 
     same = lambda **kw: (lambda f: f)  # noqa: E731 - decorators that change nothing here
-    fake = types.SimpleNamespace(Image=types.SimpleNamespace(debian_slim=lambda **kw: Image()), App=App,
+    fake = types.SimpleNamespace(Image=types.SimpleNamespace(debian_slim=lambda **kw: Image(), from_registry=lambda *a, **kw: Image()), App=App,
                                  concurrent=same, asgi_app=same)
     monkeypatch.setitem(sys.modules, "modal", fake)
     import importlib
@@ -371,7 +371,7 @@ def _load_modal_web(monkeypatch):
 def test_modal_web_image_builds_steps_only_on_copied_source(monkeypatch):
     """Like modal_app: a build step after add_local_python_source fails a deploy unless the source is copied."""
     _, images = _load_modal_web(monkeypatch)
-    assert len(images) == 8 and all(i.local for i in images)
+    assert len(images) == 9 and all(i.local for i in images)
 
 
 @pytest.fixture

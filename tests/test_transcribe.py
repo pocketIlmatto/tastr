@@ -59,7 +59,7 @@ def test_short_runs_join_the_line_before():
 
 def test_lines_split_at_punctuation_and_capitals_without_a_pause():
     text = "Paper lanterns drift away, Over the quiet harbour. Nobody saw them go"
-    lines = tr.lines_from_words(_words(text))
+    lines = tr.lines_from_words(_words(text, pauses={4: 0.1}))  # "away," then a short breath
     assert [x["line"] for x in lines] == ["Paper lanterns drift away,", "Over the quiet harbour.",
                                          "Nobody saw them go"]
 

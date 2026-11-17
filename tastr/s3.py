@@ -144,6 +144,10 @@ class Client:
             headers["Content-Encoding"] = content_encoding
         self._send("PUT", key, headers=headers, body=body).close()
 
+    def copy(self, src: str, dst: str) -> None:
+        """Copy an object to another key in the bucket, server side (CopyObject)."""
+        self._send("PUT", dst, headers={"x-amz-copy-source": self._path(src)}).close()
+
     def head(self, key: str) -> int | None:
         """The object's size, or None if there's no such object."""
         try:

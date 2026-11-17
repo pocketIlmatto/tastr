@@ -1337,6 +1337,9 @@ h1 { white-space: nowrap; }
 #card .eng-old .eng-btn { width: 24px; height: 22px; padding: 0; min-height: 0; font-size: 13px; line-height: 1; font-weight: 700; text-transform: none; letter-spacing: normal; }
 #card .eng-old .eng-btn:disabled { opacity: .45; cursor: not-allowed; }
 .eng-old .spin { margin: 0 4px; }
+.stem-old { margin: 0; display: inline-flex; flex-wrap: wrap; }
+.fl-row .eng-old .eng-btn, .st-dl .eng-old .eng-btn { width: 24px; height: 22px; padding: 0; min-height: 0; font-size: 13px; line-height: 1; font-weight: 700; text-transform: none; letter-spacing: normal; }
+.fl-row .eng-old .eng-btn:disabled, .st-dl .eng-old .eng-btn:disabled { opacity: .45; cursor: not-allowed; }
 /* Earlier cards: the card line after a re-analysis moved a number, and Metadata › Earlier analyses */
 .hist-line { margin: 6px 0 0; font-size: 12px; flex-basis: 100%; }
 .hist-line s { color: var(--muted); }

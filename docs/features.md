@@ -232,10 +232,15 @@ server has left.
 - **Download** any original or any stem (FLAC), or all four stems of a track as one zip. Files are named
   "Artist - Title.mp3" and "Artist - Title (vocals).flac".
 - **Search, sort and filter** the same way as the Library's track list (vibe, key, BPM, upload date, review),
-  plus With stems / No stems and Largest first.
+  plus With stems / No stems / Older stems and Largest first.
 - **Select** several tracks to download their audio or their stems as one zip (up to 200 tracks or 5 GB),
   separate stems for the ones without, or delete stems to free space. Stems can be made again later.
 - Once a track has stems, "Try this in › Strudel" links to each stem, the zip and the Files tab.
+- **Stems from an older model** (made before the switch to `htdemucs_ft`) carry a line under them, "Model htdemucs ·
+  latest htdemucs_ft", with ↻ to separate that track again (about 3 minutes and 1¢ of GPU time). A line above the
+  list counts them, with **Show them** and **Separate them again**, which queues them all and runs them one at a
+  time. The current stems stay playable and downloadable until each new set replaces them, and a failed run leaves
+  them as they were. Each counts toward the daily stems limit. The same line shows under the Strudel stems picker.
 
 ## Glossary
 

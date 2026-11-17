@@ -157,8 +157,11 @@ def router(ctx: AppContext) -> APIRouter:
         return _stems_status(ctx.card_or_404(track_id), track_id)
 
     @api.post("/api/tracks/{track_id}/stems", status_code=202)
-    def separate_stems(track_id: int, request: Request):
-        """Start separating one track into stems in the background (one track at a time; others queue)."""
+    def separate_stems(track_id: int, request: Request, again: bool = False):
+        """Start separating one track into stems in the background (one track at a time; others queue). Stems that
+        are ready stay as they are, unless `again` (`?again=1`): then they are separated again with today's model,
+        which counts toward the daily limit like a first separation, and the current stems stay playable until the
+        new ones replace them."""
         card = ctx.card_or_404(track_id)
         path = ctx.audio_path(card)
         if path is None:
@@ -166,7 +169,8 @@ def router(ctx: AppContext) -> APIRouter:
         if not stems.available():
             raise HTTPException(501, stems.INSTALL_HINT)
         folder = ctx.stems_dir(card, track_id)
-        if not stems.is_ready(folder) and ctx.stem_jobs.status(folder)["state"] not in ("queued", "running"):
+        ready = stems.is_ready(folder)
+        if (again or not ready) and not ctx.stem_jobs.busy(folder):
             if ctx.hosted:
                 user = request.state.user
                 with closing(ctx.conn()) as c:
@@ -175,8 +179,9 @@ def router(ctx: AppContext) -> APIRouter:
                         raise ctx.refuse(user, 429, f"You've reached today's limit of {most} stem separations.",
                                      f"daily stem limit ({most})")
                     db.add_usage(c, user, "stems", today())
-                ctx.event(user, "stems", "Started separating stems for 1 track", source=runs_on(stems.backend()))
-            ctx.stem_jobs.start(path, folder)
+                ctx.event(user, "stems", f"Started separating stems{' again' if ready else ''} for 1 track",
+                          source=runs_on(stems.backend()))
+            ctx.stem_jobs.start(path, folder, again=ready)
         return _stems_status(card, track_id)
 
     @api.get("/api/tracks/{track_id}/stems/{name}")

@@ -16,6 +16,7 @@ import { cardStems, trackMenu } from "./menu.js";
 import { setStatus } from "./upload.js";
 import { openGlossary } from "./glossary.js";
 import { fetchHistory, historyBlock, historyLine, loadHistory } from "./card-history.js";
+import { lyricsBody } from "./lyrics.js";
 
 // A chip's color strength: the engine's from its 0.20 cut-off; ML moods and voice from 0.1; ML styles score lower (0.10-0.5), so double them.
 const chipStrength = (t) => !isNum(t.score) ? 0 : Math.max(0, Math.min(1,
@@ -414,6 +415,7 @@ export function renderCard(c) {
   if (energy && energy.times && energy.times.length > 1 || (c.sections || []).length) {
     root.append(section("energy", "Energy & sections", [energyChart(energy, c.sections || [], c.duration, c)]));
   }
+  root.append(section("lyrics", "Lyrics", [lyricsBody(c)])); // lyrics.js: LRCLIB lyrics and the karaoke switch
   if (vibeTags(c).length || mlState(c) === "error") root.append(section("vibe", "Vibe", [vibeBody(c)]));
   // Template drum patterns are tempo-based guesses: they live in the Drums part's Pattern picker, not as grids or in the Try list.
   const isTemplate = (s) => s.data && s.data.origin === "template";
@@ -453,8 +455,8 @@ function section(key, title, body, defaultOpen = true) {
 }
 // Card section order: the reader's own, kept in this browser (localStorage tastr-sec-order) and used for every track.
 // Unknown keys are dropped and new ones appended, so a section added later just shows up at the end.
-const SEC_DEFAULT = ["meta", "energy", "vibe", "groove", "try"];
-const SEC_NAMES = { meta: "Metadata", energy: "Energy & sections", vibe: "Vibe", groove: "Drums, bass & chords", try: "Try this in" };
+const SEC_DEFAULT = ["meta", "energy", "lyrics", "vibe", "groove", "try"];
+const SEC_NAMES = { meta: "Metadata", energy: "Energy & sections", lyrics: "Lyrics", vibe: "Vibe", groove: "Drums, bass & chords", try: "Try this in" };
 let secOrder = (() => {
   try { const v = JSON.parse(localStorage.getItem("tastr-sec-order") || "null"); if (Array.isArray(v)) return [...v.filter((k) => SEC_DEFAULT.includes(k)), ...SEC_DEFAULT.filter((k) => !v.includes(k))]; } catch (_) {}
   return [...SEC_DEFAULT];

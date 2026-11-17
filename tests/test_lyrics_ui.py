@@ -1,0 +1,36 @@
+"""Lyrics and karaoke in the page (app/lyrics.js): the wiring into the card, the chart's player and the playlist bar,
+and the line that lights up. The lyrics here are made up."""
+
+import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+APP = Path(__file__).resolve().parents[1] / "tastr" / "web" / "static" / "app"
+
+
+def test_wired_into_the_card_the_chart_and_the_playlist():
+    card, chart, play, pl = [(APP / f).read_text() for f in ("card.js", "chart.js", "chart-play.js", "playlist.js")]
+    assert 'section("lyrics", "Lyrics", [lyricsBody(c)])' in card and '"energy", "lyrics", "vibe"' in card
+    assert "karaCtl(c.card.id" in chart and "isPlaying: () => c.play.isPlaying()" in chart
+    assert "karaBuf(c) || c.audio.buf" in play
+    assert "setListClock(" in pl and "Karaoke: no stems for this track, so it plays the full mix" in pl
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_current_line_and_the_states():
+    src = (APP / "lyrics.js").read_text()
+    src = re.sub(r"^import .*?;\n", "", src, flags=re.M).replace("export ", "")
+    body = """
+const L = { state: "found", synced: [{ t: 2, line: "Paper lanterns" }, { t: 6.5, line: "counting lights" }, { t: 30, line: "late line" }] };
+out = [lineAt(L, 0), lineAt(L, 1.9), lineAt(L, 2), lineAt(L, 7), lineAt(L, 99), synced(L), hasLyrics(L),
+       hasLyrics({ state: "found", instrumental: true, plain: "x" }), hasLyrics({ state: "found", synced: [], plain: "only words" }),
+       synced({ state: "found", synced: [], plain: "only words" }), hasLyrics({ state: "not_found" })];"""
+    stubs = "const localStorage = { getItem: () => null, setItem() {} };\n"
+    r = subprocess.run(["node", "-e", stubs + src + "\nlet out;\n" + body + "\nconsole.log(JSON.stringify(out));"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [-1, 0, 0, 1, 2, True, True, False, True, False, False]

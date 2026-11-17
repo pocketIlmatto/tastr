@@ -4,6 +4,7 @@ import { mmss } from "./core.js";
 import { actx, audioCtx, player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { T } from "./chart-draw.js";
 import { loopPos } from "./chart-math.js";
+import { karaState, karaokeOn } from "./lyrics.js";
 
 const stopSrc = (s, when) => { try { s.stop(when); } catch (_) { /* already stopped */ } };
 
@@ -14,6 +15,9 @@ function reversed(ctx, b) {
   const rev = ctx.createBuffer(1, n, b.sampleRate); rev.copyToChannel(r, 0);
   return rev;
 }
+
+// Karaoke (lyrics.js): the mix without the vocals, once it's loaded, while the switch is on.
+const karaBuf = (c) => (c.kara && karaokeOn() && karaState(c.card.id) === "ready" ? c.kara.buf : null);
 
 // Playback for one chart (c is the chart's state, see chart.js).
 export function transport(c) {
@@ -30,7 +34,7 @@ export function transport(c) {
   function startSrc() {
     const ctx = audioCtx(); if (ctx.state === "suspended") ctx.resume();
     if (src) { src.onended = null; stopSrc(src); }
-    src = ctx.createBufferSource(); src.buffer = c.audio.buf; src.connect(c.live.analyser()); // the analyser passes the sound on to the speakers
+    src = ctx.createBufferSource(); src.buffer = karaBuf(c) || c.audio.buf; src.connect(c.live.analyser()); // the analyser passes the sound on to the speakers
     const lr = loopRange();
     if (lr) { if (pos < lr[0] || pos >= lr[1]) pos = lr[0]; src.loop = true; src.loopStart = lr[0]; src.loopEnd = lr[1]; } // gapless: the browser loops the buffer itself
     src.onended = () => { if (playing) { me.stop(); pos = 0; paintHead(); } };

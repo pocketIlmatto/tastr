@@ -29,6 +29,7 @@ def make_library(tmp_path, monkeypatch):
     folder.mkdir(parents=True)
     for n in stems.STEM_NAMES:
         stems.stem_path(folder, n).write_bytes(n.encode())
+    stems.info_path(folder).write_text('{"model": "htdemucs_ft"}')
     return home / "tastr.db", with_audio, without
 
 
@@ -36,7 +37,7 @@ def test_pack_then_unpack_moves_tracks_audio_and_stems(tmp_path, monkeypatch, ca
     src_db, with_audio, without = make_library(tmp_path, monkeypatch)
     out = tmp_path / "library.tar"
     assert main(["--db", str(src_db), "pack", str(out), "--owner", "Pam@Example.com"]) == 0
-    assert "packed 2 track(s) and 5 file(s)" in capsys.readouterr().out
+    assert "packed 2 track(s) and 6 file(s)" in capsys.readouterr().out
     conn = db.connect(src_db)
     assert db.track_owner(conn, with_audio) == (True, None)  # your own library is left as it was
     conn.close()
@@ -53,6 +54,7 @@ def test_pack_then_unpack_moves_tracks_audio_and_stems(tmp_path, monkeypatch, ca
     assert open(path, "rb").read() == b"audio"
     assert db.load_card(conn, without).source.local_path is None  # its file wasn't on disk
     assert stems.is_ready(stems.stems_dir("abc", with_audio))
+    assert stems.made_with(stems.stems_dir("abc", with_audio))["model"] == "htdemucs_ft"  # the record came along
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     conn.close()
     # Only into an empty library: never over someone's tracks.

@@ -797,7 +797,9 @@ def _stems(args) -> int:
         return 1
     folder = stems.stems_dir(card.source.sha256, args.track_id)
     if stems.is_ready(folder) and not args.force:
-        print(f"Stems already in {folder} (use --force to separate again)")
+        made = stems.made_with(folder)
+        hint = f"use --force to separate again with {stems.MODEL}" if made["outdated"] else "use --force to separate again"
+        print(f"Stems already in {folder}, made with {made['model']} ({hint})")
         return 0
     if not stems.available():
         print(f"error: {stems.INSTALL_HINT}", file=sys.stderr)

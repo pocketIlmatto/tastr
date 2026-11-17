@@ -248,11 +248,34 @@ def test_daily_stem_limit(db_path, home, tmp_path, monkeypatch):
     conn.close()
     started = []
     monkeypatch.setattr(stems, "available", lambda: True)
-    monkeypatch.setattr(stems.Jobs, "start", lambda self, path, folder: started.append(folder))
+    monkeypatch.setattr(stems.Jobs, "start", lambda self, path, folder, again=False: started.append((folder, again)))
     c = make_client(db_path, daily_stems=1)
     assert c.post(f"/api/tracks/{tid}/stems", headers=GOOD).status_code == 202
     r = c.post(f"/api/tracks/{tid}/stems", headers=GOOD)
     assert r.status_code == 429 and len(started) == 1
+
+
+def test_separating_again_counts_toward_the_daily_stem_limit(db_path, home, tmp_path, monkeypatch):
+    audio = tmp_path / "x.wav"
+    audio.write_bytes(b"RIFF")
+    card = full_card()
+    card.source.local_path, card.source.sha256 = str(audio), "ab" * 32
+    conn = db.connect(db_path)
+    tid = db.save_card(conn, card, "friend@example.com")
+    conn.close()
+    folder = stems.stems_dir(card.source.sha256, tid)
+    folder.mkdir(parents=True)
+    for n in stems.STEM_NAMES:
+        stems.stem_path(folder, n).write_bytes(b"fLaC")
+    started = []
+    monkeypatch.setattr(stems, "available", lambda: True)
+    monkeypatch.setattr(stems.Jobs, "start", lambda self, path, folder, again=False: started.append((folder, again)))
+    c = make_client(db_path, daily_stems=1)
+    assert c.post(f"/api/tracks/{tid}/stems", headers=GOOD).status_code == 202 and started == []  # ready: free, no job
+    assert c.post(f"/api/tracks/{tid}/stems?again=1", headers=GOOD).status_code == 202
+    assert started == [(folder, True)]
+    r = c.post(f"/api/tracks/{tid}/stems?again=1", headers=GOOD)
+    assert r.status_code == 429 and "limit of 1 stem" in r.json()["detail"] and len(started) == 1
 
 
 def test_analysis_slots_queue_then_give_up():
@@ -687,7 +710,7 @@ def test_upload_and_stem_limits_use_the_override(db_path, home, tmp_path, monkey
     track = save(db_path, "friend@example.com", path=str(tmp_path / "x.wav"))
     (tmp_path / "x.wav").write_bytes(b"RIFF")
     monkeypatch.setattr(stems, "available", lambda: True)
-    monkeypatch.setattr(stems.Jobs, "start", lambda self, path, folder: None)
+    monkeypatch.setattr(stems.Jobs, "start", lambda self, path, folder, again=False: None)
     assert admin.post(f"/api/tracks/{track}/stems", headers=GOOD).status_code == 429
     admin.put("/api/admin/limits/friend@example.com", json={"daily_stems": 1, "scope": "standing"}, headers=GOOD)
     assert admin.post(f"/api/tracks/{track}/stems", headers=GOOD).status_code == 202

@@ -229,6 +229,12 @@ def remove(path: str | Path | None) -> None:
         _forget_listings()
 
 
+def copy(src: str | Path, dst: str | Path) -> None:
+    """Copy a file inside the bucket (no bytes pass through here), over whatever `dst` held."""
+    client().copy(key(src), key(dst))
+    _forget_listings()
+
+
 def remove_tree(folder: str | Path) -> None:
     """Delete every file under `folder` in the bucket (the local folder is the caller's)."""
     k = key(Path(folder) / "x")

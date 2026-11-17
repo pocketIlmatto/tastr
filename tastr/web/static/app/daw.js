@@ -5,7 +5,7 @@ import { sectionBus, switchTo } from "./card.js";
 import { allEdits, editedKeys } from "./groove-edits.js";
 import { laneName } from "./groove-lanes.js";
 import { sonicPiCode, tidalCode } from "./livecode.js";
-import { onStems, startStems, stemsEta, stemsLabel, stemsOf } from "./menu.js";
+import { onStems, startStems, stemModelNote, stemsEta, stemsLabel, stemsOf } from "./menu.js";
 import { shareArt } from "./share-art.js";
 import { askPanel, claudeCode, findTemplate, loadMine, mashCan, mashCard, mashLock, mashPanel, mashRow, mashStateFor, templateEditor, templatesBar, tplState, tplWarnText } from "./strudel-tpl.js";
 
@@ -177,6 +177,9 @@ export function strudelView(c) {
         return h("label", { class: "st-chip" }, cb, " " + cap(n));
       })));
       kids.push(stemDownloads(c));
+      const fail = h("span", { class: "error st-say", role: "status" });
+      const note = stemModelNote(c, st, (msg) => { fail.textContent = msg; });
+      if (note) kids.push(h("div", { class: "st-dl" }, note, fail));
     } else if (strudelMix === "stems" && !c.stems_available && !busy) {
       kids.push(h("div", { class: "st-stem-go" }, h("span", { class: "muted st-say" }, "Stem separation needs Demucs, an optional install (about 2 GB): ",
         h("code", {}, "pip install 'tastr[stems]'"), ", then restart ", h("code", {}, "tastr serve"), ". The code uses the full mix.")));

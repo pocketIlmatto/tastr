@@ -186,7 +186,9 @@ The job's state is also kept in the database (`job_markers`, `tastr/markers.py`)
 mid-analysis, the page hears that it failed and can upload again.
 
 Stems work the same way through Modal's `stems` function, which uploads each stem to a signed link of its own,
-so stems never pass through the server. A mash-up's key lock (`tastr/keylock.py`) works the same way through
+so stems never pass through the server. The links are for a staging folder (`stems/<hash>.staging/`); once all
+four stems are there, the server copies them over the track's stems inside the bucket and deletes the staging copy,
+so stems being separated again stay playable until the new set is in place. A mash-up's key lock (`tastr/keylock.py`) works the same way through
 `keylock`: it reads the second track's mix and stems from signed links, stretches them to the mash-up's speed
 ratio with their pitch kept (Signalsmith Stretch, CPU only, about a second per part), and uploads the results
 to signed links under `keylock/<hash>/<ratio>/`. Those are a cache: each part is stretched once per ratio, each

@@ -198,6 +198,13 @@ def test_modal_gets_a_signed_link_instead_of_the_bytes(bucket, home, monkeypatch
     assert calls[-1][1][0].startswith(blobs.endpoint()) and BUCKET in calls[-1][1][0]
 
 
+def put_to(url, data):
+    """What Modal's run_stems does with each signed upload link."""
+    import urllib.request
+
+    urllib.request.urlopen(urllib.request.Request(url, data=data, method="PUT", headers={"Content-Type": "audio/flac"})).close()
+
+
 def test_modal_writes_stems_straight_to_the_bucket(bucket, home, monkeypatch):
     audio = write(home / "uploads" / "a" / "song.wav")
     blobs.push(audio)
@@ -206,19 +213,56 @@ def test_modal_writes_stems_straight_to_the_bucket(bucket, home, monkeypatch):
 
     def fake_stems(path, put_urls=None):
         assert set(put_urls) == set(stems.STEM_NAMES)
-        for name in put_urls:  # what Modal's run_stems does with each link
-            blobs.client().put(blobs.key(stems.stem_path(folder, name)), b"fLaC", "audio/flac")
+        for url in put_urls.values():
+            put_to(url, b"fLaC")
         return {**{n: 4 for n in put_urls}, "settings": {"model": "htdemucs_ft", "shifts": 1, "overlap": 0.25}}
 
     monkeypatch.setattr(remote, "stems", fake_stems)
     assert not stems.is_ready(folder)
     stems.separate_track(audio, folder)
     assert stems.is_ready(folder) and not folder.exists()  # ready, and nothing on the server's disk
-    assert len(objects("stems/")) == 5  # the four stems and stems.json, the model that made them
+    assert len(objects("stems/")) == 5  # the four stems and stems.json, the model that made them (no staging left)
     assert stems.made_with(folder)["model"] == "htdemucs_ft" and stems.made_with(folder)["recorded"]
     assert not folder.exists()  # reading the record didn't download anything
     stems.remove(folder)
     assert objects("stems/") == {} and not stems.is_ready(folder)
+
+
+def test_separating_again_on_modal_stages_the_new_stems(bucket, home, monkeypatch):
+    """The old set stays playable while Modal works, the new one is copied over it, and a failed run changes nothing."""
+    audio = write(home / "uploads" / "a" / "song.wav")
+    folder = stems.stems_dir("abc123", 1)
+    for n in stems.STEM_NAMES:  # an old set, with no record
+        blobs.push(write(stems.stem_path(folder, n), b"OLD " + n.encode()))
+    stems.stem_path(folder, "drums").write_bytes(b"OLD drums")  # this server's cached copy of one
+    monkeypatch.setenv("TASTR_STEMS_BACKEND", "modal")
+    stage = stems.staging_dir(folder)
+    seen = {}
+
+    def fake_stems(path, put_urls=None, only=stems.STEM_NAMES):
+        for name in only:
+            assert "abc123.staging" in put_urls[name]
+            put_to(put_urls[name], b"NEW " + name.encode())
+        seen["stage"] = blobs.open_read(stems.stem_path(stems.staging_dir(folder), "drums")).read() if "drums" in only else None
+        seen["old"] = {n: blobs.open_read(stems.stem_path(folder, n)).read() for n in stems.STEM_NAMES}
+        return {"settings": {"model": "htdemucs_ft", "shifts": 1, "overlap": 0.25}}
+
+    # A run that fails partway: the old set is untouched and the staging copy is gone.
+    monkeypatch.setattr(remote, "stems", lambda path, put_urls=None: fake_stems(path, put_urls, ("vocals", "bass")))
+    with pytest.raises(RuntimeError, match="no other, drums stem"):
+        stems.separate_track(audio, folder)
+    assert set(objects("stems/")) == {f"stems/abc123/{n}.flac" for n in stems.STEM_NAMES}
+    assert stems.made_with(folder)["outdated"]
+
+    monkeypatch.setattr(remote, "stems", fake_stems)
+    stems.separate_track(audio, folder)
+    assert seen["stage"] == b"NEW drums"
+    assert seen["old"] == {n: b"OLD " + n.encode() for n in stems.STEM_NAMES}  # playable while Modal worked
+    assert set(objects("stems/")) == {f"stems/abc123/{n}.flac" for n in stems.STEM_NAMES} | {"stems/abc123/stems.json"}
+    assert not stage.exists() and not folder.exists()  # the old cached copy went
+    assert blobs.ensure(stems.stem_path(folder, "drums")).read_bytes() == b"NEW drums"
+    made = stems.made_with(folder)
+    assert made["model"] == "htdemucs_ft" and made["recorded"] and not made["outdated"]
 
 
 def test_modal_jobs_take_bytes_or_an_https_link(tmp_path):

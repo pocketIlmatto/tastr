@@ -12,7 +12,7 @@ import { grooveView } from "./groove.js";
 import { loadEdits, savedEdits } from "./groove-edits.js";
 import { setRoute } from "./route.js";
 import { audioCtx, player, setPlayer, stopAllPlayback } from "./sequencer.js";
-import { pollStems, stemStatus, stemsBusy, trackMenu } from "./menu.js";
+import { cardStems, trackMenu } from "./menu.js";
 import { setStatus } from "./upload.js";
 import { openGlossary } from "./glossary.js";
 import { fetchHistory, historyBlock, historyLine, loadHistory } from "./card-history.js";
@@ -277,7 +277,7 @@ function resetForCard(c) {
   stopAllPlayback();
   document.querySelectorAll(".chart-backdrop").forEach((b) => b.remove()); document.body.classList.remove("chart-open");
   if (!savedEdits.has(c.id)) loadEdits(c.id).then(() => { if (savedEdits.has(c.id) && currentId === c.id && $("card").dataset.id === String(c.id)) renderCard(c); });
-  if (c.stems_state && !stemsBusy(stemStatus.get(c.id) || {})) { stemStatus.set(c.id, { state: c.stems_state }); pollStems(); } // a fresh card knows best
+  cardStems(c); // a fresh card knows best
   sectionBus = new EventTarget();
   setMarkHook(null); charts.clear();
 }

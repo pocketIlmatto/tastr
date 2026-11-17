@@ -4,7 +4,7 @@
 import { $, api, cap, fmtLeft, h, httpError, mmss, progBar, tracks } from "./core.js";
 import { LIB_CLEAR, SORTS, filtersOn, fmtUp, fmtUpLong, keyRank, matchTracks } from "./library.js";
 import { openTrack, switchTo } from "./card.js";
-import { onStems, pollStems, setStems, startStems, stemStatus, stemsBusy, stemsEta, stemsLabel } from "./menu.js";
+import { centsText, onStems, pollStems, setStems, startStems, stemModelNote, stemStatus, stemsAgain, stemsBusy, stemsEta, stemsLabel, stemsOld } from "./menu.js";
 
 const STEMS = ["vocals", "bass", "other", "drums"];
 export const fmtBytes = (b) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(b >= 9.995 * 1024 ** 3 ? 0 : 2)} GB` : b >= 1024 ** 2 ? `${(b / 1024 ** 2).toFixed(1)} MB` : `${Math.max(1, Math.round((b || 0) / 1024))} KB`);
@@ -17,17 +17,21 @@ const watched = new Set(); // track ids whose stem job the view follows
 const stemBytes = (f) => (f.stems && f.stems.bytes ? sum(Object.values(f.stems.bytes), (v) => v) : 0);
 const audioBytes = (f) => (f.audio ? f.audio.bytes : 0);
 // The stems state: the poller's while a job runs (it updates every few seconds), else what /api/files said.
+const watching = (st) => !!st && (stemsBusy(st) || stemsAgain(st));
 function stemState(f) {
   const live = stemStatus.get(f.id);
-  return live && stemsBusy(live) ? live : f.stems || { state: "none" };
+  return watching(live) ? live : f.stems || { state: "none" };
 }
+// Stems from an older model, not already being separated again (the Older stems filter and the line above the list).
+const oldStems = (f) => { const st = stemState(f); return stemsOld(st) && !stemsAgain(st); };
+let againRun = null; // "Separate them again": the track ids it queued
 
 export async function loadFiles() {
   if (!loading) loading = api("/api/files").finally(() => { loading = null; });
   try { data = await loading; } catch (e) { $("fl-list").replaceChildren(h("li", { class: "error" }, e.message)); return; }
   for (const f of data.tracks) {
     const st = f.stems;
-    if (st && stemsBusy(st)) { setStems(f.id, st); pollStems(); }
+    if (watching(st)) { setStems(f.id, st); pollStems(); }
     follow(f.id);
   }
   fillFilters(); renderFiles();
@@ -38,9 +42,16 @@ function follow(id) {
   watched.add(id);
   onStems($("fl-list"), id, (st, was) => {
     if ($("view-files").hidden || !data) return;
+    if (was && stemsAgain(was) && !stemsAgain(st)) {
+      if (againRun) paintOldStems();
+      else if (!st.again && st.made_with) say(`✓ New stems ready for ${titleOf(id)}, made with ${st.made_with.model}.`, false);
+      else if (st.again && st.again.state === "error") say(`Couldn't separate ${titleOf(id)} again: ${st.again.error || "the separation failed"}. Its stems are as they were.`, false, true);
+      loadFiles(); return;
+    }
     if (was && stemsBusy(was) && !stemsBusy(st)) { if (st.state === "ready") say(`✓ Stems ready for ${titleOf(id)}.`, false); loadFiles(); return; }
     const li = $("fl-list").querySelector(`li[data-id="${id}"]`), f = data.tracks.find((x) => x.id === id);
     if (li && f) li.replaceWith(rowEl(f));
+    if (againRun && againRun.includes(id)) paintOldStems();
   });
 }
 const titleOf = (id) => (data && data.tracks.find((x) => x.id === id) || {}).title || `track ${id}`;
@@ -114,6 +125,47 @@ async function separate(list) {
   renderFiles();
 }
 
+// Separate stems from an older model again, all queued at once; the server runs them one at a time and each set stays
+// until its replacement is ready. Stops at the first refusal (the daily limit).
+async function separateAgain(list) {
+  const ids = [];
+  for (const f of list) {
+    try { setStems(f.id, await api(`/api/tracks/${f.id}/stems?again=1`, { method: "POST" })); ids.push(f.id); } catch (e) {
+      say(list.length > 1 ? `Queued ${ids.length} of ${list.length} to separate again. ${e.message}` : e.message, false, true);
+      break;
+    }
+  }
+  againRun = ids.length ? ids : null;
+  pollStems(); renderFiles();
+}
+// The line above the list: how many tracks have stems from an older model, with Show them and Separate them again. While
+// "Separate them again" runs it says how far along it is, and when the last one ends, what came of it.
+function paintOldStems() {
+  const el = $("fl-oldstems");
+  if (againRun) {
+    const sts = againRun.map((id) => stemStatus.get(id) || { state: "none" }), left = sts.filter(stemsAgain), n = againRun.length;
+    if (left.length) {
+      const run = left.find((x) => x.again.state === "running"), secs = (run ? stemsEta(run.again).left : 180) + (left.length - (run ? 1 : 0)) * 180;
+      el.hidden = false;
+      el.replaceChildren(h("span", { class: "spin", "aria-hidden": "true" }), ` Separating again with ${latestModel()}: ${n - left.length + 1} of ${n}, one at a time · ${fmtLeft(secs)}`);
+      return;
+    }
+    const failed = sts.filter((x) => x.again && x.again.state === "error").length, ok = n - failed;
+    againRun = null;
+    say(ok ? `New stems ready for ${ok} track${ok === 1 ? "" : "s"}, made with ${latestModel()}.${failed ? ` ${failed} failed and kept their stems.` : ""}`
+      : `Couldn't separate them again. Their stems are as they were.`, false, !ok);
+  }
+  const old = data.tracks.filter((f) => oldStems(f)), n = old.length;
+  el.hidden = !n;
+  if (!n) return;
+  el.replaceChildren(h("span", { class: "eng-mk", "aria-hidden": "true" }, "↻"), " ",
+    `${n} track${n === 1 ? " has" : "s have"} stems from the older model.`,
+    flState.show === "oldstems" ? null : h("button", { type: "button", class: "linklike", onclick: () => { flState.show = "oldstems"; syncTools(); renderFiles(); } }, "Show them"),
+    h("button", { type: "button", class: "linklike", title: `Separate ${n === 1 ? "it" : "them"} again with ${latestModel()}, one at a time (about 3 minutes each). The current stems stay until each new set is ready.`,
+      onclick: (e) => { e.currentTarget.disabled = true; separateAgain(old); } }, `Separate ${n === 1 ? "it" : "them"} again (${centsText(n)})`));
+}
+const latestModel = () => { const f = data && data.tracks.find((x) => x.stems && x.stems.made_with); return f ? f.stems.made_with.latest : "the latest model"; };
+
 // Two clicks within 4 s: the first says how much space goes, the second deletes.
 function confirmButton(attrs, label, sureLabel, run) {
   const b = h("button", { type: "button", ...attrs }, label);
@@ -158,12 +210,12 @@ export function renderFiles() {
   if (!data) return;
   renderStore();
   const all = joined();
-  const rows = matchTracks(flState, all).filter((t) => { const s = stemBytes(t.f) > 0; return (flState.show !== "stems" || s) && (flState.show !== "nostems" || !s); })
+  const rows = matchTracks(flState, all).filter((t) => { const s = stemBytes(t.f) > 0; return (flState.show !== "stems" || s) && (flState.show !== "nostems" || !s) && (flState.show !== "oldstems" || oldStems(t.f)); })
     .sort(FSORT[flState.sort] || SORTS.new);
   const active = filtersOn(flState) || !!flState.show;
   $("fl-n").textContent = active ? `${rows.length} of ${all.length} tracks` : `${all.length} track${all.length === 1 ? "" : "s"}`;
   $("fl-clear").hidden = !active;
-  renderBulk(rows);
+  renderBulk(rows); paintOldStems();
   const ul = $("fl-list");
   if (!rows.length) {
     ul.replaceChildren(h("li", { class: "empty" }, !all.length ? "No files yet. Upload audio in the Library."
@@ -199,10 +251,11 @@ function stemCells(f, st, title) {
     return [...STEMS.map((n) => h("span", { class: "fl-file" }, cap(n), h("span", { class: "sz" }, fmtBytes(f.stems.bytes[n])),
         h("button", { type: "button", class: "fl-dl", title: `Download ${f.base} (${n}).flac`, "aria-label": `Download the ${n} stem of ${title}`, onclick: () => getStem(f, n) }, "↓"))),
       h("button", { type: "button", class: "fl-dl", title: "All four stems in one zip", "aria-label": `Download all stems of ${title} as a zip`, onclick: () => getStemsZip(f) }, "↓ All (zip)"),
-      confirmButton({ class: "linklike danger-link", title: "Frees space. You can make them again later (a few minutes)." }, "Delete stems", `Delete ${fmtBytes(freed)}? Click again`, async () => {
+      stemModelNote(f, st, (msg) => say(msg, false, true)),
+      stemsAgain(st) ? null : confirmButton({ class: "linklike danger-link", title: "Frees space. You can make them again later (a few minutes)." }, "Delete stems", `Delete ${fmtBytes(freed)}? Click again`, async () => {
         try { const n = await deleteStems(f); say(`Deleted the stems of ${title}, freeing ${fmtBytes(n)}.`, false); } catch (e) { say(e.message, false, true); }
         loadFiles();
-      })];
+      })].filter(Boolean);
   }
   if (stemsBusy(st)) {
     return [h("span", { class: "fl-job" }, h("span", { class: "spin" + (st.state === "queued" ? " idle" : ""), "aria-hidden": "true" }), stemsLabel(st)),

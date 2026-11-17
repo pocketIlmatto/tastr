@@ -105,12 +105,12 @@ _made_with: dict[Path, dict] = {}  # folder -> its record, read once (the bucket
 def made_with(folder: Path) -> dict:
     """The model and settings that made the folder's stems, from its `stems.json`, plus `recorded` (False: there
     was no record, so they are LEGACY htdemucs stems) and `outdated` (made with another model than MODEL). Only
-    meaningful once the stems are ready."""
+    meaningful once the stems are ready. `latest`: MODEL, what separating again would use."""
     info = _made_with.get(folder)
     if info is None:
         info = _read_info(folder)
         _made_with[folder] = info
-    return {**info, "outdated": info.get("model") != MODEL}
+    return {**info, "outdated": info.get("model") != MODEL, "latest": MODEL}
 
 
 def _read_info(folder: Path) -> dict:
@@ -266,9 +266,15 @@ def separate_track(audio_path: str | Path, folder: Path, progress: Progress | No
         missing = [n for n in STEM_NAMES if not stem_path(tmp, n).is_file()]
         if missing:
             raise RuntimeError(f"Separation produced no {', '.join(missing)} stem")
-        remove(folder)
         _record(tmp, info)  # before the move, so ready stems always come with their record
+        # Swap the new set in with two renames, so stems being separated again are gone only for that moment. In the
+        # bucket, push() below writes over the old keys, so the old set stays playable there until the new one is in.
+        old = folder.with_name(folder.name + ".old")
+        shutil.rmtree(old, ignore_errors=True)
+        if folder.exists():
+            folder.rename(old)
         tmp.rename(folder)
+        shutil.rmtree(old, ignore_errors=True)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     _made_with.pop(folder, None)
@@ -276,20 +282,34 @@ def separate_track(audio_path: str | Path, folder: Path, progress: Progress | No
         blobs.push(path)
 
 
+def staging_dir(folder: Path) -> Path:
+    """Where a separation on Modal puts its stems in the bucket before they are copied over `folder`'s."""
+    return folder.with_name(folder.name + ".staging")
+
+
 def _separate_into_bucket(audio_path: str | Path, folder: Path, progress: Progress | None) -> None:
-    """Modal uploads each stem to a signed link for its place in the bucket, so no stem passes through here.
-    The stems count as ready only once all of them are there."""
+    """Modal uploads each stem to a signed link in the bucket, so no stem passes through here. The links are for
+    a staging folder; once all four stems are there they are copied over the folder's (with stems.json) and the
+    staging copy goes. So stems being separated again stay playable until the new set is in place, and a failed
+    run leaves them as they were."""
     from .cloud import remote
 
     if progress:
         progress(0.05)  # Modal reports no progress; show that the job has started
-    blobs.remove_tree(folder)  # a failed earlier run may have left some
-    result = remote.stems(audio_path, {n: blobs.put_url(stem_path(folder, n)) for n in STEM_NAMES})
-    blobs.reset_listings()
-    missing = [n for n in STEM_NAMES if not blobs.in_bucket(stem_path(folder, n))]
-    if missing:
-        raise RuntimeError(f"Separation produced no {', '.join(missing)} stem")
-    _record(folder, _remote_settings(result) or settings(), bucket_only=True)
+    stage = staging_dir(folder)
+    blobs.remove_tree(stage)  # a failed earlier run may have left some
+    try:
+        result = remote.stems(audio_path, {n: blobs.put_url(stem_path(stage, n)) for n in STEM_NAMES})
+        blobs.reset_listings()
+        missing = [n for n in STEM_NAMES if not blobs.in_bucket(stem_path(stage, n))]
+        if missing:
+            raise RuntimeError(f"Separation produced no {', '.join(missing)} stem")
+        for n in STEM_NAMES:
+            blobs.copy(stem_path(stage, n), stem_path(folder, n))
+        _record(folder, _remote_settings(result) or settings(), bucket_only=True)
+    finally:
+        blobs.remove_tree(stage)
+    shutil.rmtree(folder, ignore_errors=True)  # this server's cached copies of the old stems
     if progress:
         progress(1.0)
 
@@ -311,28 +331,45 @@ class Jobs:
 
     def status(self, folder: Path) -> dict:
         """The job's state; a queued one also says how many jobs are ahead of it (`position`), a running one
-        how long it has been running (`elapsed`, seconds), so the page can show time left."""
+        how long it has been running (`elapsed`, seconds), so the page can show time left.
+
+        While stems are separated again (`start(again=True)`), the current ones stay: the state is "ready" and
+        `again` holds the new job's state (queued, running, or error when it failed and the old set stayed)."""
+        job, again = None, False
         with self._lock:
-            job = self._state.get(folder)
-            if job and job["state"] in ("queued", "running", "error"):
-                out = {k: v for k, v in job.items() if not k.startswith("_")}
-                if job["state"] == "queued":
-                    out["position"] = sum(j["state"] in ("queued", "running") and j["_seq"] < job["_seq"] for j in self._state.values())
-                elif job["state"] == "running" and "_started" in job:
-                    out["elapsed"] = round(time.monotonic() - job["_started"], 1)
-                return out
-        if is_ready(folder):
-            return {"state": "ready", "stems": list(STEM_NAMES), "made_with": made_with(folder)}
+            got = self._state.get(folder)
+            if got and got["state"] in ("queued", "running", "error"):
+                job = {k: v for k, v in got.items() if not k.startswith("_") and k != "again"}
+                if got["state"] == "queued":
+                    job["position"] = sum(j["state"] in ("queued", "running") and j["_seq"] < got["_seq"] for j in self._state.values())
+                elif got["state"] == "running" and "_started" in got:
+                    job["elapsed"] = round(time.monotonic() - got["_started"], 1)
+                again = got.get("again")
+        if job and not again:
+            return job
+        # A job that separates again only starts on ready stems, and nothing removes them while it runs; so they
+        # count as ready even in the moment the new set is moved in (separate_track).
+        if again or is_ready(folder):
+            out = {"state": "ready", "stems": list(STEM_NAMES), "made_with": made_with(folder)}
+            return {**out, "again": job} if job else out
         return {"state": "none"}
 
-    def start(self, audio_path: Path, folder: Path) -> dict:
+    def busy(self, folder: Path) -> bool:
+        """Whether a separation for the folder is queued or running (a first one, or one that separates again)."""
+        with self._lock:
+            job = self._state.get(folder)
+            return bool(job and job["state"] in ("queued", "running"))
+
+    def start(self, audio_path: Path, folder: Path, again: bool = False) -> dict:
+        """Queue a separation. `again`: the folder has stems already and this one replaces them; they stay
+        playable until the new set is in place (separate_track)."""
         with self._lock:
             job = self._state.get(folder)
             if job and job["state"] in ("queued", "running"):
                 return dict(job)
             self._seq += 1
-            self._state[folder] = {"state": "queued", "progress": 0.0, "_seq": self._seq}
-        self.markers.put(folder.name, {"audio": str(audio_path)})
+            self._state[folder] = {"state": "queued", "progress": 0.0, "_seq": self._seq, "again": again}
+        self.markers.put(folder.name, {"audio": str(audio_path), **({"again": True} if again else {})})
         self._lane.submit(self._run, audio_path, folder)
         return self.status(folder)
 
@@ -344,11 +381,12 @@ class Jobs:
         n = 0
         for key, data, _ in self.markers.items():
             folder, audio = stems_root() / key, Path(data.get("audio") or "")
-            if is_ready(folder) or not data.get("audio") or not blobs.exists(audio):
+            again = bool(data.get("again"))
+            if (is_ready(folder) and not again) or not data.get("audio") or not blobs.exists(audio):
                 self.markers.remove(key)
                 continue
             log.info("Resuming stem separation for %s", audio)
-            self.start(audio, folder)
+            self.start(audio, folder, again=again and is_ready(folder))
             n += 1
         return n
 

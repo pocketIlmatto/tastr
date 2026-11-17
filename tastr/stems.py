@@ -3,7 +3,9 @@
 Demucs and PyTorch are large, so they are an optional extra (`pip install 'tastr[stems]'`); without
 them `available()` is False and the API answers 501 with that install hint. Stems are FLAC files in
 `$TASTR_HOME/stems/<sha256 prefix>/` (one folder per audio file, so re-analysis keeps them) and are
-deleted with the track.
+deleted with the track. Next to them, `stems.json` records the model and settings that made them (`made_with()`),
+so stems from an older default can be told apart and separated again; a folder without it predates the record and
+was made with `htdemucs` (LEGACY).
 
 The web server runs one separation at a time in a background thread (`Jobs`); `tastr stems ID`
 runs the same `separate_track` in the foreground. With `TASTR_STEMS_BACKEND=modal`, Demucs runs on a
@@ -13,7 +15,9 @@ Modal GPU instead (`tastr[cloud]`, docs/cloud.md) and only the stems come back h
 from __future__ import annotations
 
 import contextlib
+import importlib.metadata
 import importlib.util
+import json
 import logging
 import os
 import shutil
@@ -29,6 +33,10 @@ from .markers import Markers, legacy_files
 STEM_NAMES = ("vocals", "bass", "other", "drums")
 MODEL = "htdemucs_ft"  # four fine-tuned models, one per stem; about 2.3x the GPU time of `htdemucs`
 HF_REPO = "adefossez/HTDemucs"  # where Demucs 4.1 keeps its pretrained models on the Hugging Face Hub
+SHIFTS, OVERLAP = 1, 0.25  # Demucs' apply_model defaults, what the app uses
+INFO_NAME = "stems.json"  # the model and settings that made a folder's stems
+# Stems made before the record existed: every one of them came from `htdemucs` with the defaults.
+LEGACY = {"model": "htdemucs", "shifts": 1, "overlap": 0.25}
 INSTALL_HINT = "Stem separation needs Demucs, an optional install (about 2 GB with PyTorch): pip install 'tastr[stems]'"
 
 Progress = Callable[[float], None]
@@ -73,11 +81,72 @@ def is_ready(folder: Path) -> bool:
 def remove(folder: Path) -> None:
     shutil.rmtree(folder, ignore_errors=True)
     blobs.remove_tree(folder)
+    _made_with.pop(folder, None)
+
+
+def info_path(folder: Path) -> Path:
+    return folder / INFO_NAME
+
+
+def settings(model_name: str = MODEL, shifts: int = SHIFTS, overlap: float = OVERLAP, device: str | None = None) -> dict:
+    """What a separation with these settings records in `stems.json`."""
+    try:
+        version = importlib.metadata.version("demucs")
+    except importlib.metadata.PackageNotFoundError:
+        version = None
+    out = {"model": model_name, "shifts": shifts, "overlap": overlap, "demucs": version, "device": device,
+           "made_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    return {k: v for k, v in out.items() if v is not None}
+
+
+_made_with: dict[Path, dict] = {}  # folder -> its record, read once (the bucket's copy costs a request)
+
+
+def made_with(folder: Path) -> dict:
+    """The model and settings that made the folder's stems, from its `stems.json`, plus `recorded` (False: there
+    was no record, so they are LEGACY htdemucs stems) and `outdated` (made with another model than MODEL). Only
+    meaningful once the stems are ready."""
+    info = _made_with.get(folder)
+    if info is None:
+        info = _read_info(folder)
+        _made_with[folder] = info
+    return {**info, "outdated": info.get("model") != MODEL}
+
+
+def _read_info(folder: Path) -> dict:
+    path = info_path(folder)
+    try:
+        if path.is_file():
+            data = json.loads(path.read_text())
+        elif blobs.in_bucket(path):
+            data = json.loads(blobs.open_read(path).read())
+        else:
+            data = None
+    except (OSError, ValueError):
+        log.warning("Unreadable %s; counting its stems as %s", path, LEGACY["model"], exc_info=True)
+        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("model"), str):
+        return {**LEGACY, "recorded": False}
+    return {**data, "recorded": True}
+
+
+def _record(folder: Path, info: dict, *, bucket_only: bool = False) -> None:
+    """Write the folder's `stems.json` on disk (the caller pushes it), or with `bucket_only` straight to the
+    bucket, for stems that never touch this server's disk."""
+    body = json.dumps(info, indent=1).encode()
+    path = info_path(folder)
+    if bucket_only:
+        blobs.client().put(blobs.key(path), body, "application/json")
+        blobs.reset_listings()
+    else:
+        path.write_bytes(body)
+    _made_with.pop(folder, None)
 
 
 def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None, *,
-             model_name: str = MODEL, shifts: int = 1, overlap: float = 0.25) -> None:
-    """Split one file into STEM_NAMES FLAC files in `out_dir` with Demucs. Tests replace this.
+             model_name: str = MODEL, shifts: int = SHIFTS, overlap: float = OVERLAP) -> dict | None:
+    """Split one file into STEM_NAMES FLAC files in `out_dir` with Demucs, and return the `settings()` it used
+    (None: unknown). Tests replace this.
 
     `model_name`, `shifts` and `overlap` default to what the app uses; scripts/stem_ab.py tries others
     (docs/stems-tuning.md). They apply to the local Demucs only, not to the Modal backend."""
@@ -93,7 +162,7 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
                 stem_path(out_dir, name).write_bytes(data)
         if progress:
             progress(1.0)
-        return
+        return _remote_settings(result)
     import numpy as np
     import soundfile as sf
     import torch
@@ -138,6 +207,13 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
     for name, audio in zip(model.sources, sources):
         if name in STEM_NAMES:
             sf.write(stem_path(out_dir, name), audio.cpu().numpy().T, model.samplerate, subtype="PCM_16")
+    return settings(model_name, shifts, overlap, device)
+
+
+def _remote_settings(result: dict) -> dict | None:
+    """The settings a Modal separation sent back with its stems (tastr/cloud/jobs.py run_stems), if any."""
+    got = result.get("settings")
+    return got if isinstance(got, dict) and isinstance(got.get("model"), str) else None
 
 
 @contextlib.contextmanager
@@ -186,16 +262,18 @@ def separate_track(audio_path: str | Path, folder: Path, progress: Progress | No
     tmp = folder.with_name(folder.name + ".partial")
     remove(tmp)
     try:
-        separate(audio_path, tmp, progress)
+        info = separate(audio_path, tmp, progress) or settings()  # unknown: what separate() uses by default
         missing = [n for n in STEM_NAMES if not stem_path(tmp, n).is_file()]
         if missing:
             raise RuntimeError(f"Separation produced no {', '.join(missing)} stem")
         remove(folder)
+        _record(tmp, info)  # before the move, so ready stems always come with their record
         tmp.rename(folder)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    for n in STEM_NAMES:
-        blobs.push(stem_path(folder, n))
+    _made_with.pop(folder, None)
+    for path in [stem_path(folder, n) for n in STEM_NAMES] + [info_path(folder)]:
+        blobs.push(path)
 
 
 def _separate_into_bucket(audio_path: str | Path, folder: Path, progress: Progress | None) -> None:
@@ -206,11 +284,12 @@ def _separate_into_bucket(audio_path: str | Path, folder: Path, progress: Progre
     if progress:
         progress(0.05)  # Modal reports no progress; show that the job has started
     blobs.remove_tree(folder)  # a failed earlier run may have left some
-    remote.stems(audio_path, {n: blobs.put_url(stem_path(folder, n)) for n in STEM_NAMES})
+    result = remote.stems(audio_path, {n: blobs.put_url(stem_path(folder, n)) for n in STEM_NAMES})
     blobs.reset_listings()
     missing = [n for n in STEM_NAMES if not blobs.in_bucket(stem_path(folder, n))]
     if missing:
         raise RuntimeError(f"Separation produced no {', '.join(missing)} stem")
+    _record(folder, _remote_settings(result) or settings(), bucket_only=True)
     if progress:
         progress(1.0)
 
@@ -243,7 +322,7 @@ class Jobs:
                     out["elapsed"] = round(time.monotonic() - job["_started"], 1)
                 return out
         if is_ready(folder):
-            return {"state": "ready", "stems": list(STEM_NAMES)}
+            return {"state": "ready", "stems": list(STEM_NAMES), "made_with": made_with(folder)}
         return {"state": "none"}
 
     def start(self, audio_path: Path, folder: Path) -> dict:

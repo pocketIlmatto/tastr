@@ -1,8 +1,9 @@
 # Tuning stem separation
 
-The app separates stems with Demucs `htdemucs` at the library defaults: shifts 1, overlap 0.25, 16-bit FLAC
-at 44.1 kHz, on a Modal T4 (`tastr/stems.py`, `tastr/cloud/modal_app.py`). This page tracks whether other
-settings sound better and what they cost.
+The app separates stems with Demucs `htdemucs_ft` (`htdemucs` until 2026-11-17) at the library defaults: shifts 1,
+overlap 0.25, 16-bit FLAC at 44.1 kHz, on a Modal T4 (`tastr/stems.py`, `tastr/cloud/modal_app.py`). This page
+tracks whether other settings sound better and what they cost, and how the app knows which settings made a
+track's stems.
 
 ## Listening test
 
@@ -38,3 +39,20 @@ First run 2026-11-04: 5 tracks from one of Pam's playlists, 20 runs on a T4,
 | ft-shifts2-overlap0.5 | 148 | 5.3x |
 
 Listening verdict: pending.
+
+## Which model made each stem set
+
+Each stem folder keeps a `stems.json` next to its FLACs (on disk and in the audio bucket), written when the
+separation finishes:
+
+```json
+{"model": "htdemucs_ft", "shifts": 1, "overlap": 0.25, "demucs": "4.1.0", "device": "cuda", "made_at": "2026-11-17T01:20:00Z"}
+```
+
+On Modal, `run_stems` returns these settings with the stems and the server writes the file (straight to the bucket
+when the stems never touch its disk). A folder without `stems.json` predates the record, so it counts as
+`htdemucs` with the defaults rather than being guessed from dates. `GET /api/tracks/{id}/stems` reports it for
+ready stems as `made_with`, with `recorded` (false: no `stems.json`) and `outdated` (made with another model than
+today's default), and `tastr stems ID` says which model made existing stems. Separating again (`--force`, or after
+deleting the stems) replaces the record. Stems made between the switch to `htdemucs_ft` and this record also
+have no `stems.json`, so they show as `htdemucs` too; separating them again is harmless.

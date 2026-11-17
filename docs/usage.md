@@ -67,7 +67,9 @@ set a HF_TOKEN" warning only shows on that first download. A free read token in 
 takes under a minute for a 2-minute track on a recent Mac CPU, and about half that on
 its GPU, which is used automatically (as is a CUDA GPU); set `TASTR_STEMS_DEVICE`
 to `cpu`, `mps` or `cuda` to choose. Stems are FLAC files in `~/.tastr/stems/` and are
-deleted with the track.
+deleted with the track. Each set keeps a `stems.json` saying which model and settings made it; stems from before
+that record count as the older `htdemucs`, and `tastr stems ID --force` separates them again
+([stems-tuning.md](stems-tuning.md#which-model-made-each-stem-set)).
 
 ## Mash-up key lock (optional)
 

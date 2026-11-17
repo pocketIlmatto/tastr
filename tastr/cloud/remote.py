@@ -183,7 +183,8 @@ def _audio(audio_path: Path) -> bytes | str:
 def stems(audio_path: str | Path, put_urls: dict[str, str] | None = None) -> dict:
     """Separate one file with the Modal `stems` function. Returns {stem name: FLAC bytes} (tastr/stems.py
     writes them), or with `put_urls` ({stem name: signed upload link}, the audio bucket) Modal uploads each
-    stem itself and returns {stem name: bytes written}."""
+    stem itself and returns {stem name: bytes written}; either way plus `settings` (the model and settings
+    that made them) when the deployed function sends them."""
     audio_path = Path(audio_path)
     if http_enabled():
         result = _http_result("stems", _payload(_audio(audio_path), audio_path.suffix, put_urls=put_urls))

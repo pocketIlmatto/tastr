@@ -95,7 +95,7 @@ flowchart TB
 ```
 
 Every upload and stem is kept in the audio bucket (`tastr/blobs.py`) under the same path it would have under
-`TASTR_HOME` (`uploads/ab12cd34/song.mp3`, `stems/<hash>/drums.flac`, `keylock/<hash>/<ratio>/mix.flac`), and
+`TASTR_HOME` (`uploads/ab12cd34/song.mp3`, `stems/<hash>/drums.flac` and `stems/<hash>/stems.json`, the model that made them, `keylock/<hash>/<ratio>/mix.flac`), and
 expiry deletes the bucket's copy.
 The Worker's own files are in memory and gone after a restart, so it keeps no local copies. Modal keeps nothing
 after a job. With `TASTR_DIRECT_UPLOAD` on, the page uploads each file straight to the bucket on a signed link,

@@ -208,13 +208,15 @@ def test_modal_writes_stems_straight_to_the_bucket(bucket, home, monkeypatch):
         assert set(put_urls) == set(stems.STEM_NAMES)
         for name in put_urls:  # what Modal's run_stems does with each link
             blobs.client().put(blobs.key(stems.stem_path(folder, name)), b"fLaC", "audio/flac")
-        return {n: 4 for n in put_urls}
+        return {**{n: 4 for n in put_urls}, "settings": {"model": "htdemucs_ft", "shifts": 1, "overlap": 0.25}}
 
     monkeypatch.setattr(remote, "stems", fake_stems)
     assert not stems.is_ready(folder)
     stems.separate_track(audio, folder)
     assert stems.is_ready(folder) and not folder.exists()  # ready, and nothing on the server's disk
-    assert len(objects("stems/")) == 4
+    assert len(objects("stems/")) == 5  # the four stems and stems.json, the model that made them
+    assert stems.made_with(folder)["model"] == "htdemucs_ft" and stems.made_with(folder)["recorded"]
+    assert not folder.exists()  # reading the record didn't download anything
     stems.remove(folder)
     assert objects("stems/") == {} and not stems.is_ready(folder)
 

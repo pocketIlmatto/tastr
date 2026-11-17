@@ -262,7 +262,8 @@ def run_keylock(sources: dict[str, str], ratio: float, put_urls: dict[str, str])
 def run_stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = None) -> dict:
     """Separate one file (its bytes or a signed link to it) with the local Demucs. Returns {stem name: FLAC
     bytes}, or with `put_urls` ({stem name: signed upload link}) uploads each stem there and returns
-    {stem name: bytes written}."""
+    {stem name: bytes written}; either way plus `settings`, the model and settings that made them (the
+    server records them next to the stems, tastr/stems.py)."""
     import tempfile
 
     from .. import stems
@@ -271,7 +272,9 @@ def run_stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None =
         src = Path(tmp) / f"track{suffix}"
         _write_audio(audio, src)
         out = Path(tmp) / "stems"
-        stems.separate(src, out)
+        made = stems.separate(src, out)
         if put_urls:
-            return {n: _put(put_urls[n], stems.stem_path(out, n)) for n in stems.STEM_NAMES if n in put_urls}
-        return {n: stems.stem_path(out, n).read_bytes() for n in stems.STEM_NAMES}
+            got = {n: _put(put_urls[n], stems.stem_path(out, n)) for n in stems.STEM_NAMES if n in put_urls}
+        else:
+            got = {n: stems.stem_path(out, n).read_bytes() for n in stems.STEM_NAMES}
+        return {**got, "settings": made} if made else got

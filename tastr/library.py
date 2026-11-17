@@ -55,6 +55,8 @@ def pack(db_path: str | os.PathLike | None, out: str | os.PathLike, owner: str) 
                 folder = stems.stems_dir(sha, tid)
                 if stems.is_ready(folder):
                     files += [(stems.stem_path(folder, n), f"stems/{folder.name}/{n}.flac") for n in stems.STEM_NAMES]
+                    if stems.info_path(folder).is_file():  # which model made them (none: older htdemucs stems)
+                        files.append((stems.info_path(folder), f"stems/{folder.name}/{stems.INFO_NAME}"))
             tracks = c.execute("UPDATE tracks SET owner = ? WHERE owner IS NULL", (owner,)).rowcount
             c.commit()
         added: set[str] = set()

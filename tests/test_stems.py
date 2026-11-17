@@ -3,6 +3,7 @@
 Demucs never runs here: `stems.separate` is replaced by a stub that writes small files.
 """
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -114,7 +115,8 @@ def test_separation_runs_in_background_then_serves_stems(client, track, stub, ga
     assert st["stems"] == ["vocals", "bass", "other", "drums"]
     assert len(stub) == 1
     folder = home / "stems" / ("f00d" * 4)
-    assert sorted(p.name for p in folder.iterdir()) == ["bass.flac", "drums.flac", "other.flac", "vocals.flac"]
+    assert sorted(p.name for p in folder.iterdir()) == ["bass.flac", "drums.flac", "other.flac", "stems.json", "vocals.flac"]
+    assert st["made_with"]["model"] == stems.MODEL and st["made_with"]["recorded"] and not st["made_with"]["outdated"]
     assert not folder.with_name(folder.name + ".partial").exists()
     assert client.get(f"/api/tracks/{track}").json()["stems_state"] == "ready"
 
@@ -184,6 +186,91 @@ def test_cli_separates_in_the_foreground(db_path, track, stub, home, capsys):
     assert "already" in capsys.readouterr().out and len(stub) == 1
     assert cli.main(["--db", str(db_path), "stems", str(track), "--force"]) == 0 and len(stub) == 2
     assert cli.main(["--db", str(db_path), "stems", "999"]) == 1
+
+
+def test_each_stem_set_records_the_model_that_made_it(home, monkeypatch):
+    folder = home / "stems" / "abcd"
+
+    def fake_separate(audio_path, out_dir, progress=None):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for n in stems.STEM_NAMES:
+            stems.stem_path(out_dir, n).write_bytes(b"fLaC")
+        return stems.settings("htdemucs_ft", 2, 0.5, "mps")
+
+    monkeypatch.setattr(stems, "separate", fake_separate)
+    stems.separate_track(Path("song.wav"), folder)
+    saved = json.loads(stems.info_path(folder).read_text())
+    assert saved["model"] == "htdemucs_ft" and saved["shifts"] == 2 and saved["overlap"] == 0.5
+    assert saved["device"] == "mps" and saved["made_at"].endswith("Z")
+    made = stems.made_with(folder)
+    assert made["model"] == stems.MODEL and made["recorded"] and not made["outdated"]
+
+
+def test_stems_without_a_record_count_as_old_htdemucs(client, track, home):
+    folder = home / "stems" / ("f00d" * 4)  # stems from before the record existed
+    folder.mkdir(parents=True)
+    for n in stems.STEM_NAMES:
+        stems.stem_path(folder, n).write_bytes(b"fLaC")
+    st = client.get(f"/api/tracks/{track}/stems").json()
+    assert st["state"] == "ready"
+    assert st["made_with"] == {"model": "htdemucs", "shifts": 1, "overlap": 0.25, "recorded": False, "outdated": True}
+
+
+def test_an_unreadable_record_counts_as_old_htdemucs(home):
+    folder = home / "stems" / "bad"
+    folder.mkdir(parents=True)
+    stems.info_path(folder).write_text("{not json")
+    assert stems.made_with(folder)["model"] == "htdemucs" and stems.made_with(folder)["outdated"]
+
+
+def test_separating_again_replaces_the_record(home, monkeypatch):
+    folder = home / "stems" / "again"
+    model = ["htdemucs"]
+
+    def fake_separate(audio_path, out_dir, progress=None):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for n in stems.STEM_NAMES:
+            stems.stem_path(out_dir, n).write_bytes(b"fLaC")
+        return stems.settings(model[0])
+
+    monkeypatch.setattr(stems, "separate", fake_separate)
+    stems.separate_track(Path("song.wav"), folder)
+    assert stems.made_with(folder)["outdated"]
+    model[0] = stems.MODEL
+    stems.separate_track(Path("song.wav"), folder)
+    assert stems.made_with(folder)["model"] == stems.MODEL and not stems.made_with(folder)["outdated"]
+    stems.remove(folder)
+    assert not stems.info_path(folder).exists()
+
+
+def test_modal_stems_keep_the_settings_modal_sent(home, monkeypatch):
+    from tastr.cloud import remote
+
+    monkeypatch.setenv("TASTR_STEMS_BACKEND", "modal")
+    sent = {"model": "htdemucs_ft", "shifts": 1, "overlap": 0.25, "demucs": "4.1.0", "device": "cuda"}
+    monkeypatch.setattr(remote, "stems", lambda path, put_urls=None: {**{n: b"fLaC" for n in stems.STEM_NAMES}, "settings": sent})
+    folder = home / "stems" / "modal"
+    stems.separate_track(Path("song.wav"), folder)
+    assert json.loads(stems.info_path(folder).read_text()) == sent
+    # an older deployed function sends no settings: the record says what this server's default is
+    monkeypatch.setattr(remote, "stems", lambda path, put_urls=None: {n: b"fLaC" for n in stems.STEM_NAMES})
+    stems.separate_track(Path("song.wav"), folder)
+    assert json.loads(stems.info_path(folder).read_text())["model"] == stems.MODEL
+
+
+def test_modal_job_returns_the_settings_with_the_stems(monkeypatch, tmp_path):
+    from tastr.cloud import jobs
+
+    def fake_separate(src, out, progress=None):
+        out.mkdir(parents=True)
+        for n in stems.STEM_NAMES:
+            stems.stem_path(out, n).write_bytes(b"fLaC")
+        return stems.settings(device="cuda")
+
+    monkeypatch.setattr(stems, "separate", fake_separate)
+    got = jobs.run_stems(b"RIFF", ".wav")
+    assert set(got) == {*stems.STEM_NAMES, "settings"}
+    assert got["settings"]["model"] == stems.MODEL and got["settings"]["device"] == "cuda"
 
 
 def test_cli_without_demucs_prints_install_hint(db_path, track, home, monkeypatch, capsys):

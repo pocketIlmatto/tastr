@@ -565,6 +565,18 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   119.65 -> 120.01, 125.19 -> 125.01, 122.42 -> 122.01; already-right tracks move by 0.1 or less. The
   synthetic golden cards' beats move by 1 ms. The search is bounded, so a wrong metrical level stays wrong
   (and can move by up to 2.5%): it only sharpens a tempo that is already about right.
+  Subsets on Modal (`modal run` from each branch), Acc1 / Acc2 unchanged on all three and no track's verdict
+  changed; precision on tracks within Acc1 both times:
+
+  | Set | Tracks | Acc1 / Acc2 | Mean abs error (BPM) | Median signed error | Off by > 1 BPM |
+  |---|---|---|---|---|---|
+  | `beatport-tempo` (`--limit 100`) | 90 | 0.900 / 0.940 | 0.269 -> 0.026 | +0.010 -> +0.000 | 4 -> 0 |
+  | `giantsteps-tempo` | 33 | 0.767 / 0.884 | 0.878 -> 0.822 | -0.580 -> -0.020 | 13 -> 9 |
+  | hjdb (spectrogram tempo bench, all 235) | 219 | 0.932 / 0.949 | 1.020 -> 0.957 | +0.350 -> +0.330 | 103 -> 101 |
+
+  GiantSteps' remaining "> 1 BPM" tracks are mostly the v2 labels above (the engine reads 140.0 for "139",
+  120.0 for "121", 175.0 for "174" where the original label is 175). hjdb's references come from its beat
+  annotations and aren't whole numbers (142.86), so its error is mostly label spread.
 - Tried and dropped (Acc1 counts as hjdb train / Beatport / GiantSteps, from 151 / 675 / 30 at 0.9):
   - Onsets from the full mix instead of the HPSS percussive part: 50:50 mix at 0.8 gives 186 / 668 / 34, full
     mix 184 / 659 / 34. Helps the fast sets, costs Beatport 7 to 16 tracks.

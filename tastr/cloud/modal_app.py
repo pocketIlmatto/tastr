@@ -48,12 +48,12 @@ essentia_image = (
     .run_commands(download_command())
     .add_local_python_source("tastr")
 )
-# The same plus Demucs, with the htdemucs weights baked in so a cold start does not download them.
+# The same plus Demucs, with the htdemucs_ft weights baked in so a cold start does not download them.
 _torch_base = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
     .pip_install(*ENGINE_DEPS, *STEMS_DEPS, *PINS)
-    .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs')\"")
+    .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs_ft')\"")
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
 )
 stems_image = _torch_base.add_local_python_source("tastr")

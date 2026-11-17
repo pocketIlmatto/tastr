@@ -1,4 +1,4 @@
-"""Stem separation, on demand per track: vocals, drums, bass and other, with Demucs (`htdemucs`).
+"""Stem separation, on demand per track: vocals, drums, bass and other, with Demucs (`htdemucs_ft`, chosen in a blind listening test: docs/stems-tuning.md).
 
 Demucs and PyTorch are large, so they are an optional extra (`pip install 'tastr[stems]'`); without
 them `available()` is False and the API answers 501 with that install hint. Stems are FLAC files in
@@ -27,8 +27,8 @@ from . import blobs, runner
 from .markers import Markers, legacy_files
 
 STEM_NAMES = ("vocals", "bass", "other", "drums")
-MODEL = "htdemucs"
-HF_REPO = "adefossez/HTDemucs"  # where Demucs 4.1 keeps MODEL on the Hugging Face Hub
+MODEL = "htdemucs_ft"  # four fine-tuned models, one per stem; about 2.3x the GPU time of `htdemucs`
+HF_REPO = "adefossez/HTDemucs"  # where Demucs 4.1 keeps its pretrained models on the Hugging Face Hub
 INSTALL_HINT = "Stem separation needs Demucs, an optional install (about 2 GB with PyTorch): pip install 'tastr[stems]'"
 
 Progress = Callable[[float], None]
@@ -75,8 +75,12 @@ def remove(folder: Path) -> None:
     blobs.remove_tree(folder)
 
 
-def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None) -> None:
-    """Split one file into STEM_NAMES FLAC files in `out_dir` with Demucs. Tests replace this."""
+def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = None, *,
+             model_name: str = MODEL, shifts: int = 1, overlap: float = 0.25) -> None:
+    """Split one file into STEM_NAMES FLAC files in `out_dir` with Demucs. Tests replace this.
+
+    `model_name`, `shifts` and `overlap` default to what the app uses; scripts/stem_ab.py tries others
+    (docs/stems-tuning.md). They apply to the local Demucs only, not to the Modal backend."""
     if backend() == "modal":
         from .cloud import remote
 
@@ -98,8 +102,8 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
 
     from .engine.audio import load_audio
 
-    with _hub_offline_if_cached():
-        model = get_model(MODEL)  # downloads the weights (about 80 MB) the first time
+    with _hub_offline_if_cached(model_name):
+        model = get_model(model_name)  # downloads the weights (about 320 MB) the first time
     model.eval()
     wav = load_audio(blobs.ensure(audio_path) or audio_path, model.samplerate, mono=False)  # (channels, n); m4a/aac go through ffmpeg
     if wav.shape[0] < model.audio_channels:
@@ -121,7 +125,8 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
         demucs_apply.tqdm = types.SimpleNamespace(tqdm=counting)
     try:
         with torch.no_grad():
-            sources = demucs_apply.apply_model(model, mix[None], device=device, progress=progress is not None)[0]
+            sources = demucs_apply.apply_model(model, mix[None], shifts=shifts, overlap=overlap, device=device,
+                                               progress=progress is not None)[0]
     finally:
         demucs_apply.tqdm = real_tqdm
     sources = sources * ref.std() + ref.mean()
@@ -136,10 +141,10 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
 
 
 @contextlib.contextmanager
-def _hub_offline_if_cached():
+def _hub_offline_if_cached(model_name: str = MODEL):
     """Keep Hugging Face offline while Demucs loads a model that is already in its cache.
 
-    Demucs 4.1 loads `htdemucs` from the Hugging Face Hub (adefossez/HTDemucs). Even with the files
+    Demucs 4.1 loads its models (MODEL included) from the Hugging Face Hub (adefossez/HTDemucs). Even with the files
     cached, each load asks the Hub whether they changed, which prints an "unauthenticated requests"
     warning when no HF_TOKEN is set. HF_HUB_OFFLINE is read once at import, so set the constant.
     """
@@ -149,7 +154,7 @@ def _hub_offline_if_cached():
     except ImportError:  # Demucs 4.0 downloads from Meta's server and doesn't use the Hub
         yield
         return
-    bag = try_to_load_from_cache(HF_REPO, f"{MODEL}.yaml")
+    bag = try_to_load_from_cache(HF_REPO, f"{model_name}.yaml")  # a model kept elsewhere just loads online
     cached = isinstance(bag, str)
     if cached:
         with open(bag) as f:

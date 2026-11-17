@@ -256,7 +256,7 @@ cymbals live and little else does. *Flux* means "how much did this band just get
 in just that band. See onset strength below.
 
 **Stems.** Separate audio files for each instrument group (vocals, drums, bass, other). Tastr makes them on
-request with **Demucs** (`htdemucs`), a neural network trained to un-mix music ([`tastr/stems.py`](../tastr/stems.py)).
+request with **Demucs** (`htdemucs_ft`), a neural network trained to un-mix music ([`tastr/stems.py`](../tastr/stems.py)).
 HPSS is a fast, rough two-way cousin of this.
 
 **ADT (automatic drum transcription).** Turning audio into drum hits per instrument, like a MIDI drum part.
@@ -413,7 +413,7 @@ breakdown...) come from relative energy, as the Glossary describes.
 | Key profile | Mean normalized chroma | `music.key_profile`, learned key model |
 | Z-score | (x - mean) / std per feature | section features |
 | Ward clustering | Merge neighbours with the least added variance | `librosa.segment.agglomerative` |
-| Stems | Per-instrument audio | Demucs `htdemucs` |
+| Stems | Per-instrument audio | Demucs `htdemucs_ft` |
 | ADT | Drum transcription | NMF classifier; optional ADTOF |
 
 ## 12. Sources and further reading

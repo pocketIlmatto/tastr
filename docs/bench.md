@@ -549,6 +549,34 @@ Measured on the 43 GiantSteps tempo tracks that have audio in the Zenodo mirror 
   GiantSteps still reads 1-2 BPM low on several tracks (127 -> 124.6, 121 -> 119.7, 142 -> 140.6), so its
   median moved down while its mean error nearly halved; the cause is not yet known. Its baseline here (0.767 /
   0.884) differs from the earlier 0.744 / 0.907; main produced it before this change.
+- Tempo checked against the whole track's pulse (2026-11-17, core 0.7.0). The GiantSteps "reads 1-2 BPM low"
+  above was mostly the labels. On 15 of the 43 tracks, the strongest beat-rate plus half-beat-rate Fourier
+  component of the percussive onset envelope over the whole preview (searched in 0.0002 steps) lands within 0.05
+  of a whole number every time, and agrees with the original Beatport labels (`annotations/`) where
+  `annotations_v2` disagrees: the "121" tracks (4014747, 4014749) are 120.0, "127" (2676506, 4275052, 4693198) is
+  126.0, "142" (4723905) and "139" (3349486, 3574815, 5079918) are 140.0, "129" (3535112, 3892740) is 128.0. The
+  v2 labels are tapped and rounded, so they are off by 1-2 BPM on about half of these.
+  The engine had real misses too, all on tracks whose beats weren't steady enough to regularize: the tracker
+  drops a beat in quiet parts (gaps of 23-26 frames at 20.5 frames per beat), each such gap counts as one
+  beat, and the line fit reads low (4275052: 248 beats in 120 s, 124.64 BPM for 126.0). Core now takes the
+  period within 2.5% of the line fit whose beat and half-beat Fourier magnitudes over the whole onset envelope
+  sum highest (`refine_period`), and respaces an even grid at it (kept on its middle beat) when the grid was
+  already even. On the 15 tracks: 124.64 -> 125.98, 125.38 -> 125.98, 139.38 -> 140.00, 140.64 -> 140.00,
+  119.65 -> 120.01, 125.19 -> 125.01, 122.42 -> 122.01; already-right tracks move by 0.1 or less. The
+  synthetic golden cards' beats move by 1 ms. The search is bounded, so a wrong metrical level stays wrong
+  (and can move by up to 2.5%): it only sharpens a tempo that is already about right.
+  Subsets on Modal (`modal run` from each branch), Acc1 / Acc2 unchanged on all three and no track's verdict
+  changed; precision on tracks within Acc1 both times:
+
+  | Set | Tracks | Acc1 / Acc2 | Mean abs error (BPM) | Median signed error | Off by > 1 BPM |
+  |---|---|---|---|---|---|
+  | `beatport-tempo` (`--limit 100`) | 90 | 0.900 / 0.940 | 0.269 -> 0.026 | +0.010 -> +0.000 | 4 -> 0 |
+  | `giantsteps-tempo` | 33 | 0.767 / 0.884 | 0.878 -> 0.822 | -0.580 -> -0.020 | 13 -> 9 |
+  | hjdb (spectrogram tempo bench, all 235) | 219 | 0.932 / 0.949 | 1.020 -> 0.957 | +0.350 -> +0.330 | 103 -> 101 |
+
+  GiantSteps' remaining "> 1 BPM" tracks are mostly the v2 labels above (the engine reads 140.0 for "139",
+  120.0 for "121", 175.0 for "174" where the original label is 175). hjdb's references come from its beat
+  annotations and aren't whole numbers (142.86), so its error is mostly label spread.
 - Tried and dropped (Acc1 counts as hjdb train / Beatport / GiantSteps, from 151 / 675 / 30 at 0.9):
   - Onsets from the full mix instead of the HPSS percussive part: 50:50 mix at 0.8 gives 186 / 668 / 34, full
     mix 184 / 659 / 34. Helps the fast sets, costs Beatport 7 to 16 tracks.

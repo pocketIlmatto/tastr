@@ -78,6 +78,14 @@ GTZAN Acc1 0.673 -> 0.676, hjdb train 0.915 -> 0.925, and Beatport's 85-92 BPM t
 lost 2 of 25. All 774 Beatport tracks: Acc1 0.897 -> 0.885, all from drum & bass listed at 85-89 and those two
 tracks. Details: [bench.md, Tempo notes](bench.md#tempo-notes).
 
+**Precise BPM (2026-11-12 and 2026-11-17):** the BPM is the slope of a line through the beats rather than the
+median gap, which snapped to whole frames (117.45 or 123.05 for a track at 118.8), and is then checked against
+the whole track's pulse: the period within 2.5% whose beat and half-beat Fourier components over the whole onset
+envelope are strongest. That fixes tracks where the beat tracker dropped beats in quiet parts and the line fit
+read up to 1.4 BPM low. Most of GiantSteps' remaining "low" readings were its corrected labels, which are 1-2 BPM
+off on about half of the tracks checked (121 for a 120.0 track, 127 for 126.0). Details:
+[bench.md, Tempo notes](bench.md#tempo-notes).
+
 **Still open:** drum & bass whose snare is half-time too (beat 3 of the fast bar) still reads at 87, and
 2/3-tempo locks (116 for 174) are unchanged.
 

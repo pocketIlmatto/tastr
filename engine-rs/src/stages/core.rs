@@ -27,6 +27,9 @@ pub const BACKBEAT_CONTRAST: f64 = 2.0;
 /// Pulse clarity: (onset on the tracker's beats / mean onset - 1) / PULSE_SCALE, read before the kick
 /// alignment (core.py PULSE_SCALE).
 const PULSE_SCALE: f64 = 4.0;
+/// `refine_period` searches periods within this fraction of the beat grid's, in steps of REFINE_STEP of it.
+const REFINE_SPAN: f64 = 0.025;
+const REFINE_STEP: f64 = 0.0002;
 const METER_CUE_SCALES: [(&str, f64); 6] =
     [("timbre_lag", 0.1), ("bass_lag", 0.27), ("kick", 0.3), ("snare", 0.25), ("change", 0.17), ("bass_change", 0.22)];
 pub const METER_THRESHOLD: f64 = 1.0;
@@ -254,9 +257,14 @@ pub fn tempo_from_envelopes(
     let picked: Vec<f32> = beat_index(&frames, n_frames).into_iter().map(|i| onset[i]).collect();
     let ratio = mean_f32(&picked) / (mean_f32(onset) + 1e-9);
     let pulse = clip(((ratio - 1.0) as f64) / PULSE_SCALE, 0.0, 1.0);
-    let frames = align_to_kick(&frames, low_flux);
+    let mut frames = align_to_kick(&frames, low_flux);
     if frames.len() > 1 {
-        bpm = 60.0 * sr / (hop * beat_period(&frames));
+        let fit = beat_period(&frames);
+        let period = refine_period(onset, fit);
+        if is_uniform(&frames) {
+            frames = respace(&frames, period, n_frames);
+        }
+        bpm = 60.0 * sr / (hop * period);
     }
     (Some(bpm), frames, 0.5 * stability + 0.5 * pulse, stability, pulse)
 }
@@ -376,6 +384,70 @@ fn beat_period(frames: &[f64]) -> f64 {
     } else {
         med
     }
+}
+
+/// The beat period (in frames) near `period` that best matches the whole onset envelope: the strongest sum of the
+/// envelope's Fourier magnitudes at the beat and half-beat rates, searched within REFINE_SPAN of `period`. The
+/// line fit through the tracked beats is only as good as the beat count: where the tracker slips (a gap of 1.2
+/// beats counted as one), it reads low. A steady track's periodicity over its whole length pins the tempo to a
+/// few hundredths of a BPM. `period` itself when the best lies on the edge of the search, or the envelope is flat.
+fn refine_period(onset: &[f32], period: f64) -> f64 {
+    if onset.len() < 2 || period.is_nan() || period <= 1.0 {
+        return period;
+    }
+    let m = mean_f32(onset) as f64;
+    let x: Vec<f64> = onset.iter().map(|&v| v as f64 - m).collect();
+    let steps = libm::round(REFINE_SPAN / REFINE_STEP) as i64;
+    let mut best = (f64::NEG_INFINITY, 0i64);
+    for s in -steps..=steps {
+        let p = period * (1.0 + s as f64 * REFINE_STEP);
+        let score = fourier_mag(&x, 1.0 / p) + fourier_mag(&x, 2.0 / p);
+        if score > best.0 {
+            best = (score, s);
+        }
+    }
+    if !best.0.is_finite() || best.0 <= 0.0 || best.1.abs() == steps {
+        return period;
+    }
+    period * (1.0 + best.1 as f64 * REFINE_STEP)
+}
+
+/// |sum x[n] e^(-2 pi i f n)|, `f` in cycles per frame (the rotation is stepped, not recomputed per frame).
+fn fourier_mag(x: &[f64], f: f64) -> f64 {
+    let w = 2.0 * core::f64::consts::PI * f;
+    let (step_re, step_im) = (libm::cos(w), -libm::sin(w));
+    let (mut c, mut s) = (1.0f64, 0.0f64);
+    let (mut re, mut im) = (0.0, 0.0);
+    for (i, &v) in x.iter().enumerate() {
+        if i % 1024 == 0 {
+            let a = w * i as f64;
+            (c, s) = (libm::cos(a), -libm::sin(a));
+        }
+        re += v * c;
+        im += v * s;
+        (c, s) = (c * step_re - s * step_im, c * step_im + s * step_re);
+    }
+    libm::sqrt(re * re + im * im)
+}
+
+/// Whether the beats are an even grid (as `regularize` and `align_to_kick` leave a steady track), allowing for the
+/// first beat clamped to frame 0.
+fn is_uniform(frames: &[f64]) -> bool {
+    if frames.len() < MIN_BEATS {
+        return false;
+    }
+    let d = diffs(&frames[1..]);
+    let med = median(&d);
+    d.iter().all(|v| (v - med).abs() < 1e-6 * med.max(1.0))
+}
+
+/// An even grid at `period`, kept on the middle beat of `frames` and spanning the track as `align_to_kick` leaves
+/// it (from frame -2, clamped to 0, to the last frame).
+fn respace(frames: &[f64], period: f64, n_frames: usize) -> Vec<f64> {
+    let mid = frames[frames.len() / 2];
+    let first = libm::ceil((-2.0 - mid) / period - 1e-9) as i64;
+    let last = libm::floor((n_frames as f64 - 1.0 - mid) / period + 1e-9) as i64;
+    (first..=last).map(|k| (mid + period * k as f64).max(0.0)).collect()
 }
 
 /// _regularize: a uniform grid across the track when the tracked beats are steady.
@@ -726,6 +798,35 @@ fn bar_energy_series(downbeats: &[f64], rms_db: &[f32], sr: f64, duration: f64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refine_period_finds_the_pulse_a_slipped_count_misses() {
+        // Kicks every 20.5 frames (126.05 BPM at 43.07 fps) and a period 1.6% slow, as a beat count that lost
+        // four beats in 250 gives.
+        let true_period = 20.5;
+        let mut onset = vec![0.0f32; 5200];
+        let mut t = 3.0;
+        while (t as usize) < onset.len() {
+            onset[libm::round(t) as usize] = 1.0;
+            t += true_period;
+        }
+        let got = refine_period(&onset, true_period * 1.016);
+        assert!((got - true_period).abs() < 0.01, "{got}");
+        // Already right: stays put; a flat envelope: unchanged; never further than REFINE_SPAN away.
+        assert!((refine_period(&onset, true_period) - true_period).abs() < 0.01);
+        assert_eq!(refine_period(&vec![0.5f32; 5200], 21.0), 21.0);
+        assert!((refine_period(&onset, 25.0) / 25.0 - 1.0).abs() <= REFINE_SPAN + 1e-9);
+    }
+
+    #[test]
+    fn respace_keeps_the_middle_beat_and_spans_the_track() {
+        let frames: Vec<f64> = (0..100).map(|i| 5.0 + 21.0 * i as f64).collect();
+        let grid = respace(&frames, 20.9, 2100);
+        assert!(is_uniform(&frames) && is_uniform(&grid));
+        assert!(grid.iter().any(|&f| (f - frames[50]).abs() < 1e-9));
+        assert!(grid[0] >= 0.0 && grid[0] < 20.9 && *grid.last().unwrap() <= 2099.0);
+        assert!(!is_uniform(&[0.0, 21.0, 42.0, 64.0, 85.0, 106.0, 127.0, 148.0, 169.0]));
+    }
 
     #[test]
     fn swing_measures_the_offbeat_position() {

@@ -154,3 +154,37 @@ def test_real_mix_sums_and_scales_instead_of_clipping(tmp_path):
     assert np.abs(y).max() == pytest.approx(1.0, abs=1e-3)  # 1.5 scaled down to full scale, not clipped
     karaoke.mix_files(srcs[:1], tmp_path / "one.flac")
     assert sf.read(tmp_path / "one.flac", dtype="float32")[0].max() == pytest.approx(0.5, abs=1e-3)
+
+
+def test_a_mix_that_outlives_its_stems_is_thrown_away(client, track, monkeypatch, home, gate):
+    f = with_stems(home)
+    started = threading.Event()
+
+    def slow(srcs, dst):
+        started.set()
+        assert gate.wait(5)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b"fLaC old mix")
+
+    monkeypatch.setattr(karaoke, "mix_files", slow)
+    gate.clear()
+    client.post(f"/api/tracks/{track}/karaoke")
+    assert started.wait(5)
+    assert client.delete(f"/api/tracks/{track}/stems").status_code in (200, 204)
+    gate.set()
+    st = wait_for(client, track, "error")
+    assert "stems changed" in st["error"] and not stems.instrumental_path(f).exists()
+
+
+def test_a_mix_of_stems_separated_again_meanwhile_is_thrown_away(home, monkeypatch):
+    f = with_stems(home)
+    stems._record(f, {"model": "htdemucs_ft", "made_at": "old"})
+
+    def mix_then_resplit(srcs, dst):
+        dst.write_bytes(b"old mix")
+        stems._record(f, {"model": "htdemucs_ft", "made_at": "new"})
+
+    monkeypatch.setattr(karaoke, "mix_files", mix_then_resplit)
+    with pytest.raises(RuntimeError, match="stems changed"):
+        karaoke.make(f)
+    assert not stems.instrumental_path(f).exists()

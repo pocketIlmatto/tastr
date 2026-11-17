@@ -80,6 +80,7 @@ def make(folder: Path) -> None:
     if not stems.is_ready(folder):
         raise RuntimeError("This track has no stems to mix")
     sources = {p: stems.stem_path(folder, p) for p in PARTS}
+    before = _stem_set(folder)
     if backend() == "modal":
         from .cloud import remote
 
@@ -87,14 +88,26 @@ def make(folder: Path) -> None:
         blobs.reset_listings()
         if not blobs.in_bucket(out):
             raise RuntimeError("Karaoke produced no mix")
-        return
-    tmp = out.with_name(out.stem + ".partial.flac")
-    try:
-        mix_files([blobs.ensure(src) or src for src in sources.values()], tmp)
-        tmp.replace(out)
-    finally:
-        tmp.unlink(missing_ok=True)
-    blobs.push(out)
+    else:
+        tmp = out.with_name(out.stem + ".partial.flac")
+        try:
+            mix_files([blobs.ensure(src) or src for src in sources.values()], tmp)
+            tmp.replace(out)
+        finally:
+            tmp.unlink(missing_ok=True)
+        blobs.push(out)
+    # The stems may have been deleted or separated again while this mix ran (both drop the old mix, but this one
+    # lands after that); a mix of stems that are gone mustn't stay.
+    if not stems.is_ready(folder) or _stem_set(folder) != before:
+        blobs.remove(out)
+        raise RuntimeError("The stems changed while they were being mixed; ask again")
+
+
+def _stem_set(folder: Path) -> tuple:
+    """Which separation the folder's stems came from: its stems.json record, read fresh (separating again writes a
+    new one with its own made_at)."""
+    info = stems._read_info(folder)
+    return (info.get("model"), info.get("made_at"), info.get("recorded"))
 
 
 class Jobs:

@@ -23,10 +23,13 @@ import numpy as np
 # The stages every Rust card runs, with their versions (engine-rs/src/stages/mod.rs), as card.stages_run lists
 # them. Kept here so a server without the native library (the hosted web server checks browser cards against
 # it) knows them; tests/test_rust_switch.py checks them against the library.
-STAGES = {"core": "0.6.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.2.0"}
+STAGES = {"core": "0.7.0", "sections": "0.2.0", "tags": "0.2.0", "suggestions": "0.5.0", "views": "0.2.0"}
 # What changed in a stage version, in one sentence, for the card's "Engine 0.5.0 · latest 0.6.0" tooltip. Add a line
 # when a stage's version goes up with a change people would notice in their cards.
-STAGE_NEWS = {"core": {"0.6.0": "BPM now comes from a line fit through the beats, so it matches the beat grid"}}
+STAGE_NEWS = {"core": {
+    "0.6.0": "BPM now comes from a line fit through the beats, so it matches the beat grid",
+    "0.7.0": "BPM is now checked against the whole track's pulse, so it no longer reads a little low when beats are missed",
+}}
 
 SR = 22050  # the engine's sample rate (engine-rs SR): audio handed to it must be at this rate
 _LIB_NAMES = {"darwin": "libtastr_engine.dylib", "win32": "tastr_engine.dll"}

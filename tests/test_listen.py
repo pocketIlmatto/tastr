@@ -130,3 +130,10 @@ def test_api_separates_the_stems_first(db_path, home, track, monkeypatch):
         time.sleep(0.05)
     assert client.get(f"/api/tracks/{track}/lyrics").json()["synced"][0]["line"] == "Over the quiet harbour"
     assert client.get(f"/api/tracks/{track}/stems").json()["state"] == "ready"
+
+
+def test_lrclib_words_stay_when_no_line_can_be_placed():
+    stored = {"provider": "lrclib", "status": "found", "plain": PLAIN, "synced": [], "fetched_at": "x"}
+    for got in (listen.apply(stored, heard()), listen.apply(stored, heard((4.0, "something else entirely")))):
+        assert got["provider"] == "lrclib" and got["plain"] == PLAIN and not got["synced"]
+        assert "timed_by" not in got

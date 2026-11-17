@@ -134,7 +134,9 @@ Third-party pieces it uses or links to:
   licence for them. Tastr shows them only to the person whose library the track is in, keeps them out of
   downloads and shared links, and never ships any (the tests use made-up lines).
 - **faster-whisper** and OpenAI's **Whisper** weights (listening for lyrics in the vocal stem, `tastr/listen.py`)
-  are MIT, an optional install. What it hears is the song's words, kept private like LRCLIB's.
+  are MIT, an optional install. What it hears is the song's words, kept private like LRCLIB's. faster-whisper
+  decodes audio with **PyAV** (BSD-3-Clause), whose wheels bundle FFmpeg's libraries under the LGPL 2.1 or later;
+  they are used as shipped, unmodified.
 - **Cover Art Archive** (album art for admins' mash-up previews, when lookups are on): the images
   belong to their copyright owners, usually the labels, and the archive grants no licence for them.
   Tastr fetches one only for a preview of a link an admin shares, keeps it in the server's own storage,

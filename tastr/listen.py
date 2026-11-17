@@ -57,15 +57,17 @@ def hear(folder: Path) -> dict:
 
 def apply(stored: dict | None, heard: dict) -> dict[str, Any]:
     """The lyrics to store once Whisper has listened, given what is stored: LRCLIB's plain words timed by what was
-    heard, or what was heard."""
+    heard (left as they were when no line could be placed), or what was heard."""
     plain = (stored or {}).get("plain")
     if stored and stored.get("status") == "found" and stored.get("provider") == "lrclib" and plain \
             and not stored.get("synced"):
+        # LRCLIB's words stay whatever was heard: timed when some lines could be placed, else as they were.
+        out = {k: v for k, v in stored.items() if k != "fetched_at"}
         lines = [x for x in plain.splitlines() if x.strip()]
         placed = fill_times(tr.align_lines(lines, heard["words"]))
         if any(not x.get("guess") for x in placed):
-            out = {k: v for k, v in stored.items() if k != "fetched_at"}
             return out | {"synced": placed, "timed_by": "whisper", "model": heard.get("model")}
+        return out
     lines = [{"t": x["t"], "line": x["line"]} for x in heard["lines"]]
     if not lines:
         return {"provider": "whisper", "status": "not_found", "heard": "nothing", "model": heard.get("model")}

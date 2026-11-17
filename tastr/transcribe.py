@@ -134,8 +134,8 @@ def align_lines(lines: list[str], words: list[dict]) -> list[dict]:
     """Time lyrics we have as text: [{t, line}], each line starting where the heard words line up with its own (an
     edit-distance alignment, in order). A line is placed only when at least two of its words were heard (its one
     word, for a one-word line): a single word of a repeated hook lines up just as well with the wrong chorus. A
-    line whose first words weren't heard starts WORD_SECONDS a word earlier than its first heard word. A line that
-    can't be placed gets t=None."""
+    line whose first words weren't heard starts WORD_SECONDS a word earlier than its first heard word, but never
+    before the line above. A line that can't be placed gets t=None."""
     ref, owner, place = [], [], []
     for k, line in enumerate(lines):
         for j, w in enumerate(norm_words(line)):
@@ -147,10 +147,14 @@ def align_lines(lines: list[str], words: list[dict]) -> list[dict]:
     hits: dict[int, list[tuple[int, float]]] = {}
     for i in sorted(pairs):
         hits.setdefault(owner[i], []).append((place[i], hyp[pairs[i]][1]["t"]))
-    out = []
+    out, last = [], 0.0
     for k, line in enumerate(lines):
         h, n = hits.get(k, []), len(norm_words(line))
-        t = round(max(0.0, h[0][1] - WORD_SECONDS * h[0][0]), 2) if h and len(h) >= min(2, n) else None
+        t = None
+        if h and len(h) >= min(2, n):
+            # Never before the line above: the words came in order, an early start is only the estimate.
+            t = round(max(last, h[0][1] - WORD_SECONDS * h[0][0]), 2)
+            last = t
         out.append({"t": t, "line": line})
     return out
 

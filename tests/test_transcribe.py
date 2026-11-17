@@ -81,3 +81,10 @@ def test_lines_heard_only_counts_words_heard_in_their_place():
              {"t": 30.0, "line": "Round and round the silver wheel"}]
     heard = _words("round and round the silver wheel", 30)  # only the second chorus
     assert tr.lines_heard(timed, heard) == 0.333
+
+
+def test_aligned_lines_stay_in_order():
+    heard = [{"t": 10.0, "end": 10.05, "w": "paper"}, {"t": 10.1, "end": 10.15, "w": "lanterns"},
+             {"t": 10.2, "end": 10.25, "w": "quiet"}, {"t": 10.3, "end": 10.35, "w": "harbour"}]
+    placed = tr.align_lines(["paper lanterns", "over the quiet harbour"], heard)
+    assert [p["t"] for p in placed] == [10.0, 10.0]

@@ -130,7 +130,9 @@ def lookup_track(conn: sqlite3.Connection, track_id: int, card) -> dict[str, Any
         finally:
             usage_conn.reset(token)
     stored = db.get_lyrics(conn, track_id)
-    if res["status"] in SETTLED or (stored or {}).get("status") not in SETTLED:
+    if keep_stored(stored, res):
+        pass
+    elif res["status"] in SETTLED or (stored or {}).get("status") not in SETTLED:
         db.save_lyrics(conn, track_id, res)
     out = describe(db.get_lyrics(conn, track_id) or res)
     if res["status"] == "error" and out["state"] != "error":
@@ -138,14 +140,32 @@ def lookup_track(conn: sqlite3.Connection, track_id: int, card) -> dict[str, Any
     return out
 
 
+def keep_stored(stored: dict | None, res: dict) -> bool:
+    """Whether LRCLIB's new answer leaves the stored lyrics as they are, because they came from listening
+    (tastr/listen.py): heard lyrics stay unless LRCLIB now has the words, and LRCLIB's plain words timed by
+    listening stay while LRCLIB still has the same words and no times of its own."""
+    if not stored or stored.get("status") != "found":
+        return False
+    if stored.get("provider") == "whisper":
+        return res["status"] != "found"
+    if stored.get("timed_by") == "whisper":
+        return res["status"] != "found" or (not res.get("synced") and res.get("plain") == stored.get("plain"))
+    return False
+
+
+WHISPER_LABEL, WHISPER_HOME = "Whisper", "https://github.com/openai/whisper"
+
+
 def describe(stored: dict | None) -> dict[str, Any]:
     """A stored answer for the page: `state` found | not_found | no_tags | error | none (never asked), `timed`
-    (whether the lines have times) and the LRCLIB credit."""
+    (whether the lines have times), `source` lrclib | whisper (heard by listening, tastr/listen.py), `timed_by`
+    whisper when LRCLIB's words got their times by listening, and the credit (`label`, `homepage`)."""
     if not stored:
         return {"state": "none"}
     out = {k: v for k, v in stored.items() if k not in ("status", "provider")}
     out["state"] = stored.get("status")
     out["source"] = stored.get("provider")
-    out["label"], out["homepage"] = LRCLIB.label, LRCLIB.homepage
+    heard = stored.get("provider") == "whisper"
+    out["label"], out["homepage"] = (WHISPER_LABEL, WHISPER_HOME) if heard else (LRCLIB.label, LRCLIB.homepage)
     out["timed"] = bool(stored.get("synced"))
     return out

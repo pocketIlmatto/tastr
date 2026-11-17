@@ -87,7 +87,7 @@ def tagged(db_path):
 
 def test_api_finds_stores_and_keeps_found_lyrics_after_an_error(db_path, tagged, monkeypatch):
     client = TestClient(create_app(db_path))
-    assert client.get(f"/api/tracks/{tagged}/lyrics").json() == {"state": "none", "available": True}
+    assert client.get(f"/api/tracks/{tagged}/lyrics").json() == {"state": "none", "available": True, "listen": {"state": "none"}, "listen_available": False}
     canned(monkeypatch, lyrics.LRCLIB_PROVIDER, (200, HIT), ProviderError("LRCLIB answered HTTP 503", 503))
     r = client.post(f"/api/tracks/{tagged}/lyrics").json()
     assert r["state"] == "found" and r["timed"] and r["label"] == "LRCLIB"

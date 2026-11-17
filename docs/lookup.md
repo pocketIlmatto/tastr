@@ -219,6 +219,37 @@ Karaoke plays the track without its vocals (`tastr/karaoke.py`): once a track ha
 seconds; on Modal's `karaoke` function on the hosted site), and `GET /api/tracks/{id}/karaoke/audio` plays it.
 It goes with the stems and is mixed again after they are separated again.
 
+### Lyrics by listening
+
+For tracks LRCLIB doesn't have, or has without times, `POST /api/tracks/{id}/lyrics/listen` has Whisper listen to
+the track's vocal stem (`tastr/listen.py`, `tastr/transcribe.py`: faster-whisper and the large-v3-turbo weights,
+both MIT). It runs in the background, separating the stems first when there are none; the card's
+`lyrics.listen` says where it is (`queued`, `separating`, `listening`, `error`). Then:
+
+- LRCLIB's plain lyrics keep their words and get line times from what was heard (`timed_by: "whisper"`). A line it
+  couldn't place gets a time between its neighbours and `guess: true`.
+- Otherwise what was heard is stored as the lyrics, with `source: "whisper"`. They may be wrong, and the page says
+  so. A later LRCLIB answer replaces them only when LRCLIB has the words.
+
+On the hosted site it runs in Modal's `transcribe` function on a T4 (about 5-10 s a track once it has stems); each
+listen counts toward the daily stem separations. A local server needs `pip install 'tastr[transcribe]'` and runs
+Whisper on its CPU, which is slow.
+
+What the trial on 5 tracks taught (2026-11-17, whole tracks, separated first): clear singing and rap were about 3 in
+4 words right (word error rate 0.23 and 0.28), with 66-83% of lines starting within 1 s of LRCLIB's. Dense club
+tracks with repeated hooks were 0.68-0.83: Whisper goes quiet on repeats instead of making words up. Whisper took
+4-8 s a track; separating the stems took 45-80 s and most of the $0.17 the run cost. Line breaks come from pauses,
+full stops and capitals; Whisper puts commas inside sung lines, so a comma counts for little.
+
+To try it on a few files on Modal without deploying anything:
+
+    modal run tastr/cloud/modal_app.py::transcribe_files --files "a.flac,b.m4a" --out ~/tastr-whisper-try
+
+It separates each file first (skip with `--no-separate` for vocal stems), writes what it heard and LRCLIB's lyrics to
+`<out>/<file>.json` (keep that folder out of the repository), and prints, per track, the word error rate against
+LRCLIB's lyrics, how close each timed line starts, and `lines_heard`, the share of lines at least half heard while
+they were sung (`score`).
+
 ## Adding a provider
 
 1. Add `tastr/lookup/<name>.py` with a `base.Provider` subclass: set `name`, `label`, `homepage` and

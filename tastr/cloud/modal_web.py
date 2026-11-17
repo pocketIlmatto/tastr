@@ -5,7 +5,8 @@ The web server is small (it fits in 512 MB) because the engine runs here: each u
 which returns the card, "Detect drums with the model" calls `analyze_drums` (the same analysis plus the
 pretrained drum model, in its own image so everyday analysis doesn't load PyTorch), "Add ML tags" calls
 `ml_tags` (MTG's Essentia classifiers, docs/essentia.md), "Separate stems" calls `stems`, a mash-up's key
-lock calls `keylock` (tastr/keylock.py) and karaoke's mix calls `karaoke` (tastr/karaoke.py). Kept apart from modal_app.py (benchmarks), so
+lock calls `keylock` (tastr/keylock.py), karaoke's mix calls `karaoke` (tastr/karaoke.py) and listening for
+lyrics calls `transcribe` (tastr/listen.py, on a T4). Kept apart from modal_app.py (benchmarks), so
 it needs no dataset bucket or secrets and can live in its own Modal environment with its own budget:
 
     modal deploy --env friends tastr/cloud/modal_web.py
@@ -46,6 +47,7 @@ APP_NAME = "tastr-web"
 # Same as modal_app.py (tests/test_cloud.py keeps them in step).
 ENGINE_DEPS = ["numpy>=1.24", "scipy>=1.10", "librosa>=0.10", "soundfile>=0.12", "mutagen>=1.47"]
 STEMS_DEPS = ["demucs>=4.0.1"]
+WHISPER_DEPS = ["faster-whisper>=1.1.1", "av>=11,<14.3"]  # the `transcribe` extra (newer PyAV breaks it)
 KEYLOCK_DEPS = ["python-stretch==0.3.1"]  # the `keylock` extra: Signalsmith Stretch (MIT)
 # CPU-only PyTorch for the drum model: a few hundred MB instead of the 2 GB CUDA build.
 TORCH_CPU = ("torch>=2.1", "https://download.pytorch.org/whl/cpu")
@@ -126,6 +128,15 @@ keylock_image = (
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
     .add_local_python_source("tastr")
 )
+# Lyrics by listening (tastr/listen.py): faster-whisper on CUDA 12 with cuDNN 9, with Whisper large-v3-turbo's
+# weights (MIT, about 1.6 GB) baked in so a cold start doesn't download them.
+whisper_image = (
+    modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04", add_python="3.12")
+    .apt_install("ffmpeg")
+    .pip_install(*WHISPER_DEPS)
+    .run_commands("python -c \"from faster_whisper import WhisperModel; WhisperModel('large-v3-turbo', device='cpu')\"")
+    .add_local_python_source("tastr")
+)
 app = modal.App(APP_NAME)
 
 
@@ -186,6 +197,15 @@ def karaoke(sources: dict[str, str], put_url: str) -> dict:
     return run_karaoke(sources, put_url)
 
 
+# Lyrics by listening (tastr/listen.py): Whisper on a vocal stem read from a signed link. 4-8 s of T4 time a track
+# in the trial, plus loading the model on a cold start.
+@app.function(image=whisper_image, gpu="T4", memory=8192, timeout=10 * 60, scaledown_window=60)
+def transcribe(audio: str, suffix: str) -> dict:
+    from tastr.cloud.jobs import run_transcribe
+
+    return run_transcribe(audio, suffix)
+
+
 # A small HTTPS front for the functions above, for servers that can't run the Modal client (the Cloudflare
 # Worker). Only callers with a proxy auth token of this workspace get in (headers Modal-Key and Modal-Secret).
 # Every answer is lines of JSON, streamed: a streaming call's events, then {"result": ...} or {"error": ...};
@@ -243,6 +263,7 @@ def api():
 
     web.add_route("/keylock", _keylock_call, methods=["POST"])
     web.add_route("/karaoke", _karaoke_call, methods=["POST"])
+    web.add_route("/transcribe", _transcribe_call, methods=["POST"])
     web.add_route("/spawn/{name}", _spawn, methods=["POST"])
     web.add_route("/poll", _poll, methods=["POST"])
     web.add_route("/{name}", call, methods=["POST"])
@@ -297,6 +318,17 @@ async def _karaoke_call(request):
     if not isinstance(sources, dict) or not isinstance(put_url, str):
         return JSONResponse({"detail": "sources and put_url"}, status_code=422)
     return StreamingResponse(answer(lambda: karaoke.remote.aio(sources, put_url)), media_type="application/x-ndjson")
+
+
+async def _transcribe_call(request):
+    """POST /transcribe {audio, suffix}: a vocal stem by signed link, what Whisper heard back (tastr/listen.py)."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+
+    body = await _json_body(request) or {}
+    audio, suffix = body.get("audio"), body.get("suffix")
+    if not isinstance(audio, str) or not audio.startswith("https://") or not isinstance(suffix, str):
+        return JSONResponse({"detail": "audio (an https link) and suffix"}, status_code=422)
+    return StreamingResponse(answer(lambda: transcribe.remote.aio(audio, suffix)), media_type="application/x-ndjson")
 
 
 async def _json_body(request) -> dict | None:

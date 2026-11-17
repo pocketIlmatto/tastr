@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from .. import blobs, db, drum_jobs, karaoke, keylock, lookup, lyrics, ml_jobs, runner, service, stems
+from .. import blobs, db, drum_jobs, karaoke, keylock, listen, lookup, lyrics, ml_jobs, runner, service, stems
 from ..engine import browser_card, rust
 from ..filemeta import describe, legacy_upload_prefix
 from .analysis_jobs import AnalysisJobs, ref
@@ -111,6 +111,7 @@ class AppContext:
         self.stem_jobs = stems.Jobs(db_path)
         self.keylock_jobs = keylock.Jobs()  # mash-up key lock: cheap, so a restart just lets the page ask again
         self.karaoke_jobs = karaoke.Jobs()  # karaoke's mix: cheap too
+        self.listen_jobs = listen.Jobs(self.conn, self.stem_jobs)  # lyrics by listening: the page asks again
         # Without threads to wait for a slot (the Worker), background analyses queue for one in their lane.
         self.analyses = AnalysisJobs(db_path, legacy_folder=tastr_home() / "analysis-jobs",
                                      limit=None if blocking or not hosted else settings.max_analyses)
@@ -331,7 +332,8 @@ class AppContext:
         body["keylock_available"] = keylock.available()
         body["karaoke_state"] = self.karaoke_jobs.status(self.stems_dir(card, track_id))["state"]
         body["lyrics_available"] = lyrics.enabled() is not None
-        body["lyrics"] = lyrics.describe(db.get_lyrics(c, track_id))
+        body["lyrics"] = lyrics.describe(db.get_lyrics(c, track_id)) | {"listen": self.listen_jobs.status(track_id)}
+        body["listen_available"] = listen.available()
         body["drum_model_available"] = drum_jobs.available()
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]
         body["ml_tags"] = db.get_ml_tags(c, track_id)

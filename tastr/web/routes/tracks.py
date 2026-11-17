@@ -11,9 +11,10 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from ... import blobs, db, keylock, lookup, lyrics, service, stems
+from ... import blobs, db, keylock, listen, lookup, lyrics, service, stems
 from ...engine import rust
-from ..context import AppContext, _failure_reason, _unprefixed, log, upload_dir
+from ..context import AppContext, _failure_reason, _unprefixed, log, runs_on, upload_dir
+from ..hosted import today
 
 
 class KnownBody(BaseModel):
@@ -185,7 +186,8 @@ def router(ctx: AppContext) -> APIRouter:
         error, with `synced` ([{t, line}]) and `plain` when found; `available`: whether this server can ask."""
         with closing(ctx.conn()) as c:
             ctx.track_or_404(c, track_id)
-            return {**lyrics.describe(db.get_lyrics(c, track_id)), "available": lyrics.enabled() is not None}
+            return {**lyrics.describe(db.get_lyrics(c, track_id)), "available": lyrics.enabled() is not None,
+                    "listen": ctx.listen_jobs.status(track_id), "listen_available": listen.available()}
 
     @api.post("/api/tracks/{track_id}/lyrics")
     def find_lyrics(track_id: int):
@@ -200,7 +202,33 @@ def router(ctx: AppContext) -> APIRouter:
                 got = lyrics.lookup_track(c, track_id, card)
             except lookup.Limited as e:
                 raise HTTPException(429, str(e)) from None
-        return {**got, "available": True}
+        return {**got, "available": True, "listen": ctx.listen_jobs.status(track_id),
+                "listen_available": listen.available()}
+
+    @api.post("/api/tracks/{track_id}/lyrics/listen", status_code=202)
+    def listen_for_lyrics(track_id: int, request: Request):
+        """Listen to the track's vocals with Whisper (tastr/listen.py) in the background, separating its stems first
+        when it has none: LRCLIB's plain lyrics get line times, or what was heard becomes the lyrics. On the hosted
+        site each listen counts toward the daily stem separations. Returns the job's status."""
+        card = ctx.card_or_404(track_id)
+        if not listen.available():
+            raise HTTPException(501, listen.INSTALL_HINT)
+        folder = ctx.stems_dir(card, track_id)
+        path = ctx.audio_path(card)
+        if not stems.is_ready(folder) and (path is None or not stems.available()):
+            raise HTTPException(409, "This track has no stems, and they can't be separated here.")
+        if ctx.listen_jobs.status(track_id)["state"] in ("queued", "separating", "listening"):
+            return ctx.listen_jobs.status(track_id)
+        if ctx.hosted:
+            user = request.state.user
+            with closing(ctx.conn()) as c:
+                most = ctx.cap(c, user, "stems")
+                if db.usage_today(c, user, "stems", today()) >= most:
+                    raise ctx.refuse(user, 429, f"You've reached today's limit of {most} stem separations "
+                                     "(listening for lyrics counts as one).", f"daily stem limit ({most})")
+                db.add_usage(c, user, "stems", today())
+            ctx.event(user, "stems", "Started listening for lyrics in 1 track", source=runs_on(listen.backend()))
+        return ctx.listen_jobs.start(track_id, path, folder)
 
     @api.delete("/api/tracks/{track_id}", status_code=204)
     def delete_track(track_id: int):
@@ -212,6 +240,7 @@ def router(ctx: AppContext) -> APIRouter:
             shared = card is not None and c.execute(
                 "SELECT 1 FROM tracks WHERE sha256 = ?", (card.source.sha256,)).fetchone() is not None
         ctx.drum_runs.forget(track_id)
+        ctx.listen_jobs.forget(track_id)
         ctx.ml_runs.forget(track_id)
         if card is not None and not shared:
             folder = ctx.stems_dir(card, track_id)

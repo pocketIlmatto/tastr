@@ -159,6 +159,86 @@ def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = Non
     return run_stems(audio, suffix, put_urls)
 
 
+# Lyrics from the vocal stem (tastr/transcribe.py, an experiment): faster-whisper on CUDA 12 with cuDNN 9, and
+# Whisper large-v3-turbo's weights (MIT, about 1.6 GB) baked in so a cold start doesn't download them.
+WHISPER_DEPS = ["faster-whisper>=1.1.1", "av>=11,<14.3"]  # the `transcribe` extra; newer PyAV breaks it
+whisper_image = (
+    modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04", add_python="3.12")
+    .apt_install("ffmpeg")
+    .pip_install(*WHISPER_DEPS)
+    .run_commands("python -c \"from faster_whisper import WhisperModel; WhisperModel('large-v3-turbo', device='cpu')\"")
+    .add_local_python_source("tastr")
+)
+
+
+# 4-8 s of T4 time for a vocal stem in the trial (2026-11-17), plus loading the model on a cold start.
+@app.function(image=whisper_image, gpu="T4", memory=8192, timeout=15 * 60)
+def transcribe(audio: bytes, suffix: str, language: str | None = None) -> dict:
+    from tastr.cloud.jobs import run_transcribe
+
+    return run_transcribe(audio, suffix, language)
+
+
+@app.local_entrypoint()
+def transcribe_files(files: str, out: str, separate: bool = True, language: str = ""):
+    """Try Whisper lyrics on a few files without deploying anything (tastr/transcribe.py):
+
+        modal run tastr/cloud/modal_app.py::transcribe_files --files "a.flac,b.m4a" --out ~/tastr-whisper-try
+
+    Each file is a full track, separated here into stems with `stems` (skip that with --no-separate when the files
+    are vocal stems already). What Whisper heard goes to <out>/<file>.json, with LRCLIB's lyrics for the same track
+    when it has them and the score against them; only the numbers are printed. Keep <out> out of the repository:
+    it holds the songs' words.
+    """
+    import json
+    from pathlib import Path
+
+    from tastr import transcribe as tr
+
+    dest = Path(out).expanduser()
+    dest.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for f in [Path(x.strip()).expanduser() for x in files.split(",") if x.strip()]:
+        audio, suffix, sep_seconds = f.read_bytes(), f.suffix, None
+        if separate:
+            t0 = time.time()
+            audio, suffix = stems.remote(audio, suffix)["vocals"], ".flac"
+            sep_seconds = round(time.time() - t0, 1)
+        t0 = time.time()
+        heard = transcribe.remote(audio, suffix, language or None)
+        heard["call_seconds"] = round(time.time() - t0, 1)
+        ref = _lrclib_for(f)
+        row = {"file": f.name, "separate_seconds": sep_seconds, "audio_seconds": heard["audio_seconds"],
+               "load_seconds": heard["load_seconds"], "whisper_seconds": heard["seconds"],
+               "call_seconds": heard["call_seconds"], "language": heard["language"], "lines": len(heard["lines"]),
+               "lrclib": ref.get("status")}
+        if ref.get("status") == "found":
+            row |= tr.score(heard, ref.get("plain"), ref.get("synced"))
+        rows.append(row)
+        (dest / f"{f.stem}.json").write_text(json.dumps({"row": row, "heard": heard, "lrclib": ref}, indent=1))
+        print(json.dumps(row))
+    (dest / "summary.json").write_text(json.dumps(rows, indent=1))
+
+
+def _lrclib_for(f) -> dict:
+    """LRCLIB's lyrics for a file, found by its artist, title, album and length tags."""
+    import mutagen
+
+    from tastr import lyrics
+    from tastr.lookup.base import ProviderError, TrackQuery
+
+    m = mutagen.File(str(f), easy=True)
+    tags = {k: (v[0] if isinstance(v, list) and v else v) for k, v in (m.tags or {}).items()} if m else {}
+    if not (tags.get("artist") and tags.get("title")):
+        return {"status": "no_tags"}
+    q = TrackQuery(artist=tags["artist"], title=tags["title"], album=tags.get("album"),
+                   duration=getattr(m.info, "length", None))
+    try:
+        return lyrics.LRCLIB_PROVIDER.lookup(q)
+    except ProviderError as e:
+        return {"status": "error", "error": str(e)}
+
+
 @app.local_entrypoint()
 def run_branch(kind: str, dataset: str, path: str, limit: int = 0, out: str = "", drum_model: bool = False,
                open_hats: str = "", drums_only: bool = False, kits: str = "all"):

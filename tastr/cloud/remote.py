@@ -202,6 +202,14 @@ def keylock(sources: dict[str, str], ratio: float, put_urls: dict[str, str]) -> 
     return _call("keylock", sources, ratio, put_urls)
 
 
+def karaoke(sources: dict[str, str], put_url: str) -> dict:
+    """Mix the stems ({stem name: signed link}) into karaoke's instrumental in the Modal `karaoke` function, which
+    uploads it to `put_url` (tastr/karaoke.py). Returns {"instrumental": bytes written}."""
+    if http_enabled():
+        return _http_result("karaoke", {"sources": sources, "put_url": put_url})
+    return _call("karaoke", sources, put_url)
+
+
 POLL_SECONDS, POLL_TRIES = 5, 15 * 60 // 5  # the ml_tags function times out after 10 minutes
 
 

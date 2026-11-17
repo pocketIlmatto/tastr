@@ -208,6 +208,17 @@ CREATE TABLE IF NOT EXISTS lookups (
     PRIMARY KEY (track_id, provider)
 );
 
+-- A track's lyrics from LRCLIB (tastr/lyrics.py, TASTR_LYRICS=lrclib), kept across re-analysis. status: found |
+-- not_found | no_tags | error. result_json has the timed lines and the plain text. Lyrics belong to their publishers,
+-- so they stay out of LIBRARY_TABLES (the library snapshot people download).
+CREATE TABLE IF NOT EXISTS lyrics (
+    track_id    INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    provider    TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    result_json TEXT NOT NULL
+);
+
 -- Optional ML tags (tastr/engine/ml_tags.py, TASTR_ML_TAGS=on): MTG's Essentia classifiers on the track's audio,
 -- kept across re-analysis. tags is the shown tags, comma-separated, for searches; result_json is the full result.
 CREATE TABLE IF NOT EXISTS ml_tags (
@@ -767,6 +778,18 @@ def save_lookup(conn: sqlite3.Connection, track_id: int, result: dict[str, Any])
         conn.execute("INSERT OR REPLACE INTO lookups VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (track_id, result["provider"], result["status"], result.get("bpm"), result.get("key"),
                       result.get("tonic"), result.get("mode"), result.get("camelot"), _now(), json.dumps(result)))
+
+
+def save_lyrics(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:
+    """Store a track's lyrics lookup (tastr/lyrics.py), replacing an earlier one."""
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO lyrics VALUES (?, ?, ?, ?, ?)",
+                     (track_id, result["provider"], result["status"], _now(), json.dumps(result)))
+
+
+def get_lyrics(conn: sqlite3.Connection, track_id: int) -> dict[str, Any] | None:
+    r = conn.execute("SELECT result_json, fetched_at FROM lyrics WHERE track_id = ?", (track_id,)).fetchone()
+    return json.loads(r[0]) | {"fetched_at": r[1]} if r else None
 
 
 def save_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:

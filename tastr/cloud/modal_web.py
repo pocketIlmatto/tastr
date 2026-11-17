@@ -4,8 +4,8 @@ The web server is small (it fits in 512 MB) because the engine runs here: each u
 (as its bytes, or with the audio bucket on (tastr/blobs.py) as a signed link that the function downloads from),
 which returns the card, "Detect drums with the model" calls `analyze_drums` (the same analysis plus the
 pretrained drum model, in its own image so everyday analysis doesn't load PyTorch), "Add ML tags" calls
-`ml_tags` (MTG's Essentia classifiers, docs/essentia.md), "Separate stems" calls `stems` and a mash-up's key
-lock calls `keylock` (tastr/keylock.py). Kept apart from modal_app.py (benchmarks), so
+`ml_tags` (MTG's Essentia classifiers, docs/essentia.md), "Separate stems" calls `stems`, a mash-up's key
+lock calls `keylock` (tastr/keylock.py) and karaoke's mix calls `karaoke` (tastr/karaoke.py). Kept apart from modal_app.py (benchmarks), so
 it needs no dataset bucket or secrets and can live in its own Modal environment with its own budget:
 
     modal deploy --env friends tastr/cloud/modal_web.py
@@ -178,6 +178,14 @@ def keylock(sources: dict[str, str], ratio: float, put_urls: dict[str, str]) -> 
     return run_keylock(sources, ratio, put_urls)
 
 
+# Karaoke (tastr/karaoke.py): bass, drums and other summed into one file. A few seconds of CPU plus the transfers.
+@app.function(image=keylock_image, cpu=1, memory=2048, timeout=5 * 60, scaledown_window=60)
+def karaoke(sources: dict[str, str], put_url: str) -> dict:
+    from tastr.cloud.jobs import run_karaoke
+
+    return run_karaoke(sources, put_url)
+
+
 # A small HTTPS front for the functions above, for servers that can't run the Modal client (the Cloudflare
 # Worker). Only callers with a proxy auth token of this workspace get in (headers Modal-Key and Modal-Secret).
 # Every answer is lines of JSON, streamed: a streaming call's events, then {"result": ...} or {"error": ...};
@@ -234,6 +242,7 @@ def api():
         return StreamingResponse(out, media_type="application/x-ndjson")
 
     web.add_route("/keylock", _keylock_call, methods=["POST"])
+    web.add_route("/karaoke", _karaoke_call, methods=["POST"])
     web.add_route("/spawn/{name}", _spawn, methods=["POST"])
     web.add_route("/poll", _poll, methods=["POST"])
     web.add_route("/{name}", call, methods=["POST"])
@@ -277,6 +286,17 @@ async def _keylock_call(request):
         return JSONResponse({"detail": "sources, put_urls and ratio"}, status_code=422)
     return StreamingResponse(answer(lambda: keylock.remote.aio(sources, float(ratio), put_urls)),
                              media_type="application/x-ndjson")
+
+
+async def _karaoke_call(request):
+    """POST /karaoke {sources, put_url}: the stems by link, the mix to an upload link (tastr/karaoke.py)."""
+    from fastapi.responses import JSONResponse, StreamingResponse
+
+    body = await _json_body(request) or {}
+    sources, put_url = body.get("sources"), body.get("put_url")
+    if not isinstance(sources, dict) or not isinstance(put_url, str):
+        return JSONResponse({"detail": "sources and put_url"}, status_code=422)
+    return StreamingResponse(answer(lambda: karaoke.remote.aio(sources, put_url)), media_type="application/x-ndjson")
 
 
 async def _json_body(request) -> dict | None:

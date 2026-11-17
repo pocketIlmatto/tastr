@@ -179,6 +179,7 @@ def router(ctx: AppContext) -> APIRouter:
                 raise HTTPException(409, "Another copy of this audio uses the same stems, so they stay.")
         freed = sum(_size(p) for p in paths)
         ctx.stem_jobs.forget(folder)
+        ctx.karaoke_jobs.forget(folder)
         stems.remove(folder)
         ctx.event(ctx.owner_of(request), "stems", "Deleted stems for 1 track")
         return {"state": "none", "freed_bytes": freed}

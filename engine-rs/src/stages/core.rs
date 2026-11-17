@@ -392,7 +392,7 @@ fn beat_period(frames: &[f64]) -> f64 {
 /// beats counted as one), it reads low. A steady track's periodicity over its whole length pins the tempo to a
 /// few hundredths of a BPM. `period` itself when the best lies on the edge of the search, or the envelope is flat.
 fn refine_period(onset: &[f32], period: f64) -> f64 {
-    if onset.len() < 2 || !(period > 1.0) {
+    if onset.len() < 2 || period.is_nan() || period <= 1.0 {
         return period;
     }
     let m = mean_f32(onset) as f64;

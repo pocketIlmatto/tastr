@@ -19,7 +19,7 @@ With `--remote`, the dataset path is a folder in the bucket, not on disk. `--lim
 ## Stems on a Modal GPU
 
 Start the server with `TASTR_STEMS_BACKEND=modal tastr serve` (or set it for `tastr stems ID`). "Separate
-stems" then uploads the track to the `stems` function, which runs Demucs on a T4 GPU and sends the four
+stems" then uploads the track to the `stems` function, which runs Demucs (`htdemucs_ft`) on a T4 GPU and sends the four
 FLAC stems back; they are stored and served locally as before. You need `tastr[cloud]`, not
 `tastr[stems]`, so PyTorch stays off your machine. The progress bar jumps from start to done, because
 Modal reports no progress. The first job after a quiet spell waits for a cold start (tens of seconds).
@@ -27,7 +27,7 @@ Modal reports no progress. The first job after a quiet spell waits for a cold st
 ## Cost
 
 Modal bills per second. The `bench` function asks for 8 CPUs and 16 GB: roughly $0.40 for a 46-minute
-full GiantSteps run at list prices. A stem job is well under a cent (T4 at about $0.60 an hour). Modal's free tier includes $30 of credit a month. R2 storage is
+full GiantSteps run at list prices. A stem job is about a cent (roughly a minute of T4 time for a 4-minute track) (T4 at about $0.60 an hour). Modal's free tier includes $30 of credit a month. R2 storage is
 about $0.015 per GB-month with no egress fees; today's datasets (about 7 GB) cost around $0.10 a month.
 Check both pricing pages before relying on these.
 

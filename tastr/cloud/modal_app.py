@@ -161,7 +161,7 @@ def stems(audio: bytes | str, suffix: str, put_urls: dict[str, str] | None = Non
 
 # Lyrics from the vocal stem (tastr/transcribe.py, an experiment): faster-whisper on CUDA 12 with cuDNN 9, and
 # Whisper large-v3-turbo's weights (MIT, about 1.6 GB) baked in so a cold start doesn't download them.
-WHISPER_DEPS = ["faster-whisper>=1.1.1", "av>=11,<15"]  # the `transcribe` extra; PyAV 15+ breaks it
+WHISPER_DEPS = ["faster-whisper>=1.1.1", "av>=11,<14.3"]  # the `transcribe` extra; newer PyAV breaks it
 whisper_image = (
     modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04", add_python="3.12")
     .apt_install("ffmpeg")

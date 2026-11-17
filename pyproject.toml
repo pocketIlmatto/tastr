@@ -32,7 +32,7 @@ stems = ["demucs>=4.0.1", "tastr[engine]"]
 keylock = ["python-stretch>=0.3.1", "soundfile>=0.12", "tastr[engine]"]
 # Lyrics from the vocal stem (tastr/transcribe.py, an experiment): faster-whisper (MIT); Whisper's weights (MIT,
 # about 1.6 GB) download on first use.
-transcribe = ["faster-whisper>=1.1.1", "av>=11,<15"]
+transcribe = ["faster-whisper>=1.1.1", "av>=11,<14.3"]
 # The pretrained drum model for the kick, hat, tom and cymbal lanes (docs/drums.md). PyTorch, shared with
 # `stems`; the weights (CC BY-NC-SA 4.0, about 5 MB) download on first use.
 drums = ["torch>=2.1", "tastr[engine]"]

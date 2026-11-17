@@ -106,9 +106,11 @@ const LISTENING = ["queued", "separating", "listening"];
 export const lyricsOf = (id) => lyrics.get(id);
 export const lyricsShown = (id) => hasLyrics(lyrics.get(id));
 // From the card's own answer (c.lyrics, c.lyrics_available); a fresh card knows best.
+const applied = new WeakSet(); // card answers already taken in: drawing the same card again mustn't undo a newer listen
 export function cardLyrics(c) {
   const was = lyrics.get(c.id);
-  if (c.lyrics && was?.state !== "pending" && !was?.relook) {
+  if (c.lyrics && !applied.has(c.lyrics) && was?.state !== "pending" && !was?.relook) {
+    applied.add(c.lyrics);
     lyrics.set(c.id, { ...c.lyrics, available: !!c.lyrics_available, listen_available: !!c.listen_available,
       ...(was?.listen?.code === 429 && !LISTENING.includes(c.lyrics.listen?.state) ? { listen: was.listen } : {}) });
     if (LISTENING.includes(c.lyrics.listen?.state)) followListen(c.id);
@@ -236,7 +238,7 @@ export function lyricsBody(c) {
       ? h("button", { type: "button", class: "tp-btn ly-big", title: "Big lyrics for singing along, sized for a phone (Esc to close)", onclick: () => openSing(c.id, c.title || c.source?.title, c.source?.artist) }, "⤢ Sing along") : null);
     const st = L ? L.state : "none";
     let body;
-    if (L && L.available === false && st !== "found" && !(st === "not_found" || st === "no_tags")) body = [h("p", { class: "ly-state muted" }, "Lyrics lookups aren't set up on this server.")];
+    if (L && L.available === false && st !== "found" && !(st === "not_found" || st === "no_tags")) body = [h("p", { class: "ly-state muted" }, "Lyrics lookups aren't set up on this server."), listenLine(L, "hear")].filter(Boolean); // listening works without LRCLIB
     else if (st === "pending") body = [h("p", { class: "muted ly-state" }, h("span", { class: "spin", "aria-hidden": "true" }), " Looking for lyrics on LRCLIB…")];
     else if (st === "none") body = [h("p", { class: "ly-state" }, "Not looked up yet. ", again("Find lyrics"), h("span", { class: "muted" }, " Looks up the artist and title on LRCLIB."))];
     else if (st === "found" && L.instrumental) body = [h("p", { class: "ly-state" }, "♪ Instrumental. LRCLIB lists this track as having no vocals."), credit(L)];
@@ -315,15 +317,16 @@ export function openSing(id, title, artist) {
     const ck = lyrClock(id), lab = ck.playing ? "❚❚" : "▶";
     if (play.textContent !== lab) { play.textContent = lab; play.setAttribute("aria-label", ck.playing ? "Pause" : "Play"); }
     if (!timed) return;
-    const i = lineAt(L, ck.t), n = L.synced[i + 1], nt = L.synced.slice(i + 1).find((x) => x.t != null && !x.guess); // the countdown skips guessed lines
-    const gap = !!nt && (i < 0 || (nt.t - ck.t > 6 && ck.t - L.synced[i].t > 6));
-    const k = `${i}|${gap ? Math.ceil(nt.t - ck.t) : ""}`;
+    // the next line that will light up: guessed lines (never lit) are skipped by the preview and the countdown
+    const i = lineAt(L, ck.t), n = L.synced.slice(i + 1).find((x) => x.t != null && !x.guess);
+    const gap = !!n && (i < 0 || (n.t - ck.t > 6 && ck.t - L.synced[i].t > 6));
+    const k = `${i}|${gap ? Math.ceil(n.t - ck.t) : ""}`;
     if (k === last) return;
     last = k;
     prev.textContent = i > 0 && !gap ? L.synced[i - 1].line : "";
     cur.textContent = gap || i < 0 || !L.synced[i].line ? "♪" : L.synced[i].line;
     nxt.textContent = n ? n.line : "";
-    when.textContent = gap ? `Next line in ${Math.ceil(nt.t - ck.t)} s` : !n && i >= 0 ? "Last line" : "";
+    when.textContent = gap ? `Next line in ${Math.ceil(n.t - ck.t)} s` : !n && i >= 0 ? "Last line" : "";
     cur.classList.toggle("rest", cur.textContent === "♪");
   };
   document.body.append(view); document.body.classList.add("sing-open"); document.addEventListener("keydown", key, true);

@@ -10,6 +10,8 @@ import { B, L, R, T, draw, hideTip, showTip, specTiles } from "./chart-draw.js";
 import { liveOpts, liveView } from "./chart-live.js";
 import { transport } from "./chart-play.js";
 import { loopAndCues } from "./chart-loop.js";
+import { karaBus, karaCtl, karaState, karaokeOn, karaokeUrl } from "./lyrics.js";
+import { audioCtx } from "./sequencer.js";
 import { dragLoopEdge } from "./chart-math.js";
 
 function chartState(series, sections, duration, card) {
@@ -90,7 +92,7 @@ function transportRow(c) {
   c.playBtn = h("button", { type: "button", class: "tp-play", "aria-label": "Play" }, "▶");
   c.timeL = h("span", { class: "tp-time" }, `0:00 / ${mmss(c.duration)}`);
   c.seekR = h("input", { type: "range", class: "tp-seek", min: "0", max: String(c.end), step: "0.1", value: "0", "aria-label": "Seek" });
-  return h("div", { class: "transport" }, c.playBtn, c.timeL, c.seekR, c.loopBtn, c.cueBtn);
+  return h("div", { class: "transport" }, c.playBtn, c.timeL, c.seekR, c.loopBtn, c.cueBtn, karaCtl(c.card.id, { card: c.card }));
 }
 
 // Every element of the chart, in place in c.wrap; the SVG itself stays empty until the first draw.
@@ -124,12 +126,26 @@ export function energyChart(series, sections, duration, card) {
   sectionBus.addEventListener("section", (e) => { if (e.detail.from !== "chart") { c.selIdx = e.detail.idx; c.draw(); } });
   wirePointer(c);
   charts.set(card.id, { now: () => c.play.tNow(), draw: () => c.draw(), mode: () => c.mode, setMode: (k) => setMode(c, k), el: c.wrap, big: (on) => { if (on !== c.wrap.classList.contains("big")) c.setBig(on); },
-    keys: c.canPlay ? (k) => chartKeyAct(c, k) : null }); // Space, L, C and 1-9 (chart-loop.js initChartKeys)
+    keys: c.canPlay ? (k) => chartKeyAct(c, k) : null, // Space, L, C and 1-9 (chart-loop.js initChartKeys)
+    // for the lyrics (lyrics.js): where this player is, and playing or seeking from a lyric line or the sing-along view
+    isPlaying: () => c.play.isPlaying(), toggle: () => c.canPlay && c.play.toggle(),
+    seek: (t, go) => { if (!c.canPlay) return; c.play.seek(t); if (go && !c.play.isPlaying()) c.play.play(); } });
   c.live = liveView(c);
   c.host.append(c.live.cv);
   c.tiles = specTiles(c);
-  c.ensureAudio = async () => { if (!c.audio) c.audio = await withBusy(c, () => trackAudio(card)); return c.audio; };
+  c.ensureAudio = async () => {
+    if (!c.audio) c.audio = await withBusy(c, () => trackAudio(card));
+    if (c.audio && karaokeOn() && karaState(card.id) === "ready" && !c.kara) c.kara = await withBusy(c, () => karaokeAudio(card.id)); // lyrics.js
+    return c.audio;
+  };
   c.play = transport(c);
+  // Karaoke on or off while playing: switch to the other audio from the same spot.
+  const onKara = async () => {
+    if (!c.wrap.isConnected) { karaBus.removeEventListener("change", onKara); return; }
+    if (karaokeOn() && karaState(card.id) === "ready" && !c.kara && c.play.isPlaying()) await c.ensureAudio();
+    c.play.restart();
+  };
+  karaBus.addEventListener("change", onKara);
   c.setBig = expander(c);
   setMode(c, c.mode); // a new card opens in the last-used tab, with that tab's full setup (the Live canvas included)
   return c.wrap;
@@ -249,6 +265,17 @@ function setMode(c, k) {
   else if (c.savedView) { v.a = c.savedView.a; v.b = c.savedView.b; c.savedView = null; }
   if (k === "spec" && c.canPlay && !c.audio) trackAudio(c.card).then((a) => { c.audio = c.audio || a; if (c.mode === "spec") c.draw(); }, () => {}); // for the sharp tiles; quietly
   if (k !== "energy" && k !== "live" && !c.pics) ensurePics(c); else { needBands(c); c.draw(); }
+}
+// The track's karaoke mix (lyrics.js), decoded like the full mix; null when it can't be had (it plays the full mix then).
+async function karaokeAudio(id) {
+  try {
+    const url = await karaokeUrl(id);
+    if (!url) return null;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.statusText);
+    const bytes = await r.arrayBuffer();
+    return await new Promise((ok, fail) => audioCtx().decodeAudioData(bytes, (buf) => ok({ buf }), fail));
+  } catch (_) { return null; }
 }
 async function withBusy(c, work) {
   c.busy.hidden = false;

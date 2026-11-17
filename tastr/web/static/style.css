@@ -1353,3 +1353,43 @@ h1 { white-space: nowrap; }
 .hist-table td.hist-diff { color: var(--accent); font-weight: 700; }
 .hist-note { font-size: 12px; margin: 6px 0 0; }
 .hist-line[hidden], .meta-hist[hidden] { display: none; }
+
+/* Lyrics and karaoke (app/lyrics.js) */
+.kara { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.kara-btn svg, .pl-kara svg { vertical-align: -2px; }
+.transport .kara-btn[aria-pressed="true"], .ly-top .kara-btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.kara-btn:disabled { opacity: .5; cursor: not-allowed; }
+.kara-say { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.ly-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 8px; }
+.ly-top .tp-btn { font-size: 13px; padding: 4px 10px; }
+.ly-lines { list-style: none; margin: 0; padding: 6px 0; max-height: 280px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); scroll-behavior: smooth; overscroll-behavior: contain; }
+#card .ly-line { display: block; width: 100%; text-align: left; border: 0; background: none; box-shadow: none; padding: 3px 6px; min-height: 0; border-radius: 4px; font: inherit; font-size: 15px; line-height: 1.45; text-transform: none; letter-spacing: normal; color: var(--fg); cursor: pointer; }
+#card .ly-line:hover { background: var(--accent-soft); }
+.ly-lines li.past .ly-line { color: var(--muted) !important; }
+.ly-lines li.now .ly-line { color: var(--accent) !important; font-weight: 700; }
+.ly-gap { color: var(--muted); font-size: 13px; padding: 2px 6px; }
+.ly-plain { white-space: pre-line; font-size: 15px; line-height: 1.5; max-height: 280px; overflow-y: auto; padding: 4px 0; }
+.ly-hint, .ly-credit { font-size: 12px; margin: 6px 0 0; }
+.ly-state { margin: 4px 0; font-size: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.warn-t { color: var(--warn); }
+#pl-bar .pl-btn.pl-sing { font-size: 17px; }
+body.sing-open { overflow: hidden; }
+.sing { position: fixed; inset: 0; z-index: 90; background: var(--bg); color: var(--fg); display: grid; grid-template-rows: auto 1fr auto; padding: max(12px, env(safe-area-inset-top, 0px)) 16px max(12px, env(safe-area-inset-bottom, 0px)); }
+.sing-head { display: flex; align-items: center; gap: 12px; }
+.sing-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
+.sing-x { width: 40px; height: 40px; padding: 0; font-size: 18px; flex: none; }
+.sing-stage { align-self: center; text-align: center; max-width: 900px; width: 100%; margin: 0 auto; }
+.sing-prev { font-size: clamp(16px, 2.6vw, 22px); color: var(--muted); min-height: 1.4em; margin: 0 0 18px; opacity: .7; }
+.sing-now { font-size: clamp(30px, 7vw, 60px); font-weight: 800; line-height: 1.15; margin: 0; color: var(--accent); min-height: 2.3em; display: flex; align-items: center; justify-content: center; text-wrap: balance; }
+.sing-now.rest { color: var(--muted); }
+.sing-next { font-size: clamp(20px, 3.6vw, 30px); line-height: 1.3; margin: 18px 0 0; min-height: 1.3em; text-wrap: balance; }
+.sing-when { font-size: 14px; min-height: 1.3em; margin: 12px 0 0; }
+.sing-plain { align-self: stretch; overflow-y: auto; text-align: center; }
+.sing-text { white-space: pre-line; font-size: clamp(20px, 4vw, 28px); line-height: 1.5; padding-bottom: 24px; }
+.sing-note { font-size: 13px; }
+.sing-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 16px; }
+.sing-play { width: 64px; height: 52px; padding: 0; font-size: 20px; background: var(--accent); border-color: var(--accent); color: #fff; }
+.sing-kara .kara-btn { font-size: 14px; padding: 8px 14px; }
+.sing-kara .kara-btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.sing-credit { font-size: 12px; flex-basis: 100%; text-align: center; }
+@media (max-width: 480px) { #pl-bar .pl-ctl { grid-column: 1 / -1; justify-content: space-between; } body.pl-on { padding-bottom: 150px; } } /* two more buttons: the controls get their own row on a phone */

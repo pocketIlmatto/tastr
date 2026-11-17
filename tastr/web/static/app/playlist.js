@@ -3,10 +3,12 @@
 // the bar and kept in this browser), and the Export menu that saves a list as an M3U8, XSPF or PLS file, or a zip
 // with the audio. The queue and crossfade logic is in playlist-core.js.
 
-import { $, h, httpError, isNum, mmss, tracks } from "./core.js";
+import { $, api, h, httpError, isNum, mmss, tracks } from "./core.js";
 import { openTrack, switchTo } from "./card.js";
 import { player, setPlayer, stopAllPlayback } from "./sequencer.js";
 import { pinPop } from "./pin.js";
+import { karaBus, karaCtl, karaokeOn, karaokeUrl, loadLyrics, onForgetMix, lyricsShown, openSing, setListClock } from "./lyrics.js";
+import { setStems, stemStatus } from "./menu.js";
 import { XF_MAX, XF_MIN, markPlayed, newQueue, nextStep, prevStep, queueId, readXf, toggleShuffle, xfCurve, xfLen } from "./playlist-core.js";
 
 let pl = null; // the queue (playlist-core.js) plus msg: a line that replaces the subline for now
@@ -102,8 +104,17 @@ function ramp(a, rising, secs) {
 // eat the fade), then start it and fade between them.
 const PRELOAD = 15; // seconds before the fade
 const audioUrl = (id) => `/api/tracks/${id}/audio`;
+// Karaoke (lyrics.js): a track's mix without the vocals while the switch is on, the full mix for one without stems.
+const karaUrls = new Map(); // track id -> its karaoke URL, or null: no stems, so the full mix
+const srcFor = (id) => (karaokeOn() && karaUrls.get(id)) || audioUrl(id);
+// A failed mix isn't kept: this time it plays the full mix, and the next play asks again.
+function resolveKara(id) {
+  if (!karaokeOn() || karaUrls.has(id)) return Promise.resolve();
+  return karaokeUrl(id).then((u) => { karaUrls.set(id, u); }, () => {});
+}
+onForgetMix((id) => karaUrls.delete(id)); // the track got (new) stems
 const spare = () => els.find((a) => a !== el);
-function load(a, id) { if (a.getAttribute("src") !== audioUrl(id)) { a.src = audioUrl(id); a.load(); } }
+function load(a, id) { if (a.getAttribute("src") !== srcFor(id)) { a.src = srcFor(id); a.load(); } }
 function unload(a) { if (a && a.getAttribute("src")) { a.removeAttribute("src"); a.load(); } }
 function maybeFade() {
   if (!pl || fade || !xf.on || el.paused || !canFade()) return;
@@ -111,6 +122,7 @@ function maybeFade() {
   if (n == null || !isFinite(d)) return;
   const id = pl.ids[pl.order[n]], len = xfLen(xf.sec, d, (byId(id) || {}).duration), left = d - el.currentTime;
   if (len <= 0) return;
+  if (left <= len + PRELOAD + 10) resolveKara(id); // so the preload below gets the karaoke mix
   if (left <= len + PRELOAD) load(spare(), id);
   if (left <= len) startFade(n, len);
 }
@@ -162,10 +174,36 @@ function go(i, autoplay, msg = "") {
   const a = audioEl();
   unload(spare());
   pl.i = i; pl.msg = msg; pl.ended = false;
-  a.src = audioUrl(queueId(pl));
-  if (autoplay) a.play().catch(() => paint());
+  const id = queueId(pl), q = pl;
+  const start = () => {
+    if (pl !== q || queueId(pl) !== id) return; // moved on meanwhile
+    a.src = srcFor(id);
+    if (autoplay) a.play().catch(() => paint());
+    paint();
+  };
+  if (karaokeOn() && !karaUrls.has(id)) { a.removeAttribute("src"); resolveKara(id).then(start); } else start();
+  // what the bar's karaoke and sing-along buttons need to know
+  if (!stemStatus.has(id)) api(`/api/tracks/${id}/stems`).then((st) => setStems(id, st), () => {});
+  loadLyrics(id).then(() => { if (pl && queueId(pl) === id) paint(); });
   paint(); told(); media();
 }
+// Karaoke switched on or off: the same track, the other audio, from the same spot.
+karaBus.addEventListener("change", async () => {
+  if (!pl || !el || !el.getAttribute("src")) { if (pl) paint(); return; }
+  const id = queueId(pl);
+  await resolveKara(id);
+  if (!pl || queueId(pl) !== id) return;
+  const want = srcFor(id);
+  if (el.getAttribute("src") === want) { paint(); return; }
+  finishFade();
+  const t = el.currentTime, was = !el.paused;
+  el.src = want;
+  el.addEventListener("loadedmetadata", () => { el.currentTime = t; if (was) el.play().catch(() => {}); }, { once: true });
+  paint();
+});
+// The lyrics follow the bar while it plays their track.
+setListClock({ id: () => (pl && el && el.getAttribute("src") ? queueId(pl) : null), now: () => (el ? el.currentTime || 0 : 0), playing: () => !!el && !el.paused,
+  seek: (t) => { finishFade(); el.currentTime = t; paintTime(); }, toggle: () => toggle() });
 function end(msg = "") {
   finishFade();
   el.pause(); el.currentTime = 0;
@@ -262,8 +300,10 @@ function paintTime() {
 // The line under the title: a message for now, the crossfade, or "i of n in “List”" with the track's tempo and key.
 function subText() {
   const t = byId(queueId(pl)) || {};
+  const kara = karaokeOn() && karaUrls.has(t.id) ? karaUrls.get(t.id) : undefined;
+  if (kara === null && !pl.msg && !fade) return "Karaoke: no stems for this track, so it plays the full mix";
   return pl.msg || (fade ? `Fading in from “${fade.prev}”` : null) || [`${pl.i + 1} of ${pl.order.length} in “${pl.name}”${pl.shuffle ? " · shuffled" : ""}`,
-    isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot].filter(Boolean).join(" · ");
+    isNum(t.bpm) ? `${t.bpm.toFixed(0)} BPM` : null, t.camelot, kara ? "karaoke" : null].filter(Boolean).join(" · ");
 }
 function paint() {
   if (!pl) return;
@@ -280,7 +320,10 @@ function paint() {
       b(playing ? "❚❚" : "▶", playing ? "Pause" : "Play", toggle, { class: "pl-btn pl-play" }),
       b("⏭", "Next track", next, { disabled: pl.i >= n - 1 ? "" : null }),
       b("⤮", pl.shuffle ? "Shuffle is on" : "Shuffle", () => { toggleShuffle(pl); pl.msg = ""; paint(); }, { class: "pl-btn pl-shuf", "aria-pressed": String(pl.shuffle) }),
-      xfBtn),
+      xfBtn,
+      karaCtl(t.id, { icon: true, btnCls: "pl-btn pl-kara" }),
+      b("❝", lyricsShown(t.id) ? "Sing along: big lyrics (Esc to close)" : "No lyrics for this track", () => openSing(t.id, nameOf(t), t.artist),
+        { class: "pl-btn pl-sing", disabled: lyricsShown(t.id) ? null : "" })),
     h("div", { class: "pl-now" },
       h("div", { class: "pl-title" }, h("button", { type: "button", class: "linklike pl-open", title: "Open this track's card",
         onclick: () => { switchTo("library"); openTrack(t.id); } }, nameOf(t)), t.artist ? h("span", { class: "muted" }, ` — ${t.artist}`) : null),

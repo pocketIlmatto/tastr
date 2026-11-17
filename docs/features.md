@@ -119,9 +119,12 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   3D landscape of ridges. **⤢ Expand** shows any chart bigger, or full screen.
 - **Stem separation** into vocals, bass, other and drums with Demucs, on your
   machine or on a [Modal](https://modal.com) GPU (see [Stems](usage.md#stems-optional)).
-- **Lyrics and karaoke (server side so far):** with `TASTR_LYRICS=lrclib`, a track's lyrics come from LRCLIB, timed
-  line by line when it has them, and a track with stems can be played without its vocals (the bass, drums and
-  other stems mixed into one file). See [Lyrics](lookup.md#lyrics).
+- **Lyrics and karaoke:** with `TASTR_LYRICS=lrclib`, the card's **Lyrics** section finds a track's lyrics on LRCLIB
+  (**Find lyrics**). Timed lyrics light up line by line as the track plays, in the card's player or the playlist bar;
+  click a line to play from there. **⤢ Sing along** (or **❝** in the playlist bar) shows the current line big and the
+  next one under it, full screen. The **Karaoke** switch (card player, Lyrics, playlist bar) plays a track with stems
+  without its vocals, from the same spot; it's one setting, kept in your browser. A track without stems plays the full
+  mix, and **Separate stems** makes them. See [Lyrics](lookup.md#lyrics).
 - **Files you already have are skipped.** Before uploading, the page fingerprints each file (SHA-256 of its
   bytes) and leaves out the ones already in your library, so re-dropping a folder only uploads what's new.
   It matches exact bytes: the same song exported again with other tags or another encoding is a new file and is

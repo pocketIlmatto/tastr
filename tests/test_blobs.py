@@ -254,7 +254,24 @@ def test_separating_again_on_modal_stages_the_new_stems(bucket, home, monkeypatc
     assert set(objects("stems/")) == {f"stems/abc123/{n}.flac" for n in stems.STEM_NAMES}
     assert stems.made_with(folder)["outdated"]
 
+    # The copy into place fails after two stems: the old set comes back whole, not a mix.
     monkeypatch.setattr(remote, "stems", fake_stems)
+    real_copy, copies = blobs.copy, []
+
+    def flaky_copy(src, dst):
+        if ".staging" in str(src):
+            copies.append(dst)
+            if len(copies) == 3:
+                raise OSError("bucket hiccup")
+        real_copy(src, dst)
+
+    monkeypatch.setattr(blobs, "copy", flaky_copy)
+    with pytest.raises(OSError, match="hiccup"):
+        stems.separate_track(audio, folder)
+    assert {n: blobs.open_read(stems.stem_path(folder, n)).read() for n in stems.STEM_NAMES} == {n: b"OLD " + n.encode() for n in stems.STEM_NAMES}
+    assert set(objects("stems/")) == {f"stems/abc123/{n}.flac" for n in stems.STEM_NAMES} and stems.made_with(folder)["outdated"]
+    monkeypatch.setattr(blobs, "copy", real_copy)
+
     stems.separate_track(audio, folder)
     assert seen["stage"] == b"NEW drums"
     assert seen["old"] == {n: b"OLD " + n.encode() for n in stems.STEM_NAMES}  # playable while Modal worked

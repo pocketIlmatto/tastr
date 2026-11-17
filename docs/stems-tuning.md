@@ -61,6 +61,7 @@ While a set is separated again the old one stays: the status stays `ready` and `
 (queued, running, or error, in which case the old set is untouched). On this machine the new stems go to a
 `.partial` folder and are swapped in with two renames. On Modal, `run_stems` uploads to signed links under a
 staging folder (`stems/<hash>.staging/`); once all four are there the server copies them over the old keys inside
-the bucket (S3 CopyObject), writes `stems.json`, and deletes the staging copy. A separation again counts toward
+the bucket (S3 CopyObject), writes `stems.json`, and deletes the staging copy. The old set is copied aside
+(`stems/<hash>.old/`) first, so a copy that fails partway puts it back rather than leaving a mix of old and new. A separation again counts toward
 the daily stems limit like a first one. Stems made between the switch to `htdemucs_ft` and this record also
 have no `stems.json`, so they show as `htdemucs` too; separating them again is harmless.

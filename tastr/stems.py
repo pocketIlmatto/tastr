@@ -304,14 +304,38 @@ def _separate_into_bucket(audio_path: str | Path, folder: Path, progress: Progre
         missing = [n for n in STEM_NAMES if not blobs.in_bucket(stem_path(stage, n))]
         if missing:
             raise RuntimeError(f"Separation produced no {', '.join(missing)} stem")
-        for n in STEM_NAMES:
-            blobs.copy(stem_path(stage, n), stem_path(folder, n))
-        _record(folder, _remote_settings(result) or settings(), bucket_only=True)
+        _promote(stage, folder, _remote_settings(result) or settings())
     finally:
         blobs.remove_tree(stage)
     shutil.rmtree(folder, ignore_errors=True)  # this server's cached copies of the old stems
     if progress:
         progress(1.0)
+
+
+def _promote(stage: Path, folder: Path, info: dict) -> None:
+    """Copy the staged stems over the folder's in the bucket, then write the record. The old set (and its record)
+    is copied aside first, so a copy that fails partway puts it back instead of leaving a mix of old and new."""
+    names = [stem_path(folder, n).name for n in STEM_NAMES] + [INFO_NAME]
+    old = [n for n in names if blobs.in_bucket(folder / n)]
+    backup = folder.with_name(folder.name + ".old")
+    blobs.remove_tree(backup)
+    try:
+        for n in old:
+            blobs.copy(folder / n, backup / n)
+        try:
+            for n in STEM_NAMES:
+                blobs.copy(stem_path(stage, n), stem_path(folder, n))
+            _record(folder, info, bucket_only=True)
+        except Exception:
+            log.warning("Couldn't copy the new stems into %s; putting the old ones back", folder, exc_info=True)
+            for n in old:
+                blobs.copy(backup / n, folder / n)
+            if INFO_NAME not in old:
+                blobs.remove(info_path(folder))
+            _made_with.pop(folder, None)
+            raise
+    finally:
+        blobs.remove_tree(backup)
 
 
 class Jobs:

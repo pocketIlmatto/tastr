@@ -114,7 +114,7 @@ stems_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
     .pip_install(*ENGINE_DEPS, *STEMS_DEPS, *PINS)
-    .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs')\"")
+    .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs_ft')\"")
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
     .add_local_python_source("tastr")
 )

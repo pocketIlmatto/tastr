@@ -121,10 +121,7 @@ def router(ctx: AppContext) -> APIRouter:
         return Response(status_code=204)
 
     # Short share links (TAS-100).
-    def art_allowed(owner: str | None) -> bool:
-        """Whether this person's mash-up links may show album art: only the admins' on a shared server (Pam's
-        call: the art is the labels', so it goes out only on links she shares), anyone's on your own machine."""
-        return not ctx.hosted or owner in ctx.settings.admins
+    art_allowed = ctx.art_allowed
 
     @api.post("/api/strudel/share")
     def share(body: ShareBody, request: Request):

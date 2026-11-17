@@ -52,14 +52,14 @@ machine, and the code never runs inside Tastr.
 
 "Separate stems" in a track's ⋯ menu (or `tastr stems ID`) splits one track into
 vocals, bass, other and drums with [Demucs](https://github.com/facebookresearch/demucs)
-(`htdemucs`, MIT). The Strudel sketch can then play the stems you pick instead of the
+(`htdemucs_ft`, MIT). The Strudel sketch can then play the stems you pick instead of the
 full mix. Demucs needs PyTorch, about 2 GB, so it is an optional install:
 
 ```bash
 python -m pip install -e '.[stems]'
 ```
 
-The model weights (about 80 MB) download the first time you separate a track; Demucs 4.1
+The model weights (about 320 MB, four fine-tuned models) download the first time you separate a track; Demucs 4.1
 gets them from the Hugging Face Hub and keeps them in `~/.cache/huggingface`. Later runs
 load them from there without going online, so the Hub's "unauthenticated requests ...
 set a HF_TOKEN" warning only shows on that first download. A free read token in `HF_TOKEN`

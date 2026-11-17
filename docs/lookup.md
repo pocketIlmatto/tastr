@@ -186,6 +186,18 @@ leave it out of `TASTR_LOOKUP` until the workflow has finished.
 The dump URLs and file names are in `tastr/lookup/acousticbrainz.py` (`DUMP_BASE`, `DUMP_FILES`); the
 column layout comes from AcousticBrainz's own dump code (`db/dump.py` in metabrainz/acousticbrainz-server).
 
+## Album art for mash-up previews
+
+When `TASTR_LOOKUP` names any provider (or `TASTR_COVER_ART=1`; `0` turns it off), a mash-up preview
+(the short link's picture, [features.md](features.md)) gets album art for a track whose file has none:
+`tastr/coverart.py` finds the track's MusicBrainz recording (its tags, a stored AcousticBrainz match, else
+the same search AcousticBrainz uses), the recording's releases (official ones and the tagged album first),
+then the release group's or release's front cover from the [Cover Art Archive](https://coverartarchive.org)
+at 500 px. MusicBrainz requests share AcousticBrainz's guardrails (one a second), and the answer is kept per
+track, a miss included, so a track is asked about once. Only the people whose links may show album art get it:
+admins on a shared server, anyone on their own machine. The images belong to their copyright owners; the
+archive grants no licence, so they go only into those previews.
+
 ## Adding a provider
 
 1. Add `tastr/lookup/<name>.py` with a `base.Provider` subclass: set `name`, `label`, `homepage` and

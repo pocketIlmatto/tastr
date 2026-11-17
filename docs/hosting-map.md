@@ -60,7 +60,7 @@ flowchart TB
   GH[GitHub Actions: deploy workflow, after tests pass if app code changed]
   GHL[GitHub Actions: acousticbrainz-d1 workflow, by hand, once]
   R2D[(R2 bucket tastr-data: datasets and the AcousticBrainz index file)]
-  CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, ReccoBeats, MusicBrainz])
+  CAT([Catalogs, if TASTR_LOOKUP is set: FreqBlog, ReccoBeats, MusicBrainz, Cover Art Archive])
   ANT([Claude API, if ANTHROPIC_API_KEY is set: claude-sonnet-5-5])
 
   F -->|your hostname| ACC -->|request + signed token| W
@@ -216,7 +216,7 @@ for the whole run. The server keeps them in the `ml_tags` table, apart from the 
 | Analysis | Modal `analyze_stream` (or `analyze`) | Picked by `TASTR_ANALYSIS_BACKEND`, found by `TASTR_MODAL_APP` and `MODAL_ENVIRONMENT`. Yields each step as it starts, then the card. Stays warm 1 minute after a request. Cards always come from the Rust engine, whose library the image builds (`tastr/cloud/rust_image.py`). |
 | Drum model (on request) | Modal `analyze_drums` | Used for the tracks someone asks for, through the same `TASTR_ANALYSIS_BACKEND`. CPU-only PyTorch; the weights (CC BY-NC-SA 4.0) are downloaded into the image at deploy time. The model runs in Python and the Rust library, built into this image too, makes the card. |
 | ML tags (optional) | Modal `ml_tags` | With the Worker's `TASTR_ML_TAGS` set to `auto`, as it is in `worker/wrangler.jsonc`, every new upload gets them after its analysis, and the tracks from before got them once (`on`: only on request) (MTG's weights are non-commercial only, docs/essentia.md). Essentia (AGPL-3.0) and the weights are installed into its own image at deploy time; no Rust engine. One track at a time, about 6 s of embedding for a 5-minute track; about $1 of Modal time per 1,000 tracks. |
-| Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs on a T4 GPU. Reads the upload from a signed link and uploads each stem to a signed link of its own. |
+| Stems | Modal `stems` | Picked by `TASTR_STEMS_BACKEND`. Demucs (`htdemucs_ft`) on a T4 GPU. Reads the upload from a signed link and uploads each stem to a signed link of its own. |
 | Mash-up key lock | Modal `keylock` | Runs on Modal when `TASTR_STEMS_BACKEND` is `modal` and the audio bucket is on. 2 CPUs, no GPU. Reads the second track's mix and stems from signed links and uploads each one, stretched to the mash-up's tempo with its pitch kept, to a signed link of its own. `TASTR_DAILY_KEYLOCK` caps new stretches per person per day; cached ones are free. |
 | The way in to Modal | Modal `api` | A small web endpoint in front of the functions above, since the Worker can't run the Modal client. Only callers with a Modal proxy auth token get in. Every answer streams lines of JSON, with a blank line every 20 seconds so a long call stays open. The Worker calls it at `TASTR_MODAL_URL`, with the token as `TASTR_MODAL_KEY` and `TASTR_MODAL_SECRET` (`tastr/cloud/remote.py`). |
 | Background work | The Durable Object | `tastr/runner.py`: jobs (analyses, stems, key lock, drum model runs, ML tags) are asyncio tasks in lanes that queue them, and the repeating work (the expiry sweep every 6 hours, the GitHub watch) runs from the object's alarm, which wakes it when it is due. |
@@ -255,7 +255,10 @@ Four layers, each assuming the one before it might be bypassed.
    art: the page draws it and sends it to `PUT /api/strudel/share/{id}/art`, it is kept in the audio bucket as
    `share-art/<id>.png` and served (through the Durable Object, not Static Assets) at `/pub/s/<id>.png`, only
    while its maker is still an admin. The covers it is drawn from are read from the tracks' files on demand and
-   kept as `covers/<track id>`.
+   kept as `covers/<track id>`. For a track whose file has none, the object asks MusicBrainz for its release and
+   the Cover Art Archive (`coverartarchive.org`, which redirects to `archive.org`) for that release's front cover
+   (`tastr/coverart.py`), only for admins and only when `TASTR_LOOKUP` is set (or `TASTR_COVER_ART=1`), and keeps
+   the answer, a miss included, as `covers/fetched/<track id>`.
 
 Keys are split so a leak stays small. The audio bucket's R2 token is scoped to `tastr-audio`, not the benchmark
 bucket `tastr-data`. The Worker reaches Modal with a proxy auth token that can only call the `api` endpoint, and
@@ -302,7 +305,7 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 | `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT`, `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | The audio bucket `tastr-audio` and its own token ([deploy.md](deploy.md#2-r2-bucket-for-audio)). Required on the Worker. |
 | `TASTR_MODAL_URL`, `TASTR_MODAL_KEY`, `TASTR_MODAL_SECRET` | The Modal `api` endpoint's address (`modal deploy` prints it) and a Modal proxy auth token |
 | `TASTR_GITHUB_TOKEN` (optional) | Reading GitHub Actions runs for the Admin log: a fine-grained token with read-only Actions access to the repository. Needed even for a public repository: GitHub's limit without a token is per IP address, which Cloudflare shares, so most checks get 403. |
-| `TASTR_LOOKUP`, `FREQBLOG_API_KEY`, `FREQBLOG_STORE` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#8-catalog-lookups-optional)). FreqBlog's answers are stored unless `FREQBLOG_STORE=0`. `reccobeats` needs no key. `acousticbrainz` reads its index from the D1 database, so add it only once the acousticbrainz-d1 workflow has loaded it ([lookup.md](lookup.md#on-the-hosted-site)). |
+| `TASTR_LOOKUP`, `FREQBLOG_API_KEY`, `FREQBLOG_STORE` (optional) | Catalog lookups ([lookup.md](lookup.md), [deploy.md](deploy.md#8-catalog-lookups-optional)). FreqBlog's answers are stored unless `FREQBLOG_STORE=0`. `reccobeats` needs no key. `acousticbrainz` reads its index from the D1 database, so add it only once the acousticbrainz-d1 workflow has loaded it ([lookup.md](lookup.md#on-the-hosted-site)). Any value also turns on fetching album art for admins' mash-up previews from the Cover Art Archive; `TASTR_COVER_ART=0` turns that off on its own. |
 | `ANTHROPIC_API_KEY` (optional) | "Ask Claude to change it" in Try this in › Strudel ([deploy.md](deploy.md#9-ask-claude-in-strudel-optional)). Tastr's own Anthropic key; each ask's tokens are counted per person and priced on the Admin tab. Without it the panel says Ask is off. |
 
 These have defaults and change only if you set a secret of the same name ([hosting.md](hosting.md#settings)):
@@ -353,7 +356,7 @@ flowchart LR
     GHD[GitHub Actions: deploy, then deploy-worker] -->|pywrangler deploy| W
     DO -->|HTTPS, proxy auth token| MA["Modal api<br/>(analyze_stream, analyze_drums, ml_tags, stems, keylock)"]
     DO -->|signed requests| R2B[(R2 tastr-audio)]
-    DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, ReccoBeats, MusicBrainz])
+    DO -.->|HTTPS, if TASTR_LOOKUP is set| CAT2([Catalogs: FreqBlog, ReccoBeats, MusicBrainz, Cover Art Archive])
     DO -.->|"D1 binding ACOUSTICBRAINZ:<br/>recording ids, if acousticbrainz is in TASTR_LOOKUP"| D1B[(D1 tastr-acousticbrainz)]
 ```
 

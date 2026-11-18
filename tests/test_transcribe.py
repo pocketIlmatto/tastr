@@ -88,3 +88,38 @@ def test_aligned_lines_stay_in_order():
              {"t": 10.2, "end": 10.25, "w": "quiet"}, {"t": 10.3, "end": 10.35, "w": "harbour"}]
     placed = tr.align_lines(["paper lanterns", "over the quiet harbour"], heard)
     assert [p["t"] for p in placed] == [10.0, 10.0]
+
+
+def test_transcribe_returns_plain_python_types(monkeypatch, tmp_path):
+    """faster-whisper hands back numpy scalars; the answer is unpickled by Modal's web endpoint, which has no numpy,
+    so everything in it must be plain Python."""
+    import pickle
+    import sys
+    import types
+
+    import numpy as np
+
+    class Model:
+        def __init__(self, *a, **k):
+            pass
+
+        def transcribe(self, *a, **k):
+            words = [types.SimpleNamespace(start=np.float32(1.0 + i), end=np.float32(1.4 + i), word=f" w{i}",
+                                           probability=np.float32(0.91)) for i in range(4)]
+            info = types.SimpleNamespace(language="en", language_probability=np.float32(0.98),
+                                         duration=np.float64(12.5))
+            return iter([types.SimpleNamespace(words=words)]), info
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=Model))
+    out = tr.transcribe(tmp_path / "vocals.flac", device="cpu")
+
+    class NoNumpy(pickle.Unpickler):
+        def find_class(self, module, name):
+            assert not module.startswith("numpy"), f"{module}.{name} in the answer"
+            return super().find_class(module, name)
+
+    import io
+
+    assert NoNumpy(io.BytesIO(pickle.dumps(out))).load() == out
+    assert out["words"][0] == {"t": 1.0, "end": 1.4, "w": "w0", "p": 0.91, "seg": 0}
+    assert out["lines"] and all(type(x["t"]) is float for x in out["lines"])

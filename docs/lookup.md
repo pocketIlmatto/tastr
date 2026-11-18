@@ -231,6 +231,13 @@ both MIT). It runs in the background, separating the stems first when there are 
 - Otherwise what was heard is stored as the lyrics, with `source: "whisper"`. They may be wrong, and the page says
   so. A later LRCLIB answer replaces them only when LRCLIB has the words.
 
+Lyrics in any language work the same way. Whisper (the multilingual model) writes the words down as they are sung,
+without translating them, and detects the language again in every 30 s window, so a song that moves from one
+language to another keeps each part's own words and script. The stored lyrics list what it heard in `languages`
+(`[{code, share}]`, most words first; `language` is the first). Timing LRCLIB's lyrics compares words in every
+script, without accents or optional vowel marks, and Chinese, Japanese, Thai and the like character by character,
+since they have no spaces between words; their lines are joined without spaces and break at full-width punctuation.
+
 On the hosted site it runs in Modal's `transcribe` function on a T4 (about 5-10 s a track once it has stems); each
 listen counts toward the daily stem separations. A local server needs `pip install 'tastr[transcribe]'` and runs
 Whisper on its CPU, which is slow.

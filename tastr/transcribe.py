@@ -13,8 +13,10 @@ it hears is the song's words, so the output stays private like LRCLIB's, and the
 
 from __future__ import annotations
 
+import math
 import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -23,28 +25,163 @@ LINE_GAP = 0.6  # seconds of silence between two words that start a new line
 LINE_WORDS = 10  # a longer line is split where a new line most likely starts
 MIN_WORDS = 3  # a split never leaves fewer words than this on either side
 SPLIT_AT = 0.6  # a line of 2 * MIN_WORDS words or more is split where a break scores this much (see _break)
+CJK_WORD = 0.6  # how many words a character of a script without spaces (Chinese, Japanese, Thai...) counts as
+WINDOW = 30.0  # seconds Whisper reads at a time; the language is detected again in each one
+MIN_LANGUAGE = 0.5  # with no window SWITCH-sure, the language with most of those at least this sure
+SWITCH = 0.6  # a window keeps its own language when Whisper is this sure of it; others follow the nearest sure one
+MADE_UP_WORDS = 12  # a made-up subtitle line is at most this many words (see made_up)
+RATE = 16000  # samples a second in the audio Whisper reads
+
+# Scripts written without spaces between words: their characters are compared one by one, and joined without spaces.
+_NO_SPACES = re.compile("[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u2e80-\u2fdf\u3000-\u303f\u3040-\u30ff"
+                        "\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\U00020000-\U0003ffff]")
+_END = (".", "?", "!", "。", "？", "！", "؟", "…", "।")  # ends a sentence, in the scripts Whisper writes
+_PAUSE = (",", ";", ":", "、", "，", "；", "：", "،", "؛")
 
 
 def transcribe(path: str | Path, model: str = MODEL, language: str | None = None, device: str = "auto") -> dict:
-    """{"language", "language_probability", "model", "lines": [{t, end, line}], "words": [{t, end, w, p}],
-    "audio_seconds", "seconds"}. Voice activity detection skips the silent stretches of a vocal stem, where Whisper
-    otherwise makes things up; not conditioning on the previous text stops it repeating a line forever."""
+    """{"language", "language_probability", "languages", "model", "lines": [{t, end, line}],
+    "words": [{t, end, w, p, seg, lang}], "audio_seconds", "seconds"}. Voice activity detection skips the silent
+    stretches of a vocal stem, where Whisper otherwise makes things up; not conditioning on the previous text stops it
+    repeating a line forever. Segments that are only one of Whisper's well-known made-up lines (subtitle credits,
+    "thanks for watching") are dropped.
+
+    Without a `language`, it is detected in every 30 s window (`language_spans`), and each stretch in one language
+    is transcribed with that language set, so a song that changes language keeps each part's own words and script
+    instead of having them translated or garbled in the first one's. Each word's `lang` is the language it was
+    transcribed in; `languages` lists them, the most words first ({code, share}), and `language` is the first."""
     from faster_whisper import WhisperModel
 
     start = time.monotonic()
     cuda = device == "cuda" or (device == "auto" and _has_cuda())
     m = WhisperModel(model, device="cuda" if cuda else "cpu", compute_type="float16" if cuda else "int8")
     loaded = time.monotonic()
-    segments, info = m.transcribe(str(path), language=language, word_timestamps=True, vad_filter=True,
+    audio, spans, found = None, [(0.0, None, language)], []
+    if language is None:
+        try:
+            from faster_whisper import decode_audio
+
+            audio = decode_audio(str(path))
+            found = [_detect(m, audio[int(k * WINDOW * RATE):int((k + 1) * WINDOW * RATE)])
+                     for k in range(max(1, math.ceil(len(audio) / (WINDOW * RATE))))]
+            spans = language_spans(found)
+        except Exception:  # noqa: BLE001 - can't read it here or detect: Whisper's own detection, one language
+            audio, spans = None, [(0.0, None, None)]
+    words: list[dict] = []
+    stretches: list[dict] = []
+    dropped: list[dict] = []
+    first_info, seg = None, 0
+    for n, (t0, t1, code) in enumerate(spans):
+        whole = audio is None or (t0 == 0 and t1 is None)
+        src = str(path) if whole else audio[int(t0 * RATE):None if t1 is None else int(t1 * RATE)]
+        heard, info = _hear(m, src, code, dropped, t0)
+        if not heard and (len(spans) > 1 or code is not None):
+            # Nothing (or only made-up lines) in this stretch's language: the detection was probably wrong, so try
+            # the language of the stretch before it (the first: the one after), or with only one stretch, Whisper's
+            # own detection.
+            other = (spans[n - 1][2] if n else spans[n + 1][2]) if len(spans) > 1 else None
+            heard, info = _hear(m, src, other, dropped, t0)
+            code = other if heard else code
+        first_info = first_info or info
+        stretches.append({"t": t0, "end": t1, "lang": str(code or info.language), "words": sum(len(g) for g in heard)})
+        for got in heard:
+            # faster-whisper's times and probabilities are numpy scalars; plain floats only, because the answer is
+            # pickled back to Modal's web endpoint, whose image has no numpy (it failed there with a
+            # DeserializationError).
+            words += [{"t": _num(t0 + w.start, 2), "end": _num(t0 + w.end, 2), "w": w.word.strip(),
+                       "p": _num(w.probability, 3), "seg": seg, "lang": str(code or info.language)} for w in got]
+            seg += 1
+    info = first_info
+    languages = languages_of(words) or [{"code": str(language or info.language), "share": 1.0}]
+    first = languages[0]["code"]
+    return {"language": first,
+            "language_probability": _num(info.language_probability, 3) if first == info.language else None,
+            "languages": languages, "model": model, "device": "cuda" if cuda else "cpu",
+            "lines": lines_from_words(words), "words": words, "stretches": stretches, "dropped": dropped,
+            "windows": [{"t": k * WINDOW, "lang": c, "p": _num(pr, 3)} for k, (c, pr) in enumerate(found)],
+            "audio_seconds": _num(len(audio) / RATE if audio is not None else info.duration, 1),
+            "load_seconds": round(loaded - start, 1), "seconds": round(time.monotonic() - loaded, 1)}
+
+
+def _hear(m: Any, src: Any, code: str | None, dropped: list[dict], t0: float) -> tuple[list[list[Any]], Any]:
+    """Whisper's words in `src`, one list per segment, without empty segments or made-up subtitle lines (noted in
+    `dropped` as {t, words}, without their text)."""
+    segments, info = m.transcribe(src, language=code, word_timestamps=True, vad_filter=True,
                                   condition_on_previous_text=False, beam_size=5)
-    # faster-whisper's times and probabilities are numpy scalars; plain floats only, because the answer is pickled
-    # back to Modal's web endpoint, whose image has no numpy (it failed there with a DeserializationError).
-    words = [{"t": _num(w.start, 2), "end": _num(w.end, 2), "w": w.word.strip(), "p": _num(w.probability, 3),
-              "seg": k} for k, s in enumerate(segments) for w in (s.words or []) if w.word.strip()]
-    return {"language": str(info.language), "language_probability": _num(info.language_probability, 3),
-            "model": model, "device": "cuda" if cuda else "cpu", "lines": lines_from_words(words), "words": words,
-            "audio_seconds": _num(info.duration, 1), "load_seconds": round(loaded - start, 1),
-            "seconds": round(time.monotonic() - loaded, 1)}
+    out = []
+    for s in segments:
+        got = [w for w in (s.words or []) if w.word.strip()]
+        if got and made_up("".join(w.word for w in got)):
+            note = {"t": _num(t0 + got[0].start, 2), "words": len(got)}
+            if note not in dropped:  # a retry of the same stretch drops the same line again
+                dropped.append(note)
+        elif got:
+            out.append(got)
+    return out, info
+
+
+def _detect(m: Any, clip: Any) -> tuple[str | None, float]:
+    """Whisper's language for one window of audio and how sure it is; (None, 0) when there is no singing in it."""
+    try:
+        code, prob, _ = m.detect_language(audio=clip, vad_filter=True)
+        return str(code), float(prob)
+    except Exception:  # noqa: BLE001 - nothing left after voice detection
+        return None, 0.0
+
+
+def language_spans(found: list[tuple[str | None, float]]) -> list[tuple[float, float | None, str | None]]:
+    """Stretches of one language, [(start, end or None for the rest, code)], from each 30 s window's detected
+    language and its probability. A window keeps its own language when Whisper is at least SWITCH sure of it; any
+    other (quiet, wordless, "oh oh", which get detected as almost anything) takes the language of the nearest sure
+    window before it, else after it. With no sure window, the language most windows lean to (at least MIN_LANGUAGE),
+    else Whisper's own detection (None)."""
+    sure = [code if code and prob >= SWITCH else None for code, prob in found]
+    if not any(sure):
+        score: dict[str, float] = {}
+        for code, prob in found:
+            if code and prob >= MIN_LANGUAGE:
+                score[code] = score.get(code, 0.0) + prob
+        return [(0.0, None, max(score, key=score.get) if score else None)]
+    codes, last = [], None
+    for code in sure:
+        last = code or last
+        codes.append(last)
+    nxt = next(c for c in sure if c)
+    codes = [c or nxt for c in codes]  # windows before the first sure one
+    spans: list[tuple[float, float | None, str | None]] = []
+    for k, code in enumerate(codes):
+        if spans and spans[-1][2] == code:
+            spans[-1] = (spans[-1][0], (k + 1) * WINDOW, code)
+        else:
+            spans.append((k * WINDOW, (k + 1) * WINDOW, code))
+    spans[-1] = (spans[-1][0], None, spans[-1][2])
+    return spans
+
+
+# Lines Whisper makes up over music or silence, learned from the subtitles it was trained on. A segment that says
+# one of these is dropped: no song needs them, and they turned up in place of the words in the 2026-11-18 trial.
+MADE_UP = re.compile(
+    r"sous-titr|subtit|untertitel|субтитр|редактор субтитров|altyaz|napisy|ondertitel|sottotitol|legendas? por"
+    r"|amara\.org|ترجمة|字幕|ご視聴ありがとう|thanks? (you )?for watching|请不吝点赞|請不吝點贊|订阅|訂閱|구독"
+    r"|시청해 주셔서", re.IGNORECASE)
+
+
+def made_up(text: str) -> bool:
+    """Whether a heard segment is one of Whisper's made-up subtitle lines (MADE_UP): it says one, and is short, as
+    those are. A long segment with such a phrase in it is sung words and is kept."""
+    return bool(MADE_UP.search(text)) and len(text.split()) <= MADE_UP_WORDS
+
+
+def languages_of(words: list[dict]) -> list[dict]:
+    """[{code, share}] of the words tagged with a language, the most words first; a language under 5% of them (a
+    window of ad-libs detected as something else) is left out."""
+    counts: dict[str, int] = {}
+    for w in words:
+        if w.get("lang"):
+            counts[w["lang"]] = counts.get(w["lang"], 0) + 1
+    total = sum(counts.values())
+    return [{"code": c, "share": round(n / total, 3)} for c, n in sorted(counts.items(), key=lambda x: -x[1])
+            if n / total >= 0.05]
 
 
 def _num(x: Any, digits: int) -> float:
@@ -65,7 +202,8 @@ def lines_from_words(words: list[dict]) -> list[dict]:
     """Group heard words into lines: a new line after a pause of LINE_GAP; within a run of words, where a new line
     most likely starts (`_break`: a short pause, punctuation, a capital, a new Whisper segment), when the run is
     longer than LINE_WORDS or the break is clear. A run of one or two words close after a line joins it, so a held
-    word or an ad-lib doesn't make a line of its own."""
+    word or an ad-lib doesn't make a line of its own. Whisper's "words" in Chinese, Japanese or Thai are a character
+    or two, so they count as CJK_WORD words a character, and are joined without spaces."""
     runs: list[list[dict]] = []
     for w in words:
         if runs and w["t"] - runs[-1][-1]["end"] < LINE_GAP:
@@ -74,40 +212,96 @@ def lines_from_words(words: list[dict]) -> list[dict]:
             runs.append([w])
     merged: list[list[dict]] = []
     for r in runs:
-        if merged and len(r) < MIN_WORDS and r[0]["t"] - merged[-1][-1]["end"] < 2 * LINE_GAP \
-                and len(merged[-1]) + len(r) <= LINE_WORDS:
+        if merged and _size(r) < MIN_WORDS and r[0]["t"] - merged[-1][-1]["end"] < 2 * LINE_GAP \
+                and _size(merged[-1]) + _size(r) <= LINE_WORDS:
             merged[-1] += r
         else:
             merged.append(r)
     out = [line for r in merged for line in _split(r)]
-    return [{"t": g[0]["t"], "end": g[-1]["end"], "line": " ".join(w["w"] for w in g)} for g in out]
+    return [{"t": g[0]["t"], "end": g[-1]["end"], "line": join_words([w["w"] for w in g])} for g in out]
+
+
+def _word_size(w: str) -> float:
+    n = len(_NO_SPACES.findall(w))
+    return CJK_WORD * n if n else 1.0
+
+
+def _size(g: list[dict]) -> float:
+    return sum(_word_size(w["w"]) for w in g)
+
+
+def join_words(words: list[str]) -> str:
+    """Words as a line: with spaces, except between two characters of a script written without them (so a Japanese
+    line with an English word in it reads "君と dance して")."""
+    out = ""
+    for w in words:
+        if out and not (_NO_SPACES.match(out[-1]) and _NO_SPACES.match(w[:1])):
+            out += " "
+        out += w
+    return out
 
 
 def _break(g: list[dict], i: int) -> float:
     """How much a new line looks like it starts at g[i]: the pause before it in seconds, plus 0.5 after a full stop,
     question or exclamation mark (0.1 after a comma: Whisper puts commas inside sung lines too), 0.4 for a capital that
-    isn't "I" (Whisper starts most sung lines with one), 0.3 for a new segment. Tuned on the trial's tracks."""
+    isn't "I" (Whisper starts most sung lines with one; in a script without capitals, for any word after a full
+    stop), 0.3 for a new segment. Tuned on the trial's tracks."""
     prev, w = g[i - 1]["w"], g[i]["w"]
     s = max(0.0, g[i]["t"] - g[i - 1]["end"])
-    s += 0.5 if prev.endswith((".", "?", "!")) else 0.1 if prev.endswith((",", ";", ":")) else 0.0
-    s += 0.4 if w[:1].isupper() and not re.match(r"I\b|I'", w) else 0.0
+    s += 0.5 if prev.endswith(_END) else 0.1 if prev.endswith(_PAUSE) else 0.0
+    caseless = w[:1].isalpha() and not (w[:1].isupper() or w[:1].islower())
+    s += 0.4 if (w[:1].isupper() and not re.match(r"I\b|I'", w)) or (caseless and prev.endswith(_END)) else 0.0
     s += 0.3 if g[i].get("seg") is not None and g[i].get("seg") != g[i - 1].get("seg") else 0.0
     return s
 
 
 def _split(g: list[dict]) -> list[list[dict]]:
-    if len(g) < 2 * MIN_WORDS:
+    size = _size(g)
+    if size < 2 * MIN_WORDS:
         return [g]
-    # The best break, nudged towards the middle so a long run splits into lines of similar length.
-    i = max(range(MIN_WORDS, len(g) - MIN_WORDS + 1), key=lambda k: _break(g, k) - 0.02 * abs(k - len(g) / 2))
-    if len(g) > LINE_WORDS or _break(g, i) >= SPLIT_AT:
+    # Breaks that leave at least MIN_WORDS on each side; the best one, nudged towards the middle so a long run
+    # splits into lines of similar length.
+    before, at = [], 0.0
+    for w in g:
+        before.append(at)
+        at += _word_size(w["w"])
+    ok = [k for k in range(1, len(g)) if MIN_WORDS <= before[k] <= size - MIN_WORDS]
+    if not ok:
+        return [g]
+    i = max(ok, key=lambda k: _break(g, k) - 0.02 * abs(before[k] - size / 2))
+    if size > LINE_WORDS or _break(g, i) >= SPLIT_AT:
         return _split(g[:i]) + _split(g[i:])
     return [g]
 
 
 def norm_words(text: str) -> list[str]:
-    """Lowercase words without punctuation, for comparing what was sung with what was written."""
-    return re.findall(r"[a-z0-9À-ɏ']+", text.lower().replace("’", "'"))
+    """Lowercase words without punctuation, for comparing what was sung with what was written, in any script.
+    Accents and vowel marks go (é is e; Arabic and Hebrew are compared without their optional vowel signs), so a
+    word written either way still matches; Chinese, Japanese, Thai and the like have no spaces between words, so
+    each of their characters is a word of its own."""
+    out, cur = [], []
+
+    def done() -> None:
+        word = unicodedata.normalize("NFC", "".join(cur)).strip("'")
+        if word:
+            out.append(word)
+        cur.clear()
+
+    text = unicodedata.normalize("NFKC", text).casefold().replace("’", "'").replace("\u0640", "")
+    for ch in unicodedata.normalize("NFD", text):
+        cat = unicodedata.category(ch)
+        if cat == "Mn":
+            continue
+        if _NO_SPACES.match(ch):
+            done()
+            if cat[0] in "LN":
+                out.append(ch)
+        elif cat[0] in "LN" or cat == "Mc" or ch == "'":
+            cur.append(ch)
+        else:
+            done()
+    done()
+    return out
 
 
 def _align(ref: list[str], hyp: list[str]) -> tuple[int, dict[int, int]]:
@@ -149,11 +343,11 @@ def align_lines(lines: list[str], words: list[dict]) -> list[dict]:
             ref.append(w)
             owner.append(k)
             place.append(j)
-    hyp = [(nw, w) for w in words for nw in norm_words(w["w"])[:1]]
+    hyp = heard_words(words)
     _, pairs = _align(ref, [h[0] for h in hyp])
     hits: dict[int, list[tuple[int, float]]] = {}
     for i in sorted(pairs):
-        hits.setdefault(owner[i], []).append((place[i], hyp[pairs[i]][1]["t"]))
+        hits.setdefault(owner[i], []).append((place[i], hyp[pairs[i]][1]))
     out, last = [], 0.0
     for k, line in enumerate(lines):
         h, n = hits.get(k, []), len(norm_words(line))
@@ -166,11 +360,22 @@ def align_lines(lines: list[str], words: list[dict]) -> list[dict]:
     return out
 
 
+def heard_words(words: list[dict]) -> list[tuple[str, float]]:
+    """(word, start) for every word in what was heard, as norm_words splits it: one of Whisper's words can hold
+    several (two Chinese characters, "mighty-moon"), timed evenly across it."""
+    out = []
+    for w in words:
+        parts = norm_words(w["w"])
+        step = (w.get("end", w["t"]) - w["t"]) / len(parts) if parts else 0.0
+        out += [(nw, round(w["t"] + k * step, 2)) for k, nw in enumerate(parts)]
+    return out
+
+
 def lines_heard(timed: list[dict], words: list[dict], slack: float = 2.0) -> float:
     """The share of timed lines (LRCLIB's, [{t, line}]) at least half of whose words were heard while the line was
     being sung: between its start and the next line's (the last line: 10 s), give or take `slack` seconds. Unlike
     `align_lines`, this can't mix up the choruses of a repeated hook."""
-    heard = [(w["t"], nw) for w in words for nw in norm_words(w["w"])]
+    heard = [(t, nw) for nw, t in heard_words(words)]
     got = 0
     for k, x in enumerate(timed):
         end = timed[k + 1]["t"] if k + 1 < len(timed) else x["t"] + 10.0

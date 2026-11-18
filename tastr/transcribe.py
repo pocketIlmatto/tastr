@@ -27,8 +27,8 @@ MIN_WORDS = 3  # a split never leaves fewer words than this on either side
 SPLIT_AT = 0.6  # a line of 2 * MIN_WORDS words or more is split where a break scores this much (see _break)
 CJK_WORD = 0.6  # how many words a character of a script without spaces (Chinese, Japanese, Thai...) counts as
 WINDOW = 30.0  # seconds Whisper reads at a time; the language is detected again in each one
-MIN_LANGUAGE = 0.5  # a window's language counts only when Whisper is at least this sure of it
-SWITCH = 0.8  # ...and a window leaves the song's main language only when Whisper is this sure of the other one
+MIN_LANGUAGE = 0.5  # with no window SWITCH-sure, the language with most of those at least this sure
+SWITCH = 0.6  # a window keeps its own language when Whisper is this sure of it; others follow the nearest sure one
 RATE = 16000  # samples a second in the audio Whisper reads
 
 # Scripts written without spaces between words: their characters are compared one by one, and joined without spaces.
@@ -55,28 +55,33 @@ def transcribe(path: str | Path, model: str = MODEL, language: str | None = None
     cuda = device == "cuda" or (device == "auto" and _has_cuda())
     m = WhisperModel(model, device="cuda" if cuda else "cpu", compute_type="float16" if cuda else "int8")
     loaded = time.monotonic()
-    audio, spans = None, [(0.0, None, language)]
+    audio, spans, found = None, [(0.0, None, language)], []
     if language is None:
         try:
             from faster_whisper import decode_audio
 
             audio = decode_audio(str(path))
-            spans = language_spans([_detect(m, audio[int(k * WINDOW * RATE):int((k + 1) * WINDOW * RATE)])
-                                    for k in range(max(1, math.ceil(len(audio) / (WINDOW * RATE))))])
+            found = [_detect(m, audio[int(k * WINDOW * RATE):int((k + 1) * WINDOW * RATE)])
+                     for k in range(max(1, math.ceil(len(audio) / (WINDOW * RATE))))]
+            spans = language_spans(found)
         except Exception:  # noqa: BLE001 - can't read it here or detect: Whisper's own detection, one language
             audio, spans = None, [(0.0, None, None)]
     words: list[dict] = []
+    stretches: list[dict] = []
     first_info, seg = None, 0
-    for t0, t1, code in spans:
+    for n, (t0, t1, code) in enumerate(spans):
         whole = audio is None or (t0 == 0 and t1 is None)
         src = str(path) if whole else audio[int(t0 * RATE):None if t1 is None else int(t1 * RATE)]
-        segments, info = m.transcribe(src, language=code, word_timestamps=True, vad_filter=True,
-                                      condition_on_previous_text=False, beam_size=5)
+        heard, info = _hear(m, src, code)
+        if not heard and len(spans) > 1:
+            # Nothing (or only made-up lines) in this stretch's language: the detection was probably wrong, so try
+            # the language of the stretch before it (the first: the one after).
+            other = spans[n - 1][2] if n else spans[n + 1][2]
+            heard, info = _hear(m, src, other)
+            code = other if heard else code
         first_info = first_info or info
-        for s in segments:
-            got = [w for w in (s.words or []) if w.word.strip()]
-            if not got or made_up("".join(w.word for w in got)):
-                continue
+        stretches.append({"t": t0, "end": t1, "lang": str(code or info.language), "words": sum(len(g) for g in heard)})
+        for got in heard:
             # faster-whisper's times and probabilities are numpy scalars; plain floats only, because the answer is
             # pickled back to Modal's web endpoint, whose image has no numpy (it failed there with a
             # DeserializationError).
@@ -89,9 +94,22 @@ def transcribe(path: str | Path, model: str = MODEL, language: str | None = None
     return {"language": first,
             "language_probability": _num(info.language_probability, 3) if first == info.language else None,
             "languages": languages, "model": model, "device": "cuda" if cuda else "cpu",
-            "lines": lines_from_words(words), "words": words,
+            "lines": lines_from_words(words), "words": words, "stretches": stretches,
+            "windows": [{"t": k * WINDOW, "lang": c, "p": _num(pr, 3)} for k, (c, pr) in enumerate(found)],
             "audio_seconds": _num(len(audio) / RATE if audio is not None else info.duration, 1),
             "load_seconds": round(loaded - start, 1), "seconds": round(time.monotonic() - loaded, 1)}
+
+
+def _hear(m: Any, src: Any, code: str | None) -> tuple[list[list[Any]], Any]:
+    """Whisper's words in `src`, one list per segment, without empty segments or made-up subtitle lines."""
+    segments, info = m.transcribe(src, language=code, word_timestamps=True, vad_filter=True,
+                                  condition_on_previous_text=False, beam_size=5)
+    out = []
+    for s in segments:
+        got = [w for w in (s.words or []) if w.word.strip()]
+        if got and not made_up("".join(w.word for w in got)):
+            out.append(got)
+    return out, info
 
 
 def _detect(m: Any, clip: Any) -> tuple[str | None, float]:
@@ -105,18 +123,23 @@ def _detect(m: Any, clip: Any) -> tuple[str | None, float]:
 
 def language_spans(found: list[tuple[str | None, float]]) -> list[tuple[float, float | None, str | None]]:
     """Stretches of one language, [(start, end or None for the rest, code)], from each 30 s window's detected
-    language and its probability. The song's main language is the one with the most confidence summed over its
-    windows (at least MIN_LANGUAGE each); a window switches to another language only when Whisper is at least SWITCH
-    sure of it, since quiet or wordless windows (ad-libs, "oh oh") get detected as almost anything. With no window
-    sure enough, one stretch with Whisper's own detection (None)."""
-    score: dict[str, float] = {}
-    for code, prob in found:
-        if code and prob >= MIN_LANGUAGE:
-            score[code] = score.get(code, 0.0) + prob
-    if not score:
-        return [(0.0, None, None)]
-    main = max(score, key=score.get)
-    codes = [code if code and prob >= SWITCH else main for code, prob in found]
+    language and its probability. A window keeps its own language when Whisper is at least SWITCH sure of it; any
+    other (quiet, wordless, "oh oh", which get detected as almost anything) takes the language of the nearest sure
+    window before it, else after it. With no sure window, the language most windows lean to (at least MIN_LANGUAGE),
+    else Whisper's own detection (None)."""
+    sure = [code if code and prob >= SWITCH else None for code, prob in found]
+    if not any(sure):
+        score: dict[str, float] = {}
+        for code, prob in found:
+            if code and prob >= MIN_LANGUAGE:
+                score[code] = score.get(code, 0.0) + prob
+        return [(0.0, None, max(score, key=score.get) if score else None)]
+    codes, last = [], None
+    for code in sure:
+        last = code or last
+        codes.append(last)
+    nxt = next(c for c in sure if c)
+    codes = [c or nxt for c in codes]  # windows before the first sure one
     spans: list[tuple[float, float | None, str | None]] = []
     for k, code in enumerate(codes):
         if spans and spans[-1][2] == code:

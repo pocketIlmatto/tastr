@@ -184,10 +184,12 @@ def test_languages_of_lists_what_was_heard_most_first():
 
 
 def test_language_spans_follow_confident_windows_only():
-    found = [("es", 0.9), ("es", 0.95), (None, 0.0), ("en", 0.6), ("en", 0.92), ("en", 0.85), ("es", 0.9)]
-    # The quiet window and the unsure "en" stay Spanish; two sure English windows make a stretch of their own.
-    assert tr.language_spans(found) == [(0.0, 120.0, "es"), (120.0, 180.0, "en"), (180.0, None, "es")]
+    found = [("en", 0.5), ("es", 0.9), ("es", 0.95), (None, 0.0), ("fr", 0.4), ("en", 0.92), ("en", 0.85),
+             ("es", 0.9)]
+    # Unsure windows follow the nearest sure one before them (the first: after it).
+    assert tr.language_spans(found) == [(0.0, 150.0, "es"), (150.0, 210.0, "en"), (210.0, None, "es")]
     assert tr.language_spans([("ja", 0.99)]) == [(0.0, None, "ja")]
+    assert tr.language_spans([("fr", 0.55), ("en", 0.3), ("fr", 0.5)]) == [(0.0, None, "fr")]
     assert tr.language_spans([(None, 0.0), ("en", 0.3)]) == [(0.0, None, None)]  # Whisper decides
 
 
@@ -212,7 +214,7 @@ def test_transcribe_sets_the_language_of_each_stretch(monkeypatch, tmp_path):
 
         def transcribe(self, src, **k):
             calls.append((len(src), k["language"]))
-            text = {"es": ["hola", "luna"], "en": ["hello", "moon"]}[k["language"]]
+            text = {"es": ["hola", "luna"], "en": ["hello", "moon"], "de": []}[k["language"]]
             words = [types.SimpleNamespace(start=1.0 + i, end=1.5 + i, word=f" {w}", probability=0.9)
                      for i, w in enumerate(text)]
             junk = [types.SimpleNamespace(start=9.0, end=9.5, word=" Subtitles by someone", probability=0.5)]
@@ -220,19 +222,23 @@ def test_transcribe_sets_the_language_of_each_stretch(monkeypatch, tmp_path):
             return iter([types.SimpleNamespace(words=words), types.SimpleNamespace(words=junk)]), info
 
         def detect_language(self, audio, vad_filter=False):
-            return ("es", 0.9, []) if audio[0] == 0 else ("en", 0.95, [])
+            return {0: ("es", 0.9, []), 1: ("en", 0.95, []), 2: ("de", 0.7, [])}[audio[0]]
 
     def decode_audio(path):
-        return [0] * (60 * 16000) + [1] * (30 * 16000)
+        return [0] * (60 * 16000) + [1] * (30 * 16000) + [2] * (30 * 16000)
 
     monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=Model,
                                                                             decode_audio=decode_audio))
     out = tr.transcribe(tmp_path / "vocals.flac", device="cpu")
-    assert calls == [(60 * 16000, "es"), (30 * 16000, "en")]
+    # The German stretch heard nothing, so it was tried again in the English before it.
+    assert calls == [(60 * 16000, "es"), (30 * 16000, "en"), (30 * 16000, "de"), (30 * 16000, "en")]
     assert [(w["w"], w["t"], w["lang"]) for w in out["words"]] == [
-        ("hola", 1.0, "es"), ("luna", 2.0, "es"), ("hello", 61.0, "en"), ("moon", 62.0, "en")]
-    assert out["languages"] == [{"code": "es", "share": 0.5}, {"code": "en", "share": 0.5}]
-    assert out["language"] == "es" and out["audio_seconds"] == 90.0
+        ("hola", 1.0, "es"), ("luna", 2.0, "es"), ("hello", 61.0, "en"), ("moon", 62.0, "en"),
+        ("hello", 91.0, "en"), ("moon", 92.0, "en")]
+    assert out["languages"] == [{"code": "en", "share": 0.667}, {"code": "es", "share": 0.333}]
+    assert out["language"] == "en" and out["audio_seconds"] == 120.0
+    assert [x["lang"] for x in out["stretches"]] == ["es", "en", "en"]
+    assert out["windows"][3] == {"t": 90.0, "lang": "de", "p": 0.7}
 
     calls.clear()
     out = tr.transcribe(tmp_path / "vocals.flac", device="cpu", language="en")  # told the language: no detection

@@ -233,9 +233,11 @@ both MIT). It runs in the background, separating the stems first when there are 
 
 Lyrics in any language work the same way. Whisper (the multilingual model) writes the words down as they are sung,
 without translating them. Without a set language, it detects one in every 30 s window of the vocals; the song's
-main language is the most confident one, and a window switches to another only when Whisper is at least 80% sure
-(quiet windows and "oh oh" get detected as almost anything). Each stretch in one language is then transcribed with
-that language set, so a song that moves between languages keeps each part's own words and script; with Whisper
+window keeps that language when Whisper is at least 60% sure, and any other (quiet windows and "oh oh" get detected
+as almost anything) follows the nearest sure window. Each stretch in one language is then transcribed with that
+language set, so a song that moves between languages keeps each part's own words and script; a stretch that hears
+nothing in its language is tried again in its neighbour's. The answer keeps each window's detection (`windows`) and
+the stretches (`stretches`), so a wrong switch can be checked without running Whisper again. With Whisper
 deciding window by window instead (faster-whisper's `multilingual`), the part after the switch mostly came out as
 made-up subtitle credits ("Sous-titrage Société Radio-Canada") in the 2026-11-18 trial. Segments that are only
 such a credit are dropped. The stored lyrics list what was heard in `languages` (`[{code, share}]`, most words

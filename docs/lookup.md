@@ -245,6 +245,15 @@ first; `language` is the first). Timing LRCLIB's lyrics compares words in every 
 vowel marks, and Chinese, Japanese, Thai and the like character by character, since they have no spaces between
 words; their lines are joined without spaces and break at full-width punctuation.
 
+What the language trial taught (2026-11-18, four rounds, $0.78 on Modal; public-domain records from Wikimedia
+Commons, most of them 1900s-1930s 78s, and mixes made from them): Japanese went from unscorable to 24 of 24 lines
+placed, with lines that read naturally; a French record gave real words where the old single pass wrote a subtitle
+credit; a Japanese-then-French mix keeps both parts in their own script (about 58/42 by words). Limits: a switch
+lands on a 30 s window edge, so up to one window around it is transcribed in the other language, and a short insert
+(13 s of Japanese inside French) is never heard; Whisper heard nothing on the Hebrew, Greek and Chinese records and
+only English junk on a Russian one (its own detection said English); and results vary from run to run on these
+old records, partly because separation does. Modern, cleanly mixed tracks are the next test.
+
 On the hosted site it runs in Modal's `transcribe` function on a T4 (about 5-10 s a track once it has stems); each
 listen counts toward the daily stem separations. A local server needs `pip install 'tastr[transcribe]'` and runs
 Whisper on its CPU, which is slow.

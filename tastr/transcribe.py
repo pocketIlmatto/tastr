@@ -112,7 +112,9 @@ def _hear(m: Any, src: Any, code: str | None, dropped: list[dict], t0: float) ->
     for s in segments:
         got = [w for w in (s.words or []) if w.word.strip()]
         if got and made_up("".join(w.word for w in got)):
-            dropped.append({"t": _num(t0 + got[0].start, 2), "words": len(got)})
+            note = {"t": _num(t0 + got[0].start, 2), "words": len(got)}
+            if note not in dropped:  # a retry of the same stretch drops the same line again
+                dropped.append(note)
         elif got:
             out.append(got)
     return out, info

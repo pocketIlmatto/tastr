@@ -240,8 +240,7 @@ def test_transcribe_sets_the_language_of_each_stretch(monkeypatch, tmp_path):
     assert out["language"] == "en" and out["audio_seconds"] == 120.0
     assert [x["lang"] for x in out["stretches"]] == ["es", "en", "en"]
     assert out["windows"][3] == {"t": 90.0, "lang": "de", "p": 0.7}
-    assert out["dropped"] == [{"t": 9.0, "words": 1}, {"t": 69.0, "words": 1}, {"t": 99.0, "words": 1},
-                              {"t": 99.0, "words": 1}]  # the made-up line, noted without its words
+    assert out["dropped"] == [{"t": 9.0, "words": 1}, {"t": 69.0, "words": 1}, {"t": 99.0, "words": 1}]  # no text
 
     calls.clear()
     out = tr.transcribe(tmp_path / "vocals.flac", device="cpu", language="en")  # told the language: no detection

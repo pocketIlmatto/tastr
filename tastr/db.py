@@ -219,6 +219,20 @@ CREATE TABLE IF NOT EXISTS lyrics (
     result_json TEXT NOT NULL
 );
 
+-- The person's own copy of a track's lyrics (tastr/lyrics.py: edit_lines), kept apart from the LRCLIB or Whisper
+-- answer in `lyrics` so asking again never overwrites it. synced_json is [{t, line, guess?}] (empty when untimed),
+-- base is what the edits started from (lrclib | whisper | none), base_sig the signature of that answer, so the page
+-- can say when a newer one has come in. Private like `lyrics`.
+CREATE TABLE IF NOT EXISTS lyrics_edits (
+    track_id    INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    base        TEXT NOT NULL,
+    base_sig    TEXT NOT NULL,
+    synced_json TEXT NOT NULL,
+    plain       TEXT NOT NULL,
+    timed_by    TEXT,
+    edited_at   TEXT NOT NULL
+);
+
 -- Optional ML tags (tastr/engine/ml_tags.py, TASTR_ML_TAGS=on): MTG's Essentia classifiers on the track's audio,
 -- kept across re-analysis. tags is the shown tags, comma-separated, for searches; result_json is the full result.
 CREATE TABLE IF NOT EXISTS ml_tags (
@@ -790,6 +804,28 @@ def save_lyrics(conn: sqlite3.Connection, track_id: int, result: dict[str, Any])
 def get_lyrics(conn: sqlite3.Connection, track_id: int) -> dict[str, Any] | None:
     r = conn.execute("SELECT result_json, fetched_at FROM lyrics WHERE track_id = ?", (track_id,)).fetchone()
     return json.loads(r[0]) | {"fetched_at": r[1]} if r else None
+
+
+def save_lyrics_edits(conn: sqlite3.Connection, track_id: int, edits: dict[str, Any]) -> None:
+    """Store the person's edited lyrics (tastr/lyrics.py: edit_lines), replacing earlier edits."""
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO lyrics_edits VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (track_id, edits["base"], edits["base_sig"], json.dumps(edits.get("synced") or []),
+                      edits.get("plain") or "", edits.get("timed_by"), edits.get("edited_at") or _now()))
+
+
+def get_lyrics_edits(conn: sqlite3.Connection, track_id: int) -> dict[str, Any] | None:
+    r = conn.execute("SELECT base, base_sig, synced_json, plain, timed_by, edited_at FROM lyrics_edits "
+                     "WHERE track_id = ?", (track_id,)).fetchone()
+    if not r:
+        return None
+    return {"base": r[0], "base_sig": r[1], "synced": json.loads(r[2]), "plain": r[3], "timed_by": r[4],
+            "edited_at": r[5]}
+
+
+def delete_lyrics_edits(conn: sqlite3.Connection, track_id: int) -> None:
+    with conn:
+        conn.execute("DELETE FROM lyrics_edits WHERE track_id = ?", (track_id,))
 
 
 def save_ml_tags(conn: sqlite3.Connection, track_id: int, result: dict[str, Any]) -> None:

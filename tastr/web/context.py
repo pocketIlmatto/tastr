@@ -332,7 +332,7 @@ class AppContext:
         body["keylock_available"] = keylock.available()
         body["karaoke_state"] = self.karaoke_jobs.status(self.stems_dir(card, track_id))["state"]
         body["lyrics_available"] = lyrics.enabled() is not None
-        body["lyrics"] = lyrics.describe(db.get_lyrics(c, track_id)) | {"listen": self.listen_jobs.status(track_id)}
+        body["lyrics"] = lyrics.shown(c, track_id) | {"listen": self.listen_jobs.status(track_id)}
         body["listen_available"] = listen.available()
         body["drum_model_available"] = drum_jobs.available()
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]

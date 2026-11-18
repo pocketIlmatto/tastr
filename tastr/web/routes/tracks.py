@@ -6,8 +6,9 @@ import json
 import re
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -191,8 +192,39 @@ def router(ctx: AppContext) -> APIRouter:
         error, with `synced` ([{t, line}]) and `plain` when found; `available`: whether this server can ask."""
         with closing(ctx.conn()) as c:
             ctx.track_or_404(c, track_id)
-            return {**lyrics.describe(db.get_lyrics(c, track_id)), "available": lyrics.enabled() is not None,
-                    "listen": ctx.listen_jobs.status(track_id), "listen_available": listen.available()}
+            return lyrics_body(c, track_id)
+
+    def lyrics_body(c, track_id: int) -> dict:
+        return {**lyrics.shown(c, track_id), "available": lyrics.enabled() is not None,
+                "listen": ctx.listen_jobs.status(track_id), "listen_available": listen.available()}
+
+    @api.put("/api/tracks/{track_id}/lyrics/edits")
+    def edit_lyrics(track_id: int, body: dict[str, Any] = Body(...)):
+        """Keep the person's own lyrics for the track: {synced: [{t, line}]} (t null for a line not timed yet) or
+        {plain: text}. Looking on LRCLIB or listening again never overwrites them. Returns the lyrics, `edited: true`."""
+        with closing(ctx.conn()) as c:
+            ctx.track_or_404(c, track_id)
+            try:
+                lyrics.edit_lines(c, track_id, body)
+            except ValueError as e:
+                raise HTTPException(422, str(e)) from None
+            return lyrics_body(c, track_id)
+
+    @api.delete("/api/tracks/{track_id}/lyrics/edits")
+    def undo_lyrics_edits(track_id: int):
+        """Drop the person's lyrics edits; the latest LRCLIB or Whisper answer shows again."""
+        with closing(ctx.conn()) as c:
+            ctx.track_or_404(c, track_id)
+            lyrics.undo_edits(c, track_id)
+            return lyrics_body(c, track_id)
+
+    @api.post("/api/tracks/{track_id}/lyrics/edits/keep")
+    def keep_lyrics_edits(track_id: int):
+        """Keep the person's edits over a newer LRCLIB or Whisper answer (`newer` goes back to false)."""
+        with closing(ctx.conn()) as c:
+            ctx.track_or_404(c, track_id)
+            lyrics.keep_edits(c, track_id)
+            return lyrics_body(c, track_id)
 
     @api.post("/api/tracks/{track_id}/lyrics")
     def find_lyrics(track_id: int):

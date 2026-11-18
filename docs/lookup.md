@@ -250,6 +250,19 @@ It separates each file first (skip with `--no-separate` for vocal stems), writes
 LRCLIB's lyrics, how close each timed line starts, and `lines_heard`, the share of lines at least half heard while
 they were sung (`score`).
 
+### Your own edits
+
+People can fix a track's lyrics and line times themselves. `PUT /api/tracks/{id}/lyrics/edits` takes their lines,
+`{synced: [{t, line}]}` (t in seconds, `null` for a line not timed yet) or `{plain: text}`, and stores them in the
+`lyrics_edits` table, apart from the LRCLIB or Whisper answer in `lyrics` (`tastr/lyrics.py`: `edit_lines`). So
+looking on LRCLIB again, listening again and re-analyzing never overwrite them. Timed lines are kept in time order;
+a line with no time gets `guess: true` and stays right after the line it followed. The lyrics the page reads then carry the
+person's `synced` and `plain` with `edited: true`, `edited_at` and `base` (`lrclib`, `whisper` or `none`: what they
+started from). When LRCLIB or Whisper gives a different answer later, `newer: true` says so;
+`POST /api/tracks/{id}/lyrics/edits/keep` keeps the edits and clears it, and `DELETE /api/tracks/{id}/lyrics/edits`
+drops them so the latest answer shows again. Listening on edited lyrics that have no times times the person's
+words (`timed_by: "whisper"`) and leaves them theirs. Edits are private like the rest of the lyrics.
+
 ## Adding a provider
 
 1. Add `tastr/lookup/<name>.py` with a `base.Provider` subclass: set `name`, `label`, `homepage` and

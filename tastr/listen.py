@@ -5,6 +5,8 @@ none (the usual stems job, waited on), then transcribes the vocals and stores th
 
 - When LRCLIB found the words but no times, they keep LRCLIB's words and get line times from what was heard
   (`timed_by: "whisper"`). A line Whisper didn't hear gets a time between its neighbours and `guess: true`.
+- When the person has edited the lyrics and not timed them, their words get the times instead (the edits stay theirs,
+  tastr/lyrics.py: edit_lines).
 - Otherwise what was heard becomes the lyrics, with `provider: "whisper"`. The page says they were heard by a
   machine and may be wrong: in the trial, clear singing and rap were about 3 in 4 words right, while repetitive
   dance hooks lost most of their repeats.
@@ -73,6 +75,17 @@ def apply(stored: dict | None, heard: dict) -> dict[str, Any]:
         return {"provider": "whisper", "status": "not_found", "heard": "nothing", "model": heard.get("model")}
     return {"provider": "whisper", "status": "found", "synced": lines, "plain": "\n".join(x["line"] for x in lines),
             "instrumental": False, "language": heard.get("language"), "model": heard.get("model")}
+
+
+def time_edits(edits: dict, heard: dict) -> dict[str, Any]:
+    """The person's edited, untimed lyrics (tastr/lyrics.py: edit_lines) timed by what was heard, like LRCLIB's plain
+    words in apply(): their words stay, lines that couldn't be placed get `guess: true`. Unchanged when no line could
+    be placed."""
+    lines = [x for x in (edits.get("plain") or "").splitlines() if x.strip()]
+    placed = fill_times(tr.align_lines(lines, heard["words"]))
+    if any(not x.get("guess") for x in placed):
+        return edits | {"synced": placed, "timed_by": "whisper"}
+    return edits
 
 
 def fill_times(placed: list[dict]) -> list[dict]:
@@ -150,7 +163,11 @@ class Jobs:
             from contextlib import closing
 
             with closing(self._conn()) as c:
-                db.save_lyrics(c, track_id, apply(db.get_lyrics(c, track_id), heard))
+                edits = db.get_lyrics_edits(c, track_id)
+                if edits and not edits["synced"]:  # the person's own words, not timed yet: time those
+                    db.time_lyrics_edits(c, track_id, edits, time_edits(edits, heard))  # unless they changed meanwhile
+                else:
+                    db.save_lyrics(c, track_id, apply(db.get_lyrics(c, track_id), heard))
         except Exception as e:  # noqa: BLE001 - the page shows it
             log.exception("Listening for lyrics failed for track %s", track_id)
             self._set(track_id, state="error", error=f"{type(e).__name__}: {e}")

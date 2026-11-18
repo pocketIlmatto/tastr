@@ -128,10 +128,12 @@ def _mp4_tags(raw) -> dict[str, str]:
     return out
 
 
-def _reopen(cls, p: Path):
+def _reopen(cls, p: Path, fileobj=None):
     """The file again as `cls` (mutagen.mp4.MP4 or mutagen.mp3.MP3), whose raw tags easy mode hides; None on failure."""
     try:
-        return cls(p)
+        if fileobj is not None:
+            fileobj.seek(0)
+        return cls(fileobj if fileobj is not None else p)
     except Exception as e:  # mutagen raises many types for damaged or unknown files
         log.debug("can't read tags from %s: %s", p.name, e)
         return None
@@ -145,13 +147,13 @@ def _easy_tags(easy) -> dict[str, str]:
     return tags
 
 
-def _read_tags(p: Path, easy):
+def _read_tags(p: Path, easy, fileobj=None):
     """(the mutagen file the tags came from, tags); (None, {}) when it can't be read."""
     if isinstance(easy, mutagen.mp4.MP4):  # easy mode hides most atoms, so read the raw ones
-        raw = _reopen(mutagen.mp4.MP4, p)
+        raw = _reopen(mutagen.mp4.MP4, p, fileobj)
         return (raw, _mp4_tags(raw.tags or {})) if raw is not None else (None, {})
     if isinstance(easy, mutagen.mp3.MP3):  # EasyID3 has no comment/key mapping, so read the frames
-        raw = _reopen(mutagen.mp3.MP3, p)
+        raw = _reopen(mutagen.mp3.MP3, p, fileobj)
         return (raw, _id3_tags(raw.tags) if raw.tags is not None else {}) if raw is not None else (None, {})
     if hasattr(easy.tags, "getall"):  # plain ID3 (WAV/AIFF): no easy mapping
         return easy, _id3_tags(easy.tags)
@@ -177,24 +179,27 @@ def _audio_info(f, p: Path) -> dict[str, Any]:
     return info
 
 
-def read_file_meta(path: str | Path) -> tuple[dict[str, str], dict[str, Any]]:
-    """Return (tags, audio_info) for `path`. Both are empty when nothing could be read."""
+def read_file_meta(path: str | Path, fileobj=None) -> tuple[dict[str, str], dict[str, Any]]:
+    """Return (tags, audio_info) for `path`. Both are empty when nothing could be read. `fileobj`: read the file
+    from this seekable file object instead (the audio bucket's copy, tastr.blobs.RemoteFile), `path` naming it."""
     p = Path(path)
     info: dict[str, Any] = {}
     try:
-        info["file_size"] = p.stat().st_size
+        info["file_size"] = fileobj.seek(0, 2) if fileobj is not None else p.stat().st_size
     except OSError:  # gone or unreadable: the tag read below fails the same way and returns empty dicts
         pass
     if mutagen is None:
         return {}, info
     try:
-        easy = mutagen.File(p, easy=True)
+        if fileobj is not None:
+            fileobj.seek(0)
+        easy = mutagen.File(fileobj if fileobj is not None else p, easy=True)
     except Exception as e:  # mutagen raises many types for damaged or unknown files
         log.debug("can't read tags from %s: %s", p.name, e)
         return {}, info
     if easy is None:
         return {}, info
-    f, tags = _read_tags(p, easy)
+    f, tags = _read_tags(p, easy, fileobj)
     if f is None:
         return tags, info
     return tags, info | _audio_info(f, p)

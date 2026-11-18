@@ -22,6 +22,8 @@ a token that can read and write that bucket only. Requests go through tastr/s3.p
 from __future__ import annotations
 
 import gzip
+import hashlib
+import io
 import json
 import logging
 import mimetypes
@@ -200,6 +202,81 @@ def open_read(path: str | Path):
     if p.is_file():
         return open(p, "rb")
     return client().get(key(p))
+
+
+class RemoteFile(io.RawIOBase):
+    """The bucket's copy of a file as a read-only, seekable file object that fetches only what is read, a block
+    at a time (Range requests), keeping a few blocks. For tag and header readers where the disk is memory (the
+    Worker): a whole upload brought down to read its tags ran the Worker out of memory (T93)."""
+
+    BLOCK = 256 * 1024
+    KEEP = 16  # blocks held at once, most recently read last: 4 MB at most
+
+    def __init__(self, path: str | Path, size: int | None = None):
+        super().__init__()
+        self.name = str(path)
+        self._key = key(path)
+        self.size = size if size is not None else client().head(self._key)
+        if self.size is None:
+            raise FileNotFoundError(f"{Path(path).name} isn't in the audio bucket")
+        self._pos = 0
+        self._blocks: dict[int, bytes] = {}
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self._pos
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        base = {io.SEEK_SET: 0, io.SEEK_CUR: self._pos, io.SEEK_END: self.size}[whence]
+        if base + offset < 0:
+            raise OSError(22, "negative seek position")
+        self._pos = base + offset
+        return self._pos
+
+    def _block(self, i: int) -> bytes:
+        got = self._blocks.pop(i, None)
+        if got is None:
+            start = i * self.BLOCK
+            end = min(start + self.BLOCK, self.size) - 1
+            with client().get(self._key, start, end) as resp:
+                got = resp.read(end - start + 1)  # a server that ignores Range sends it all: only this much is read
+            while len(self._blocks) >= self.KEEP:
+                del self._blocks[next(iter(self._blocks))]
+        self._blocks[i] = got
+        return got
+
+    def readinto(self, buf) -> int:
+        n = min(len(buf), max(0, self.size - self._pos))
+        done = 0
+        while done < n:
+            i, off = divmod(self._pos, self.BLOCK)
+            part = self._block(i)[off:off + n - done]
+            if not part:
+                break
+            buf[done:done + len(part)] = part
+            done += len(part)
+            self._pos += len(part)
+        return done
+
+    def read(self, n: int = -1) -> bytes:
+        if n is None or n < 0:
+            n = max(0, self.size - self._pos)
+        buf = bytearray(min(n, max(0, self.size - self._pos)))
+        return bytes(buf[:self.readinto(buf)])
+
+
+def sha256(path: str | Path) -> str:
+    """The SHA-256 of the bucket's copy, read as it arrives: no copy of the file is kept anywhere."""
+    h = hashlib.sha256()
+    with client().get(key(path)) as resp:
+        for chunk in resp.chunks():
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def ensure(path: str | Path | None) -> Path | None:

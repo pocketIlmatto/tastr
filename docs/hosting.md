@@ -226,7 +226,7 @@ live in memory, the bucket is required:
 - With `TASTR_DIRECT_UPLOAD=1` the page uploads straight to the bucket instead. `POST /api/uploads` checks the
   limits (count, type, size, the daily track limit, the storage cap) before any bytes move and answers with a
   signed PUT link per file (an hour; `POST /api/uploads/{id}/link` renews one). The page PUTs the files, 3 at a
-  time, then `POST /api/uploads/{id}/check` checks what arrived (size, and length once read back into the cache)
+  time, then `POST /api/uploads/{id}/check` checks what arrived (size, and length from the header; the Worker reads only the header from the bucket)
   and `POST /api/analyze/uploaded` analyzes it like any upload when its turn comes. A PUT the bucket refuses
   (usually a missing CORS rule) is reported with `POST /api/uploads/{id}/failed` and shows in the admin
   activity log and Problems. A refused upload is deleted from the bucket; one that got a link and was never finished is

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from ... import blobs, db, service
 from ...engine import browser_card
-from ...ingest import AUDIO_EXTENSIONS, IngestError, file_sha256, is_url, resolve_inputs
+from ...ingest import AUDIO_EXTENSIONS, IngestError, bucket_source, file_sha256, is_url, resolve_inputs
 from ...markers import Markers
 from ..analysis_jobs import JobError, new_id, ref
 from ..context import AppContext, _failure_reason, _results, log, tastr_home, upload_dir
@@ -208,20 +208,27 @@ def router(ctx: AppContext) -> APIRouter:
                 give_up(ids, paths)
                 raise too_big(user, path.name)
             with blobs.copy_slot():  # one file at a time where memory is the disk (the Worker)
+                remote = None
                 try:
-                    blobs.ensure(path)  # tags, length and the file's hash are read from a local copy (a cache)
+                    if blobs.keep_copies:
+                        blobs.ensure(path)  # tags, length and the file's hash are read from a local copy (a cache)
+                    else:  # the disk is memory (the Worker): read the header from the bucket, not a whole copy (T93)
+                        remote = blobs.RemoteFile(path, size)
                 except Exception:
                     log.exception("couldn't read back the upload %s", upload_id)
                     give_up(ids, paths)
                     raise HTTPException(503, f"Couldn't read {path.name} back from storage. Upload it again.") from None
                 kept.append(str(path))
                 try:
-                    check_minutes(request, kept, path)
+                    check_minutes(request, kept, path, remote)
                 except HTTPException:
                     give_up(ids, paths)
                     raise
+                finally:
+                    if remote is not None:
+                        remote.close()
                 if not blobs.keep_copies:
-                    release([path])  # the analysis brings it back when its turn comes
+                    release([path])
         return kept
 
     def give_up(ids: list[str], paths: list[Path]) -> None:
@@ -241,9 +248,10 @@ def router(ctx: AppContext) -> APIRouter:
         return ctx.refuse(user, 413, f"{name} is larger than {ctx.settings.max_upload_mb:g} MB.",
                           f"upload size limit ({ctx.settings.max_upload_mb:g} MB)", name)
 
-    def check_minutes(request: Request, paths: list[str], dest: Path) -> None:
-        """Refuse a track longer than TASTR_MAX_MINUTES (hosted), dropping `paths` (this request's files so far)."""
-        minutes = audio_minutes(dest) if ctx.hosted else None
+    def check_minutes(request: Request, paths: list[str], dest: Path, fileobj=None) -> None:
+        """Refuse a track longer than TASTR_MAX_MINUTES (hosted), dropping `paths` (this request's files so far).
+        `fileobj`: the file read from there (the bucket's copy) rather than from `dest`."""
+        minutes = audio_minutes(dest, fileobj) if ctx.hosted else None
         if minutes is not None and minutes > ctx.settings.max_minutes:
             discard(map(Path, paths))
             raise ctx.refuse(request.state.user, 413,
@@ -387,14 +395,20 @@ def router(ctx: AppContext) -> APIRouter:
                     progress.stage("fetch")
                 try:
                     with blobs.copy_slot():
-                        if not link:
-                            for p in inputs:  # a stored upload whose local copy was dropped (blobs.keep_copies)
-                                blobs.ensure(p)
-                        sources = resolve_inputs(inputs)  # reads the tags
-                        if not link and not blobs.keep_copies:
-                            for s in sources:  # all the analysis needs of the copy; Modal reads the bucket's
-                                s.sha256 = s.sha256 or file_sha256(s.local_path)
+                        if not link and not blobs.keep_copies and all(blobs.in_bucket(p) for p in inputs):
+                            # the disk is memory (the Worker): the tags and the hash are read from the bucket
+                            # as it streams, never a whole copy here (T93); Modal reads the bucket's copy
                             release(inputs)
+                            sources = [bucket_source(p) for p in inputs]
+                        else:
+                            if not link:
+                                for p in inputs:  # a stored upload whose local copy was dropped (blobs.keep_copies)
+                                    blobs.ensure(p)
+                            sources = resolve_inputs(inputs)  # reads the tags
+                            if not link and not blobs.keep_copies:
+                                for s in sources:  # all the analysis needs of the copy; Modal reads the bucket's
+                                    s.sha256 = s.sha256 or file_sha256(s.local_path)
+                                release(inputs)
                 except IngestError as e:
                     raise JobError(str(e)) from e
                 progress.stage("waiting")

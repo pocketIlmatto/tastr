@@ -159,9 +159,12 @@ class Client:
         resp.close()
         return int(resp.headers.get("content-length", 0))
 
-    def get(self, key: str) -> http.Response:
-        """The object, its body read as it arrives (`chunks()`, or `read(n)` like a file)."""
-        return self._send("GET", key)
+    def get(self, key: str, start: int | None = None, end: int | None = None) -> http.Response:
+        """The object, its body read as it arrives (`chunks()`, or `read(n)` like a file). `start`/`end`: only
+        bytes start..end (inclusive), a Range request."""
+        if start is None:
+            return self._send("GET", key)
+        return self._send("GET", key, headers={"Range": f"bytes={start}-{'' if end is None else end}"}, ok=(200, 206))
 
     def download(self, key: str, path: Path) -> None:
         with self.get(key) as resp, open(path, "wb") as f:

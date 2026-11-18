@@ -210,7 +210,8 @@ def transcribe_files(files: str, out: str, separate: bool = True, language: str 
         ref = _lrclib_for(f)
         row = {"file": f.name, "separate_seconds": sep_seconds, "audio_seconds": heard["audio_seconds"],
                "load_seconds": heard["load_seconds"], "whisper_seconds": heard["seconds"],
-               "call_seconds": heard["call_seconds"], "language": heard["language"], "lines": len(heard["lines"]),
+               "call_seconds": heard["call_seconds"], "language": heard["language"],
+               "languages": heard.get("languages"), "lines": len(heard["lines"]),
                "lrclib": ref.get("status")}
         if ref.get("status") == "found":
             row |= tr.score(heard, ref.get("plain"), ref.get("synced"))

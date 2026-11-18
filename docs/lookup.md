@@ -231,6 +231,29 @@ both MIT). It runs in the background, separating the stems first when there are 
 - Otherwise what was heard is stored as the lyrics, with `source: "whisper"`. They may be wrong, and the page says
   so. A later LRCLIB answer replaces them only when LRCLIB has the words.
 
+Lyrics in any language work the same way. Whisper (the multilingual model) writes the words down as they are sung,
+without translating them. Without a set language, it detects one in every 30 s window of the vocals; the song's
+window keeps that language when Whisper is at least 60% sure, and any other (quiet windows and "oh oh" get detected
+as almost anything) follows the nearest sure window. Each stretch in one language is then transcribed with that
+language set, so a song that moves between languages keeps each part's own words and script; a stretch that hears
+nothing in its language is tried again in its neighbour's (a song of one stretch: with Whisper's own detection). The answer keeps each window's detection (`windows`) and
+the stretches (`stretches`), so a wrong switch can be checked without running Whisper again. With Whisper
+deciding window by window instead (faster-whisper's `multilingual`), the part after the switch mostly came out as
+made-up subtitle credits ("Sous-titrage Société Radio-Canada") in the 2026-11-18 trial. Short segments (12 words
+or fewer) that say such a credit are dropped and counted in `dropped`. The stored lyrics list what was heard in `languages` (`[{code, share}]`, most words
+first; `language` is the first), and the card's credit starts "Heard in Japanese and French." (shares in its tooltip). Timing LRCLIB's lyrics compares words in every script, without accents or optional
+vowel marks, and Chinese, Japanese, Thai and the like character by character, since they have no spaces between
+words; their lines are joined without spaces and break at full-width punctuation.
+
+What the language trial taught (2026-11-18, four rounds, $0.78 on Modal; public-domain records from Wikimedia
+Commons, most of them 1900s-1930s 78s, and mixes made from them): Japanese went from unscorable to 24 of 24 lines
+placed, with lines that read naturally; a French record gave real words where the old single pass wrote a subtitle
+credit; a Japanese-then-French mix keeps both parts in their own script (about 58/42 by words). Limits: a switch
+lands on a 30 s window edge, so up to one window around it is transcribed in the other language, and a short insert
+(13 s of Japanese inside French) is never heard; Whisper heard nothing on the Hebrew, Greek and Chinese records and
+only English junk on a Russian one (its own detection said English); and results vary from run to run on these
+old records, partly because separation does. Modern, cleanly mixed tracks are the next test.
+
 On the hosted site it runs in Modal's `transcribe` function on a T4 (about 5-10 s a track once it has stems); each
 listen counts toward the daily stem separations. A local server needs `pip install 'tastr[transcribe]'` and runs
 Whisper on its CPU, which is slow.

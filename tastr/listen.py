@@ -74,7 +74,8 @@ def apply(stored: dict | None, heard: dict) -> dict[str, Any]:
     if not lines:
         return {"provider": "whisper", "status": "not_found", "heard": "nothing", "model": heard.get("model")}
     return {"provider": "whisper", "status": "found", "synced": lines, "plain": "\n".join(x["line"] for x in lines),
-            "instrumental": False, "language": heard.get("language"), "model": heard.get("model")}
+            "instrumental": False, "language": heard.get("language"), "languages": heard.get("languages"),
+            "model": heard.get("model")}
 
 
 def time_edits(edits: dict, heard: dict) -> dict[str, Any]:

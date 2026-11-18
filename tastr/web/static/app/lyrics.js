@@ -106,6 +106,24 @@ const hasLyrics = (L) => !!(L && L.state === "found" && !L.instrumental && ((L.s
 // The line being sung: guessed lines (timed by listening, not placed) never light up.
 const lineAt = (L, t) => { let i = -1; for (let k = 0; k < L.synced.length; k++) { const x = L.synced[k]; if (x.t == null || x.guess) continue; if (x.t <= t + 0.15) i = k; else break; } return i; };
 const heard = (L) => !!(L && L.source === "whisper");
+// Which language(s) Whisper heard (tastr/transcribe.py): `languages` [{code, share}], most words first, or an old
+// row's `language`. {say: "Japanese and French", tip: "Japanese 58%, French 42% of the words." or null}; null for
+// LRCLIB's lyrics, which don't say.
+const langName = (code) => { try { return new Intl.DisplayNames(["en"], { type: "language" }).of(code) || code; } catch (_) { return code; } };
+function heardLangs(L) {
+  if (!heard(L)) return null;
+  const ls = L.languages && L.languages.length ? L.languages : L.language ? [{ code: L.language }] : [];
+  if (!ls.length) return null;
+  const names = ls.map((x) => langName(x.code));
+  const say = names.length < 3 ? names.join(" and ") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const tip = ls.length > 1 && ls.every((x) => typeof x.share === "number")
+    ? ls.map((x) => `${langName(x.code)} ${Math.round(x.share * 100)}%`).join(", ") + " of the words." : null;
+  return { say, tip };
+}
+const langLabel = (L) => {
+  const g = heardLangs(L);
+  return g ? [h("span", { class: "ly-lang", ...(g.tip ? { title: g.tip, tabindex: "0" } : {}) }, `Heard in ${g.say}.`), " "] : "";
+};
 const LISTENING = ["queued", "separating", "listening"];
 export const lyricsOf = (id) => lyrics.get(id);
 export const lyricsShown = (id) => hasLyrics(lyrics.get(id));
@@ -372,7 +390,7 @@ export function lyricsBody(c) {
     return p;
   };
   const credit = (L) => L && L.edited ? editedCredit(L) : heard(L)
-    ? h("p", { class: "muted ly-credit ly-heard" }, h("b", {}, "Heard by Whisper from the vocals. Words may be wrong."), " ",
+    ? h("p", { class: "muted ly-credit ly-heard" }, langLabel(L), h("b", {}, "Heard by Whisper from the vocals. Words may be wrong."), " ",
       L.relook ? h("span", {}, h("span", { class: "spin", "aria-hidden": "true" }), " Looking on LRCLIB…")
         : [L.relooked ? `Still not on LRCLIB (checked ${fmtDay(L.relooked)}). ` : "", h("button", { type: "button", class: "linklike", onclick: () => lookUp(c.id) }, "Look on LRCLIB again")])
     : h("p", { class: "muted ly-credit" }, "Lyrics from ", h("a", { href: "https://lrclib.net", target: "_blank", rel: "noopener" }, "LRCLIB"),
@@ -481,7 +499,7 @@ export function openSing(id, title, artist) {
       h("button", { type: "button", class: "sing-x", title: "Close (Esc)", "aria-label": "Close sing-along", onclick: close }, "✕")),
     stage,
     h("div", { class: "sing-foot" }, play, karaCtl(id, { cls: "sing-kara" }), h("span", { class: "muted sing-credit" },
-      L.edited ? mineLabel(L) : heard(L) ? "Heard by Whisper from the vocals. Words may be wrong." : L.timed_by === "whisper" ? "Lyrics from LRCLIB · timed by listening" : "Lyrics from LRCLIB")));
+      L.edited ? mineLabel(L) : heard(L) ? `Heard by Whisper from the vocals${heardLangs(L) ? `, in ${heardLangs(L).say}` : ""}. Words may be wrong.` : L.timed_by === "whisper" ? "Lyrics from LRCLIB · timed by listening" : "Lyrics from LRCLIB")));
   let last = "";
   const paint = () => {
     const ck = lyrClock(id), lab = ck.playing ? "❚❚" : "▶";

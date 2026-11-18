@@ -1404,6 +1404,8 @@ h1 { white-space: nowrap; }
 .lye-foot { margin-top: 12px; }
 .lye-short { display: none; }
 @media (max-width: 560px) { #card .lye-text { flex-basis: 100%; order: 3; } .lye-rowacts { margin-left: auto; } .lye-long { display: none; } .lye-short { display: inline; } #card .lye-time { width: 4.6em; } }
+.ly-lang { color: var(--fg); }
+.ly-lang[title] { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
 #card .ly-lines li.untimed .ly-line, .ly-lines li.untimed .ly-line { display: block; padding: 3px 6px; font-size: 15px; line-height: 1.45; color: var(--muted); font-style: italic; cursor: default; }
 .spin.idle { animation: none; border-color: var(--line); }
 .warn-t { color: var(--warn); }

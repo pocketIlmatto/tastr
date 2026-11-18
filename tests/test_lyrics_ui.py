@@ -105,14 +105,14 @@ def test_editor_times_lrc_and_credit():
     src = re.sub(r"^import .*?;\n", "", src, flags=re.M).replace("export ", "")
     body = """
 out = [fmtLT(null), fmtLT(5), fmtLT(62.46), fmtLT(600), parseLT(""), parseLT("1:02.5"), parseLT("62.5"), Number.isNaN(parseLT("1:2:3")),
-       Number.isNaN(parseLT("abc")), parseLRC("[ar: Nobody]\\n[00:01.50] Paper boats\\nno stamp\\n[01:04.26]Hum it back\\n"),
+       Number.isNaN(parseLT("abc")), parseLRC("[ar: Nobody]\\n[00:01.50] Paper boats\\nno stamp\\n[00:04.20][01:04.26]Hum it back\\n"),
        mineLabel({ base: "lrclib" }), mineLabel({ base: "whisper" }), mineLabel({ base: "none" }), mineLabel({})];"""
     stubs = "const localStorage = { getItem: () => null, setItem() {} };\n"
     r = subprocess.run(["node", "-e", stubs + src + "\nlet out;\n" + body + "\nconsole.log(JSON.stringify(out));"],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == ["", "0:05.0", "1:02.5", "10:00.0", None, 62.5, 62.5, True, True,
-                                    [{"t": 1.5, "line": "Paper boats"}, {"t": 64.3, "line": "Hum it back"}],
+                                    [{"t": 1.5, "line": "Paper boats"}, {"t": 4.2, "line": "Hum it back"}, {"t": 64.3, "line": "Hum it back"}],
                                     "Edited by you", "Edited by you", "Typed by you", "Typed by you"]
 
 
@@ -121,7 +121,7 @@ def test_editing_is_wired():
     for text in ("/lyrics/edits${path}", '"PUT", ""', '"DELETE", ""', '"POST", "/keep"', "✎ ", "Edit lyrics", "Type lyrics",
                  "Set to now", "Saving puts them in time order.", "No [mm:ss.xx] lines found.", "add times by hand",
                  "Discard your changes? Click again", "Undo my edits", "Yes, undo my edits", "Keep mine", "Yes, show them",
-                 "e.ctrlKey || e.metaKey", "L.edited ? mineLabel(L)"):
+                 "e.ctrlKey || e.metaKey", "L.edited ? mineLabel(L)", "Fix the times marked in red first."):
         assert text in src, text
     for rule in (".ly-lines.ly-edited", ".ly-newer", ".lye-rows", "#card .lye-time", ".lye-short"):
         assert rule in css, rule

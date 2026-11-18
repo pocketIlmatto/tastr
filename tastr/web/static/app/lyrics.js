@@ -223,8 +223,17 @@ export function karaCtl(id, o = {}) {
 const fmtLT = (t) => (t == null ? "" : `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`);
 // "1:02.5", "62.5" or "" (no time) -> seconds or null; anything else NaN
 const parseLT = (v) => { v = String(v).trim(); if (!v) return null; const m = /^(\d+):(\d{1,2}(?:\.\d*)?)$/.exec(v); if (m) return +m[1] * 60 + +m[2]; return /^\d+(\.\d*)?$/.test(v) ? +v : NaN; };
-export const parseLRC = (text) => String(text).split(/\r?\n/).map((l) => /^\s*\[(\d+):(\d+(?:\.\d+)?)\](.*)$/.exec(l)).filter(Boolean)
-  .map((m) => ({ t: Math.round((+m[1] * 60 + +m[2]) * 10) / 10, line: m[3].trim() }));
+// Pasted LRC: one row per stamp ("[00:12.00][01:30.50] chorus" is two rows), in time order; tags and lines without a stamp are skipped.
+export function parseLRC(text) {
+  const out = [];
+  for (const raw of String(text).split(/\r?\n/)) {
+    let rest = raw.trim(), m;
+    const ts = [];
+    while ((m = /^\[(\d+):(\d+(?:[.:]\d+)?)\]/.exec(rest))) { ts.push(+m[1] * 60 + +m[2].replace(":", ".")); rest = rest.slice(m[0].length); }
+    for (const t of ts) out.push({ t: Math.round(t * 10) / 10, line: rest.trim() });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
 function lyricsEditor(c, L, close) {
   const startTimed = synced(L);
   const ed = { mode: startTimed ? "timed" : "plain", rows: startTimed ? L.synced.map((x) => ({ t: x.guess ? null : x.t, line: x.line })) : [], text: startTimed ? "" : L?.plain || "", cur: 0 };
@@ -232,14 +241,15 @@ function lyricsEditor(c, L, close) {
   const wrap = h("div", { class: "lye", role: "group", "aria-label": "Edit lyrics" });
   let list = null, warn = null, cancelSure = false, busy = false;
   const nowT = () => Math.round(lyrClock(c.id).t * 10) / 10;
+  const unreadable = () => ed.rows.filter((r) => r.bad).length;
   const outOfOrder = () => { let prev = -1, n = 0; ed.rows.forEach((r) => { if (r.t == null) return; if (r.t < prev) n++; prev = Math.max(prev, r.t); }); return n; };
   const focusRow = (k) => { const el = list && list.querySelector(`li[data-k="${k}"] .lye-text`); if (el) { el.focus({ preventScroll: true }); el.closest("li").scrollIntoView({ block: "nearest" }); } };
-  const stamp = (k) => { if (!ed.rows[k]) return; ed.rows[k].t = nowT(); ed.cur = Math.min(k + 1, ed.rows.length - 1); paint(); focusRow(ed.cur); };
+  const stamp = (k) => { if (!ed.rows[k]) return; ed.rows[k].t = nowT(); ed.rows[k].bad = false; ed.cur = Math.min(k + 1, ed.rows.length - 1); paint(); focusRow(ed.cur); };
   function rowEl(r, k) {
     const time = h("input", { type: "text", class: "lye-time", inputmode: "decimal", value: fmtLT(r.t), placeholder: "–:––", "aria-label": `Time of line ${k + 1}`, title: "m:ss.0" });
-    time.addEventListener("change", () => { const v = parseLT(time.value); if (Number.isNaN(v)) { time.classList.add("bad-in"); return; } r.t = v == null ? null : Math.round(v * 10) / 10; paintFlags(); });
+    time.addEventListener("change", () => { const v = parseLT(time.value); r.bad = Number.isNaN(v); if (!r.bad) r.t = v == null ? null : Math.round(v * 10) / 10; paintFlags(); });
     const nudge = (d, label) => h("button", { type: "button", class: "lye-b", title: `${d < 0 ? "Earlier" : "Later"} by 0.1 s`, "aria-label": `Line ${k + 1} ${label}`,
-      onclick: () => { r.t = Math.max(0, Math.round(((r.t ?? nowT()) + d) * 10) / 10); time.value = fmtLT(r.t); paintFlags(); } }, d < 0 ? "−.1" : "+.1");
+      onclick: () => { r.t = Math.max(0, Math.round(((r.t ?? nowT()) + d) * 10) / 10); r.bad = false; time.value = fmtLT(r.t); paintFlags(); } }, d < 0 ? "−.1" : "+.1");
     const text = h("input", { type: "text", class: "lye-text", value: r.line, placeholder: "(blank line = a ♪ break)", "aria-label": `Line ${k + 1}`, maxlength: "300" });
     text.addEventListener("input", () => { r.line = text.value; });
     text.addEventListener("focus", () => { ed.cur = k; list.querySelectorAll("li.cur").forEach((x) => x.classList.remove("cur")); text.closest("li").classList.add("cur"); });
@@ -258,11 +268,12 @@ function lyricsEditor(c, L, close) {
     list.querySelectorAll("li[data-k]").forEach((li) => {
       const r = ed.rows[+li.dataset.k], bad = r.t != null && r.t < prev;
       if (r.t != null) prev = Math.max(prev, r.t);
-      li.classList.toggle("bad", bad); li.querySelector(".lye-time").classList.remove("bad-in");
+      li.classList.toggle("bad", bad); li.querySelector(".lye-time").classList.toggle("bad-in", !!r.bad);
     });
-    const n = outOfOrder();
-    warn.hidden = !n;
-    warn.textContent = n ? `${n} line${n === 1 ? " is" : "s are"} earlier than the line above. Saving puts them in time order.` : "";
+    const n = outOfOrder(), wrong = unreadable();
+    warn.hidden = !n && !wrong;
+    warn.textContent = [wrong ? `${wrong} time${wrong === 1 ? " isn't" : "s aren't"} readable: use m:ss.0, like 1:02.5.` : "",
+      n ? `${n} line${n === 1 ? " is" : "s are"} earlier than the line above. Saving puts them in time order.` : ""].filter(Boolean).join(" ");
   }
   const lrcBox = () => { // Paste LRC: [mm:ss.xx] line
     const ta = h("textarea", { class: "lye-lrc", rows: "5", placeholder: "[00:12.40] First line\n[00:16.10] Second line", "aria-label": "LRC text" });
@@ -277,6 +288,7 @@ function lyricsEditor(c, L, close) {
   const says = h("span", { class: "muted lye-say", role: "status" });
   async function save() {
     if (busy) return;
+    if (ed.mode === "timed" && unreadable()) { says.classList.add("warn-t"); says.textContent = "Fix the times marked in red first."; return; }
     const body = ed.mode === "timed" ? { synced: ed.rows.map((r) => ({ t: r.t, line: r.line })) } : { plain: ed.text };
     busy = true; says.classList.remove("warn-t"); says.textContent = "Saving…";
     try { await saveEdits(c.id, body); close(); }

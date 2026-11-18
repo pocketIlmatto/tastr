@@ -72,7 +72,7 @@ export function setStems(id, st) {
   const was = stemStatus.get(id);
   stemStatus.set(id, st);
   // Stems made, made again or deleted: reload the list so the track's Vocals answer (tastr/vocals.py) follows them.
-  if (was && stemSet(st) && stemSet(was) && stemSet(st) !== stemSet(was)) loadTracks().then(() => { renderList(); vocChanged(id); }).catch(() => {});
+  if (was && stemSet(st) && stemSet(st) !== stemSet(was)) loadTracks().then(() => { renderList(); vocChanged(id); }).catch(() => {});
   const running = [...stemStatus.values()].map((x) => (stemsAgain(x) ? x.again : x)).find((x) => x.state === "running");
   jobTitle("stems", running ? stemsEta(running).frac : null);
   for (const l of [...stemListeners]) {

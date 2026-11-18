@@ -133,3 +133,6 @@ def test_the_filter_is_wired_in_library_and_files():
     assert 'value="unsure">Not sure' in html
     assert 'voc: "" })' in js and "f.voc)" in js and "vocIs(t.voc) === f.voc" in js
     assert "Show tracks like this" in js and 'vocFilter("unsure")' in js
+    # the answer follows a first separation (running -> ready) and ML tags arriving on an open card
+    assert "if (was && stemSet(st) && stemSet(st) !== stemSet(was))" in js
+    assert "renderList(); vocChanged(c.id); }" in js

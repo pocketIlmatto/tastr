@@ -60,7 +60,7 @@ async function pollMl(c) {
       if (st.state !== "queued" && st.state !== "running") break;
       if (currentId !== c.id) break; // another track is open; its card polls for itself
     }
-    if (mlState(c) === "done") { await loadTracks(); renderList(); }
+    if (mlState(c) === "done") { await loadTracks(); renderList(); vocChanged(c.id); } // the voice score may settle Vocals
   } finally { mlPolling.delete(c.id); }
 }
 // Try again: POST /api/tracks/{id}/ml-tags starts a run (or joins one), then poll it.

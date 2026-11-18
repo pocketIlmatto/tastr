@@ -7,6 +7,10 @@
 // separating the stems first when needed. The answer's `listen` is the job ({state: none | queued | separating |
 // listening | error}); once it's done the lyrics are LRCLIB's words with times (`timed_by: "whisper"`, lines it
 // couldn't place carry `guess: true`) or what was heard (`source: "whisper"`).
+// Your own lyrics (T92 in the sandbox): PUT /api/tracks/{id}/lyrics/edits {synced: [{t, line}]} or {plain} keeps the
+// person's lines apart from LRCLIB's or Whisper's answer, so looking up or listening again never overwrites them; the
+// answer then has edited, edited_at, base (lrclib | whisper | none) and newer (a different answer came in since).
+// DELETE drops the edits; POST .../edits/keep keeps them over the newer answer.
 // Karaoke: one switch for the card player, the playlist bar and the sing-along view, kept per browser (tastr-karaoke).
 // It plays the track's karaoke mix (its stems without the vocals): POST /api/tracks/{id}/karaoke makes it from the
 // stems the first time (a few seconds), GET .../karaoke/audio plays it.
@@ -185,6 +189,18 @@ export async function loadLyrics(id) {
   try { lyrics.set(id, await api(`/api/tracks/${id}/lyrics`)); changed(); } catch (_) { /* no lyrics then */ }
   return lyrics.get(id);
 }
+// Save, undo or keep the person's edits; the answer is the lyrics as shown. Errors go to the caller.
+async function editCall(id, method, path, body) {
+  const was = lyrics.get(id) || {};
+  const got = await api(`/api/tracks/${id}/lyrics/edits${path}`, { method, ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}) });
+  lyrics.set(id, { ...got, listen_available: got.listen_available ?? was.listen_available });
+  changed();
+  return got;
+}
+const saveEdits = (id, body) => editCall(id, "PUT", "", body);
+const undoEdits = (id) => editCall(id, "DELETE", "");
+const keepEdits = (id) => editCall(id, "POST", "/keep");
+const mineLabel = (L) => (L.base && L.base !== "none" ? "Edited by you" : "Typed by you");
 const fmtDay = (iso) => {
   const d = new Date(String(iso || "").replace(" ", "T").replace(/(T\d\d:\d\d(:\d\d)?)$/, "$1Z"));
   return isNaN(d) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
@@ -221,10 +237,159 @@ export function karaCtl(id, o = {}) {
   return wrap;
 }
 
+// ---- the editor: timed rows (time, nudges, Set to now, text) or one textarea for plain lyrics ----
+const fmtLT = (t) => (t == null ? "" : `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`);
+// "1:02.5", "62.5" or "" (no time) -> seconds or null; anything else NaN
+const parseLT = (v) => { v = String(v).trim(); if (!v) return null; const m = /^(\d+):(\d{1,2}(?:\.\d*)?)$/.exec(v); if (m) return +m[1] * 60 + +m[2]; return /^\d+(\.\d*)?$/.test(v) ? +v : NaN; };
+// Pasted LRC: one row per stamp ("[00:12.00][01:30.50] chorus" is two rows), in time order; tags and lines without a stamp are skipped.
+export function parseLRC(text) {
+  const out = [];
+  for (const raw of String(text).split(/\r?\n/)) {
+    let rest = raw.trim(), m;
+    const ts = [];
+    while ((m = /^\[(\d+):(\d+(?:[.:]\d+)?)\]/.exec(rest))) { ts.push(+m[1] * 60 + +m[2].replace(":", ".")); rest = rest.slice(m[0].length); }
+    for (const t of ts) out.push({ t: Math.round(t * 10) / 10, line: rest.trim() });
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+function lyricsEditor(c, L, close) {
+  const startTimed = synced(L);
+  const ed = { mode: startTimed ? "timed" : "plain", rows: startTimed ? L.synced.map((x) => ({ t: x.guess ? null : x.t, line: x.line })) : [], text: startTimed ? "" : L?.plain || "", cur: 0 };
+  const snap = () => JSON.stringify([ed.mode, ed.rows, ed.text]), start = snap();
+  const wrap = h("div", { class: "lye", role: "group", "aria-label": "Edit lyrics" });
+  let list = null, warn = null, cancelSure = false, busy = false;
+  const nowT = () => Math.round(lyrClock(c.id).t * 10) / 10;
+  const unreadable = () => ed.rows.filter((r) => r.bad).length;
+  const outOfOrder = () => { let prev = -1, n = 0; ed.rows.forEach((r) => { if (r.t == null) return; if (r.t < prev) n++; prev = Math.max(prev, r.t); }); return n; };
+  const focusRow = (k) => { const el = list && list.querySelector(`li[data-k="${k}"] .lye-text`); if (el) { el.focus({ preventScroll: true }); el.closest("li").scrollIntoView({ block: "nearest" }); } };
+  const stamp = (k) => { if (!ed.rows[k]) return; ed.rows[k].t = nowT(); ed.rows[k].bad = false; ed.cur = Math.min(k + 1, ed.rows.length - 1); paint(); focusRow(ed.cur); };
+  function rowEl(r, k) {
+    const time = h("input", { type: "text", class: "lye-time", inputmode: "decimal", value: fmtLT(r.t), placeholder: "–:––", "aria-label": `Time of line ${k + 1}`, title: "m:ss.0" });
+    time.addEventListener("change", () => { const v = parseLT(time.value); r.bad = Number.isNaN(v); if (!r.bad) r.t = v == null ? null : Math.round(v * 10) / 10; paintFlags(); });
+    const nudge = (d, label) => h("button", { type: "button", class: "lye-b", title: `${d < 0 ? "Earlier" : "Later"} by 0.1 s`, "aria-label": `Line ${k + 1} ${label}`,
+      onclick: () => { r.t = Math.max(0, Math.round(((r.t ?? nowT()) + d) * 10) / 10); r.bad = false; time.value = fmtLT(r.t); paintFlags(); } }, d < 0 ? "−.1" : "+.1");
+    const text = h("input", { type: "text", class: "lye-text", value: r.line, placeholder: "(blank line = a ♪ break)", "aria-label": `Line ${k + 1}`, maxlength: "300" });
+    text.addEventListener("input", () => { r.line = text.value; });
+    text.addEventListener("focus", () => { ed.cur = k; list.querySelectorAll("li.cur").forEach((x) => x.classList.remove("cur")); text.closest("li").classList.add("cur"); });
+    return h("li", { "data-k": String(k), class: k === ed.cur ? "cur" : "" },
+      h("span", { class: "lye-tools" }, time, nudge(-0.1, "earlier"), nudge(0.1, "later"),
+        h("button", { type: "button", class: "lye-b lye-stamp", title: "Set this line's time to where the track is playing (Ctrl+Enter, ⌘+Enter on a Mac)", onclick: () => stamp(k) },
+          h("span", { class: "lye-long" }, "Set to now"), h("span", { class: "lye-short", "aria-hidden": "true" }, "Now"))),
+      text,
+      h("span", { class: "lye-rowacts" },
+        h("button", { type: "button", class: "lye-b", title: "Add a line after this one (a missing repeat, say)", "aria-label": `Add a line after line ${k + 1}`, onclick: () => { ed.rows.splice(k + 1, 0, { t: null, line: "" }); ed.cur = k + 1; paint(); focusRow(k + 1); } }, "＋"),
+        h("button", { type: "button", class: "lye-b", title: "Remove this line", "aria-label": `Remove line ${k + 1}`, onclick: () => { ed.rows.splice(k, 1); ed.cur = Math.max(0, Math.min(ed.cur, ed.rows.length - 1)); paint(); } }, "×")));
+  }
+  function paintFlags() { // lines earlier than the line above in the warn colour, with a note
+    if (!list) return;
+    let prev = -1;
+    list.querySelectorAll("li[data-k]").forEach((li) => {
+      const r = ed.rows[+li.dataset.k], bad = r.t != null && r.t < prev;
+      if (r.t != null) prev = Math.max(prev, r.t);
+      li.classList.toggle("bad", bad); li.querySelector(".lye-time").classList.toggle("bad-in", !!r.bad);
+    });
+    const n = outOfOrder(), wrong = unreadable();
+    warn.hidden = !n && !wrong;
+    warn.textContent = [wrong ? `${wrong} time${wrong === 1 ? " isn't" : "s aren't"} readable: use m:ss.0, like 1:02.5.` : "",
+      n ? `${n} line${n === 1 ? " is" : "s are"} earlier than the line above. Saving puts them in time order.` : ""].filter(Boolean).join(" ");
+  }
+  const lrcBox = () => { // Paste LRC: [mm:ss.xx] line
+    const ta = h("textarea", { class: "lye-lrc", rows: "5", placeholder: "[00:12.40] First line\n[00:16.10] Second line", "aria-label": "LRC text" });
+    const say = h("span", { class: "muted" });
+    return h("div", { class: "lye-paste" }, ta, h("div", { class: "lye-acts" },
+      h("button", { type: "button", onclick: () => {
+        const rows = parseLRC(ta.value);
+        if (!rows.length) { say.textContent = "No [mm:ss.xx] lines found."; return; }
+        ed.mode = "timed"; ed.rows = rows; ed.cur = 0; paint();
+      } }, "Use these lines"), h("button", { type: "button", class: "linklike", onclick: () => paint() }, "Cancel"), say));
+  };
+  const says = h("span", { class: "muted lye-say", role: "status" });
+  async function save() {
+    if (busy) return;
+    if (ed.mode === "timed" && unreadable()) { says.classList.add("warn-t"); says.textContent = "Fix the times marked in red first."; return; }
+    const body = ed.mode === "timed" ? { synced: ed.rows.map((r) => ({ t: r.t, line: r.line })) } : { plain: ed.text };
+    busy = true; says.classList.remove("warn-t"); says.textContent = "Saving…";
+    try { await saveEdits(c.id, body); close(); }
+    catch (e) { says.classList.add("warn-t"); says.textContent = `Couldn't save: ${e.message}`; }
+    finally { busy = false; }
+  }
+  function paint() {
+    cancelSure = false;
+    const kids = [];
+    if (ed.mode === "timed") {
+      kids.push(h("p", { class: "muted lye-hint" }, "Play the track and press ", h("b", {}, "Set to now"), " as each line starts, or ", h("kbd", {}, "Ctrl"), "+", h("kbd", {}, "Enter"), " (", h("kbd", {}, "⌘"), "+", h("kbd", {}, "Enter"),
+        " on a Mac) to stamp the line you're on and move to the next. The line being sung still lights up, so you can check."));
+      list = h("ol", { class: "lye-rows" }, ...ed.rows.map(rowEl));
+      warn = h("p", { class: "warn-t lye-warn", role: "status", hidden: "" });
+      kids.push(list, warn, h("p", { class: "lye-more" },
+        h("button", { type: "button", class: "linklike", onclick: () => { ed.rows.push({ t: null, line: "" }); ed.cur = ed.rows.length - 1; paint(); focusRow(ed.cur); } }, "＋ Add line"),
+        h("button", { type: "button", class: "linklike", onclick: (e) => e.currentTarget.closest(".lye-more").after(lrcBox()) }, "Paste LRC")));
+    } else {
+      list = null;
+      const ta = h("textarea", { class: "lye-plain", rows: "12", "aria-label": "Lyrics" });
+      ta.value = ed.text;
+      ta.addEventListener("input", () => { ed.text = ta.value; });
+      kids.push(ta, h("p", { class: "muted lye-hint" }, "One line per line; a blank line between verses. After saving you can time them with ", h("b", {}, "Time these lines"), ", or ",
+        h("button", { type: "button", class: "linklike", onclick: () => {
+          ed.rows = ed.text.split("\n").map((line) => ({ t: null, line: line.trim() })).filter((r, k, a) => r.line || (k && a[k - 1].line));
+          ed.mode = "timed"; ed.cur = 0; paint(); focusRow(0);
+        } }, "add times by hand"), ". ", h("button", { type: "button", class: "linklike", onclick: (e) => e.currentTarget.closest("p").after(lrcBox()) }, "Paste LRC")));
+      setTimeout(() => ta.isConnected && ta.focus({ preventScroll: true }));
+    }
+    const cancel = h("button", { type: "button", onclick: () => {
+      if (snap() === start || cancelSure) return close();
+      cancelSure = true; cancel.textContent = "Discard your changes? Click again";
+      setTimeout(() => { if (cancel.isConnected) { cancelSure = false; cancel.textContent = "Cancel"; } }, 4000);
+    } }, "Cancel");
+    says.textContent = L?.edited ? "Saves over your earlier edits." : "Your edits are yours: looking up or listening again won't overwrite them.";
+    says.classList.remove("warn-t");
+    wrap.replaceChildren(...kids, h("div", { class: "lye-acts lye-foot" }, h("button", { type: "button", class: "primary", onclick: save }, "Save"), cancel, says));
+    paintFlags();
+  }
+  wrap.addEventListener("keydown", (e) => { if (ed.mode === "timed" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); stamp(ed.cur); } });
+  watch(wrap, () => { // the line being sung lights up in the editor too
+    if (!list) return;
+    const t = lyrClock(c.id).t;
+    let i = -1;
+    ed.rows.forEach((r, k) => { if (r.t != null && r.t <= t + 0.15 && r.line) i = k; });
+    if (wrap.dataset.now !== String(i)) { wrap.dataset.now = String(i); list.querySelectorAll("li[data-k]").forEach((li) => li.classList.toggle("now", +li.dataset.k === i)); }
+  });
+  paint();
+  return wrap;
+}
+
 // ---- the card's Lyrics section ----
 export function lyricsBody(c) {
   const box = h("div", { class: "ly" });
-  const credit = (L) => heard(L)
+  let editing = false;
+  const editBtn = (label) => h("button", { type: "button", class: "tp-btn ly-edit", title: label === "Type lyrics" ? "Type or paste this track's lyrics yourself" : "Fix words, add a missing line, or fix when lines light up",
+    onclick: () => { editing = true; paint(); } }, "✎ " + label);
+  const failed = (p, e) => p.append(h("span", { class: "warn-t" }, ` Couldn't do that: ${e.message}`));
+  // "Edited by you · based on LRCLIB · date. Undo my edits", the undo asking first
+  const editedCredit = (L) => {
+    const p = h("p", { class: "muted ly-credit ly-mine" });
+    const from = L.base === "whisper" ? "what Whisper heard" : L.base === "lrclib" ? "LRCLIB" : null;
+    const fill = (sure) => p.replaceChildren(h("b", { class: "mine-tag" }, mineLabel(L)), from ? ` · based on ${from}` : "", L.timed_by === "whisper" ? " · timed by listening" : "",
+      L.edited_at ? ` · ${fmtDay(L.edited_at)}. ` : ". ",
+      sure ? h("span", { class: "ly-sure" }, `Drop your edits and go back to ${L.base === "whisper" ? "what Whisper heard" : L.base === "lrclib" ? "LRCLIB's lyrics" : "no lyrics"}? This can't be undone. `,
+        h("button", { type: "button", class: "linklike danger-link", onclick: () => undoEdits(c.id).catch((e) => failed(p, e)) }, "Yes, undo my edits"), " ",
+        h("button", { type: "button", class: "linklike", onclick: () => fill(false) }, "Keep them"))
+        : h("button", { type: "button", class: "linklike", onclick: () => fill(true) }, "Undo my edits"));
+    fill(false);
+    return p;
+  };
+  // A newer LRCLIB or Whisper answer under the edits: show it (dropping the edits, asked first) or keep mine
+  const newerNote = (L) => {
+    if (!L.edited || !L.newer) return null;
+    const p = h("p", { class: "ly-newer", role: "status" }), who = L.source === "whisper" ? "Listening found" : "LRCLIB has";
+    const fill = (sure) => p.replaceChildren(h("span", { class: "muted" }, sure ? `Show the new lyrics? Your edits will be dropped. ` : `${who} new lyrics for this track${L.fetched_at ? ` (${fmtDay(L.fetched_at)})` : ""}. `),
+      sure ? h("button", { type: "button", class: "linklike danger-link", onclick: () => undoEdits(c.id).catch((e) => failed(p, e)) }, "Yes, show them")
+        : h("button", { type: "button", class: "linklike", onclick: () => fill(true) }, "Show them"), " ",
+      h("button", { type: "button", class: "linklike", onclick: () => (sure ? fill(false) : keepEdits(c.id).catch((e) => failed(p, e))) }, sure ? "Cancel" : "Keep mine"));
+    fill(false);
+    return p;
+  };
+  const credit = (L) => L && L.edited ? editedCredit(L) : heard(L)
     ? h("p", { class: "muted ly-credit ly-heard" }, langLabel(L), h("b", {}, "Heard by Whisper from the vocals. Words may be wrong."), " ",
       L.relook ? h("span", {}, h("span", { class: "spin", "aria-hidden": "true" }), " Looking on LRCLIB…")
         : [L.relooked ? `Still not on LRCLIB (checked ${fmtDay(L.relooked)}). ` : "", h("button", { type: "button", class: "linklike", onclick: () => lookUp(c.id) }, "Look on LRCLIB again")])
@@ -252,9 +417,12 @@ export function lyricsBody(c) {
   let lines = null, lastIdx = -2, userScrolled = 0;
   const paint = () => {
     const L = lyrics.get(c.id); lines = null; lastIdx = -2;
-    const top = h("div", { class: "ly-top" }, karaCtl(c.id, { card: c }), hasLyrics(L)
-      ? h("button", { type: "button", class: "tp-btn ly-big", title: "Big lyrics for singing along, sized for a phone (Esc to close)", onclick: () => openSing(c.id, c.title || c.source?.title, c.source?.artist) }, "⤢ Sing along") : null);
+    if (editing) { box.replaceChildren(h("div", { class: "ly-top" }, karaCtl(c.id, { card: c })), lyricsEditor(c, L, () => { editing = false; box.dataset.st = key(); paint(); })); return; }
     const st = L ? L.state : "none";
+    const canType = L && (st === "not_found" || st === "no_tags" || (L.available === false && st !== "found"));
+    const top = h("div", { class: "ly-top" }, karaCtl(c.id, { card: c }), hasLyrics(L)
+      ? h("button", { type: "button", class: "tp-btn ly-big", title: "Big lyrics for singing along, sized for a phone (Esc to close)", onclick: () => openSing(c.id, c.title || c.source?.title, c.source?.artist) }, "⤢ Sing along") : null,
+      hasLyrics(L) ? editBtn("Edit lyrics") : canType ? editBtn("Type lyrics") : null);
     let body;
     if (L && L.available === false && st !== "found" && !(st === "not_found" || st === "no_tags")) body = [h("p", { class: "ly-state muted" }, "Lyrics lookups aren't set up on this server."), listenLine(L, "hear")].filter(Boolean); // listening works without LRCLIB
     else if (st === "pending") body = [h("p", { class: "muted ly-state" }, h("span", { class: "spin", "aria-hidden": "true" }), " Looking for lyrics on LRCLIB…")];
@@ -267,21 +435,23 @@ export function lyricsBody(c) {
       const steps = L.synced.filter((x) => x.t != null && !x.guess).map((x) => x.t).map((t, k, a) => (k ? t - a[k - 1] : 0)).slice(1).sort((a, b) => a - b);
       const gapMin = Math.max(12, 2.2 * (steps[steps.length >> 1] || 0));
       L.synced.forEach((x, k) => {
+        if (!x.line) { lines.append(h("li", { class: "ly-gap", "aria-hidden": "true" }, "♪")); return; } // a blank line is a break
         if (x.guess || x.t == null) { // timed by listening, but this line couldn't be placed: never lights up
           lines.append(h("li", { "data-k": String(k), class: "untimed" }, h("span", { class: "ly-line", title: "Not timed: listening couldn't place this line" }, x.line)));
           return;
         }
         if (x.t - prevT > gapMin && k) lines.append(h("li", { class: "ly-gap", "aria-hidden": "true" }, "♪"));
-        lines.append(h("li", { "data-k": String(k) }, h("button", { type: "button", class: "ly-line", title: `Play from ${mmss(x.t)}`, onclick: () => lyrSeek(c.id, x.t) }, x.line || "♪")));
+        lines.append(h("li", { "data-k": String(k) }, h("button", { type: "button", class: "ly-line", title: `Play from ${mmss(x.t)}`, onclick: () => lyrSeek(c.id, x.t) }, x.line)));
         prevT = x.t;
       });
       lines.addEventListener("wheel", () => (userScrolled = Date.now()), { passive: true });
       lines.addEventListener("touchmove", () => (userScrolled = Date.now()), { passive: true });
-      body = [lines, h("p", { class: "muted ly-hint" }, "The line being sung lights up as the track plays. Click a line to play from there."), credit(L)];
+      if (L.edited) lines.classList.add("ly-edited");
+      body = [newerNote(L), lines, h("p", { class: "muted ly-hint" }, "The line being sung lights up as the track plays. Click a line to play from there."), credit(L)].filter(Boolean);
     } else if (st === "found" && L.plain) {
       const busy = LISTENING.includes(L.listen?.state) || L.listen?.state === "error";
-      body = [h("p", { class: "muted ly-hint" }, "These lyrics aren't timed, so they don't follow the track. ", busy ? null : listenLine(L, "time")),
-        busy ? listenLine(L, "time") : null, h("div", { class: "ly-plain" }, L.plain), credit(L)].filter(Boolean);
+      body = [newerNote(L), h("p", { class: "muted ly-hint" }, "These lyrics aren't timed, so they don't follow the track. ", busy ? null : listenLine(L, "time")),
+        busy ? listenLine(L, "time") : null, h("div", { class: "ly-plain" + (L.edited ? " ly-edited" : "") }, L.plain), credit(L)].filter(Boolean);
     } else if (st === "not_found") body = [h("p", { class: "ly-state" }, "LRCLIB doesn't have lyrics for this track yet. ", L.available === false ? null : again("Look again")), listenLine(L, "hear"), credit(L)].filter(Boolean);
     else if (st === "no_tags") body = [h("p", { class: "ly-state" }, "Can't look up lyrics: the file has no artist or title tags. ", h("span", { class: "muted" }, "Add them in Metadata, then look again.")), listenLine(L, "hear")].filter(Boolean);
     else body = [h("p", { class: "ly-state" }, h("span", { class: "warn-t" }, "Couldn't reach LRCLIB. "), again())];
@@ -300,8 +470,8 @@ export function lyricsBody(c) {
       lines.scrollTo({ top: at - lines.clientHeight / 2 + cur.offsetHeight / 2, behavior: "smooth" });
     }
   };
-  const key = () => { const L = lyrics.get(c.id); return L ? [L.state, L.fetched_at, L.source, L.timed_by, L.listen?.state, L.relook, L.relooked].join("|") : "none"; };
-  onBus(box, () => { const k = key(); if (box.dataset.st !== k || /\|separating\|/.test(k)) { box.dataset.st = k; paint(); } }); // separating: the stems' % moves
+  const key = () => { const L = lyrics.get(c.id); return L ? [L.state, L.fetched_at, L.source, L.timed_by, L.listen?.state, L.relook, L.relooked, L.edited_at, L.newer].join("|") : "none"; };
+  onBus(box, () => { if (editing) return; const k = key(); if (box.dataset.st !== k || /\|separating\|/.test(k)) { box.dataset.st = k; paint(); } }); // separating: the stems' % moves
   cardLyrics(c);
   paint(); box.dataset.st = key();
   watch(box, follow);
@@ -329,7 +499,7 @@ export function openSing(id, title, artist) {
       h("button", { type: "button", class: "sing-x", title: "Close (Esc)", "aria-label": "Close sing-along", onclick: close }, "✕")),
     stage,
     h("div", { class: "sing-foot" }, play, karaCtl(id, { cls: "sing-kara" }), h("span", { class: "muted sing-credit" },
-      heard(L) ? `Heard by Whisper from the vocals${heardLangs(L) ? `, in ${heardLangs(L).say}` : ""}. Words may be wrong.` : L.timed_by === "whisper" ? "Lyrics from LRCLIB · timed by listening" : "Lyrics from LRCLIB")));
+      L.edited ? mineLabel(L) : heard(L) ? `Heard by Whisper from the vocals${heardLangs(L) ? `, in ${heardLangs(L).say}` : ""}. Words may be wrong.` : L.timed_by === "whisper" ? "Lyrics from LRCLIB · timed by listening" : "Lyrics from LRCLIB")));
   let last = "";
   const paint = () => {
     const ck = lyrClock(id), lab = ck.playing ? "❚❚" : "▶";

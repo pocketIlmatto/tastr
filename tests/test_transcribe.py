@@ -198,6 +198,7 @@ def test_made_up_subtitle_lines_are_recognised():
                  "ترجمة نانسي قنقر", "ご視聴ありがとうございました", "Thanks for watching!"]:
         assert tr.made_up(line), line
     assert not tr.made_up("Paper lanterns drift away over the quiet harbour")
+    assert not tr.made_up("thank you for watching the lanterns drift away over the quiet harbour every night")
 
 
 def test_transcribe_sets_the_language_of_each_stretch(monkeypatch, tmp_path):
@@ -239,6 +240,8 @@ def test_transcribe_sets_the_language_of_each_stretch(monkeypatch, tmp_path):
     assert out["language"] == "en" and out["audio_seconds"] == 120.0
     assert [x["lang"] for x in out["stretches"]] == ["es", "en", "en"]
     assert out["windows"][3] == {"t": 90.0, "lang": "de", "p": 0.7}
+    assert out["dropped"] == [{"t": 9.0, "words": 1}, {"t": 69.0, "words": 1}, {"t": 99.0, "words": 1},
+                              {"t": 99.0, "words": 1}]  # the made-up line, noted without its words
 
     calls.clear()
     out = tr.transcribe(tmp_path / "vocals.flac", device="cpu", language="en")  # told the language: no detection

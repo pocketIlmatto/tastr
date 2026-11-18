@@ -29,6 +29,7 @@ CJK_WORD = 0.6  # how many words a character of a script without spaces (Chinese
 WINDOW = 30.0  # seconds Whisper reads at a time; the language is detected again in each one
 MIN_LANGUAGE = 0.5  # with no window SWITCH-sure, the language with most of those at least this sure
 SWITCH = 0.6  # a window keeps its own language when Whisper is this sure of it; others follow the nearest sure one
+MADE_UP_WORDS = 12  # a made-up subtitle line is at most this many words (see made_up)
 RATE = 16000  # samples a second in the audio Whisper reads
 
 # Scripts written without spaces between words: their characters are compared one by one, and joined without spaces.
@@ -68,16 +69,18 @@ def transcribe(path: str | Path, model: str = MODEL, language: str | None = None
             audio, spans = None, [(0.0, None, None)]
     words: list[dict] = []
     stretches: list[dict] = []
+    dropped: list[dict] = []
     first_info, seg = None, 0
     for n, (t0, t1, code) in enumerate(spans):
         whole = audio is None or (t0 == 0 and t1 is None)
         src = str(path) if whole else audio[int(t0 * RATE):None if t1 is None else int(t1 * RATE)]
-        heard, info = _hear(m, src, code)
-        if not heard and len(spans) > 1:
+        heard, info = _hear(m, src, code, dropped, t0)
+        if not heard and (len(spans) > 1 or code is not None):
             # Nothing (or only made-up lines) in this stretch's language: the detection was probably wrong, so try
-            # the language of the stretch before it (the first: the one after).
-            other = spans[n - 1][2] if n else spans[n + 1][2]
-            heard, info = _hear(m, src, other)
+            # the language of the stretch before it (the first: the one after), or with only one stretch, Whisper's
+            # own detection.
+            other = (spans[n - 1][2] if n else spans[n + 1][2]) if len(spans) > 1 else None
+            heard, info = _hear(m, src, other, dropped, t0)
             code = other if heard else code
         first_info = first_info or info
         stretches.append({"t": t0, "end": t1, "lang": str(code or info.language), "words": sum(len(g) for g in heard)})
@@ -94,20 +97,23 @@ def transcribe(path: str | Path, model: str = MODEL, language: str | None = None
     return {"language": first,
             "language_probability": _num(info.language_probability, 3) if first == info.language else None,
             "languages": languages, "model": model, "device": "cuda" if cuda else "cpu",
-            "lines": lines_from_words(words), "words": words, "stretches": stretches,
+            "lines": lines_from_words(words), "words": words, "stretches": stretches, "dropped": dropped,
             "windows": [{"t": k * WINDOW, "lang": c, "p": _num(pr, 3)} for k, (c, pr) in enumerate(found)],
             "audio_seconds": _num(len(audio) / RATE if audio is not None else info.duration, 1),
             "load_seconds": round(loaded - start, 1), "seconds": round(time.monotonic() - loaded, 1)}
 
 
-def _hear(m: Any, src: Any, code: str | None) -> tuple[list[list[Any]], Any]:
-    """Whisper's words in `src`, one list per segment, without empty segments or made-up subtitle lines."""
+def _hear(m: Any, src: Any, code: str | None, dropped: list[dict], t0: float) -> tuple[list[list[Any]], Any]:
+    """Whisper's words in `src`, one list per segment, without empty segments or made-up subtitle lines (noted in
+    `dropped` as {t, words}, without their text)."""
     segments, info = m.transcribe(src, language=code, word_timestamps=True, vad_filter=True,
                                   condition_on_previous_text=False, beam_size=5)
     out = []
     for s in segments:
         got = [w for w in (s.words or []) if w.word.strip()]
-        if got and not made_up("".join(w.word for w in got)):
+        if got and made_up("".join(w.word for w in got)):
+            dropped.append({"t": _num(t0 + got[0].start, 2), "words": len(got)})
+        elif got:
             out.append(got)
     return out, info
 
@@ -159,8 +165,9 @@ MADE_UP = re.compile(
 
 
 def made_up(text: str) -> bool:
-    """Whether a heard segment is one of Whisper's made-up subtitle lines (MADE_UP)."""
-    return bool(MADE_UP.search(text))
+    """Whether a heard segment is one of Whisper's made-up subtitle lines (MADE_UP): it says one, and is short, as
+    those are. A long segment with such a phrase in it is sung words and is kept."""
+    return bool(MADE_UP.search(text)) and len(text.split()) <= MADE_UP_WORDS
 
 
 def languages_of(words: list[dict]) -> list[dict]:

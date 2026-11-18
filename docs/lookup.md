@@ -236,11 +236,11 @@ without translating them. Without a set language, it detects one in every 30 s w
 window keeps that language when Whisper is at least 60% sure, and any other (quiet windows and "oh oh" get detected
 as almost anything) follows the nearest sure window. Each stretch in one language is then transcribed with that
 language set, so a song that moves between languages keeps each part's own words and script; a stretch that hears
-nothing in its language is tried again in its neighbour's. The answer keeps each window's detection (`windows`) and
+nothing in its language is tried again in its neighbour's (a song of one stretch: with Whisper's own detection). The answer keeps each window's detection (`windows`) and
 the stretches (`stretches`), so a wrong switch can be checked without running Whisper again. With Whisper
 deciding window by window instead (faster-whisper's `multilingual`), the part after the switch mostly came out as
-made-up subtitle credits ("Sous-titrage Société Radio-Canada") in the 2026-11-18 trial. Segments that are only
-such a credit are dropped. The stored lyrics list what was heard in `languages` (`[{code, share}]`, most words
+made-up subtitle credits ("Sous-titrage Société Radio-Canada") in the 2026-11-18 trial. Short segments (12 words
+or fewer) that say such a credit are dropped and counted in `dropped`. The stored lyrics list what was heard in `languages` (`[{code, share}]`, most words
 first; `language` is the first). Timing LRCLIB's lyrics compares words in every script, without accents or optional
 vowel marks, and Chinese, Japanese, Thai and the like character by character, since they have no spaces between
 words; their lines are joined without spaces and break at full-width punctuation.

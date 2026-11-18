@@ -1,6 +1,6 @@
 // The track list: search, sort and filters, placeholder rows while files analyze, the collapsible sidebar and quick jump.
 
-import { $, VIBE_GROUPS, api, currentId, groupOf, h, isNum, labels, mmss, progBar, reviewRows, rowVibes, setTracks, tracks } from "./core.js";
+import { $, VIBE_GROUPS, api, currentId, groupOf, h, isNum, labels, mmss, progBar, reviewRows, rowVibes, setTracks, tracks, VOC_LABEL, vocIs } from "./core.js";
 import { bulkBusy, jobs, renderBulk, runBulk, sel, selecting, setSelecting, toggleSel } from "./bulk.js";
 import { serverCfg } from "./daw.js";
 import { loadReview, renderReview } from "./labels.js";
@@ -9,7 +9,7 @@ import { A_STEPS } from "./upload.js";
 import { lists, loadLists, onListsChange } from "./lists.js";
 import { exportMenu, onPlaying, playList, playingId } from "./playlist.js";
 
-export const LIB_CLEAR = () => ({ q: "", vibes: [], key: "", bmin: "", bmax: "", up: "", upFrom: "", upTo: "", lab: "", eng: "" });
+export const LIB_CLEAR = () => ({ q: "", vibes: [], key: "", bmin: "", bmax: "", up: "", upFrom: "", upTo: "", lab: "", eng: "", voc: "" });
 export const lib = { sort: "new", list: null, ...LIB_CLEAR() };  // list: the saved list shown (Library › List), or null for all tracks
 const shownList = () => (lib.list == null ? null : lists.find((l) => l.id === lib.list) || null);
 const listSig = () => { const l = shownList(); return l ? `${l.id}:${l.track_ids.join(",")}` : ""; };
@@ -52,7 +52,7 @@ export const SORTS = {
   energy: (a, b) => (b.energy ?? -1) - (a.energy ?? -1),
   len: (a, b) => (b.duration ?? 0) - (a.duration ?? 0),
 };
-export const filtersOn = (f) => !!(f.q || f.vibes.length || f.key || f.bmin || f.bmax || f.up || f.lab || f.eng);
+export const filtersOn = (f) => !!(f.q || f.vibes.length || f.key || f.bmin || f.bmax || f.up || f.lab || f.eng || f.voc);
 export const libActive = () => filtersOn(lib);
 // Search, sort and filters run in the browser, which is fine for a few hundred tracks. `f` is a filter state like `lib`.
 export function matchTracks(f, list = tracks) {
@@ -63,7 +63,8 @@ export function matchTracks(f, list = tracks) {
     f.vibes.every((v) => (t.tags || []).includes(v)) && (!f.key || keyMatch(t.camelot, f)) &&
     (lo === null || (isNum(t.bpm) && t.bpm >= lo)) && (hi === null || (isNum(t.bpm) && t.bpm <= hi)) &&
     upMatch(t.uploaded, f) && (!f.lab || (need ? need.has(t.id) : (f.lab === "yes") === labels.has(t.id))) &&
-    (!f.eng || (f.eng === "old") === !!t.stale));  // Engine: cards from the current engine, or an older one (Files has no eng)
+    (!f.eng || (f.eng === "old") === !!t.stale) &&  // Engine: cards from the current engine, or an older one (Files has no eng)
+    (!f.voc || vocIs(t.voc) === f.voc));  // Vocals: has vocals, instrumental or not sure (core.js vocIs)
 }
 // A list shows in its own order (the Sort is off meanwhile); search and filters still narrow it.
 export function visibleTracks() {
@@ -111,7 +112,7 @@ function fillFilterOptions() {
 }
 export function syncTools() {
   $("lib-q").value = lib.q; $("lib-sort").value = lib.sort; syncFilterSelects(); $("lib-bmin").value = lib.bmin; $("lib-bmax").value = lib.bmax;
-  $("lib-up").value = lib.up; $("lib-up-from").value = lib.upFrom; $("lib-up-to").value = lib.upTo; $("lib-up-range").hidden = lib.up !== "range"; $("lib-lab").value = lib.lab; $("lib-eng").value = lib.eng;
+  $("lib-up").value = lib.up; $("lib-up-from").value = lib.upFrom; $("lib-up-to").value = lib.upTo; $("lib-up-range").hidden = lib.up !== "range"; $("lib-lab").value = lib.lab; $("lib-eng").value = lib.eng; $("lib-voc").value = lib.voc;
 }
 export async function loadTracks() {
   const [rows] = await Promise.all([api("/api/tracks"), loadReview(false)]);
@@ -184,6 +185,8 @@ export function vibeFilter(tag) {
   lib.vibes = lib.vibes.includes(tag) ? lib.vibes.filter((v) => v !== tag) : [...lib.vibes, tag];
   showFiltered(lib.vibes.includes(tag));
 }
+// The card's "Show tracks like this" under a not-sure Vocals line: the Vocals filter set to that answer.
+export function vocFilter(v) { lib.voc = v; showFiltered(true); }
 // Clicking the key or BPM on the card does the same: compatible keys, or the BPM ± 5. Clicking it again turns it off.
 export function keyFilter(cam) { const k = cam + "~"; lib.key = lib.key === k ? "" : k; showFiltered(!!lib.key); }
 export function bpmFilter(bpm) {
@@ -278,7 +281,8 @@ export function paintPending() {
 // "12 tracks", "3 of 12 tracks", or "8 tracks in “Name”" while a list is shown.
 function countLine(l, n) {
   const all = l ? l.track_ids.filter((id) => tracks.some((t) => t.id === id)).length : tracks.length, inL = l ? ` in “${l.name}”` : "";
-  return libActive() ? `${n} of ${all} tracks${inL}` : `${all} track${all === 1 ? "" : "s"}${inL}`;
+  const voc = lib.voc ? ` · ${VOC_LABEL[lib.voc]}` : "";
+  return libActive() ? `${n} of ${all} tracks${inL}${voc}` : `${all} track${all === 1 ? "" : "s"}${inL}`;
 }
 const noneRow = (l) => (l && !libActive() ? h("li", { class: "muted empty" }, "This list has no tracks left.")
   : h("li", { class: "muted empty" }, "No tracks match. ", h("button", { type: "button", class: "linklike", onclick: clearFilters }, "Clear filters")));
@@ -413,6 +417,7 @@ export function init() {
   $("lib-up-to").addEventListener("change", (e) => { lib.upTo = e.target.value; renderList(); });
   $("lib-lab").addEventListener("change", (e) => { lib.lab = e.target.value; renderList(); });
   $("lib-eng").addEventListener("change", (e) => { lib.eng = e.target.value; renderList(); });
+  $("lib-voc").addEventListener("change", (e) => { lib.voc = e.target.value; renderList(); });
   $("lib-clear").addEventListener("click", clearFilters);
   $("lib-fbtn").addEventListener("click", () => { const f = $("lib-filters"), open = f.hidden; f.hidden = !open; $("lib-fbtn").setAttribute("aria-expanded", String(open)); });
   $("track-list").addEventListener("keydown", (e) => {

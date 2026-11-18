@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from .. import blobs, db, drum_jobs, karaoke, keylock, listen, lookup, lyrics, ml_jobs, runner, service, stems
+from .. import blobs, db, drum_jobs, karaoke, keylock, listen, lookup, lyrics, ml_jobs, runner, service, stems, vocals
 from ..engine import browser_card, rust
 from ..filemeta import describe, legacy_upload_prefix
 from .analysis_jobs import AnalysisJobs, ref
@@ -337,6 +337,9 @@ class AppContext:
         body["drum_model_available"] = drum_jobs.available()
         body["drum_model_state"] = self.drum_runs.status(track_id)["state"]
         body["ml_tags"] = db.get_ml_tags(c, track_id)
+        # One answer for the card's vocal/instrumental chip and the Vocals filter (tastr/vocals.py)
+        body["voc"] = vocals.verdict(vocals.voice_score(body["ml_tags"]),
+                                     vocals.stems_share(self.stem_jobs.status(self.stems_dir(card, track_id))))
         body["ml_tags_available"] = ml_jobs.available()
         ml_run = self.ml_run_status(c, track_id)
         body["ml_tags_state"] = ml_run["state"]

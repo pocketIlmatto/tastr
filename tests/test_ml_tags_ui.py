@@ -33,7 +33,7 @@ def run(body: str):
 
 def test_done_ml_tags_replace_the_weak_engine_vibes_and_keep_dark():
     out = run(f"""
-    const c = {{ tags: {json.dumps(ENGINE)}, ml_tags: {json.dumps(ML)}, ml_tags_state: "none" }};
+    const c = {{ tags: {json.dumps(ENGINE)}, ml_tags: {json.dumps(ML)}, ml_tags_state: "none", voc: {{ is: "no", by: "ml", score: 0.1 }} }};
     const v = C.vibeTags(c);
     out = {{ tags: v.map((t) => [t.tag, t.src]), state: C.mlState(c),
              groups: Object.fromEntries(v.map((t) => [t.tag, C.groupOf(t.tag).key])) }};
@@ -58,7 +58,7 @@ def test_without_ml_tags_the_engine_vibes_stay_as_they_are(state, available, wan
 
 def test_track_list_rows_use_the_same_list():
     out = run("""
-    out = { tagged: C.rowVibes({ tags: ["dark", "driving", "bright"], ml_tags: ["Tech House", "happy", "dark", "vocal"] }),
+    out = { tagged: C.rowVibes({ tags: ["dark", "driving", "bright"], ml_tags: ["Tech House", "happy", "dark", "vocal"], voc: { is: "yes", by: "ml", score: 0.8 } }),
             untagged: C.rowVibes({ tags: ["dark", "driving"], ml_tags: null }), old: C.rowVibes({ tags: ["chill"] }),
             style: C.groupOf("Tech House").key, mood: C.groupOf("happy").key };
     """)

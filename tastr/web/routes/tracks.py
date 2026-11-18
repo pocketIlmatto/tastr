@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from ... import blobs, db, keylock, listen, lookup, lyrics, service, stems
+from ... import blobs, db, keylock, listen, lookup, lyrics, service, stems, vocals
 from ...engine import rust
 from ..context import AppContext, _failure_reason, _unprefixed, log, runs_on, upload_dir
 from ..hosted import today
@@ -63,10 +63,15 @@ def router(ctx: AppContext) -> APIRouter:
                 vibes.setdefault(tid, []).append(tag)
             # ML tags (names), for the tracks that have them: the page swaps them in for the weak engine vibes
             ml = {tid: [t for t in tags.split(",") if t] for tid, tags in c.execute("SELECT track_id, tags FROM ml_tags")}
+            # The Vocals filter (tastr/vocals.py): Essentia's voice score, and the vocal stem's share where stems recorded it
+            voice = {tid: vocals.voice_score(json.loads(res)) for tid, res in c.execute("SELECT track_id, result_json FROM ml_tags")}
+            shas = dict(c.execute("SELECT id, sha256 FROM tracks").fetchall())
         for r in rows:  # tracks uploaded before the hash moved into a folder still have it in their title
             r["title"] = _unprefixed(r["title"], uris.get(r["id"]))
             r["tags"] = vibes.get(r["id"], [])
             r["ml_tags"] = ml.get(r["id"])
+            share = vocals.stems_share(ctx.stem_jobs.status(stems.stems_dir(shas.get(r["id"]), r["id"])))
+            r["voc"] = vocals.verdict(voice.get(r["id"]), share)
             stages, path = engine.get(r["id"], (None, None))
             r["stale"] = bool(rust.stale_stages(_stages(stages)))
             r["audio_gone"] = r["stale"] and not blobs.exists(path)

@@ -3,7 +3,7 @@
 import { $, api, currentId, fmtLeft, h, isNum, jobTitle, mmss, setCurrentId, vibeTags } from "./core.js";
 import { loadTracks, refresh, renderList } from "./library.js";
 import { inReview, setInReview } from "./labels.js";
-import { beatsPerBar, renderCard } from "./card.js";
+import { beatsPerBar, renderCard, vocChanged } from "./card.js";
 import { keyName } from "./daw.js";
 import { setViewsCache } from "./audio.js";
 import { dropEdits, flushEdits, loadEdits } from "./groove-edits.js";
@@ -66,9 +66,13 @@ export const stemsLabel = (st) => {
   const { frac, left } = stemsEta(st);
   return `Separating stems ${Math.round(frac * 100)}% · ${fmtLeft(left)}`;
 };
+// Which stem set a status stands for: none, or ready with the record that made it (its vocal share feeds the Vocals filter).
+const stemSet = (st) => (st && st.state === "ready" ? `ready ${(st.made_with && st.made_with.made_at) || ""}` : st && st.state === "none" ? "none" : null);
 export function setStems(id, st) {
   const was = stemStatus.get(id);
   stemStatus.set(id, st);
+  // Stems made, made again or deleted: reload the list so the track's Vocals answer (tastr/vocals.py) follows them.
+  if (was && stemSet(st) && stemSet(was) && stemSet(st) !== stemSet(was)) loadTracks().then(() => { renderList(); vocChanged(id); }).catch(() => {});
   const running = [...stemStatus.values()].map((x) => (stemsAgain(x) ? x.again : x)).find((x) => x.state === "running");
   jobTitle("stems", running ? stemsEta(running).frac : null);
   for (const l of [...stemListeners]) {

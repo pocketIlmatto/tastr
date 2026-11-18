@@ -121,7 +121,7 @@ def test_transcribe_returns_plain_python_types(monkeypatch, tmp_path):
     import io
 
     assert NoNumpy(io.BytesIO(pickle.dumps(out))).load() == out
-    assert out["words"][0] == {"t": 1.0, "end": 1.4, "w": "w0", "p": 0.91, "seg": 0}
+    assert out["words"][0] == {"t": 1.0, "end": 1.4, "w": "w0", "p": 0.91, "seg": 0, "lang": "en"}
     assert out["lines"] and all(type(x["t"]) is float for x in out["lines"])
 
 
@@ -183,38 +183,57 @@ def test_languages_of_lists_what_was_heard_most_first():
     assert tr.languages_of(words) == [{"code": "es", "share": 0.732}, {"code": "en", "share": 0.244}]
 
 
-def test_transcribe_detects_language_window_by_window(monkeypatch, tmp_path):
-    """A song that moves from Spanish to English: each 30 s window gets its own language, and Whisper is asked to
-    detect it per window (multilingual) so the English isn't written down in Spanish."""
+def test_language_spans_follow_confident_windows_only():
+    found = [("es", 0.9), ("es", 0.95), (None, 0.0), ("en", 0.6), ("en", 0.92), ("en", 0.85), ("es", 0.9)]
+    # The quiet window and the unsure "en" stay Spanish; two sure English windows make a stretch of their own.
+    assert tr.language_spans(found) == [(0.0, 120.0, "es"), (120.0, 180.0, "en"), (180.0, None, "es")]
+    assert tr.language_spans([("ja", 0.99)]) == [(0.0, None, "ja")]
+    assert tr.language_spans([(None, 0.0), ("en", 0.3)]) == [(0.0, None, None)]  # Whisper decides
+
+
+def test_made_up_subtitle_lines_are_recognised():
+    for line in ["Sous-titrage Société Radio-Canada", "Субтитры создавал DimaTorzok", "Altyazı M.K.",
+                 "ترجمة نانسي قنقر", "ご視聴ありがとうございました", "Thanks for watching!"]:
+        assert tr.made_up(line), line
+    assert not tr.made_up("Paper lanterns drift away over the quiet harbour")
+
+
+def test_transcribe_sets_the_language_of_each_stretch(monkeypatch, tmp_path):
+    """A song that moves from Spanish to English: each stretch is transcribed with its own language set, so the
+    English isn't written down in Spanish, and made-up subtitle lines are dropped."""
     import sys
     import types
 
-    seen = {}
+    calls = []
 
     class Model:
         def __init__(self, *a, **k):
             pass
 
-        def transcribe(self, *a, **k):
-            seen.update(k)
-            words = [types.SimpleNamespace(start=5.0 + i, end=5.5 + i, word=f" w{i}", probability=0.9)
-                     for i in range(50)]
-            info = types.SimpleNamespace(language="es", language_probability=0.8, duration=60.0)
-            return iter([types.SimpleNamespace(words=words[:25]), types.SimpleNamespace(words=words[25:])]), info
+        def transcribe(self, src, **k):
+            calls.append((len(src), k["language"]))
+            text = {"es": ["hola", "luna"], "en": ["hello", "moon"]}[k["language"]]
+            words = [types.SimpleNamespace(start=1.0 + i, end=1.5 + i, word=f" {w}", probability=0.9)
+                     for i, w in enumerate(text)]
+            junk = [types.SimpleNamespace(start=9.0, end=9.5, word=" Subtitles by someone", probability=0.5)]
+            info = types.SimpleNamespace(language=k["language"], language_probability=0.97, duration=30.0)
+            return iter([types.SimpleNamespace(words=words), types.SimpleNamespace(words=junk)]), info
 
         def detect_language(self, audio, vad_filter=False):
             return ("es", 0.9, []) if audio[0] == 0 else ("en", 0.95, [])
 
     def decode_audio(path):
-        return [0] * (30 * 16000) + [1] * (30 * 16000)
+        return [0] * (60 * 16000) + [1] * (30 * 16000)
 
     monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=Model,
                                                                             decode_audio=decode_audio))
     out = tr.transcribe(tmp_path / "vocals.flac", device="cpu")
-    assert seen["multilingual"] is True
+    assert calls == [(60 * 16000, "es"), (30 * 16000, "en")]
+    assert [(w["w"], w["t"], w["lang"]) for w in out["words"]] == [
+        ("hola", 1.0, "es"), ("luna", 2.0, "es"), ("hello", 61.0, "en"), ("moon", 62.0, "en")]
     assert out["languages"] == [{"code": "es", "share": 0.5}, {"code": "en", "share": 0.5}]
-    assert out["language"] == "es" and out["words"][0]["lang"] == "es" and out["words"][-1]["lang"] == "en"
+    assert out["language"] == "es" and out["audio_seconds"] == 90.0
 
-    out = tr.transcribe(tmp_path / "vocals.flac", device="cpu", language="fr")  # told the language: no detection
-    assert seen["multilingual"] is False and out["languages"] == [{"code": "fr", "share": 1.0}]
-    assert "lang" not in out["words"][0]
+    calls.clear()
+    out = tr.transcribe(tmp_path / "vocals.flac", device="cpu", language="en")  # told the language: no detection
+    assert [c[1] for c in calls] == ["en"] and out["languages"] == [{"code": "en", "share": 1.0}]

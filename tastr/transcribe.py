@@ -13,6 +13,7 @@ it hears is the song's words, so the output stays private like LRCLIB's, and the
 
 from __future__ import annotations
 
+import math
 import re
 import time
 import unicodedata
@@ -27,6 +28,8 @@ SPLIT_AT = 0.6  # a line of 2 * MIN_WORDS words or more is split where a break s
 CJK_WORD = 0.6  # how many words a character of a script without spaces (Chinese, Japanese, Thai...) counts as
 WINDOW = 30.0  # seconds Whisper reads at a time; the language is detected again in each one
 MIN_LANGUAGE = 0.5  # a window's language counts only when Whisper is at least this sure of it
+SWITCH = 0.8  # ...and a window leaves the song's main language only when Whisper is this sure of the other one
+RATE = 16000  # samples a second in the audio Whisper reads
 
 # Scripts written without spaces between words: their characters are compared one by one, and joined without spaces.
 _NO_SPACES = re.compile("[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u2e80-\u2fdf\u3000-\u303f\u3040-\u30ff"
@@ -37,55 +40,104 @@ _PAUSE = (",", ";", ":", "、", "，", "；", "：", "،", "؛")
 
 def transcribe(path: str | Path, model: str = MODEL, language: str | None = None, device: str = "auto") -> dict:
     """{"language", "language_probability", "languages", "model", "lines": [{t, end, line}],
-    "words": [{t, end, w, p, seg, lang?}], "audio_seconds", "seconds"}. Voice activity detection skips the silent
+    "words": [{t, end, w, p, seg, lang}], "audio_seconds", "seconds"}. Voice activity detection skips the silent
     stretches of a vocal stem, where Whisper otherwise makes things up; not conditioning on the previous text stops it
-    repeating a line forever.
+    repeating a line forever. Segments that are only one of Whisper's well-known made-up lines (subtitle credits,
+    "thanks for watching") are dropped.
 
-    Without a `language`, Whisper detects it again in every 30 s window (`multilingual`), so a song that changes
-    language keeps each part's own words instead of having them translated or spelled out in the first one's.
-    `languages` lists what was heard, the most words first ({code, share}); `language` is the first of them."""
+    Without a `language`, it is detected in every 30 s window (`language_spans`), and each stretch in one language
+    is transcribed with that language set, so a song that changes language keeps each part's own words and script
+    instead of having them translated or garbled in the first one's. Each word's `lang` is the language it was
+    transcribed in; `languages` lists them, the most words first ({code, share}), and `language` is the first."""
     from faster_whisper import WhisperModel
 
     start = time.monotonic()
     cuda = device == "cuda" or (device == "auto" and _has_cuda())
     m = WhisperModel(model, device="cuda" if cuda else "cpu", compute_type="float16" if cuda else "int8")
     loaded = time.monotonic()
-    segments, info = m.transcribe(str(path), language=language, word_timestamps=True, vad_filter=True,
-                                  condition_on_previous_text=False, beam_size=5, multilingual=language is None)
-    # faster-whisper's times and probabilities are numpy scalars; plain floats only, because the answer is pickled
-    # back to Modal's web endpoint, whose image has no numpy (it failed there with a DeserializationError).
-    words = [{"t": _num(w.start, 2), "end": _num(w.end, 2), "w": w.word.strip(), "p": _num(w.probability, 3),
-              "seg": k} for k, s in enumerate(segments) for w in (s.words or []) if w.word.strip()]
+    audio, spans = None, [(0.0, None, language)]
     if language is None:
-        _tag_languages(m, path, words)
+        try:
+            from faster_whisper import decode_audio
+
+            audio = decode_audio(str(path))
+            spans = language_spans([_detect(m, audio[int(k * WINDOW * RATE):int((k + 1) * WINDOW * RATE)])
+                                    for k in range(max(1, math.ceil(len(audio) / (WINDOW * RATE))))])
+        except Exception:  # noqa: BLE001 - can't read it here or detect: Whisper's own detection, one language
+            audio, spans = None, [(0.0, None, None)]
+    words: list[dict] = []
+    first_info, seg = None, 0
+    for t0, t1, code in spans:
+        whole = audio is None or (t0 == 0 and t1 is None)
+        src = str(path) if whole else audio[int(t0 * RATE):None if t1 is None else int(t1 * RATE)]
+        segments, info = m.transcribe(src, language=code, word_timestamps=True, vad_filter=True,
+                                      condition_on_previous_text=False, beam_size=5)
+        first_info = first_info or info
+        for s in segments:
+            got = [w for w in (s.words or []) if w.word.strip()]
+            if not got or made_up("".join(w.word for w in got)):
+                continue
+            # faster-whisper's times and probabilities are numpy scalars; plain floats only, because the answer is
+            # pickled back to Modal's web endpoint, whose image has no numpy (it failed there with a
+            # DeserializationError).
+            words += [{"t": _num(t0 + w.start, 2), "end": _num(t0 + w.end, 2), "w": w.word.strip(),
+                       "p": _num(w.probability, 3), "seg": seg, "lang": str(code or info.language)} for w in got]
+            seg += 1
+    info = first_info
     languages = languages_of(words) or [{"code": str(language or info.language), "share": 1.0}]
     first = languages[0]["code"]
     return {"language": first,
             "language_probability": _num(info.language_probability, 3) if first == info.language else None,
             "languages": languages, "model": model, "device": "cuda" if cuda else "cpu",
-            "lines": lines_from_words(words), "words": words, "audio_seconds": _num(info.duration, 1),
+            "lines": lines_from_words(words), "words": words,
+            "audio_seconds": _num(len(audio) / RATE if audio is not None else info.duration, 1),
             "load_seconds": round(loaded - start, 1), "seconds": round(time.monotonic() - loaded, 1)}
 
 
-def _tag_languages(m: Any, path: str | Path, words: list[dict]) -> None:
-    """Mark each heard word with the language Whisper detects in its 30 s window (`lang`), where it is sure enough.
-    faster-whisper decodes each window in the language it detects but doesn't say which; this asks again, one
-    encoder pass a window with words in it (a fraction of a second on the GPU)."""
+def _detect(m: Any, clip: Any) -> tuple[str | None, float]:
+    """Whisper's language for one window of audio and how sure it is; (None, 0) when there is no singing in it."""
     try:
-        from faster_whisper import decode_audio
+        code, prob, _ = m.detect_language(audio=clip, vad_filter=True)
+        return str(code), float(prob)
+    except Exception:  # noqa: BLE001 - nothing left after voice detection
+        return None, 0.0
 
-        audio = decode_audio(str(path))
-        rate = 16000
-        for k in sorted({int(w["t"] // WINDOW) for w in words}):
-            clip = audio[int(k * WINDOW * rate):int((k + 1) * WINDOW * rate)]
-            code, prob, _ = m.detect_language(audio=clip, vad_filter=True)
-            if float(prob) >= MIN_LANGUAGE:
-                for w in words:
-                    if int(w["t"] // WINDOW) == k:
-                        w["lang"] = str(code)
-    except Exception:  # noqa: BLE001 - the words matter, their language is a label: one language it is
-        for w in words:  # all or nothing
-            w.pop("lang", None)
+
+def language_spans(found: list[tuple[str | None, float]]) -> list[tuple[float, float | None, str | None]]:
+    """Stretches of one language, [(start, end or None for the rest, code)], from each 30 s window's detected
+    language and its probability. The song's main language is the one with the most confidence summed over its
+    windows (at least MIN_LANGUAGE each); a window switches to another language only when Whisper is at least SWITCH
+    sure of it, since quiet or wordless windows (ad-libs, "oh oh") get detected as almost anything. With no window
+    sure enough, one stretch with Whisper's own detection (None)."""
+    score: dict[str, float] = {}
+    for code, prob in found:
+        if code and prob >= MIN_LANGUAGE:
+            score[code] = score.get(code, 0.0) + prob
+    if not score:
+        return [(0.0, None, None)]
+    main = max(score, key=score.get)
+    codes = [code if code and prob >= SWITCH else main for code, prob in found]
+    spans: list[tuple[float, float | None, str | None]] = []
+    for k, code in enumerate(codes):
+        if spans and spans[-1][2] == code:
+            spans[-1] = (spans[-1][0], (k + 1) * WINDOW, code)
+        else:
+            spans.append((k * WINDOW, (k + 1) * WINDOW, code))
+    spans[-1] = (spans[-1][0], None, spans[-1][2])
+    return spans
+
+
+# Lines Whisper makes up over music or silence, learned from the subtitles it was trained on. A segment that says
+# one of these is dropped: no song needs them, and they turned up in place of the words in the 2026-11-18 trial.
+MADE_UP = re.compile(
+    r"sous-titr|subtit|untertitel|субтитр|редактор субтитров|altyaz|napisy|ondertitel|sottotitol|legendas? por"
+    r"|amara\.org|ترجمة|字幕|ご視聴ありがとう|thanks? (you )?for watching|请不吝点赞|請不吝點贊|订阅|訂閱|구독"
+    r"|시청해 주셔서", re.IGNORECASE)
+
+
+def made_up(text: str) -> bool:
+    """Whether a heard segment is one of Whisper's made-up subtitle lines (MADE_UP)."""
+    return bool(MADE_UP.search(text))
 
 
 def languages_of(words: list[dict]) -> list[dict]:

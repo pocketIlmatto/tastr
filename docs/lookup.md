@@ -232,11 +232,16 @@ both MIT). It runs in the background, separating the stems first when there are 
   so. A later LRCLIB answer replaces them only when LRCLIB has the words.
 
 Lyrics in any language work the same way. Whisper (the multilingual model) writes the words down as they are sung,
-without translating them, and detects the language again in every 30 s window, so a song that moves from one
-language to another keeps each part's own words and script. The stored lyrics list what it heard in `languages`
-(`[{code, share}]`, most words first; `language` is the first). Timing LRCLIB's lyrics compares words in every
-script, without accents or optional vowel marks, and Chinese, Japanese, Thai and the like character by character,
-since they have no spaces between words; their lines are joined without spaces and break at full-width punctuation.
+without translating them. Without a set language, it detects one in every 30 s window of the vocals; the song's
+main language is the most confident one, and a window switches to another only when Whisper is at least 80% sure
+(quiet windows and "oh oh" get detected as almost anything). Each stretch in one language is then transcribed with
+that language set, so a song that moves between languages keeps each part's own words and script; with Whisper
+deciding window by window instead (faster-whisper's `multilingual`), the part after the switch mostly came out as
+made-up subtitle credits ("Sous-titrage Société Radio-Canada") in the 2026-11-18 trial. Segments that are only
+such a credit are dropped. The stored lyrics list what was heard in `languages` (`[{code, share}]`, most words
+first; `language` is the first). Timing LRCLIB's lyrics compares words in every script, without accents or optional
+vowel marks, and Chinese, Japanese, Thai and the like character by character, since they have no spaces between
+words; their lines are joined without spaces and break at full-width punctuation.
 
 On the hosted site it runs in Modal's `transcribe` function on a T4 (about 5-10 s a track once it has stems); each
 listen counts toward the daily stem separations. A local server needs `pip install 'tastr[transcribe]'` and runs

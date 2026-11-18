@@ -1378,6 +1378,32 @@ h1 { white-space: nowrap; }
 .ly-listen { margin: 8px 0 4px; font-size: 13px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .ly-listen .tp-btn { font-size: 13px; padding: 4px 10px; }
 .ly-heard b { font-weight: 600; color: var(--fg); }
+/* Lyrics editor: your own words and line times */
+.ly-lines.ly-edited, .ly-plain.ly-edited { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--edit); border-radius: 4px; }
+.ly-mine .ly-sure { color: var(--fg); }
+.ly-newer { font-size: 13px; margin: 0 0 8px; padding: 6px 10px; border: 1px dashed var(--line); border-radius: 6px; }
+.ly-top .ly-edit { font-size: 13px; padding: 4px 10px; }
+.lye-hint { font-size: 12px; margin: 0 0 8px; }
+.lye-hint kbd { font-size: 11px; }
+.lye-rows { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overscroll-behavior: contain; }
+.lye-rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 4px 4px; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); border-left: 3px solid transparent; }
+.lye-rows li.cur { background: color-mix(in srgb, var(--accent-soft) 50%, transparent); }
+.lye-rows li.now { border-left-color: var(--accent); }
+.lye-rows li.bad .lye-time, .lye-time.bad-in { color: var(--warn); border-color: var(--warn); }
+.lye-tools, .lye-rowacts { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+#card .lye-time { width: 5.2em; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums; padding: 3px 6px; }
+#card .lye-text { flex: 1 1 240px; min-width: 0; font: inherit; font-size: 14px; padding: 3px 6px; }
+#card .lye-b { font-size: 12px; padding: 2px 7px; min-height: 0; line-height: 1.4; text-transform: none; letter-spacing: normal; }
+#card .lye-stamp { font-weight: 600; }
+.lye-warn { font-size: 12px; margin: 6px 0 0; }
+.lye-more { display: flex; gap: 14px; font-size: 13px; margin: 8px 0 0; }
+.lye-paste { margin: 8px 0 0; }
+#card .lye-lrc, #card .lye-plain { width: 100%; font: inherit; font-size: 14px; line-height: 1.5; padding: 6px 8px; box-sizing: border-box; }
+#card .lye-lrc { font-family: ui-monospace, monospace; font-size: 13px; }
+.lye-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; font-size: 12px; }
+.lye-foot { margin-top: 12px; }
+.lye-short { display: none; }
+@media (max-width: 560px) { #card .lye-text { flex-basis: 100%; order: 3; } .lye-rowacts { margin-left: auto; } .lye-long { display: none; } .lye-short { display: inline; } #card .lye-time { width: 4.6em; } }
 #card .ly-lines li.untimed .ly-line, .ly-lines li.untimed .ly-line { display: block; padding: 3px 6px; font-size: 15px; line-height: 1.45; color: var(--muted); font-style: italic; cursor: default; }
 .spin.idle { animation: none; border-color: var(--line); }
 .warn-t { color: var(--warn); }

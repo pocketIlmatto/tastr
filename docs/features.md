@@ -129,6 +129,12 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   in the vocals ("Heard by Whisper from the vocals. Words may be wrong."); when LRCLIB has the words without times,
   **Time these lines** times them from the vocals, leaving lines it couldn't place unlit. Both separate the stems
   first when needed. See [Lyrics by listening](lookup.md#lyrics-by-listening).
+- **Your own lyrics:** **✎ Edit lyrics** in the Lyrics section fixes words, adds a missing line or fixes when lines
+  light up: one row per line with its time, ±0.1 s nudges and **Set to now** (or Ctrl/⌘+Enter) to stamp the line as
+  the track plays, plus **Paste LRC**. Untimed lyrics edit as plain text. **✎ Type lyrics** adds them when none were
+  found. Your edits get the edit ring and "Edited by you", stay when LRCLIB or listening is asked again (a note says
+  when there are newer lyrics: **Show them** or **Keep mine**), and **Undo my edits** goes back. See
+  [Your own edits](lookup.md#your-own-edits).
 - **Files you already have are skipped.** Before uploading, the page fingerprints each file (SHA-256 of its
   bytes) and leaves out the ones already in your library, so re-dropping a folder only uploads what's new.
   It matches exact bytes: the same song exported again with other tags or another encoding is a new file and is

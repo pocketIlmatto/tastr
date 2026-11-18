@@ -37,12 +37,19 @@ def transcribe(path: str | Path, model: str = MODEL, language: str | None = None
     loaded = time.monotonic()
     segments, info = m.transcribe(str(path), language=language, word_timestamps=True, vad_filter=True,
                                   condition_on_previous_text=False, beam_size=5)
-    words = [{"t": round(w.start, 2), "end": round(w.end, 2), "w": w.word.strip(), "p": round(w.probability, 3),
+    # faster-whisper's times and probabilities are numpy scalars; plain floats only, because the answer is pickled
+    # back to Modal's web endpoint, whose image has no numpy (it failed there with a DeserializationError).
+    words = [{"t": _num(w.start, 2), "end": _num(w.end, 2), "w": w.word.strip(), "p": _num(w.probability, 3),
               "seg": k} for k, s in enumerate(segments) for w in (s.words or []) if w.word.strip()]
-    return {"language": info.language, "language_probability": round(info.language_probability, 3), "model": model,
-            "device": "cuda" if cuda else "cpu", "lines": lines_from_words(words), "words": words,
-            "audio_seconds": round(info.duration, 1), "load_seconds": round(loaded - start, 1),
+    return {"language": str(info.language), "language_probability": _num(info.language_probability, 3),
+            "model": model, "device": "cuda" if cuda else "cpu", "lines": lines_from_words(words), "words": words,
+            "audio_seconds": _num(info.duration, 1), "load_seconds": round(loaded - start, 1),
             "seconds": round(time.monotonic() - loaded, 1)}
+
+
+def _num(x: Any, digits: int) -> float:
+    """A plain Python float, rounded; Whisper hands back numpy scalars (see `transcribe`)."""
+    return round(float(x), digits)
 
 
 def _has_cuda() -> bool:

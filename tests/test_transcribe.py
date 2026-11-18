@@ -123,3 +123,98 @@ def test_transcribe_returns_plain_python_types(monkeypatch, tmp_path):
     assert NoNumpy(io.BytesIO(pickle.dumps(out))).load() == out
     assert out["words"][0] == {"t": 1.0, "end": 1.4, "w": "w0", "p": 0.91, "seg": 0}
     assert out["lines"] and all(type(x["t"]) is float for x in out["lines"])
+
+
+# Other languages and scripts. The lines are made up, like the English ones above.
+
+def _pieces(pieces: list[str], start: float, step: float = 0.3) -> list[dict]:
+    return [{"t": round(start + step * i, 2), "end": round(start + step * i + 0.25, 2), "w": w}
+            for i, w in enumerate(pieces)]
+
+
+def test_norm_words_reads_every_script():
+    assert tr.norm_words("Ночь, улица — ФОНАРЬ!") == ["ночь", "улица", "фонарь"]
+    assert tr.norm_words("Καλημέρα κόσμε") == ["καλημερα", "κοσμε"]  # accents go, as with é
+    assert tr.norm_words("Café déjà-vu") == ["cafe", "deja", "vu"]
+    assert tr.norm_words("שָׁלוֹם עוֹלָם") == tr.norm_words("שלום עולם") == ["שלום", "עולם"]  # vowel points go
+    assert tr.norm_words("مَرْحَبًا يا عالم؟") == tr.norm_words("مرحبا يا عالم") == ["مرحبا", "يا", "عالم"]
+    assert len(tr.norm_words("नमस्ते दुनिया")) == 2  # Devanagari's vowel signs don't split a word
+    assert tr.norm_words("夜空に、星！") == ["夜", "空", "に", "星"]  # no spaces: one character a word
+    assert tr.norm_words("君と dance して") == ["君", "と", "dance", "し", "て"]
+    assert tr.norm_words("ＡＢＣ　１２") == ["abc", "12"]  # full-width letters are the usual ones
+
+
+def test_align_lines_times_cyrillic_lyrics():
+    lines = ["Бумажные фонари уплывают", "Над тихой гаванью", "Эту строку никто не слышал"]
+    heard = _words("бумажные фонари уплывают", 10) + _words("над тихой гаванью", 20)
+    assert [p["t"] for p in tr.align_lines(lines, heard)] == [10.0, 20.0, None]
+
+
+def test_align_lines_times_japanese_lyrics_from_whispers_pieces():
+    # Whisper splits Japanese into a character or two a "word", with no spaces.
+    lines = ["紙の灯籠が流れていく", "静かな港の上を"]
+    heard = _pieces(["紙の", "灯", "籠が", "流", "れて", "いく"], 10) + _pieces(["静", "かな", "港の", "上を"], 20)
+    assert [p["t"] for p in tr.align_lines(lines, heard)] == [10.0, 20.0]
+
+
+def test_score_compares_chinese_by_character():
+    synced = [{"t": 10.0, "line": "纸灯笼漂走了"}]
+    heard = {"words": _pieces(["纸灯", "笼", "飘走", "了"], 10)}
+    s = tr.score(heard, None, synced)
+    assert s["ref_words"] == 6 and s["heard_words"] == 6 and s["wer"] == 0.167  # one character misheard
+    assert s["timing"]["placed"] == 1
+
+
+def test_lines_join_cjk_without_spaces_and_split_at_full_width_punctuation():
+    pieces = ["夜", "空", "に", "星", "が", "光", "る。", "君", "と", "dance", "し", "た", "い"]
+    words = [{"t": 10.0 + 0.25 * i, "end": 10.2 + 0.25 * i, "w": w} for i, w in enumerate(pieces)]
+    assert [x["line"] for x in tr.lines_from_words(words)] == ["夜空に星が光る。", "君と dance したい"]
+
+
+def test_short_cjk_lines_are_not_split_like_ten_english_words():
+    # Twelve characters is a normal sung line, not one to split.
+    words = [{"t": 10.0 + 0.25 * i, "end": 10.2 + 0.25 * i, "w": w} for i, w in enumerate("静かな港の上を流れていく")]
+    assert [x["line"] for x in tr.lines_from_words(words)] == ["静かな港の上を流れていく"]
+
+
+def test_languages_of_lists_what_was_heard_most_first():
+    words = [{"w": "x", "lang": "es"}] * 30 + [{"w": "x", "lang": "en"}] * 10 + [{"w": "x", "lang": "pt"}]
+    words += [{"w": "x"}] * 5
+    assert tr.languages_of(words) == [{"code": "es", "share": 0.732}, {"code": "en", "share": 0.244}]
+
+
+def test_transcribe_detects_language_window_by_window(monkeypatch, tmp_path):
+    """A song that moves from Spanish to English: each 30 s window gets its own language, and Whisper is asked to
+    detect it per window (multilingual) so the English isn't written down in Spanish."""
+    import sys
+    import types
+
+    seen = {}
+
+    class Model:
+        def __init__(self, *a, **k):
+            pass
+
+        def transcribe(self, *a, **k):
+            seen.update(k)
+            words = [types.SimpleNamespace(start=5.0 + i, end=5.5 + i, word=f" w{i}", probability=0.9)
+                     for i in range(50)]
+            info = types.SimpleNamespace(language="es", language_probability=0.8, duration=60.0)
+            return iter([types.SimpleNamespace(words=words[:25]), types.SimpleNamespace(words=words[25:])]), info
+
+        def detect_language(self, audio, vad_filter=False):
+            return ("es", 0.9, []) if audio[0] == 0 else ("en", 0.95, [])
+
+    def decode_audio(path):
+        return [0] * (30 * 16000) + [1] * (30 * 16000)
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=Model,
+                                                                            decode_audio=decode_audio))
+    out = tr.transcribe(tmp_path / "vocals.flac", device="cpu")
+    assert seen["multilingual"] is True
+    assert out["languages"] == [{"code": "es", "share": 0.5}, {"code": "en", "share": 0.5}]
+    assert out["language"] == "es" and out["words"][0]["lang"] == "es" and out["words"][-1]["lang"] == "en"
+
+    out = tr.transcribe(tmp_path / "vocals.flac", device="cpu", language="fr")  # told the language: no detection
+    assert seen["multilingual"] is False and out["languages"] == [{"code": "fr", "share": 1.0}]
+    assert "lang" not in out["words"][0]

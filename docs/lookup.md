@@ -256,7 +256,7 @@ People can fix a track's lyrics and line times themselves. `PUT /api/tracks/{id}
 `{synced: [{t, line}]}` (t in seconds, `null` for a line not timed yet) or `{plain: text}`, and stores them in the
 `lyrics_edits` table, apart from the LRCLIB or Whisper answer in `lyrics` (`tastr/lyrics.py`: `edit_lines`). So
 looking on LRCLIB again, listening again and re-analyzing never overwrite them. Timed lines are kept in time order;
-when some have no time the order is kept and those get `guess: true`. The lyrics the page reads then carry the
+a line with no time gets `guess: true` and stays right after the line it followed. The lyrics the page reads then carry the
 person's `synced` and `plain` with `edited: true`, `edited_at` and `base` (`lrclib`, `whisper` or `none`: what they
 started from). When LRCLIB or Whisper gives a different answer later, `newer: true` says so;
 `POST /api/tracks/{id}/lyrics/edits/keep` keeps the edits and clears it, and `DELETE /api/tracks/{id}/lyrics/edits`

@@ -165,7 +165,7 @@ class Jobs:
             with closing(self._conn()) as c:
                 edits = db.get_lyrics_edits(c, track_id)
                 if edits and not edits["synced"]:  # the person's own words, not timed yet: time those
-                    db.save_lyrics_edits(c, track_id, time_edits(edits, heard))
+                    db.time_lyrics_edits(c, track_id, edits, time_edits(edits, heard))  # unless they changed meanwhile
                 else:
                     db.save_lyrics(c, track_id, apply(db.get_lyrics(c, track_id), heard))
         except Exception as e:  # noqa: BLE001 - the page shows it

@@ -54,9 +54,11 @@ def test_timed_lines_are_sorted_tidied_and_trailing_blanks_dropped():
     assert got["plain"] == "first line\nsecond line"
 
 
-def test_lines_without_a_time_keep_their_place_as_guesses():
-    got = lyrics.clean_edit({"synced": [{"t": 8, "line": "a"}, {"t": None, "line": "b"}, {"t": 3, "line": "c"}]})
-    assert [(x["t"], x["line"], bool(x.get("guess"))) for x in got["synced"]] == [(8.0, "a", False), (None, "b", True), (3.0, "c", False)]
+def test_lines_without_a_time_stay_after_the_line_they_followed():
+    got = lyrics.clean_edit({"synced": [{"t": None, "line": "intro"}, {"t": 8, "line": "a"}, {"t": None, "line": "b"},
+                                        {"t": 3, "line": "c"}, {"t": 3, "line": "d"}]})
+    assert [(x["t"], x["line"], bool(x.get("guess"))) for x in got["synced"]] == [
+        (None, "intro", True), (3.0, "c", False), (3.0, "d", False), (8.0, "a", False), (None, "b", True)]
 
 
 def test_no_times_at_all_is_plain_and_plain_is_tidied():
@@ -162,3 +164,20 @@ def test_time_edits_without_a_match_leaves_them():
 
 def test_lyrics_edits_stay_out_of_the_downloaded_library():
     assert "lyrics_edits" not in db.LIBRARY_TABLES
+
+
+def test_listening_times_only_the_edits_it_read(db_path, tagged):
+    conn = db.connect(db_path)
+    lyrics.edit_lines(conn, tagged, {"plain": "Paper lanterns drift away"})
+    was = db.get_lyrics_edits(conn, tagged)
+    timed = listen.time_edits(was, heard((3.0, "paper lanterns drift away")))
+    lyrics.edit_lines(conn, tagged, {"plain": "Paper lanterns float away"})  # saved while listening ran
+    assert db.time_lyrics_edits(conn, tagged, was, timed) is False
+    assert db.get_lyrics_edits(conn, tagged)["plain"] == "Paper lanterns float away"
+    lyrics.undo_edits(conn, tagged)
+    assert db.time_lyrics_edits(conn, tagged, was, timed) is False and db.get_lyrics_edits(conn, tagged) is None
+    lyrics.edit_lines(conn, tagged, {"plain": "Paper lanterns drift away"})
+    now = db.get_lyrics_edits(conn, tagged)
+    assert db.time_lyrics_edits(conn, tagged, now, listen.time_edits(now, heard((3.0, "paper lanterns drift away"))))
+    assert db.get_lyrics_edits(conn, tagged)["synced"] == [{"t": 3.0, "line": "Paper lanterns drift away"}]
+    conn.close()

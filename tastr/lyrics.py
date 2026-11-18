@@ -222,8 +222,8 @@ def _line(text: Any) -> str:
 
 def clean_edit(body: Any) -> dict[str, Any]:
     """The person's lines from the page, checked: {"synced": [{t, line}]} (t in seconds, or null for a line not
-    timed yet) or {"plain": text}. Timed lines come back in time order; when some have no time, the order is kept
-    and those lines get `guess: true`, like lines listening couldn't place. Raises ValueError."""
+    timed yet) or {"plain": text}. Timed lines come back in time order (in_time_order); lines with no time get
+    `guess: true`, like lines listening couldn't place, and stay right after the line they followed. Raises ValueError."""
     if not isinstance(body, dict):
         raise ValueError("send {synced: [...]} or {plain: text}")
     if body.get("synced") is not None:
@@ -244,10 +244,7 @@ def clean_edit(body: Any) -> dict[str, Any]:
             raise ValueError("there are no lines to keep; undo the edits instead")
         if all(x["t"] is None for x in lines):
             return {"synced": [], "plain": "\n".join(x["line"] for x in lines).strip("\n")}
-        if any(x["t"] is None for x in lines):
-            lines = [x if x["t"] is not None else {"t": None, "line": x["line"], "guess": True} for x in lines]
-        else:
-            lines.sort(key=lambda x: x["t"])
+        lines = in_time_order(lines)
         while not lines[-1]["line"]:
             lines.pop()  # trailing blank lines say nothing
         return {"synced": lines, "plain": "\n".join(x["line"] for x in lines if x["line"])}
@@ -262,6 +259,21 @@ def clean_edit(body: Any) -> dict[str, Any]:
     if len(rows) > MAX_LINES:
         raise ValueError(f"lyrics can have at most {MAX_LINES} lines")
     return {"synced": [], "plain": "\n".join(rows)}
+
+
+def in_time_order(lines: list[dict]) -> list[dict]:
+    """Timed lines sorted by time, each line without a time (marked `guess: true`) kept right after the line it
+    followed, and any before the first timed line kept first. So the timed lines always run in time order, which
+    the page's playback relies on."""
+    head: list[dict] = []
+    groups: list[list[dict]] = []
+    for x in lines:
+        if x["t"] is None:
+            (groups[-1] if groups else head).append({"t": None, "line": x["line"], "guess": True})
+        else:
+            groups.append([x])
+    groups.sort(key=lambda g: g[0]["t"])  # stable: equal times keep their order
+    return head + [x for g in groups for x in g]
 
 
 def edit_lines(conn: sqlite3.Connection, track_id: int, body: Any) -> dict[str, Any]:

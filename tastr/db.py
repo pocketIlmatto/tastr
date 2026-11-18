@@ -823,6 +823,17 @@ def get_lyrics_edits(conn: sqlite3.Connection, track_id: int) -> dict[str, Any] 
             "edited_at": r[5]}
 
 
+def time_lyrics_edits(conn: sqlite3.Connection, track_id: int, was: dict[str, Any], timed: dict[str, Any]) -> bool:
+    """Store listening's times for the person's edits only if the edits are still the ones it timed (`was`): a save
+    or undo in the meantime wins. Whether it was stored."""
+    with conn:
+        n = conn.execute("UPDATE lyrics_edits SET synced_json = ?, timed_by = ? WHERE track_id = ? AND edited_at = ? "
+                         "AND plain = ? AND synced_json = ?",
+                         (json.dumps(timed.get("synced") or []), timed.get("timed_by"), track_id, was["edited_at"],
+                          was.get("plain") or "", json.dumps(was.get("synced") or []))).rowcount
+    return n == 1
+
+
 def delete_lyrics_edits(conn: sqlite3.Connection, track_id: int) -> None:
     with conn:
         conn.execute("DELETE FROM lyrics_edits WHERE track_id = ?", (track_id,))

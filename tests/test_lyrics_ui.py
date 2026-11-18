@@ -96,3 +96,25 @@ out = [a, lyricsOf(5).state];"""
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == ["found", "not_found"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_heard_lyrics_say_their_languages():
+    """Whisper's lyrics say which language(s) were heard (shares in the tooltip); LRCLIB's say nothing."""
+    src = (APP / "lyrics.js").read_text()
+    src = re.sub(r"^import .*?;\n", "", src, flags=re.M).replace("export ", "")
+    body = """out = [heardLangs({ source: "whisper", languages: [{ code: "ja", share: 0.58 }, { code: "fr", share: 0.42 }] }),
+       heardLangs({ source: "whisper", languages: [{ code: "en", share: 1 }] }),
+       heardLangs({ source: "whisper", language: "es" }),
+       heardLangs({ source: "whisper", languages: [{ code: "ja" }, { code: "fr" }, { code: "en" }] }),
+       heardLangs({ source: "lrclib", timed_by: "whisper", language: "en" }), heardLangs({ source: "whisper" })];"""
+    stubs = "const localStorage = { getItem: () => null, setItem() {} };\n"
+    r = subprocess.run(["node", "-e", stubs + src + "\nlet out;\n" + body + "\nconsole.log(JSON.stringify(out));"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == [
+        {"say": "Japanese and French", "tip": "Japanese 58%, French 42% of the words."},
+        {"say": "English", "tip": None}, {"say": "Spanish", "tip": None},
+        {"say": "Japanese, French and English", "tip": None}, None, None]
+    assert "langLabel(L), h(\"b\", {}, \"Heard by Whisper from the vocals." in src
+    assert "Heard by Whisper from the vocals${heardLangs(L) ? `, in ${heardLangs(L).say}` : \"\"}" in src

@@ -1378,6 +1378,8 @@ h1 { white-space: nowrap; }
 .ly-listen { margin: 8px 0 4px; font-size: 13px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .ly-listen .tp-btn { font-size: 13px; padding: 4px 10px; }
 .ly-heard b { font-weight: 600; color: var(--fg); }
+.ly-lang { color: var(--fg); }
+.ly-lang[title] { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
 #card .ly-lines li.untimed .ly-line, .ly-lines li.untimed .ly-line { display: block; padding: 3px 6px; font-size: 15px; line-height: 1.45; color: var(--muted); font-style: italic; cursor: default; }
 .spin.idle { animation: none; border-color: var(--line); }
 .warn-t { color: var(--warn); }

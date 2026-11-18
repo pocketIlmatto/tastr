@@ -241,7 +241,7 @@ the stretches (`stretches`), so a wrong switch can be checked without running Wh
 deciding window by window instead (faster-whisper's `multilingual`), the part after the switch mostly came out as
 made-up subtitle credits ("Sous-titrage Société Radio-Canada") in the 2026-11-18 trial. Short segments (12 words
 or fewer) that say such a credit are dropped and counted in `dropped`. The stored lyrics list what was heard in `languages` (`[{code, share}]`, most words
-first; `language` is the first). Timing LRCLIB's lyrics compares words in every script, without accents or optional
+first; `language` is the first), and the card's credit starts "Heard in Japanese and French." (shares in its tooltip). Timing LRCLIB's lyrics compares words in every script, without accents or optional
 vowel marks, and Chinese, Japanese, Thai and the like character by character, since they have no spaces between
 words; their lines are joined without spaces and break at full-width punctuation.
 

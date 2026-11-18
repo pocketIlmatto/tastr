@@ -336,16 +336,19 @@ def file_bytes(path: str | None) -> int:
         return 0
 
 
-def audio_minutes(path: str | Path) -> float | None:
-    """How long an audio file is, from its header (no decoding), or None if that can't be read."""
+def audio_minutes(path: str | Path, fileobj=None) -> float | None:
+    """How long an audio file is, from its header (no decoding), or None if that can't be read. `fileobj`: as
+    for read_file_meta, the file read from there."""
     from ..filemeta import read_file_meta
 
-    seconds = read_file_meta(path)[1].get("duration")
+    seconds = read_file_meta(path, fileobj)[1].get("duration")
     if not seconds:
         try:
             import soundfile
 
-            seconds = soundfile.info(str(path)).duration
+            if fileobj is not None:
+                fileobj.seek(0)
+            seconds = soundfile.info(fileobj if fileobj is not None else str(path)).duration
         except Exception as e:  # neither reader knows the length; the upload size cap still applies
             log.info("can't read the length of %s from its header: %s", Path(path).name, e)
             return None

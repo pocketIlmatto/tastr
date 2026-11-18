@@ -143,7 +143,7 @@ sequenceDiagram
     end
     B->>W: POST /api/uploads/{id}/check
     W->>A: is it there, and how big?
-    W->>W: read it back (one upload at a time), check its length from the header, drop the copy
+    W->>A: read its header only (Range requests, a few blocks), check its length
     B->>W: POST /api/analyze/uploaded, on its turn: the id (+ its card)
   else the upload goes through the server
     B->>C: upload a track (+ its card)
@@ -384,10 +384,12 @@ flowchart LR
   waits on it with `run_sync` like the fetches do): one query of up to 25 recording ids per lookup.
   The catalog lookups' per-provider guard waits with the runner's `sleep`, which lets other requests run,
   instead of holding the event loop.
-- Its memory (128 MB for the Durable Object) is why it keeps no local copies (`blobs.keep_copies`): a checked
-  upload's copy is dropped until its analysis reads it back, only one request or job holds a copy at a time
-  (`blobs.copy_limit`), the analysis drops it again once it has the tags and the hash, before Modal reads the
-  bucket's copy, and zips stream from the bucket. A restart that
+- Its memory (128 MB for the Durable Object) is why it keeps no local copies (`blobs.keep_copies`) and never
+  brings a whole upload down: the check and the analysis job read the tags and the length from the bucket's copy
+  a few 256 KB blocks at a time (`blobs.RemoteFile`, Range requests) and hash it as it streams past
+  (`blobs.sha256`), then Modal reads the bucket's copy. A whole copy of a large lossless upload ran the memory
+  out and reset the Worker, failing every request in flight (T93). One request or job reads at a time
+  (`blobs.copy_limit`), and zips stream from the bucket. A restart that
   hits the limit rolls back a transaction that wasn't committed.
 - A card's waveform data goes to the bucket after the card's transaction, never inside it (`transactionSync` is
   a synchronous call, so a fetch can't wait in it); the six-hourly sweep moves any that a card had to keep.

@@ -12,7 +12,7 @@ from urllib.parse import unquote
 import pytest
 from fastapi.testclient import TestClient
 
-from tastr import blobs, db, service, stems
+from tastr import blobs, db, s3, service, stems
 from tastr.cloud import jobs, remote
 from tastr.web import hosted
 from tastr.web.hosted import Settings
@@ -606,6 +606,76 @@ def test_a_background_analysis_lets_go_of_the_copy_before_analyzing(bucket, home
         time.sleep(0.05)
     assert job["state"] == "done" and job["results"][0]["track_id"] is not None, job
     assert seen and seen[0][0] and seen[0][1] is False  # hashed, and no local copy left while analyzing
+
+
+@pytest.fixture
+def tagged_upload(synth_wav, tmp_path):
+    """A tagged WAV of a few MB, as an album's lossless tracks are."""
+    from mutagen.id3 import TIT2, TPE1
+    from mutagen.wave import WAVE
+
+    dest = tmp_path / "13 Halala.wav"
+    dest.write_bytes(synth_wav[0].read_bytes())
+    w = WAVE(dest)
+    w.add_tags()
+    w.tags.add(TIT2(encoding=3, text="Halala"))
+    w.tags.add(TPE1(encoding=3, text="Okra Lane"))
+    w.save()
+    return dest
+
+
+def test_a_remote_file_reads_like_the_local_one(bucket, home, tagged_upload):
+    from tastr.filemeta import read_file_meta
+    from tastr.ingest import file_sha256
+
+    stored = home / "uploads" / "ab12cd34" / tagged_upload.name
+    blobs.client().put(blobs.key(stored), tagged_upload, "audio/wav")
+    with blobs.RemoteFile(stored) as f:
+        assert read_file_meta(stored, f) == read_file_meta(tagged_upload)
+        f.seek(-10, 2)
+        assert f.read() == tagged_upload.read_bytes()[-10:] and f.read(5) == b""
+        f.seek(3)
+        assert f.read(blobs.RemoteFile.BLOCK + 7) == tagged_upload.read_bytes()[3:3 + blobs.RemoteFile.BLOCK + 7]
+    assert blobs.sha256(stored) == file_sha256(tagged_upload)
+    assert not stored.exists()
+
+
+def test_the_worker_checks_and_analyzes_a_big_upload_without_a_copy(bucket, home, db_path, monkeypatch, tagged_upload):
+    # T93: the Worker brought each upload down whole to read its tags and length, and a few lossless tracks of
+    # an album ran its memory out. Now only the header is read, in blocks, and the hash as the file streams by.
+    monkeypatch.setattr(blobs, "keep_copies", False)
+    monkeypatch.setattr(blobs, "copy_limit", 1)
+    monkeypatch.setattr(blobs, "ensure", lambda p: pytest.fail("a whole copy was brought down"))
+    ranged = []
+    get = s3.Client.get
+
+    def counting(self, key, start=None, end=None):
+        if start is not None:
+            ranged.append(end - start + 1)
+        return get(self, key, start, end)
+
+    monkeypatch.setattr(s3.Client, "get", counting)
+    c = direct_client(db_path, monkeypatch)
+    data = tagged_upload.read_bytes()
+    (up,) = c.post("/api/uploads", json={"files": [{"name": tagged_upload.name, "size": len(data)}]},
+                   headers=GOOD).json()["uploads"]
+    browser_put(up, data)
+    assert c.post(f"/api/uploads/{up['id']}/check", headers=GOOD).status_code == 200
+    assert ranged and sum(ranged) < len(data) / 2  # the header, not the file
+    job = c.post("/api/analyze/uploaded?background=1", data={"ids": [up["id"]]}, headers=GOOD).json()
+    for _ in range(100):
+        job = c.get(f"/api/analyze/jobs/{job['id']}", headers=GOOD).json()
+        if job["state"] in ("done", "error"):
+            break
+        time.sleep(0.05)
+    assert job["state"] == "done", job
+    tid = job["results"][0]["track_id"]
+    with closing(db.connect(db_path)) as conn:
+        card = db.load_card(conn, tid)
+    from tastr.ingest import file_sha256
+    assert card.source.title == "Halala" and card.source.artist == "Okra Lane"
+    assert card.source.sha256 == file_sha256(tagged_upload)
+    assert [p for p in (home / "uploads").rglob("*") if p.is_file()] == []
 
 
 def test_a_dropped_copy_still_takes_the_pages_card(bucket, home, db_path, monkeypatch):

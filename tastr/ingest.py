@@ -37,14 +37,30 @@ def resolve_inputs(inputs: list[str], cache_dir: Path | None = None) -> list[Sou
     return out
 
 
-def _file_source(p: Path) -> Source:
+def _file_source(p: Path, fileobj=None) -> Source:
     p = p.resolve()
-    tags, info = read_file_meta(p)
+    tags, info = read_file_meta(p, fileobj)
     return Source(
         kind="file", uri=str(p), local_path=str(p),
         title=tags.get("title") or p.stem, artist=tags.get("artist"), album=tags.get("album"),
         file_tags=tags, audio_info=info,
     )
+
+
+def bucket_source(path: str | os.PathLike) -> Source:
+    """A stored upload as a Source, read from the audio bucket without bringing the file down (tastr/blobs.py):
+    its tags from the header, a few blocks at a time, and its hash as it streams past. For the Worker, whose disk
+    is memory: a whole copy of a large upload ran it out (T93). Modal reads the bucket's copy to analyze it."""
+    from . import blobs
+
+    p = Path(path)
+    try:
+        with blobs.RemoteFile(p) as f:
+            source = _file_source(p, f)
+    except FileNotFoundError:
+        raise IngestError(f"No such file or folder: {path}") from None
+    source.sha256 = blobs.sha256(p)
+    return source
 
 
 def _resolve_url(url: str, cache_dir: Path) -> list[Source]:

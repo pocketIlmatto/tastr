@@ -1,7 +1,7 @@
 // The Files view: the audio you uploaded and the stems made from it, their sizes, downloads (one file or a zip),
 // and deleting stems to free space. GET /api/files has the sizes; the rest of each track comes from the library.
 
-import { $, api, cap, fmtLeft, h, httpError, mmss, progBar, tracks } from "./core.js";
+import { $, api, cap, fmtLeft, h, httpError, mmss, progBar, tracks, VOC_LABEL } from "./core.js";
 import { LIB_CLEAR, SORTS, filtersOn, fmtUp, fmtUpLong, keyRank, matchTracks } from "./library.js";
 import { openTrack, switchTo } from "./card.js";
 import { centsText, onStems, pollStems, setStems, startStems, stemModelNote, stemStatus, stemsAgain, stemsBusy, stemsEta, stemsLabel, stemsOld } from "./menu.js";
@@ -213,7 +213,7 @@ export function renderFiles() {
   const rows = matchTracks(flState, all).filter((t) => { const s = stemBytes(t.f) > 0; return (flState.show !== "stems" || s) && (flState.show !== "nostems" || !s) && (flState.show !== "oldstems" || oldStems(t.f)); })
     .sort(FSORT[flState.sort] || SORTS.new);
   const active = filtersOn(flState) || !!flState.show;
-  $("fl-n").textContent = active ? `${rows.length} of ${all.length} tracks` : `${all.length} track${all.length === 1 ? "" : "s"}`;
+  $("fl-n").textContent = active ? `${rows.length} of ${all.length} tracks${flState.voc ? ` · ${VOC_LABEL[flState.voc]}` : ""}` : `${all.length} track${all.length === 1 ? "" : "s"}`;
   $("fl-clear").hidden = !active;
   renderBulk(rows); paintOldStems();
   const ul = $("fl-list");
@@ -309,7 +309,7 @@ function fillFilters() {
 function syncTools() {
   $("fl-q").value = flState.q; $("fl-sort").value = flState.sort; $("fl-vibe").value = flState.vibes[0] || ""; $("fl-key").value = flState.key;
   $("fl-bmin").value = flState.bmin; $("fl-bmax").value = flState.bmax; $("fl-up").value = flState.up; $("fl-up-from").value = flState.upFrom; $("fl-up-to").value = flState.upTo;
-  $("fl-up-range").hidden = flState.up !== "range"; $("fl-lab").value = flState.lab;
+  $("fl-up-range").hidden = flState.up !== "range"; $("fl-lab").value = flState.lab; $("fl-voc").value = flState.voc;
   $("fl-show").querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.v === flState.show)));
 }
 function setSelecting(on) {
@@ -332,6 +332,7 @@ export function init() {
   on("fl-up-from", "change", (v) => { flState.upFrom = v; });
   on("fl-up-to", "change", (v) => { flState.upTo = v; });
   on("fl-lab", "change", (v) => { flState.lab = v; });
+  on("fl-voc", "change", (v) => { flState.voc = v; });
   $("fl-fbtn").addEventListener("click", () => { const f = $("fl-filters"); f.hidden = !f.hidden; $("fl-fbtn").setAttribute("aria-expanded", String(!f.hidden)); });
   $("fl-clear").addEventListener("click", () => { Object.assign(flState, LIB_CLEAR(), { show: "" }); syncTools(); renderFiles(); });
   $("fl-sel").addEventListener("click", () => setSelecting(!flSelecting));

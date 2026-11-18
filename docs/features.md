@@ -137,6 +137,13 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   by vibe, key, BPM, upload date and review state. Each row shows when the track was uploaded, a ✓ when you
   labeled it and a hollow dot when it's in your review list. Click a vibe, the BPM or the key on a track card
   to filter the list from there (more vibes narrow it; the key shows the keys that mix with it).
+- **Vocals filter.** Filters › Vocals (in the Library and on the Files page) shows tracks that have vocals, are
+  instrumental, or that Tastr isn't sure about. Each track gets one answer (`tastr/vocals.py`), which the card's
+  vocal/instrumental chip follows too. When the track has stems, the vocal stem decides: Tastr measures the share of
+  1-second windows where the vocal stem is within 20 dB of the mix (near-silent windows skipped), and 10% or more
+  means vocals, 2% or less instrumental. Otherwise Essentia's voice score decides (0.7 or more vocals, 0.3 or less
+  instrumental). Anything in between, or a track with neither yet, is "not sure"; its card says why and links to
+  the others like it. Stems made before the share was recorded count as having none until they're separated again.
 - **Card sections in your order.** Drag a section by its ⠿ grip, or use the ↑/↓ buttons on its header, to put
   e.g. Vibe above Energy. The order is kept in your browser and used for every track; "Reset order" puts it back.
 - **Track and bulk actions:** copy a summary, reload metadata, re-analyze,

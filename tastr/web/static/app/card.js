@@ -1,7 +1,7 @@
 // The track card: opening a track, its header and stats, sections and their order, Hear a key and the metadata section.
 
-import { $, ML_REPLACES, VIBE_GROUPS, VIBE_MIN, api, currentId, groupOf, h, isNum, mlState, mlTip, mmss, nap, setCurrentId, tagHelp, vibeHelp, vibeTags } from "./core.js";
-import { bpmFilter, camelotNear, keyFilter, lib, loadTracks, renderList, syncCardFilters, vibeFilter, visibleTracks } from "./library.js";
+import { $, ML_REPLACES, VIBE_GROUPS, VIBE_MIN, api, currentId, groupOf, h, isNum, mlState, mlTip, mmss, nap, setCurrentId, tagHelp, tracks, vibeHelp, vibeTags, vocIs, vocUnsureText, vocWhy } from "./core.js";
+import { bpmFilter, camelotNear, keyFilter, lib, loadTracks, renderList, syncCardFilters, vibeFilter, visibleTracks, vocFilter } from "./library.js";
 import { bulkBusy, jobs, runBulk, setDrumModelOn, setLookupProviders } from "./bulk.js";
 import { camPc, charts, labelOpen, setLabelOpen, setMarkHook } from "./labels.js";
 import { labelBar } from "./label-bar.js";
@@ -32,6 +32,11 @@ function mlNote(c) {
     st === "running" ? "Adding ML tags: style, mood and vocals…" : "ML tags are queued for this track.",
     h("span", { class: "muted" }, " Until they're in, these are Tastr's own vibes."));
 }
+// After stems are made or deleted, the track list's Vocals answer (loadTracks) may have changed: the open card follows it.
+export function vocChanged(id) {
+  const t = tracks.find((x) => x.id === id);
+  if (t && shownCard && shownCard.id === id) { shownCard.voc = t.voc; redrawVibe(shownCard); }
+}
 // Swap the open card's Vibe section in place (the rest of the card, and what's playing, stay as they are).
 function redrawVibe(c) {
   if (currentId !== c.id || shownCard !== c) return;
@@ -55,7 +60,7 @@ async function pollMl(c) {
       if (st.state !== "queued" && st.state !== "running") break;
       if (currentId !== c.id) break; // another track is open; its card polls for itself
     }
-    if (mlState(c) === "done") { await loadTracks(); renderList(); }
+    if (mlState(c) === "done") { await loadTracks(); renderList(); vocChanged(c.id); } // the voice score may settle Vocals
   } finally { mlPolling.delete(c.id); }
 }
 // Try again: POST /api/tracks/{id}/ml-tags starts a run (or joins one), then poll it.
@@ -68,6 +73,12 @@ async function mlRetry(c) {
   }
   redrawVibe(c);
   if (c.ml_tags_state === "queued" || c.ml_tags_state === "running") pollMl(c);
+}
+// Vocals: when Tastr can't tell (core.js vocIs), the card says so in a line instead of a chip, with a link to the others like it.
+function vocUnsureLine(c) {
+  if (vocIs(c.voc) !== "unsure") return null;
+  return h("p", { class: "voc-unsure muted" }, h("span", { tabindex: "0", "data-tip": `${vocWhy(c.voc)} Separating stems settles it.` }, vocUnsureText(c.voc)), " ",
+    h("button", { type: "button", class: "linklike", onclick: () => vocFilter("unsure") }, "Show tracks like this"));
 }
 function vibeBody(c) {
   const shown = vibeTags(c).sort((a, b) => b.score - a.score), ml = mlState(c) === "done";
@@ -97,8 +108,9 @@ function vibeBody(c) {
           h("span", { class: "chip" + (lib.vibes.includes(t.tag) ? " on" : ""), role: "button", tabindex: "0", "data-tag": t.tag, "aria-pressed": String(lib.vibes.includes(t.tag)),
             onclick: () => vibeFilter(t.tag), onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); vibeFilter(t.tag); } },
             style: `--t:${chipStrength(t)}`,
-            "data-tip": `${t.src === "ml" ? `${mlTip(t.tag)} ML tag, score ${t.score.toFixed(2)}.` : `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`} Click to filter the track list; click more vibes to narrow it.`.trim() },
+            "data-tip": `${t.src === "ml" ? `${mlTip(t.tag)} ML tag, score ${t.score.toFixed(2)}.` : t.src === "stems" ? mlTip(t.tag) : `${tagHelp(t.tag)}${isNum(t.score) ? ` Score ${t.score.toFixed(2)}.` : ""}`}${t.why ? ` ${t.why}` : ""} Click to filter the track list; click more vibes to narrow it.`.trim() },
             t.tag, t.src === "ml" ? h("span", { class: "ml-mk", "aria-label": "(ML)" }, "✦") : null))))),
+    vocUnsureLine(c),
     mlNote(c),
     h("div", { class: "card-filter", "data-kind": "vibe", hidden: "" }),
     ml && shown.some((t) => t.src === "ml") ? h("p", { class: "ml-src muted" }, "✦ Tagged by Essentia's trained models (ML). The rest are measured by Tastr.") : null,

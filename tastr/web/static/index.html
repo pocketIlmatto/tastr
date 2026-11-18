@@ -147,6 +147,7 @@
             <label>Vibe <select id="lib-vibe"></select></label>
             <label>Key <select id="lib-key"></select></label>
             <label class="lib-bpm">BPM <input id="lib-bmin" type="number" min="0" max="300" placeholder="min" aria-label="Minimum BPM"> – <input id="lib-bmax" type="number" min="0" max="300" placeholder="max" aria-label="Maximum BPM"></label>
+            <label>Vocals <select id="lib-voc" title="Has vocals: singing or rapping. Decided by the vocal stem when the track has stems, otherwise by Essentia's voice score. Not sure: in between, or not tagged yet."><option value="">Any</option><option value="yes">Has vocals</option><option value="no">Instrumental</option><option value="unsure">Not sure</option></select></label>
             <label>Uploaded <select id="lib-up"><option value="">Any time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="old">More than 30 days ago</option><option value="range">Between dates…</option></select></label>
             <label id="lib-up-range" class="lib-bpm" hidden>From <input id="lib-up-from" type="date" aria-label="Uploaded from"> to <input id="lib-up-to" type="date" aria-label="Uploaded until"></label>
             <label>Review <select id="lib-lab"><option value="">Any</option><option value="need">Needs review</option><option value="yes">Reviewed (labeled)</option><option value="no">Not reviewed yet</option></select></label>
@@ -501,6 +502,7 @@
         <label>Vibe <select id="fl-vibe"></select></label>
         <label>Key <select id="fl-key"></select></label>
         <label>BPM <input id="fl-bmin" type="number" min="0" max="300" placeholder="min" aria-label="Minimum BPM"> – <input id="fl-bmax" type="number" min="0" max="300" placeholder="max" aria-label="Maximum BPM"></label>
+        <label>Vocals <select id="fl-voc" title="Has vocals: singing or rapping. Decided by the vocal stem when the track has stems, otherwise by Essentia's voice score. Not sure: in between, or not tagged yet."><option value="">Any</option><option value="yes">Has vocals</option><option value="no">Instrumental</option><option value="unsure">Not sure</option></select></label>
         <label>Uploaded <select id="fl-up"><option value="">Any time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="old">More than 30 days ago</option><option value="range">Between dates…</option></select></label>
         <label id="fl-up-range" hidden>From <input id="fl-up-from" type="date" aria-label="Uploaded from"> to <input id="fl-up-to" type="date" aria-label="Uploaded until"></label>
         <label>Review <select id="fl-lab"><option value="">Any</option><option value="need">Needs review</option><option value="yes">Reviewed (labeled)</option><option value="no">Not reviewed yet</option></select></label>

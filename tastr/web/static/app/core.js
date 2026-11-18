@@ -79,20 +79,40 @@ export function mlState(c) {
 }
 // The one list of vibes for a card, [{tag, score, src: "engine"|"ml", mlGroup?}]: the chips, the summary, the filters.
 export function vibeTags(c) {
-  const eng = (c.tags || []).map((t) => ({ ...t, src: "engine" }));
-  if (mlState(c) !== "done") return eng;
+  const eng = (c.tags || []).map((t) => ({ ...t, src: "engine" })).filter((t) => !VOC_TAGS.has(t.tag)), voc = vocChip(c.voc);
+  if (mlState(c) !== "done") return [...eng, ...voc];
   const kept = eng.filter((t) => !ML_REPLACES[t.tag]), have = new Set(kept.map((t) => t.tag));
-  const ml = c.ml_tags.tags.filter((t) => t && t.tag && !have.has(t.tag));
+  const ml = c.ml_tags.tags.filter((t) => t && t.tag && !have.has(t.tag) && !VOC_TAGS.has(t.tag));
   for (const t of ml) if (t.group === "style") mlStyles.add(t.tag);
-  return [...kept, ...ml.map((t) => ({ tag: t.tag, score: t.score, src: "ml", mlGroup: t.group }))];
+  return [...kept, ...ml.map((t) => ({ tag: t.tag, score: t.score, src: "ml", mlGroup: t.group })), ...voc];
 }
 // The same for a /api/tracks row: `tags` (the engine's, strongest first) and `ml_tags` (names, or null before they're in).
 export function rowVibes(row) {
-  const eng = row.tags || [];
-  if (!Array.isArray(row.ml_tags)) return eng;
+  const eng = (row.tags || []).filter((t) => !VOC_TAGS.has(t)), voc = vocChip(row.voc).map((t) => t.tag);
+  if (!Array.isArray(row.ml_tags)) return [...eng, ...voc];
   const kept = eng.filter((t) => !ML_REPLACES[t]), have = new Set(kept);
   for (const t of row.ml_tags) if (!ML_NOT_STYLE.has(t)) mlStyles.add(t);
-  return [...kept, ...row.ml_tags.filter((t) => !have.has(t))];
+  return [...kept, ...row.ml_tags.filter((t) => !have.has(t) && !VOC_TAGS.has(t)), ...voc];
+}
+/* Vocals (tastr/vocals.py): the server gives each track and card one answer, voc {is: "yes"|"no"|"unsure", by: "stems"|"ml"|null,
+   share (stems) or score (ML)}, so the Vocals filter and the card's vocal/instrumental chip always agree. The vocal stem decides
+   when the track has measured stems, else Essentia's voice score; "unsure" gets no chip, only a line on the card. */
+export const VOC_LABEL = { yes: "Has vocals", no: "Instrumental", unsure: "Not sure" };
+const VOC_TAGS = new Set(["vocal", "instrumental"]);
+export const vocIs = (v) => (v && VOC_LABEL[v.is] ? v.is : "unsure");
+const pct = (x) => Math.round(x * 100);
+export function vocWhy(v) {
+  if (v && v.by === "stems") return `Decided by the vocal stem: vocals are heard in ${vocIs(v) === "unsure" ? "only " : ""}${pct(v.share)}% of the track.`;
+  if (v && v.by === "ml") return `Essentia's voice score is ${v.score.toFixed(2)} (0.7 or more means vocals, 0.3 or less means instrumental).`;
+  return "No ML tags or stems yet, so Tastr can't tell.";
+}
+export const vocUnsureText = (v) => (v && v.by === "stems" ? `Vocals: not sure (the vocal stem is heard in only ${pct(v.share)}% of the track).`
+  : v && v.by === "ml" ? `Vocals: not sure (voice score ${v.score.toFixed(2)}).` : "Vocals: not sure yet.");
+function vocChip(v) {
+  const is = vocIs(v);
+  if (is === "unsure") return [];
+  const score = v.by === "ml" ? (is === "yes" ? v.score : 1 - v.score) : 1;
+  return [{ tag: is === "yes" ? "vocal" : "instrumental", score, src: v.by === "ml" ? "ml" : "stems", mlGroup: "voice", why: vocWhy(v) }];
 }
 export const vibeHelp = (tag) => VIBE_RULES[tag] || tagHelp(tag);
 

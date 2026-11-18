@@ -231,7 +231,15 @@ def separate(audio_path: str | Path, out_dir: Path, progress: Progress | None = 
     for name, audio in zip(model.sources, sources):
         if name in STEM_NAMES:
             sf.write(stem_path(out_dir, name), audio.cpu().numpy().T, model.samplerate, subtype="PCM_16")
-    return settings(model_name, shifts, overlap, device)
+    info = settings(model_name, shifts, overlap, device)
+    if "vocals" in model.sources:  # how much of the track the vocals are heard in (tastr/vocals.py), for the Vocals filter
+        from . import vocals
+
+        arr = sources.cpu().numpy()
+        share = vocals.vocal_share(arr[list(model.sources).index("vocals")], arr.sum(axis=0), model.samplerate)
+        if share is not None:
+            info["vocal_share"] = share
+    return info
 
 
 def _remote_settings(result: dict) -> dict | None:

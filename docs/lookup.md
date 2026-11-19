@@ -220,7 +220,8 @@ its own words clearly say another, so "Mami" or "oh baby" doesn't count as a lan
 lines can be read (a language missing from the word lists, a very short text) `languages` is empty. It uses no
 library on purpose: the web server is a Cloudflare Worker with 128 MB of memory, and detectors such as langid
 (about 75 MB loaded), lingua or fastText's need that much or more. Answers stored before this get their languages
-when they are read.
+when they are read. The card's credit shows them ("Lyrics from LRCLIB, in Spanish and English", and in Sing
+along), except for lyrics that read as English only.
 
 Lyrics belong to their writers and publishers, and LRCLIB, whose lyrics come from its users, grants no licence for
 them. So they are shown only to the person whose library the track is in: the `lyrics` table isn't in the library

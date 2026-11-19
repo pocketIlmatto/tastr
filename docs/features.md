@@ -124,7 +124,9 @@ so a refresh or a bookmark reopens it, and Back and Forward move between the vie
   click a line to play from there. **⤢ Sing along** (or **❝** in the playlist bar) shows the current line big and the
   next one under it, full screen. The **Karaoke** switch (card player, Lyrics, playlist bar) plays a track with stems
   without its vocals, from the same spot; it's one setting, kept in your browser. A track without stems plays the full
-  mix, and **Separate stems** makes them. See [Lyrics](lookup.md#lyrics).
+  mix, and **Separate stems** makes them. The credit says which language(s) the lyrics are in when they aren't
+  English only ("Lyrics from LRCLIB, in Spanish and English", shares of the lines on hover), read from the words.
+  See [Lyrics](lookup.md#lyrics).
 - **Lyrics by listening:** when LRCLIB doesn't have a track, **Listen for lyrics** has Whisper write down what it hears
   in the vocals ("Heard by Whisper from the vocals. Words may be wrong."); when LRCLIB has the words without times,
   **Time these lines** times them from the vocals, leaving lines it couldn't place unlit. Both separate the stems

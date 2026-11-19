@@ -37,6 +37,13 @@ def test_mixed_songs_get_each_language_by_lines():
     assert codes("너를 사랑해\nOh baby you are my everything\n우리 함께 걸어가\n내 마음을 알아줘") == ["ko", "en"]
 
 
+def test_a_few_wordy_english_lines_dont_outvote_sparser_spanish_ones():
+    song = ("Las luces bajan por la calle\nGuardo tu voz en el bolsillo\nBailamos hasta que amanezca\n"
+            "I just wanna hold you tonight\nYou're the only one I need\nNadie duerme en este barrio\n"
+            "El tren se lleva la lluvia\nCuento las ventanas encendidas")
+    assert textlang.languages(song) == [{"code": "es", "share": 0.75}, {"code": "en", "share": 0.25}]
+
+
 def test_a_borrowed_line_under_a_tenth_is_left_out():
     song = "\n".join(["You know I want you by my side", "Don't let me go tonight"] * 6 + ["Je t'aime"])
     assert codes(song) == ["en"]

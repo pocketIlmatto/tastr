@@ -36,7 +36,7 @@ SIX = {
 SIX_STEMS = ("vocals", "drums", "bass", "guitar", "piano", "other")
 AUDIO = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".aiff", ".aif", ".ogg", ".opus"}
 
-image = (
+_base = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg", "libsndfile1")
     .pip_install("numpy<2.3", "scipy<1.16", "librosa==0.11.0", "numba==0.61.2", "llvmlite==0.44.0",
@@ -44,13 +44,14 @@ image = (
     # Bake both models' weights in, so runs don't download them (htdemucs_ft is four models, about 320 MB).
     .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs'); get_model('htdemucs_ft')\"")
     .env({"NUMBA_CACHE_DIR": "/tmp/numba"})
-    .add_local_python_source("tastr")
 )
+image = _base.add_local_python_source("tastr")  # local files last: Modal refuses build steps after them
 # The 6-stem runs add htdemucs_6s and the BS-RoFormer SW checkpoint (about 700 MB, sha256-checked by the package).
 image6 = (
-    image.pip_install("bs-roformer-infer==0.1.5")
+    _base.pip_install("bs-roformer-infer==0.1.5")
     .run_commands("python -c \"from demucs.pretrained import get_model; get_model('htdemucs_6s')\"",
                   "python -c \"from bs_roformer import DEFAULT_MODEL, ensure_model_assets; ensure_model_assets(DEFAULT_MODEL)\"")
+    .add_local_python_source("tastr")
 )
 app = modal.App("tastr-stem-ab")
 

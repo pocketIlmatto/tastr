@@ -25,6 +25,7 @@ import re
 import sqlite3
 from typing import Any
 
+from . import textlang
 from .lookup.base import Provider, ProviderError, TrackQuery, same_artists, same_text
 
 log = logging.getLogger(__name__)
@@ -88,10 +89,12 @@ def pick(hits: list[dict], q: TrackQuery) -> dict | None:
 def result(hit: dict, p: Provider) -> dict[str, Any]:
     synced = parse_lrc(hit.get("syncedLyrics") or "")
     plain = (hit.get("plainLyrics") or "").strip() or "\n".join(x["line"] for x in synced)
+    instrumental = bool(hit.get("instrumental"))
     return {"provider": p.name, "status": "found", "id": hit.get("id"),
             "matched_artist": hit.get("artistName"), "matched_title": hit.get("trackName"),
-            "duration": hit.get("duration"), "instrumental": bool(hit.get("instrumental")),
+            "duration": hit.get("duration"), "instrumental": instrumental,
             "synced": synced, "plain": plain or None,
+            "languages": [] if instrumental else textlang.languages(plain),
             "url": f"{p.homepage}/lyrics/{hit['id']}" if hit.get("id") else p.homepage}
 
 
@@ -162,7 +165,9 @@ WHISPER_LABEL, WHISPER_HOME = "Whisper", "https://github.com/openai/whisper"
 def describe(stored: dict | None, edits: dict | None = None) -> dict[str, Any]:
     """A stored answer for the page: `state` found | not_found | no_tags | error | none (never asked), `timed`
     (whether the lines have times), `source` lrclib | whisper (heard by listening, tastr/listen.py), `timed_by`
-    whisper when LRCLIB's words got their times by listening, and the credit (`label`, `homepage`).
+    whisper when LRCLIB's words got their times by listening, the credit (`label`, `homepage`) and `languages`
+    [{code, share}]: what Whisper heard, or for LRCLIB's words what they read as (tastr/textlang.py, share of the
+    lines; empty when they don't say clearly; worked out here for answers stored before it was).
 
     With the person's own edits (edit_lines), `synced` and `plain` are theirs, with `edited: true`, `edited_at`,
     `base` (lrclib | whisper | none: what they started from) and `newer: true` when LRCLIB or Whisper has given a
@@ -175,6 +180,8 @@ def describe(stored: dict | None, edits: dict | None = None) -> dict[str, Any]:
         out["state"] = stored.get("status")
         out["source"] = stored.get("provider")
         heard = stored.get("provider") == "whisper"
+        if not heard and stored.get("status") == "found" and "languages" not in stored:
+            out["languages"] = [] if stored.get("instrumental") else textlang.languages(stored.get("plain"))
         out["label"], out["homepage"] = (WHISPER_LABEL, WHISPER_HOME) if heard else (LRCLIB.label, LRCLIB.homepage)
     if edits:
         sig = signature(stored)

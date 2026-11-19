@@ -210,6 +210,18 @@ first. The answer is stored in the `lyrics` table (`found` with `synced` lines `
 same guardrails as the catalogs, as provider `lrclib`: one at a time, at least 1 s apart, 1,000 a day
 (`TASTR_LOOKUP_LRCLIB_INTERVAL`, `TASTR_LOOKUP_LRCLIB_DAILY`).
 
+LRCLIB doesn't say what language its lyrics are in, so Tastr reads it from the words (`tastr/textlang.py`) and
+stores it as `languages` (`[{code, share}]`, the share of the lines, most first), the same shape as what Whisper
+heard. Each line is read on its own: the writing system decides first (kana is Japanese, Hangul Korean, and so on;
+Chinese characters alone are Chinese, or Japanese in a song with kana), then common words and telltale letters for
+about twenty languages written in Latin or Cyrillic letters. A Latin line stays in the song's main language unless
+its own words clearly say another, so "Mami" or "oh baby" doesn't count as a language of its own. Lines of only
+"oh", "la la" and the like are skipped, a language under 10% of the lines is dropped, and when fewer than half the
+lines can be read (a language missing from the word lists, a very short text) `languages` is empty. It uses no
+library on purpose: the web server is a Cloudflare Worker with 128 MB of memory, and detectors such as langid
+(about 75 MB loaded), lingua or fastText's need that much or more. Answers stored before this get their languages
+when they are read.
+
 Lyrics belong to their writers and publishers, and LRCLIB, whose lyrics come from its users, grants no licence for
 them. So they are shown only to the person whose library the track is in: the `lyrics` table isn't in the library
 copy the browser downloads for searches, nor in shared links, and the tests use made-up lines.

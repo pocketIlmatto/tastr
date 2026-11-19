@@ -75,7 +75,7 @@ def test_listening_is_wired():
     assert "/lyrics/listen`, { method: \"POST\" }" in src
     for text in ("Listen for lyrics", "Time these lines", "Waiting for another listen to finish…",
                  "Heard by Whisper from the vocals. Words may be wrong.", "Look on LRCLIB again",
-                 "Timed by listening to the vocals.", "Lyrics from LRCLIB · timed by listening",
+                 "Timed by listening to the vocals.", "Lyrics from LRCLIB${", "\" · timed by listening\"",
                  "Couldn't listen to this track. "):
         assert text in src, text
 
@@ -128,15 +128,21 @@ def test_editing_is_wired():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_heard_lyrics_say_their_languages():
-    """Whisper's lyrics say which language(s) were heard (shares in the tooltip); LRCLIB's say nothing."""
+def test_lyrics_say_their_languages():
+    """Whisper's lyrics say which language(s) were heard (shares of the words in the tooltip); LRCLIB's say what
+    their words read as (shares of the lines), unless they are English only; edited lyrics say nothing."""
     src = (APP / "lyrics.js").read_text()
     src = re.sub(r"^import .*?;\n", "", src, flags=re.M).replace("export ", "")
-    body = """out = [heardLangs({ source: "whisper", languages: [{ code: "ja", share: 0.58 }, { code: "fr", share: 0.42 }] }),
-       heardLangs({ source: "whisper", languages: [{ code: "en", share: 1 }] }),
-       heardLangs({ source: "whisper", language: "es" }),
-       heardLangs({ source: "whisper", languages: [{ code: "ja" }, { code: "fr" }, { code: "en" }] }),
-       heardLangs({ source: "lrclib", timed_by: "whisper", language: "en" }), heardLangs({ source: "whisper" })];"""
+    body = """out = [lyricLangs({ source: "whisper", languages: [{ code: "ja", share: 0.58 }, { code: "fr", share: 0.42 }] }),
+       lyricLangs({ source: "whisper", languages: [{ code: "en", share: 1 }] }),
+       lyricLangs({ source: "whisper", language: "es" }),
+       lyricLangs({ source: "whisper", languages: [{ code: "ja" }, { code: "fr" }, { code: "en" }] }),
+       lyricLangs({ source: "lrclib", timed_by: "whisper", language: "en" }), lyricLangs({ source: "whisper" }),
+       lyricLangs({ source: "lrclib", languages: [{ code: "es", share: 0.62 }, { code: "en", share: 0.38 }] }),
+       lyricLangs({ source: "lrclib", languages: [{ code: "ja", share: 1 }] }),
+       lyricLangs({ source: "lrclib", languages: [{ code: "en", share: 1 }] }),
+       lyricLangs({ source: "lrclib", languages: [] }),
+       lyricLangs({ source: "lrclib", edited: true, languages: [{ code: "ja", share: 1 }] })];"""
     stubs = "const localStorage = { getItem: () => null, setItem() {} };\n"
     r = subprocess.run(["node", "-e", stubs + src + "\nlet out;\n" + body + "\nconsole.log(JSON.stringify(out));"],
                        capture_output=True, text=True)
@@ -144,6 +150,11 @@ def test_heard_lyrics_say_their_languages():
     assert json.loads(r.stdout) == [
         {"say": "Japanese and French", "tip": "Japanese 58%, French 42% of the words."},
         {"say": "English", "tip": None}, {"say": "Spanish", "tip": None},
-        {"say": "Japanese, French and English", "tip": None}, None, None]
+        {"say": "Japanese, French and English", "tip": None}, None, None,
+        {"say": "Spanish and English",
+         "tip": "Spanish 62%, English 38% of the lines. Read from the words, so a short or mixed line can be wrong."},
+        {"say": "Japanese", "tip": None}, None, None, None]
     assert "langLabel(L), h(\"b\", {}, \"Heard by Whisper from the vocals." in src
-    assert "Heard by Whisper from the vocals${heardLangs(L) ? `, in ${heardLangs(L).say}` : \"\"}" in src
+    assert "Heard by Whisper from the vocals${lyricLangs(L) ? `, in ${lyricLangs(L).say}` : \"\"}" in src
+    assert '"LRCLIB"),\n      ...(lyricLangs(L) ? [", ", langSpan(lyricLangs(L), `in ${lyricLangs(L).say}`)] : [])' in src
+    assert "`Lyrics from LRCLIB${lyricLangs(L) ? `, in ${lyricLangs(L).say}` : \"\"}" in src

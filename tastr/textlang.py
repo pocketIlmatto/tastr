@@ -20,7 +20,8 @@ from typing import Iterable
 MIN_SHARE = 0.10  # a language under this share of the lines is left out (a borrowed line, a misread one)
 MIN_KNOWN = 0.5  # at least this share of the wordy lines must be readable, or nothing is said
 MIN_LINES = 2  # and at least this many lines
-MIN_COVER = 0.12  # the main Latin/Cyrillic language must account for this much of those lines' words
+MIN_COVER = 0.08  # the main Latin/Cyrillic language must account for this much of those lines' words...
+MIN_VOTES = 0.4  # ...and lean this share of those lines its way
 SWITCH = 1.5  # a line leaves the main language when another scores at least this much...
 MARGIN = 2.0  # ...and at least this many times the main language's score (plus a little)
 
@@ -226,18 +227,25 @@ def languages(lines: Iterable[str] | str | None) -> list[dict]:
     if isinstance(lines, str):
         lines = lines.splitlines()
     read = [(line, *line_language(line)) for line in lines if line and line.strip()]
-    # The main language of each alphabet: the most words over the whole song, if it covers enough of them.
+    # The main language of each alphabet: the one most lines lean to (a few English lines full of "you" and "the"
+    # mustn't outvote many Spanish ones with fewer listed words), if its words cover enough of the song's.
     main: dict[str, str | None] = {}
     for alphabet in ("latn", "cyrl"):
         total: dict[str, float] = {}
-        words = 0
+        votes: dict[str, int] = {}
+        words = lines = 0
         for line, lang, scores, n in read:
             if lang is None and n and _alphabet(line) == alphabet:
                 words += n
+                lines += 1
                 for k, v in scores.items():
                     total[k] = total.get(k, 0.0) + v
-        best = max(total.items(), key=lambda x: x[1], default=(None, 0.0))
-        main[alphabet] = best[0] if words and best[1] >= MIN_COVER * words else None
+                if scores:
+                    top = max(scores.items(), key=lambda x: x[1])[0]
+                    votes[top] = votes.get(top, 0) + 1
+        best = max(votes, key=lambda k: (votes[k], total[k]), default=None)
+        sure = best and total[best] >= MIN_COVER * words and votes[best] >= MIN_VOTES * lines
+        main[alphabet] = best if sure else None
     labels: list[str | None] = []
     wordy = 0
     for line, lang, scores, n in read:

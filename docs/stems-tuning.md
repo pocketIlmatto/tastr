@@ -40,6 +40,30 @@ First run 2026-11-04: 5 tracks from one of Pam's playlists, 20 runs on a T4,
 
 Listening verdict: pending.
 
+## Six stems (guitar and piano)
+
+Suno-style splits go past four stems. A survey on 2026-11-19 found that only Demucs' `htdemucs_6s` (adds guitar
+and piano) has the same MIT terms as today's model; the stronger RoFormer models (a 6-stem BS-RoFormer "SW", and
+MVSep's 53-stem model with strings, brass and synth) publish weights with no clear licence or known trainer, and
+need a bigger GPU. Demucs' own notes say the 6-stem guitar is fair and the piano bleeds.
+
+`--set six` runs three 6-stem configs instead of the four above, blind as before (letters A to C):
+
+```
+modal run scripts/stem_ab.py --audio-dir PLAYLIST/audio --out-dir stem-ab-six --limit 5 --set six
+```
+
+| Config | What it does | Shippable |
+| --- | --- | --- |
+| 6s | `htdemucs_6s` alone | yes (MIT) |
+| hybrid | `htdemucs_ft` for vocals, drums and bass, `htdemucs_6s` for guitar and piano, other = mix minus those five | yes (MIT) |
+| roformer-sw | BS-RoFormer SW 6-stem via `bs-roformer-infer` | no: yardstick only (weights unlicensed) |
+
+`listen.html` adds guitar and piano buttons (keys `g` and `p`) when every version has them. Tracks with real
+guitar or piano parts tell the most. Timings count only the GPU work (not decoding the track).
+
+Results: pending.
+
 ## Which model made each stem set
 
 Each stem folder keeps a `stems.json` next to its FLACs (on disk and in the audio bucket), written when the

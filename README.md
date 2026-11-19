@@ -119,6 +119,9 @@ Third-party pieces it uses or links to:
   [Toaster](https://github.com/StopBanning/toaster) (MIT). No code was copied.
 - **Demucs** (stems) is MIT. It is an optional install, and its model weights
   download on first use.
+- **bs-roformer-infer** (MIT) and the **BS-RoFormer SW** weights are used only by the stem listening script
+  (`scripts/stem_ab.py --set six`) as a quality yardstick. The weights have no stated licence or known trainer, so
+  Tastr doesn't ship or use them in the app.
 - **yt-dlp** (links) is under the Unlicense, also optional.
 - **Signalsmith Stretch** and its Python binding **python-stretch** (mash-up key lock) are MIT,
   an optional install.

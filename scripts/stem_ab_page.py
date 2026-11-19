@@ -3,7 +3,7 @@
     python scripts/stem_ab_page.py stem-ab/out
 
 Open OUT/listen.html in Chrome or Safari. It plays the FLAC files next to it (nothing is uploaded), keeps all
-four letters in sync so switching is instant, and lets you mark the best and worst letter per track. The page
+letters in sync so switching is instant, and lets you mark the best and worst letter per track. The page
 never reads answers.json; "Copy my picks" puts your picks on the clipboard to paste back.
 """
 
@@ -13,7 +13,8 @@ import json
 import sys
 from pathlib import Path
 
-STEMS = ["vocals", "drums", "bass", "other"]
+BASE = ["vocals", "drums", "bass", "other"]  # every config makes these
+EXTRA = ["guitar", "piano"]  # the 6-stem configs (stem_ab.py --set six) add these
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -37,14 +38,14 @@ input[type=range]{flex:1;min-width:160px;accent-color:var(--acc)}.time{color:var
 #copied{color:var(--mute);font-size:13px}
 </style></head><body><main>
 <h1>Stem listening test</h1>
-<p class="help">Each track was split four ways; the letters are shuffled per track. Pick a stem, press play, and switch letters while it plays: they stay in sync.
-Keys for the highlighted track: <kbd>space</kbd> play/pause, <kbd>1</kbd>–<kbd>4</kbd> letter, <kbd>v</kbd> <kbd>d</kbd> <kbd>b</kbd> <kbd>o</kbd> stem, <kbd>←</kbd> <kbd>→</kbd> 5 s.</p>
+<p class="help">Each track was split __WAYS__ ways; the letters are shuffled per track. Pick a stem, press play, and switch letters while it plays: they stay in sync.
+Keys for the highlighted track: <kbd>space</kbd> play/pause, <kbd>1</kbd>–<kbd>__WAYS__</kbd> letter, __KEYS__ stem, <kbd>←</kbd> <kbd>→</kbd> 5 s.</p>
 <div id="tracks"></div>
 <div class="bar"><button id="copy">Copy my picks</button><span id="copied"></span></div>
 </main>
 <script>
 const DATA = __DATA__, STEMS = __STEMS__;
-const KEY = "stem-ab-picks";
+const KEY = "stem-ab-picks:" + location.pathname;  // each output folder keeps its own picks
 let picks = {}; try { picks = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch {}
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(picks)); } catch {} };
 const fmt = s => isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}` : "0:00";
@@ -110,7 +111,7 @@ DATA.forEach(t => { const p = makePlayer(t); players.push(p); document.getElemen
 active = players[0]; if (active) active.box.classList.add("on");
 document.addEventListener("keydown", e => {
   if (!active || e.metaKey || e.ctrlKey || e.altKey || e.target.tagName === "INPUT") return;
-  const k = e.key.toLowerCase(), stems = { v: "vocals", d: "drums", b: "bass", o: "other" };
+  const k = e.key.toLowerCase(), stems = Object.fromEntries(STEMS.map(s => [s[0], s]));
   if (k === " ") { e.preventDefault(); active.st.playing ? active.stop() : active.start(); }
   else if (/^[1-9]$/.test(k) && active.t.letters[+k - 1]) active.setLetter(active.t.letters[+k - 1]);
   else if (stems[k]) active.setStem(stems[k]);
@@ -128,15 +129,22 @@ document.getElementById("copy").onclick = async () => {
 
 
 def build(out: Path) -> Path:
+    dirs = sorted(p for p in out.iterdir() if p.is_dir())
+    folders = [x for d in dirs for x in d.iterdir() if x.is_dir()]
+    # The 6-stem run adds guitar and piano; show them only when every version has them.
+    stems = BASE[:3] + [s for s in EXTRA if folders and all((x / f"{s}.flac").is_file() for x in folders)] + BASE[3:]
     tracks = []
-    for d in sorted(p for p in out.iterdir() if p.is_dir()):
-        letters = sorted(x.name for x in d.iterdir() if x.is_dir() and all((x / f"{s}.flac").is_file() for s in STEMS))
+    for d in dirs:
+        letters = sorted(x.name for x in d.iterdir() if x.is_dir() and all((x / f"{s}.flac").is_file() for s in stems))
         if letters:
             tracks.append({"name": d.name, "dir": d.name, "letters": letters})
     if not tracks:
         raise SystemExit(f"No track folders with stems in {out}")
+    ways = max(len(t["letters"]) for t in tracks)
+    keys = " ".join(f"<kbd>{s[0]}</kbd>" for s in stems)
     page = out / "listen.html"
-    page.write_text(PAGE.replace("__DATA__", json.dumps(tracks)).replace("__STEMS__", json.dumps(STEMS)))
+    page.write_text(PAGE.replace("__DATA__", json.dumps(tracks)).replace("__STEMS__", json.dumps(stems))
+                    .replace("__WAYS__", str(ways)).replace("__KEYS__", keys))
     return page
 
 

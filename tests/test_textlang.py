@@ -42,6 +42,16 @@ def test_a_borrowed_line_under_a_tenth_is_left_out():
     assert codes(song) == ["en"]
 
 
+def test_urdu_lines_with_letters_persian_shares_stay_urdu():
+    assert codes("میں تم سے پیار کرتا ہوں\nتم میرے دل میں رہتے ہو") == ["ur"]
+    assert codes("من تو را دوست دارم\nچشمهای تو را می‌بینم") == ["fa"]
+
+
+def test_lines_in_an_unlisted_writing_system_count_as_unread():
+    song = "I keep on running through the night\nYou know I want you by my side\n" + "ང་ཁྱོད་ལ་དགའ་པོ་ཡོད\n" * 10
+    assert textlang.languages(song) == []
+
+
 def test_nothing_when_the_words_dont_say():
     assert textlang.languages("la la la\nna na na\noh oh yeah") == []
     assert textlang.languages("Nakupenda sana mpenzi wangu\nMoyo wangu unakupenda\nUsiniache peke yangu") == []

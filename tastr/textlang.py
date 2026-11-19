@@ -140,7 +140,7 @@ SCRIPTS = [
     (0xAC00, 0xD7AF, "ko"), (0x1100, 0x11FF, "ko"), (0x3130, 0x318F, "ko"),
     (0x4E00, 0x9FFF, "han"), (0x3400, 0x4DBF, "han"), (0xF900, 0xFAFF, "han"),
     (0x0E00, 0x0E7F, "th"), (0x0370, 0x03FF, "el"), (0x1F00, 0x1FFF, "el"), (0x0590, 0x05FF, "he"),
-    (0x0600, 0x06FF, "ar"), (0x0750, 0x077F, "ar"), (0x0900, 0x097F, "hi"), (0x0980, 0x09FF, "bn"),
+    (0x0600, 0x06FF, "arab"), (0x0750, 0x077F, "arab"), (0x0900, 0x097F, "hi"), (0x0980, 0x09FF, "bn"),
     (0x0A00, 0x0A7F, "pa"), (0x0A80, 0x0AFF, "gu"), (0x0B80, 0x0BFF, "ta"), (0x0C00, 0x0C7F, "te"),
     (0x0C80, 0x0CFF, "kn"), (0x0D00, 0x0D7F, "ml"), (0x0D80, 0x0DFF, "si"), (0x0E80, 0x0EFF, "lo"),
     (0x1000, 0x109F, "my"), (0x1780, 0x17FF, "km"), (0x10A0, 0x10FF, "ka"), (0x0530, 0x058F, "hy"),
@@ -158,8 +158,8 @@ def _script(ch: str) -> str | None:
             return lang
     if 0x0400 <= o <= 0x04FF:
         return "cyrl"
-    if ch.isalpha() and unicodedata.name(ch, "").startswith("LATIN"):
-        return "latn"
+    if ch.isalpha():
+        return "latn" if unicodedata.name(ch, "").startswith("LATIN") else "unknown"
     return None
 
 
@@ -197,7 +197,7 @@ def _scores(line: str) -> tuple[dict[str, float], int]:
 
 
 def line_language(line: str) -> tuple[str | None, dict[str, float], int]:
-    """(language or "han" by its writing system, else None; word scores; word count) for one line."""
+    """(language, or "han" or "arab" for the song to settle, by its writing system, else None; word scores; word count) for one line."""
     counts = _scripts(line)
     if not counts:
         return None, {}, 0
@@ -205,13 +205,14 @@ def line_language(line: str) -> tuple[str | None, dict[str, float], int]:
         return "ja", {}, 1
     if counts.get("ko", 0) >= 2:
         return "ko", {}, 1
-    other = {k: n for k, n in counts.items() if k not in ("latn", "cyrl", "ja", "ko")}
+    other = {k: n for k, n in counts.items() if k not in ("latn", "cyrl", "ja", "ko", "unknown")}
     alpha = counts.get("latn", 0) + counts.get("cyrl", 0)
+    if not other and counts.get("unknown", 0) > alpha:
+        # A writing system not listed above: words this can't read, which count against `languages` saying anything
+        return None, {}, max(1, len(_TOKEN.findall(line)))
     if other:
         s, n = max(other.items(), key=lambda x: x[1])
         if n * (3 if s == "han" else 1) >= alpha:  # one Chinese character is about a word
-            if s == "ar":
-                s = "fa" if PERSIAN & set(line) else "ur" if URDU & set(line) else "ar"
             return s, {}, 1
     scores, words = _scores(line)
     return None, scores, words
@@ -251,6 +252,10 @@ def languages(lines: Iterable[str] | str | None) -> list[dict]:
             else:
                 lang = m
         labels.append(lang)
+    if "arab" in labels:  # Persian and Urdu add letters to Arabic's, and Urdu uses Persian's too; the song decides
+        text = "".join(line for line, lang, _, _ in read if lang == "arab")
+        arab = "ur" if URDU & set(text) else "fa" if PERSIAN & set(text) else "ar"
+        labels = [arab if x == "arab" else x for x in labels]
     if "han" in labels:
         han = "ja" if "ja" in labels else "zh"
         labels = [han if x == "han" else x for x in labels]
@@ -267,4 +272,6 @@ def languages(lines: Iterable[str] | str | None) -> list[dict]:
 
 def _alphabet(line: str) -> str:
     c = _scripts(line)
+    if c.get("unknown", 0) > c.get("latn", 0) + c.get("cyrl", 0):
+        return "unknown"  # no main language: its lines stay unread
     return "cyrl" if c.get("cyrl", 0) > c.get("latn", 0) else "latn"

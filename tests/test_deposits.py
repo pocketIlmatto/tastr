@@ -180,7 +180,7 @@ def test_api_refuses(client, body):
 def test_cli_add_list_show(db_path, capsys):
     _tracks(db_path, 1)
     assert cli.main(["--db", str(db_path), "deposit", "add", "moment", "--source", "https://example.com/set",
-                     "--start", "15:38", "--end", "16:30", "--note", "the handover", "--tag", "transition"]) == 0
+                     "--start", "15:38", "--end", "16:30", "--note", "the handover", "--tag", "transition", "--no-fetch"]) == 0
     added = json.loads(capsys.readouterr().out)
     assert added["start_s"] == 938 and added["end_s"] == 990 and added["status"] == "needs-source"
     assert cli.main(["--db", str(db_path), "deposit", "list"]) == 0

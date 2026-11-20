@@ -117,11 +117,23 @@ class AppContext:
                                      limit=None if blocking or not hosted else settings.max_analyses)
         self.drum_runs = drum_jobs.Jobs(self.run_drum_model, db_path)
         self.ml_runs = drum_jobs.Jobs(self.run_ml_tags, db_path, kind="ml-tags", label="ML tags")
+        # moments from a link (tastr/moments.py): fetch the source, cut, analyze and separate, one at a time
+        self.moment_runs = drum_jobs.Jobs(self.run_moment, db_path, kind="moments", label="a moment from a link")
         self.last_seen: dict[str, str] = {}  # email -> time of their last request, since the server started
         self.snapshot_day = ""  # the UTC day storage was last recorded for (storage_days)
 
     def conn(self) -> sqlite3.Connection:
         return db.connect(self.db_path)
+
+    def run_moment(self, deposit_id: int) -> None:
+        """Finish one moment from a link (a moment_runs job); its status and error are saved on the deposit."""
+        from .. import moments
+
+        with closing(self.conn()) as c:
+            found, owner = moments.owner_of(c, deposit_id)
+            if not found:
+                raise LookupError("The moment was deleted.")
+            moments.run(c, owner, deposit_id)
 
     def run_drum_model(self, track_id: int) -> None:
         """Re-analyze one track with the drum model (a drum_jobs job); raises with a message for the UI."""

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bank · Tastr</title>
+<meta name="description" content="Your bank of deposits: moments, tracks and whole sets, each broken down by Tastr.">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<script>try { var l = localStorage.getItem("tastr-look"); document.documentElement.dataset.look = (l === "technics") ? l : "808"; } catch (_) { document.documentElement.dataset.look = "808"; }</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600&family=Michroma&family=Space+Grotesk:wght@400;600&family=Space+Mono:wght@400;700&display=swap">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="bank-page">
+<!-- The bank of deposits, at its own address (/bank, /bank/<id>) beside the app; app/bank.js draws it. -->
+<header>
+  <h1>Tastr</h1>
+  <div class="head-right">
+    <span class="look-pick" role="group" aria-label="Look"><span>Look</span><button type="button" data-look="808" aria-pressed="true" title="Drum-machine panel: cream, black and orange">808</button><button type="button" data-look="technics" aria-pressed="false" title="70s hi-fi: champagne aluminium and red LEDs">Technics</button></span>
+  </div>
+</header>
+<main>
+  <div id="bk" class="bk"><p class="muted" role="status">Loading your bank…</p></div>
+</main>
+<script type="module" src="/static/app/bank.js"></script>
+</body>
+</html>

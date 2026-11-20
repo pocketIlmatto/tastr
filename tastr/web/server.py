@@ -56,9 +56,9 @@ def app_version() -> str:
     return h.hexdigest()[:10]
 
 
-def versioned_index() -> str:
-    """index.html with `?v=<content hash>` on each /static/ file it loads, and the UI's modules from
-    /static/app-<app_version()>/.
+def versioned_index(page: str = "index.html") -> str:
+    """index.html (or another page in static/: bank.html) with `?v=<content hash>` on each /static/ file it loads,
+    and the UI's modules from /static/app-<app_version()>/.
 
     Browsers and Cloudflare cache scripts and style.css for hours when no Cache-Control is sent; a new
     hash after a deploy is a new URL, so the new files load right away. The UI's modules (static/app/) import
@@ -75,7 +75,7 @@ def versioned_index() -> str:
         if not f.is_file():
             return m.group(0)
         return f'{m.group(1)}/static/{name}?v={hashlib.sha256(f.read_bytes()).hexdigest()[:10]}"'
-    return re.sub(r'((?:src|href)=")/static/([\w./-]+)"', tag, (STATIC_DIR / "index.html").read_text())
+    return re.sub(r'((?:src|href)=")/static/([\w./-]+)"', tag, (STATIC_DIR / page).read_text())
 
 
 class ModuleFiles(StaticFiles):
@@ -243,6 +243,15 @@ def create_app(db_path: str | Path | None = None, settings: Settings | None = No
     def index():
         # The page itself is never cached; its scripts and styles carry a content hash, so a deploy is seen at once.
         return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
+
+    bank_page = versioned_index("bank.html")
+
+    # The bank's own pages (static/bank.html, app/bank.js), at their own address beside the app: the list of
+    # deposits and one deposit. The page reads /api/deposits itself, so an unknown id is its "not found" line.
+    @app.get("/bank", include_in_schema=False)
+    @app.get("/bank/{deposit_id:int}", include_in_schema=False)
+    def bank(deposit_id: int | None = None):
+        return HTMLResponse(bank_page, headers={"Cache-Control": "no-cache"})
 
     app.mount("/static", ModuleFiles(directory=STATIC_DIR), name="static")
     return app

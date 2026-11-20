@@ -765,7 +765,8 @@ def test_ui_modules_skip_stale_caches_and_core_loads_first(client):
 
     mods = sorted(p.name for p in APP_DIR.glob("*.js"))
     assert client.get("/static/app/core.js").headers["cache-control"] == "no-cache"
-    seen, todo = set(), ["main.js"]  # every module is reachable from main.js
+    # every module is reachable from an entry point: main.js (the app) or bank.js (the bank's page, bank.html)
+    seen, todo = set(), ["main.js", "bank.js"]
     while todo:
         m = todo.pop()
         if m not in seen:

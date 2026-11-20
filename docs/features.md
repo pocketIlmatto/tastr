@@ -252,8 +252,8 @@ the music you actually use, and every label also scores future engine changes
 
 The bank is where Tastr is heading: a place to put anything you want to come back to, from one moment you noticed
 to a whole library. Each thing you put in is a **deposit**: the source, your note if you wrote one, and what
-Tastr found, kept together. So far it is the records, an API and a command; it has no page yet, and nothing in the
-rest of the app changes.
+Tastr found, kept together. It has its own pages at its own address, `/bank`, beside the app (the app's tabs don't
+link to it yet), and nothing in the rest of the app changes.
 
 - A deposit has a size. A **moment** is a time range in a source (a transition, a line, a sound). A **track** is
   one track in your library. A **collection** holds tracks and moments (a playlist, a DJ set).
@@ -273,6 +273,13 @@ rest of the app changes.
   fetching it again picks up where it stopped. Moments are up to 15 minutes, sources up to 6 hours. Breaking
   down a whole set comes later. This needs the links extra (`pip install 'tastr[links]'`) and ffmpeg, and works
   on your own install for now: the hosted server doesn't fetch from links.
+- **The bank's pages.** `/bank` lists every deposit, newest first, with a size filter (moments, tracks,
+  collections): each row shows its note (or its title), where it came from, a line on what Tastr found and when you
+  added it. One still breaking down, waiting for audio or failed says so in colour. `/bank/<id>` shows one deposit:
+  its source and what it was cut from, **Hear it** (a moment loops by default, with a mute and solo for each of its
+  stems; a track plays whole, with a bar ruler), what Tastr found (tempo, key, length in bars, vibes), and for a
+  set the moments cut from it. A deposit that is breaking down shows its steps and updates itself; a moment saved
+  from a link without fetching, or one that failed, has a button to fetch it (again).
 - `tastr deposit add`, `tastr deposit fetch ID`, `tastr deposit list` and `tastr deposit show ID` work from a
   terminal ([usage.md](usage.md#command-line)); `/api/deposits` is the same over HTTP, with
   `POST /api/deposits/moments` for a moment from a link and `/api/deposits/{id}/audio`, `/stems/{name}` and

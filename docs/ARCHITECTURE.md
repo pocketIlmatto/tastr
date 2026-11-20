@@ -139,10 +139,11 @@ tastr/resolvers/            link/playlist resolvers
 tastr/lookup/               opt-in catalog lookups (BPM/key by artist + title), one module per provider
 tastr/db.py                 SQLite schema and save/load/query
 tastr/labels.py             your own BPM/key/section labels, the review queue, manifest export
+tastr/deposits.py           the bank: moments, tracks and collections kept with their note and source (features.md, "The bank")
 tastr/service.py            inputs -> engine -> DB, used by the CLI and web app
 tastr/web/                  FastAPI app and UI; hosted.py is the shared-server mode (docs/hosting.md)
   server.py                 create_app: the shared AppContext (context.py), login middleware, and the routes/ modules
-  routes/                   the API by area: tracks, media (audio, stems, drum model), edits, analyze, search, admin
+  routes/                   the API by area: tracks, media (audio, stems, drum model), edits, analyze, search, deposits, admin
 tastr/cloud/                Modal apps: benchmarks and stems (modal_app.py), a hosted server's analysis (modal_web.py)
 engine-rs/                  the Rust engine that makes every card, on the server and in the browser (docs/rust-engine.md)
 worker/                     the hosted server: a Cloudflare Python Worker and its Durable Object (docs/deploy.md)

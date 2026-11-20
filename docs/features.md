@@ -240,6 +240,25 @@ the music you actually use, and every label also scores future engine changes
 - Labels, review flags and pattern marks are per person on a hosted server, like the library, and re-analyzing
   never changes them.
 
+## The bank (early)
+
+The bank is where Tastr is heading: a place to put anything you want to come back to, from one moment you noticed
+to a whole library. Each thing you put in is a **deposit**: the source, your note if you wrote one, and what
+Tastr found, kept together. So far it is the records, an API and a command; it has no page yet, and nothing in the
+rest of the app changes.
+
+- A deposit has a size. A **moment** is a time range in a source (a transition, a line, a sound). A **track** is
+  one track in your library. A **collection** holds tracks and moments (a playlist, a DJ set).
+- Every track in your library is in the bank already, pointing at its card. Deleting a track removes its deposit
+  too, unless you gave it a note, tags or a place in a collection.
+- A moment can sit in a track or a collection, and can point at each track it spans, as a transition between two
+  tracks does.
+- Tags carry where they came from, so tags imported from elsewhere stay apart from your own.
+- A deposit with a link and no audio yet is marked `needs-source`. Fetching and breaking it down comes next.
+- `tastr deposit add`, `tastr deposit list` and `tastr deposit show ID` work from a terminal
+  ([usage.md](usage.md#command-line)); `/api/deposits` is the same over HTTP. On a hosted server each person has
+  their own bank.
+
 ## Files
 
 The **Files** tab lists everything Tastr stores for you: the audio you uploaded and the stems made from it,

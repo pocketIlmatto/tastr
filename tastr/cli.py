@@ -1,4 +1,4 @@
-"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr set-owner EMAIL`, `tastr pack OUT --owner EMAIL`, `tastr unpack FILE`, `tastr lookup`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
+"""Command line: `tastr analyze FILES...`, `tastr list`, `tastr show ID`, `tastr query SQL`, `tastr retag`, `tastr set-owner EMAIL`, `tastr pack OUT --owner EMAIL`, `tastr unpack FILE`, `tastr lookup`, `tastr deposit`, `tastr stems ID`, `tastr stages`, `tastr serve`, `tastr bench`, `tastr spec-bench`, `tastr drum-bench`, `tastr key-profiles`,
 `tastr vibe-bench`, `tastr vibe-fit`, `tastr fetch`, `tastr rekordbox-compare`."""
 
 from __future__ import annotations
@@ -61,6 +61,28 @@ def main(argv: list[str] | None = None) -> int:
     le = lbs.add_parser("export", help="write the labels as a `tastr bench manifest` CSV")
     le.add_argument("out")
     le.add_argument("--patterns", action="store_true", help="write the pattern reviews as JSON instead")
+    dp = sub.add_parser("deposit", help="the bank: moments, tracks and collections you put in to come back to")
+    dps = dp.add_subparsers(dest="action", required=True)
+    da = dps.add_parser("add", help="add a moment or a collection")
+    da.add_argument("size", choices=["moment", "collection"])
+    da.add_argument("--source", help="a link to where it is (a video, a DJ set, a playlist)")
+    da.add_argument("--start", help="a moment's start in its source, e.g. 15:38")
+    da.add_argument("--end", help="a moment's end, e.g. 16:30")
+    da.add_argument("--note", help="a sentence on what caught your ear")
+    da.add_argument("--title")
+    da.add_argument("--tag", action="append", default=[], help="a tag; repeat for more")
+    da.add_argument("--in", dest="held_by", type=int, metavar="ID", help="the deposit it sits in")
+    da.add_argument("--owner", help="on a hosted server's database, whose bank it goes in")
+    dl = dps.add_parser("list", help="deposits, newest first")
+    dl.add_argument("--size", choices=["moment", "track", "collection"])
+    dl.add_argument("--tag")
+    dl.add_argument("-q", "--query", help="words in the title, note, source or track")
+    dl.add_argument("--limit", type=int, default=50)
+    dl.add_argument("--owner", help="on a hosted server's database, only this person's")
+    dl.add_argument("--json", action="store_true", help="print them as JSON")
+    dw = dps.add_parser("show", help="print one deposit as JSON")
+    dw.add_argument("deposit_id", type=int)
+    dw.add_argument("--owner")
     rv = sub.add_parser("review", help="tracks whose analysis is most likely wrong, to label first")
     rv.add_argument("--limit", type=int, default=20)
     st = sub.add_parser("stems", help="separate one track into vocals, bass, other and drums (needs tastr[stems])")
@@ -507,6 +529,52 @@ def _labels(args) -> int:
     return run(conn, args, labels)
 
 
+def _deposit(args) -> int:
+    from . import deposits
+
+    conn = db.connect(args.db)
+    try:
+        if args.action == "add":
+            if args.source and not args.source.startswith(("http://", "https://")):
+                raise deposits.DepositError("--source has to be a link.")
+            got = deposits.add(
+                conn, args.owner, args.size, title=args.title, note=args.note,
+                source_kind="link" if args.source else None, source_uri=args.source,
+                start_s=deposits.parse_time(args.start) if args.start else None,
+                end_s=deposits.parse_time(args.end) if args.end else None, tags=args.tag,
+                status="needs-source" if args.source else "ready", held_by=args.held_by)
+            print(json.dumps(got, indent=2))
+            return 0
+        if args.action == "show":
+            got = deposits.get(conn, args.owner, args.deposit_id)
+            if got is None:
+                print(f"no deposit {args.deposit_id}", file=sys.stderr)
+                return 1
+            print(json.dumps(got, indent=2))
+            return 0
+        deposits.sync_tracks(conn, args.owner)
+        found = deposits.find(conn, args.owner, size=args.size, tag=args.tag, q=args.query, limit=args.limit)
+    except deposits.DepositError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(found, indent=2))
+        return 0
+    for d in found["deposits"]:
+        span = f" {_clock(d['start_s'])}-{_clock(d['end_s'])}" if d["start_s"] is not None else ""
+        tags = " [" + ", ".join(t["tag"] for t in d["tags"]) + "]" if d["tags"] else ""
+        note = f"  \"{d['note']}\"" if d["note"] else ""
+        print(f"{d['id']:>5}  {d['size']:<10} {d['title'] or d['source_uri'] or '(untitled)'}{span}{tags}{note}")
+    if found["total"] > len(found["deposits"]):
+        print(f"... {found['total'] - len(found['deposits'])} more (--limit)", file=sys.stderr)
+    return 0
+
+
+def _clock(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    return f"{m}:{s:02d}"
+
+
 def _lookup(args) -> int:
     import os
 
@@ -830,7 +898,7 @@ COMMANDS = {
     "analyze": _analyze, "list": _list, "show": _show, "query": _query, "db-size": _db_size, "bucket-backfill": _bucket_backfill,
 "retag": _retag,
     "set-owner": _set_owner, "pack": _pack, "unpack": _unpack, "lookup": _lookup, "labels": _labels,
-    "review": _labels, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
+    "review": _labels, "deposit": _deposit, "stems": _stems, "stages": _stages, "serve": _serve, "spec-bench": _spec_bench,
     "key-profiles": _key_profiles, "drum-model": _drum_model, "ml-tags": _ml_tags, "drum-bench": _drum_bench,
     "vibe-bench": _vibe_bench, "vibe-fit": _vibe_fit, "fetch": _fetch, "bench": _bench,
     "rekordbox-compare": _rekordbox_compare,

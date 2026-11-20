@@ -58,6 +58,7 @@ def pack(db_path: str | os.PathLike | None, out: str | os.PathLike, owner: str) 
                     if stems.info_path(folder).is_file():  # which model made them (none: older htdemucs stems)
                         files.append((stems.info_path(folder), f"stems/{folder.name}/{stems.INFO_NAME}"))
             tracks = c.execute("UPDATE tracks SET owner = ? WHERE owner IS NULL", (owner,)).rowcount
+            c.execute("UPDATE deposits SET owner = ? WHERE owner IS NULL", (owner,))  # the bank goes with them
             c.commit()
         added: set[str] = set()
         with tarfile.open(out, "w") as tar:

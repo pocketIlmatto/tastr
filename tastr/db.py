@@ -402,6 +402,55 @@ CREATE TABLE IF NOT EXISTS job_markers (
     PRIMARY KEY (kind, key)
 );
 
+-- The bank (tastr/deposits.py): anything a person puts in, from one moment they noticed to a whole library.
+-- size: moment, track or collection. A track-sized deposit points at its track card (track_id); deleting the
+-- track keeps the deposit when it carries a note, tags or links, and deposits.sync_tracks drops it otherwise.
+-- start_s/end_s: a moment's range inside its source. context_json: where and why it was marked;
+-- extracted_json: what the tooling found.
+CREATE TABLE IF NOT EXISTS deposits (
+    id             INTEGER PRIMARY KEY,
+    owner          TEXT,
+    size           TEXT NOT NULL,
+    title          TEXT,
+    note           TEXT,
+    source_kind    TEXT,
+    source_uri     TEXT,
+    track_id       INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
+    start_s        REAL,
+    end_s          REAL,
+    status         TEXT NOT NULL DEFAULT 'ready',
+    context_json   TEXT NOT NULL DEFAULT '{}',
+    extracted_json TEXT NOT NULL DEFAULT '{}',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deposits_track ON deposits(track_id) WHERE track_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_deposits_owner ON deposits(owner, created_at);
+
+-- How deposits relate. kind 'holds': from_id (a collection or track) holds to_id, at `position` and, for a
+-- moment, from start_s to end_s of the holder. kind 'touches': a moment (from_id) that spans tracks points at
+-- each track deposit (to_id) it touches.
+CREATE TABLE IF NOT EXISTS deposit_links (
+    from_id  INTEGER NOT NULL REFERENCES deposits(id) ON DELETE CASCADE,
+    to_id    INTEGER NOT NULL REFERENCES deposits(id) ON DELETE CASCADE,
+    kind     TEXT NOT NULL,
+    position INTEGER,
+    start_s  REAL,
+    end_s    REAL,
+    PRIMARY KEY (from_id, to_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_deposit_links_to ON deposit_links(to_id, kind);
+
+-- A deposit's tags. origin says where a tag came from ('user', 'tool', or an import such as 'rekordbox'), so
+-- imported vocabularies stay separate from the bank's own.
+CREATE TABLE IF NOT EXISTS deposit_tags (
+    deposit_id INTEGER NOT NULL REFERENCES deposits(id) ON DELETE CASCADE,
+    tag        TEXT NOT NULL,
+    origin     TEXT NOT NULL DEFAULT 'user',
+    PRIMARY KEY (deposit_id, tag, origin)
+);
+CREATE INDEX IF NOT EXISTS idx_deposit_tags_tag ON deposit_tags(tag);
+
 CREATE INDEX IF NOT EXISTS idx_tracks_bpm ON tracks(bpm);
 CREATE INDEX IF NOT EXISTS idx_tracks_owner ON tracks(owner);
 CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);
@@ -728,9 +777,13 @@ def track_owner(conn: sqlite3.Connection, track_id: int) -> tuple[bool, str | No
 
 
 def set_owner(conn: sqlite3.Connection, owner: str) -> int:
-    """Give every track with no owner (analyzed on your own machine) to `owner`. Returns how many."""
-    with conn:
+    """Give every track with no owner (analyzed on your own machine) to `owner`, and the bank's deposits with
+    them. Returns how many tracks."""
+    def write() -> int:
+        conn.execute("UPDATE deposits SET owner = ? WHERE owner IS NULL", (owner,))
         return conn.execute("UPDATE tracks SET owner = ? WHERE owner IS NULL", (owner,)).rowcount
+
+    return atomic(conn, write)
 
 
 def load_card(conn: sqlite3.Connection, track_id: int) -> TrackCard | None:

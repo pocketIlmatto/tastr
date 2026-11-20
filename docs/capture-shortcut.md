@@ -4,7 +4,7 @@ One press on the iPhone marks what you are hearing and puts it in your bank as a
 where in it you were, and an optional note. This page is how to build the Shortcut by hand (a shortcut can't be
 installed from the repository), and the request format the capture address takes.
 
-> **Status: draft.** The capture address isn't live yet, and nothing here has been built or tried on a phone. It
+> **Status: draft.** Nothing here has been built or tried on a phone yet. It
 > is written from knowledge of Shortcuts, so expect to adjust action names and steps while testing. The steps
 > marked *(check)* are the ones most likely to need it.
 
@@ -25,9 +25,9 @@ installed from the repository), and the request format the capture address takes
 ## Before you start
 
 - iOS 17 or later, with the Shortcuts app.
-- The **capture address** and your **capture key**. The key can only add deposits to your bank: it can't read,
-  change or delete anything. Get it from Tastr once the capture address is live, and keep it out of chats,
-  screenshots and shared shortcuts. If it leaks, make a new one in Tastr and paste that into the shortcut.
+- The **capture address** and your **capture key** ([capture.md](capture.md#the-key)). The key can only add
+  deposits to your bank: it can't read, change or delete anything. Keep it out of chats,
+  screenshots and shared shortcuts. If it leaks, rotate it (capture.md says how) and paste the new one into the shortcut.
 - Microphone permission for Shortcuts (asked for on the first run).
 
 ## Build it
@@ -135,7 +135,7 @@ Run each and look for the deposit in the bank (`tastr deposit list`, or `/api/de
 - [ ] **Spotify not set up, music from a speaker**: Shazam names it, a 10 second clip is kept, `heard_on` is
       `shazam`.
 - [ ] **Something Shazam won't know** (humming, a live set blend): a 30 second clip is kept, `heard_on` is
-      `recording`, and the deposit waits as `needs-source`.
+      `recording`, and the deposit is titled "Recording, <date and time>".
 - [ ] **Note typed**, **note dictated**, **note skipped** with Done: each saves; the skipped one has no note.
 - [ ] **From the Lock Screen** and **from the Action Button** with the phone locked.
 - [ ] **A wrong key** (change one character): nothing is saved and the shortcut shows an error.
@@ -145,49 +145,14 @@ Run each and look for the deposit in the bank (`tastr deposit list`, or `/api/de
 
 ## Request format
 
-The capture address takes two requests. Both send the key as `Authorization: Bearer <key>`; a missing or wrong key
-gets `401` and nothing else. The key only adds deposits to its owner's bank.
+The full format, the key and its limits are in [capture.md](capture.md). In short, the shortcut makes two
+requests, both with `Authorization: Bearer <key>`:
 
-### `GET /pub/capture/now`
-
-Asks Spotify what is playing on the key owner's account (needs Tastr's Spotify sign-in).
-
-```json
-{"playing": true, "title": "Pili Pili", "artist": "Polo & Pan", "position_s": 95.4,
- "uri": "https://open.spotify.com/track/…", "heard_on": "spotify"}
-```
-
-Anything else (nothing playing, Spotify not set up, Spotify not answering) is `200` with `{"playing": false}`, so
-the shortcut has one thing to check.
-
-### `POST /pub/capture`
-
-`multipart/form-data` (what a Shortcuts Form body sends); `application/x-www-form-urlencoded` without `audio`
-works too, for testing with curl. Every field is optional except `heard_on`; empty fields count as missing.
-
-| Field | Meaning |
-|---|---|
-| `marked_at` | When the button was pressed, ISO 8601 with an offset. Defaults to when the request arrived. |
-| `heard_on` | `spotify`, `shazam` or `recording`. |
-| `title`, `artist` | The match, if there was one. |
-| `position_s` | Seconds into the track at `marked_at` (Spotify only). |
-| `link` | The match's link: a Spotify track link or an Apple Music link. |
-| `note` | The person's note, up to the deposit note limit. |
-| `audio` | A recording (m4a/AAC from Record Audio), up to 60 seconds and a few MB. |
-| `client` | What sent it, for debugging (`ios-shortcut/1`). |
-
-It saves one **moment** deposit:
-
-- `title` is "Artist - Title" when there was a match, else "Recording, <date>".
-- `status` is `needs-source` until the audio is fetched or identified.
-- `context` keeps the request as sent: `{"capture": {"marked_at", "heard_on", "title", "artist", "position_s",
-  "link", "client"}}`, and the recording's stored name when there is one.
-- With `position_s`, the moment's range is set around it (from a little before to a little after); without it the
-  range stays empty until Tastr finds the spot from the clip.
-
-The answer is `201` with `{"id": 42, "title": "Polo & Pan - Pili Pili", "status": "needs-source"}`. `413` means the
-recording is too large or long, `429` that the day's cap is reached, `422` a field Tastr can't read; each with
-`{"detail": "<a sentence to show>"}`.
-
-`/pub/` already passes Cloudflare Access (see [hosting-map.md](hosting-map.md)), and Tastr checks the key itself.
-If the capture address ends up somewhere else, only the shortcut's first **Text** action changes.
+- `GET /pub/capture/now` answers `{"playing": true, "title", "artist", "position_s", "uri", "heard_on"}`, or
+  `{"playing": false}`. Until Spotify is connected it always answers `{"playing": false}`.
+- `POST /pub/capture` takes the form fields above and saves one moment. A match is titled "Artist - Title"; a
+  recording with no match is titled "Recording, 20 Nov 2026, 14:03" and is ready to work on, since the recording is
+  the source. With `position_s` the moment runs from 20 seconds before to 10 seconds after. The answer is `201`
+  with `{"id", "title", "status"}`; otherwise `401` (wrong key), `409` (the bank is full), `413` (recording too
+  large or long: 60 seconds and 5 MB by default), `422` (a field Tastr can't read) or `429` (the day's cap), each
+  with `{"detail": "<a sentence to show>"}`.

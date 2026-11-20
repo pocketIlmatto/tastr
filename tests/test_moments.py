@@ -203,3 +203,27 @@ def test_the_engine_analyzes_a_slice(synth_wav, tmp_path):
     moments.slice_audio(path, cut, 2, 14)
     card = moments.analyze_slice(cut)
     assert abs(card["duration"] - 12) < 0.1 and card["core"]["bpm"]
+
+
+def test_cli_keeps_the_collection_asked_for(db_path, home, fetcher, monkeypatch, capsys):
+    monkeypatch.setattr(moments, "fetch_link", fetcher)
+    monkeypatch.setattr(moments, "analyze_slice", fake_card)
+    conn = db.connect(db_path)
+    crate = deposits.add(conn, None, "collection", title="Transitions")
+    assert cli.main(["--db", str(db_path), "deposit", "add", "moment", "--source", URL, "--start", "10",
+                     "--end", "20", "--in", str(crate["id"]), "--no-stems"]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert {h["id"] for h in got["held_by"]} == {crate["id"], got["extracted"]["source_deposit"]}
+
+
+def test_the_card_is_written_when_only_the_bucket_has_the_slice(db_path, home, fetcher):
+    conn = db.connect(db_path)
+    m = moments.add(conn, None, URL, 10, 20)
+
+    def analyze_then_lose_the_folder(path):
+        card = fake_card(path)
+        shutil.rmtree(deposits.files_dir(m["id"]))  # as an evicted cache would, with Modal reading the bucket's copy
+        return card
+
+    got = moments.run(conn, None, m["id"], fetch=fetcher, analyze=analyze_then_lose_the_folder, separate=False)
+    assert got["status"] == "ready" and moments.card_path(m["id"]).is_file()

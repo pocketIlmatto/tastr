@@ -545,7 +545,8 @@ def _deposit(args) -> int:
             from . import moments
 
             got = moments.add(conn, args.owner, args.source, deposits.parse_time(args.start),
-                              deposits.parse_time(args.end), note=args.note, title=args.title, tags=args.tag)
+                              deposits.parse_time(args.end), note=args.note, title=args.title, tags=args.tag,
+                              held_by=args.held_by)
             if args.no_fetch:
                 print(json.dumps(got, indent=2))
                 return 0

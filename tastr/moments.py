@@ -48,13 +48,14 @@ def check_range(start_s: float, end_s: float) -> None:
 
 
 def add(conn: sqlite3.Connection, owner: str | None, url: str, start_s: float, end_s: float, *,
-        note: str | None = None, title: str | None = None, tags=None) -> dict[str, Any]:
-    """Save the moment as 'needs-source' and return it; `run` (or a background job running it) does the rest."""
+        note: str | None = None, title: str | None = None, tags=None, held_by: int | None = None) -> dict[str, Any]:
+    """Save the moment as 'needs-source' and return it; `run` (or a background job running it) does the rest.
+    `held_by`: a collection (or track) to put it in besides the source it is cut from."""
     if not str(url or "").startswith(("http://", "https://")):
         raise deposits.DepositError("The source has to be a link.")
     check_range(start_s, end_s)
     return deposits.add(conn, owner, "moment", title=title, note=note, source_kind="link", source_uri=url,
-                        start_s=start_s, end_s=end_s, tags=tags, status="needs-source")
+                        start_s=start_s, end_s=end_s, tags=tags, status="needs-source", held_by=held_by)
 
 
 def owner_of(conn: sqlite3.Connection, deposit_id: int) -> tuple[bool, str | None]:
@@ -293,6 +294,7 @@ def _analysis(cut: Path, card_file: Path, moment: dict[str, Any], analyze) -> di
         card = json.loads((blobs.ensure(card_file) or card_file).read_text())
     else:
         card = (analyze or analyze_slice)(cut)
+        card_file.parent.mkdir(parents=True, exist_ok=True)  # the slice may be only in the bucket (Modal read it)
         card_file.write_text(json.dumps(card))
         blobs.push(card_file)
     core, key = card.get("core") or {}, (card.get("core") or {}).get("key") or {}

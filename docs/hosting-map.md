@@ -57,7 +57,7 @@ flowchart TB
     KA[karaoke, 1 CPU: stems without the vocals]
     TR[transcribe, T4 GPU + Whisper: lyrics heard in the vocals]
   end
-  R2A[(R2 bucket tastr-audio: uploads, stems, key-locked copies, each card's waveform data)]
+  R2A[(R2 bucket tastr-audio: uploads, stems, key-locked copies, the bank's files, each card's waveform data)]
   GHT[GitHub Actions: tests workflow, on each push to main]
   GH[GitHub Actions: deploy workflow, after tests pass if app code changed]
   GHL[GitHub Actions: acousticbrainz-d1 workflow, by hand, once]
@@ -102,7 +102,10 @@ flowchart TB
 
 Every upload and stem is kept in the audio bucket (`tastr/blobs.py`) under the same path it would have under
 `TASTR_HOME` (`uploads/ab12cd34/song.mp3`, `stems/<hash>/drums.flac` and `stems/<hash>/stems.json`, the model that made them, `stems/<hash>/instrumental.flac`, karaoke's mix, `keylock/<hash>/<ratio>/mix.flac`), and
-expiry deletes the bucket's copy.
+expiry deletes the bucket's copy. The bank's own files (`bank/<deposit id>/`: a source fetched from a link, a
+moment's `slice.flac`, `card.json` and `stems/`; `tastr/moments.py`) go there too and count toward the storage cap,
+but the hosted server doesn't fetch from links yet (`POST /api/deposits/moments` answers 403), so for now only a
+local install with the bucket set writes them. Deleting the deposit deletes them.
 The Worker's own files are in memory and gone after a restart, so it keeps no local copies. Modal keeps nothing
 after a job. With `TASTR_DIRECT_UPLOAD` on, the page uploads each file straight to the bucket on a signed link,
 so the file's bytes never pass through the server on the way in (a Worker takes at most 100 MB in one request);

@@ -763,9 +763,13 @@ def track_owner(conn: sqlite3.Connection, track_id: int) -> tuple[bool, str | No
 
 
 def set_owner(conn: sqlite3.Connection, owner: str) -> int:
-    """Give every track with no owner (analyzed on your own machine) to `owner`. Returns how many."""
-    with conn:
+    """Give every track with no owner (analyzed on your own machine) to `owner`, and the bank's deposits with
+    them. Returns how many tracks."""
+    def write() -> int:
+        conn.execute("UPDATE deposits SET owner = ? WHERE owner IS NULL", (owner,))
         return conn.execute("UPDATE tracks SET owner = ? WHERE owner IS NULL", (owner,)).rowcount
+
+    return atomic(conn, write)
 
 
 def load_card(conn: sqlite3.Connection, track_id: int) -> TrackCard | None:

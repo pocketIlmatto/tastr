@@ -148,7 +148,8 @@ def hold(conn: sqlite3.Connection, owner: str | None, holder_id: int, deposit_id
 
 
 def sync_tracks(conn: sqlite3.Connection, owner: str | None = None) -> int:
-    """Give every track in the library that has no deposit yet a track-sized one pointing at its card, and drop
+    """Give every track in the library that has no deposit yet a track-sized one pointing at its card (its title
+    stays the card's unless the person gives the deposit one of its own), and drop
     the bare deposits of tracks that were deleted since (ones with no note, tags or links; the rest stay, marked
     'needs-source'). `owner` None: every library. Returns how many deposits were added. Cheap when nothing changed."""
     where, args = (" AND t.owner = ?", (owner,)) if owner is not None else ("", ())
@@ -156,9 +157,13 @@ def sync_tracks(conn: sqlite3.Connection, owner: str | None = None) -> int:
     orphan = f"size = 'track' AND source_kind = 'track' AND track_id IS NULL{mine}"
 
     def write() -> int:
+        # a track handed to someone else (`tastr set-owner`, a copied library) takes its deposit along
+        conn.execute("UPDATE deposits SET owner = (SELECT t.owner FROM tracks t WHERE t.id = deposits.track_id) "
+                     "WHERE track_id IS NOT NULL AND owner IS NOT (SELECT t.owner FROM tracks t WHERE t.id = "
+                     "deposits.track_id)")
         added = conn.execute(
             "INSERT INTO deposits (owner, size, title, source_kind, source_uri, track_id, created_at, updated_at) "
-            "SELECT t.owner, 'track', t.title, 'track', NULL, t.id, COALESCE(t.created_at, t.analyzed_at), "
+            "SELECT t.owner, 'track', NULL, 'track', NULL, t.id, COALESCE(t.created_at, t.analyzed_at), "
             "COALESCE(t.created_at, t.analyzed_at) FROM tracks t "
             f"WHERE NOT EXISTS (SELECT 1 FROM deposits d WHERE d.track_id = t.id){where}", args).rowcount
         conn.execute(
@@ -179,13 +184,16 @@ def _row(r, tags: list[dict[str, str]]) -> dict[str, Any]:
         "start_s": r["start_s"], "end_s": r["end_s"], "status": r["status"], "tags": tags,
         "context": db._json_or(r["context_json"], {}), "extracted": db._json_or(r["extracted_json"], {}),
         "created_at": r["created_at"], "updated_at": r["updated_at"],
+        "holds_count": r["holds_count"], "touches_count": r["touches_count"],
         "track": ({"id": r["track_id"], "title": r["track_title"], "artist": r["artist"], "bpm": r["bpm"],
                    "key": r["key_name"], "camelot": r["camelot"], "duration": r["duration"]}
                   if r["track_id"] is not None else None),
     }
 
 
-_SELECT = ("SELECT d.*, t.title AS track_title, t.artist, t.bpm, t.key_name, t.camelot, t.duration "
+_SELECT = ("SELECT d.*, t.title AS track_title, t.artist, t.bpm, t.key_name, t.camelot, t.duration, "
+           "(SELECT COUNT(*) FROM deposit_links l WHERE l.from_id = d.id AND l.kind = 'holds') AS holds_count, "
+           "(SELECT COUNT(*) FROM deposit_links l WHERE l.from_id = d.id AND l.kind = 'touches') AS touches_count "
            "FROM deposits d LEFT JOIN tracks t ON t.id = d.track_id")
 
 
@@ -251,7 +259,7 @@ def get(conn: sqlite3.Connection, owner: str | None, deposit_id: int) -> dict[st
 
 def update(conn: sqlite3.Connection, owner: str | None, deposit_id: int, changes: dict[str, Any]) -> dict[str, Any] | None:
     """Change a deposit's title, note, tags, status, context or extracted data (the keys present in `changes`;
-    tags replace the ones of the same origins, context and extracted are merged key by key). None: no such deposit."""
+    tags replace the ones of the origins they name, and an empty list clears the person's own, context and extracted are merged key by key). None: no such deposit."""
     row = _mine(conn, owner, deposit_id)
     if row is None:
         return None
@@ -273,7 +281,8 @@ def update(conn: sqlite3.Connection, owner: str | None, deposit_id: int, changes
             sets.append(f"{key}_json = ?")
             args.append(json.dumps({k: v for k, v in merged.items() if v is not None}))
     tag_rows = _clean_tags(changes["tags"]) if "tags" in changes else None
-    origins = sorted({o for _, o in tag_rows} | {"user"}) if tag_rows is not None else []
+    # only the origins named are replaced; an empty list clears the person's own tags and leaves imported ones
+    origins = sorted({o for _, o in tag_rows} or {"user"}) if tag_rows is not None else []
 
     def write() -> None:
         conn.execute(f"UPDATE deposits SET {', '.join([*sets, 'updated_at = ?'])} WHERE id = ?",

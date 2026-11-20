@@ -65,6 +65,8 @@ def test_moment_in_a_collection_touching_two_tracks(db_path):
     moment = deposits.add(conn, None, "moment", note="the handover", start_s=938, end_s=990, held_by=dj_set["id"],
                           touches=[by_track[a], by_track[b]])
     assert [t["id"] for t in moment["touches"]] == [by_track[a], by_track[b]]
+    listed = {d["id"]: d for d in deposits.find(conn, None)["deposits"]}
+    assert listed[moment["id"]]["touches_count"] == 2 and listed[dj_set["id"]]["holds_count"] == 3
     assert moment["held_by"][0]["id"] == dj_set["id"] and moment["held_by"][0]["start_s"] == 938
     got = deposits.get(conn, None, dj_set["id"])
     assert [h["id"] for h in got["holds"]] == [by_track[a], by_track[b], moment["id"]]
@@ -188,3 +190,43 @@ def test_cli_add_list_show(db_path, capsys):
     assert json.loads(capsys.readouterr().out)["note"] == "the handover"
     assert cli.main(["--db", str(db_path), "deposit", "show", "999"]) == 1
     assert cli.main(["--db", str(db_path), "deposit", "add", "moment", "--start", "9", "--end", "3"]) == 2
+
+
+def test_importing_tags_keeps_the_persons_own(db_path):
+    conn = db.connect(db_path)
+    d = deposits.add(conn, None, "moment", tags=["mine", {"tag": "Old", "origin": "rekordbox"}])
+    got = deposits.update(conn, None, d["id"], {"tags": [{"tag": "Dark", "origin": "rekordbox"}]})
+    assert got["tags"] == [{"tag": "Dark", "origin": "rekordbox"}, {"tag": "mine", "origin": "user"}]
+    assert deposits.update(conn, None, d["id"], {"tags": []})["tags"] == [{"tag": "Dark", "origin": "rekordbox"}]
+
+
+def test_track_deposit_follows_the_card_title_unless_renamed(db_path):
+    a, b = _tracks(db_path, 2)
+    conn = db.connect(db_path)
+    deposits.sync_tracks(conn)
+    by_track = {d["track_id"]: d["id"] for d in deposits.find(conn, None)["deposits"]}
+    deposits.update(conn, None, by_track[b], {"title": "My name for it"})
+    with conn:
+        conn.execute("UPDATE tracks SET title = 'Corrected'")
+    deposits.sync_tracks(conn)
+    assert deposits.get(conn, None, by_track[a])["title"] == "Corrected"
+    assert deposits.get(conn, None, by_track[b])["title"] == "My name for it"
+    assert deposits.find(conn, None, q="corrected")["total"] == 2  # the card's title still finds both
+
+
+def test_set_owner_takes_the_bank_along(db_path):
+    (a,) = _tracks(db_path, 1)
+    conn = db.connect(db_path)
+    deposits.sync_tracks(conn)
+    moment = deposits.add(conn, None, "moment", note="mine")
+    assert db.set_owner(conn, "a@example.com") == 1
+    deposits.sync_tracks(conn, "a@example.com")
+    found = deposits.find(conn, "a@example.com")
+    assert found["total"] == 2 and {d["track_id"] for d in found["deposits"]} == {a, None}
+    assert deposits.get(conn, "a@example.com", moment["id"])["note"] == "mine"
+    assert deposits.find(conn, None)["total"] == 0
+    # a track whose owner changed some other way still brings its deposit
+    with conn:
+        conn.execute("UPDATE tracks SET owner = 'b@example.com'")
+    deposits.sync_tracks(conn, "b@example.com")
+    assert [d["track_id"] for d in deposits.find(conn, "b@example.com")["deposits"]] == [a]

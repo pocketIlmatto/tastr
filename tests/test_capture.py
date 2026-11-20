@@ -57,6 +57,7 @@ def test_keys_parse_and_skip_weak_or_ownerless(caplog):
         keys = hosted.capture_keys(f"A@x.com:{KEY}\nb@x.com:tiny123,{OTHER}", hosted=True)
     assert [k[0] for k in keys] == ["a@x.com"]
     assert KEY not in caplog.text and "tiny123" not in caplog.text and OTHER not in caplog.text
+    assert "@" not in caplog.text and "entry 2" in caplog.text and "entry 3" in caplog.text
     assert hosted.capture_keys(OTHER, hosted=False)[0][0] is None  # your own machine: one library
     assert hosted.capture_owner(keys, KEY) == (True, "a@x.com")
     assert hosted.capture_owner(keys, KEY + "x") == (False, None)
@@ -118,6 +119,44 @@ def test_a_recording_alone_is_ready_and_kept(client, db_path, home):
     name = d["context"]["recording"]
     assert name.startswith("captures/") and name.endswith(".wav") and (home / name).is_file()
     assert d["source_kind"] == "recording" and d["start_s"] is None
+
+
+def test_a_failed_capture_keeps_a_recording_an_earlier_one_uses(client, db_path, home):
+    clip = wav(2)
+    first = client.post("/pub/capture", headers=AUTH, data={"heard_on": "recording"},
+                        files={"audio": ("r.wav", clip, "audio/wav")})
+    assert first.status_code == 201
+    [d] = bank(db_path)
+    kept = home / d["context"]["recording"]
+    bad = client.post("/pub/capture", headers=AUTH, data={"heard_on": "recording", "position_s": "5"},
+                      files={"audio": ("r.wav", clip, "audio/wav")})
+    assert bad.status_code == 201 and kept.is_file()  # the same audio again: shared, not stored twice
+    import tastr.deposits as dep
+
+    def fail(*a, **k):
+        raise dep.DepositError("no")
+    orig, dep.add = dep.add, fail
+    try:
+        assert client.post("/pub/capture", headers=AUTH, data={"heard_on": "recording"},
+                           files={"audio": ("r.wav", clip, "audio/wav")}).status_code == 422
+    finally:
+        dep.add = orig
+    assert kept.is_file()
+
+
+def test_a_long_artist_and_title_are_shortened_not_refused(client):
+    r = client.post("/pub/capture", headers=AUTH, data={"heard_on": "shazam", "artist": "a" * 200, "title": "t" * 200})
+    assert r.status_code == 201 and len(r.json()["title"]) == deposits.MAX_TITLE
+
+
+def test_a_full_server_refuses_the_recording_not_the_capture(db_path, home, monkeypatch):
+    from tastr.web.routes import capture
+    monkeypatch.setattr(capture, "stored_bytes", lambda _home: 11 * 1024 ** 3)
+    c = make(db_path, storage_gb=10)
+    r = c.post("/pub/capture", headers=AUTH, data={"heard_on": "recording"},
+               files={"audio": ("r.wav", wav(2), "audio/wav")})
+    assert r.status_code == 507 and r.json()["detail"]
+    assert c.post("/pub/capture", headers=AUTH, data={"heard_on": "shazam", "title": "x"}).status_code == 201
 
 
 def test_limits(db_path, home):

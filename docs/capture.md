@@ -15,8 +15,8 @@ SHA-256 hash, compares it in constant time, and never logs it.
 
 Keys live in one setting, `TASTR_CAPTURE_KEYS` (a Worker secret, [settings.md](settings.md#worker-secrets)):
 entries `email:key`, separated by commas or new lines. The email is whose bank the key adds to. A key has to be
-at least 32 characters; shorter ones are left out (with a warning in the log that names the email, never the
-key). Make one with:
+at least 32 characters; shorter ones are left out, with a warning in the log that names the entry by its place
+in the list (never its email or key). Make one with:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -85,6 +85,7 @@ The answer is `201` with `{"id": 42, "title": "Polo & Pan - Pili Pili", "status"
 | `413` | The recording is larger or longer than the limit |
 | `422` | A field Tastr can't read: `heard_on` missing or unknown, a time or link it can't parse, an audio type it doesn't take |
 | `429` | The day's cap is reached (`TASTR_DAILY_CAPTURES`, 100 per key owner per UTC day) |
+| `507` | The server is at its storage cap (`TASTR_STORAGE_GB`), so it can't keep a recording; the same capture without one still works |
 
 Each comes with `{"detail": "<a sentence to show>"}`.
 

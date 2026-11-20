@@ -23,7 +23,7 @@ from starlette.datastructures import UploadFile
 
 from ... import blobs, db, deposits
 from ..context import AppContext, tastr_home
-from ..hosted import PUBLIC_PREFIX, audio_minutes, capture_owner, today
+from ..hosted import PUBLIC_PREFIX, audio_minutes, capture_owner, stored_bytes, today
 from .deposits import MAX_DEPOSITS
 
 log = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def _date(marked_at: str) -> str:
 def title_of(f: dict, has_audio: bool) -> str:
     """"Artist - Title" for a match, else "Recording, 20 Nov 2026, 14:03" (or "Capture, ..." without audio)."""
     if f["title"] or f["artist"]:
-        return " - ".join(x for x in (f["artist"], f["title"]) if x)
+        return " - ".join(x for x in (f["artist"], f["title"]) if x)[:deposits.MAX_TITLE]
     return f"{'Recording' if has_audio else 'Capture'}, {_date(f['marked_at'])}"
 
 
@@ -146,7 +146,10 @@ def router(ctx: AppContext) -> APIRouter:
             n = c.execute("SELECT COUNT(*) FROM deposits WHERE owner IS ? AND size != 'track'", (owner,)).fetchone()[0]
             if n >= MAX_DEPOSITS:
                 raise Refused(409, f"The bank holds {MAX_DEPOSITS} deposits. Delete some first.")
-            recording = store(audio) if audio else None
+            if audio and ctx.hosted and stored_bytes(tastr_home()) >= s.storage_gb * 1024 ** 3:
+                raise Refused(507, f"The server is at its storage cap ({s.storage_gb:g} GB), so it can't keep "
+                                   "a recording now. Send the capture without one.")
+            recording, created = store(audio) if audio else (None, False)
             try:
                 matched = bool(f["title"] or f["artist"] or f["link"])
                 pos = f["position_s"]
@@ -163,19 +166,23 @@ def router(ctx: AppContext) -> APIRouter:
                     # 'ready' only when the recording is the whole source; a match names a track not here yet
                     status="ready" if recording and not matched else "needs-source")
             except Exception:
-                if recording:
-                    blobs.remove(blobs.home() / recording)
+                if created:  # never a file an earlier capture of the same audio still points at
+                    blobs.remove(tastr_home() / recording)
                 raise
             db.add_usage(c, user, USAGE, today())
         log.info("capture: deposit %s added (%s%s)", d["id"], f["heard_on"], ", with a recording" if recording else "")
         return JSONResponse({"id": d["id"], "title": d["title"], "status": d["status"]}, status_code=201)
 
-    def store(audio: tuple[bytes, str]) -> str:
+    def store(audio: tuple[bytes, str]) -> tuple[str, bool]:
         """Keep the recording as captures/<hash>/<hash>.<ext> (in the audio bucket when that is on) after checking
-        its length; returns that name. Raises Refused for one too long or unreadable."""
+        its length; returns that name, and whether this call made the file (False: the same audio was kept
+        before, for an earlier capture). Raises Refused for one too long or unreadable."""
         data, suffix = audio
         h = hashlib.sha256(data).hexdigest()
         path = tastr_home() / "captures" / h[:12] / f"{h[:16]}{suffix}"
+        name = path.relative_to(tastr_home()).as_posix()
+        if blobs.exists(path):
+            return name, False
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         try:
@@ -190,7 +197,7 @@ def router(ctx: AppContext) -> APIRouter:
             raise
         if blobs.enabled() and not blobs.keep_copies:
             path.unlink(missing_ok=True)
-        return path.relative_to(tastr_home()).as_posix()
+        return name, True
 
     @api.post(CAPTURE_PATH, status_code=201)
     async def capture(request: Request):

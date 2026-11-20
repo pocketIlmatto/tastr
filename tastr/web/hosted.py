@@ -200,19 +200,16 @@ def capture_keys(text: str, hosted: bool) -> tuple[tuple[str | None, bytes], ...
     """TASTR_CAPTURE_KEYS: entries `email:key`, separated by commas or new lines, each key adding to that email's
     bank. Two entries for one email are how a key is rotated (both work until the old one is removed). On your
     own machine a bare `key` adds to the one local library. Too-short keys, and bare keys on a hosted server, are
-    left out with a warning that never shows the key."""
+    left out with a warning that names the entry by its place in the list, never its key or email."""
     out = []
-    for entry in re.split(r"[,\s]+", text.strip()):
-        if not entry:
-            continue
+    for i, entry in enumerate((e for e in re.split(r"[,\s]+", text.strip()) if e), 1):
         owner, _, key = entry.rpartition(":")
         owner = owner.strip().lower() or None
         if len(key) < CAPTURE_KEY_MIN:
-            log.warning("TASTR_CAPTURE_KEYS: the key for %s is shorter than %d characters; left out",
-                        owner or "the local library", CAPTURE_KEY_MIN)
+            log.warning("TASTR_CAPTURE_KEYS: entry %d's key is shorter than %d characters; left out", i, CAPTURE_KEY_MIN)
             continue
         if owner is None and hosted:
-            log.warning("TASTR_CAPTURE_KEYS: a key without an email can't be used on a hosted server; left out")
+            log.warning("TASTR_CAPTURE_KEYS: entry %d has no email, which a hosted server can't use; left out", i)
             continue
         out.append((owner, hashlib.sha256(key.encode()).digest()))
     return tuple(out)

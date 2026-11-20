@@ -263,6 +263,9 @@ rest of the app changes.
   tracks does.
 - Tags carry where they came from, so tags imported from elsewhere stay apart from your own.
 - A deposit with a link and no audio yet is marked `needs-source`. Fetching and breaking it down comes next.
+- A shortcut on your phone can add a moment while you listen: what was playing, where in the track, your note, or
+  a short recording. It posts to the capture address with a key that can only add to your bank
+  ([capture.md](capture.md)).
 - `tastr deposit add`, `tastr deposit list` and `tastr deposit show ID` work from a terminal
   ([usage.md](usage.md#command-line)); `/api/deposits` is the same over HTTP. On a hosted server each person has
   their own bank.

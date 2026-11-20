@@ -4,7 +4,9 @@ Tastr is a local app: `tastr serve` binds to 127.0.0.1 and has no login. Don't e
 to a network you don't trust. To share it with a few invited people, run it in hosted mode behind
 Cloudflare Access ([docs/hosting.md](docs/hosting.md)), which requires a login on every request and
 turns off link analysis and the SQL box. The one exception is `/pub/`: links signed with
-`TASTR_LINK_SECRET` that serve one track's audio and stems to strudel.cc for a week.
+`TASTR_LINK_SECRET` that serve one track's audio and stems to strudel.cc for a week, and the capture address
+`/pub/capture`, which takes only a capture key that can add moments to one person's bank and do nothing else
+([docs/capture.md](docs/capture.md)).
 
 ## Reporting a vulnerability
 

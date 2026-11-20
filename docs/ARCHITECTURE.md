@@ -140,6 +140,7 @@ tastr/lookup/               opt-in catalog lookups (BPM/key by artist + title), 
 tastr/db.py                 SQLite schema and save/load/query
 tastr/labels.py             your own BPM/key/section labels, the review queue, manifest export
 tastr/deposits.py           the bank: moments, tracks and collections kept with their note and source (features.md, "The bank")
+tastr/moments.py            a moment from a link: fetch the whole source once, cut the moment, analyze and separate the slice
 tastr/service.py            inputs -> engine -> DB, used by the CLI and web app
 tastr/web/                  FastAPI app and UI; hosted.py is the shared-server mode (docs/hosting.md)
   server.py                 create_app: the shared AppContext (context.py), login middleware, and the routes/ modules

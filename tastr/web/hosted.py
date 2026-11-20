@@ -361,7 +361,7 @@ def stored_bytes(home: Path) -> int:
     if blobs.enabled():
         return blobs.stored_bytes()
     total = 0
-    for sub in ("uploads", "stems", "keylock"):
+    for sub in ("uploads", "stems", "keylock", "bank"):
         d = home / sub
         if d.is_dir():
             total += sum(f.stat().st_size for f in d.rglob("*") if f.is_file())

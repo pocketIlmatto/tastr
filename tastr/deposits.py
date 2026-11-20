@@ -16,10 +16,12 @@ Everything here is per person on a hosted server (`owner`, as in the library) an
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+from pathlib import Path
 from typing import Any
 
-from . import db
+from . import blobs, db
 
 SIZES = ("moment", "track", "collection")
 LINK_KINDS = ("holds", "touches")
@@ -73,15 +75,16 @@ def add(conn: sqlite3.Connection, owner: str | None, size: str, *, title: str | 
         source_kind: str | None = None, source_uri: str | None = None, start_s: float | None = None,
         end_s: float | None = None, tags=None, context: dict[str, Any] | None = None,
         extracted: dict[str, Any] | None = None, status: str = "ready", held_by: int | None = None,
-        position: int | None = None, touches: list[int] | None = None) -> dict[str, Any]:
+        position: int | None = None, touches: list[int] | None = None, fetched: bool = False) -> dict[str, Any]:
     """Save a new deposit and return it as `get` does. `held_by`: the deposit (a track or collection) it sits in,
     at `position`; a moment's start_s and end_s are then times in that holder. `touches`: track deposits a moment
-    spans. Raises DepositError for what can't be saved."""
+    spans. `fetched`: a track-sized source whose audio the bank fetched itself (tastr/moments.py), which isn't a
+    library track. Raises DepositError for what can't be saved."""
     if size not in SIZES:
         raise DepositError(f"size is one of: {', '.join(SIZES)}")
     if status not in STATUSES:
         raise DepositError(f"status is one of: {', '.join(STATUSES)}")
-    if size == "track":
+    if size == "track" and not fetched:
         raise DepositError("Tracks come into the bank by being analyzed; add a moment or a collection here.")
     title, note = _text(title, MAX_TITLE, "title"), _text(note, MAX_NOTE, "note")
     _check_range(start_s, end_s)
@@ -119,6 +122,22 @@ def add(conn: sqlite3.Connection, owner: str | None, size: str, *, title: str | 
         return did
 
     return get(conn, owner, db.atomic(conn, write))
+
+
+def place(conn: sqlite3.Connection, owner: str | None, holder_id: int, moment_id: int) -> None:
+    """Put a moment into the track or collection it was cut from, at its own start and end (its times are in
+    that holder). Does nothing when it is there already."""
+    holder, moment = _mine(conn, owner, holder_id), _mine(conn, owner, moment_id)
+    if holder is None or holder["size"] == "moment" or moment is None or moment["size"] != "moment":
+        raise DepositError(f"Deposit {holder_id} can't hold deposit {moment_id}.")
+
+    def write() -> None:
+        if conn.execute("SELECT 1 FROM deposit_links WHERE from_id = ? AND to_id = ? AND kind = 'holds'",
+                        (holder_id, moment_id)).fetchone() is None:
+            conn.execute("INSERT INTO deposit_links (from_id, to_id, kind, start_s, end_s) VALUES (?, ?, 'holds', ?, ?)",
+                         (holder_id, moment_id, moment["start_s"], moment["end_s"]))
+
+    db.atomic(conn, write)
 
 
 def hold(conn: sqlite3.Connection, owner: str | None, holder_id: int, deposit_ids: list[int]) -> int:
@@ -308,7 +327,15 @@ def delete(conn: sqlite3.Connection, owner: str | None, deposit_id: int) -> bool
 
     with conn:  # its tags and links go with it (ON DELETE CASCADE)
         conn.execute("DELETE FROM deposits WHERE id = ?", (deposit_id,))
+    shutil.rmtree(files_dir(deposit_id), ignore_errors=True)
+    blobs.remove_tree(files_dir(deposit_id))  # audio the bank fetched or cut for it, and its stems
     return True
+
+
+def files_dir(deposit_id: int) -> Path:
+    """Where the bank keeps a deposit's own files under TASTR_HOME: a fetched source's audio, a moment's slice,
+    its card and its stems (tastr/moments.py). In the audio bucket too, when that is on."""
+    return blobs.home() / "bank" / str(int(deposit_id))
 
 
 def parse_time(text: str) -> float:

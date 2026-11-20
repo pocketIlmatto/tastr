@@ -5,11 +5,13 @@ from __future__ import annotations
 from contextlib import closing
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from ... import deposits
+from ... import blobs, deposits, moments, stems
 from ..context import AppContext
+from .media import _serve
 
 MAX_DEPOSITS = 20000  # moments and collections per person (tracks are counted by the library's own limits)
 MAX_JSON_KEYS = 50
@@ -32,6 +34,16 @@ class NewDeposit(BaseModel):
     held_by: int | None = None
     position: int | None = Field(default=None, ge=0)
     touches: list[int] = Field(default_factory=list, max_length=50)
+
+
+class NewMoment(BaseModel):
+    """A moment from a link: the bank fetches the whole source, cuts the moment out and breaks it down."""
+    source_uri: str = Field(min_length=1, max_length=2000)
+    start_s: float = Field(ge=0)
+    end_s: float = Field(gt=0)
+    title: str | None = Field(default=None, max_length=deposits.MAX_TITLE)
+    note: str | None = Field(default=None, max_length=deposits.MAX_NOTE)
+    tags: list[Tag | str] = Field(default_factory=list, max_length=deposits.MAX_TAGS)
 
 
 class DepositEdit(BaseModel):
@@ -80,6 +92,78 @@ def router(ctx: AppContext) -> APIRouter:
             except deposits.DepositError as e:
                 raise HTTPException(422, str(e)) from None
 
+    def _no_links_here() -> None:
+        if ctx.hosted:  # as for /api/analyze-url: the hosted server doesn't fetch from links (docs/features.md)
+            raise HTTPException(403, "Saving a moment from a link works on your own install for now.")
+
+    @api.post("/api/deposits/moments", status_code=202)
+    def add_moment(body: NewMoment, request: Request):
+        """Save a moment from a link and start finishing it in the background; follow its `status` (and
+        `extracted.stage`) with GET /api/deposits/{id}."""
+        _no_links_here()
+        owner = ctx.owner_of(request)
+        source = body.source_uri.strip()
+        with closing(ctx.conn()) as c:
+            n = c.execute("SELECT COUNT(*) FROM deposits WHERE owner IS ? AND size != 'track'", (owner,)).fetchone()[0]
+            if n >= MAX_DEPOSITS:
+                raise HTTPException(409, f"You have {MAX_DEPOSITS} deposits. Delete some first.")
+            try:
+                got = moments.add(c, owner, source, body.start_s, body.end_s, note=body.note, title=body.title,
+                                  tags=_tags(body.tags))
+            except deposits.DepositError as e:
+                raise HTTPException(422, str(e)) from None
+        ctx.moment_runs.start(got["id"])
+        return {**got, "job": ctx.moment_runs.status(got["id"])}
+
+    @api.post("/api/deposits/{deposit_id}/fetch", status_code=202)
+    def fetch(deposit_id: int, request: Request):
+        """Finish a moment from a link again: one saved as needs-source, or one that failed. What is done is kept."""
+        _no_links_here()
+        with closing(ctx.conn()) as c:
+            got = deposits.get(c, ctx.owner_of(request), deposit_id)
+        if got is None:
+            raise HTTPException(404, "no such deposit")
+        if got["size"] != "moment" or got["source_kind"] != "link" or got["start_s"] is None:
+            raise HTTPException(422, "Only a moment with a link, a start and an end can be fetched.")
+        ctx.moment_runs.start(deposit_id)
+        return {**got, "job": ctx.moment_runs.status(deposit_id)}
+
+    def _mine_or_404(request: Request, deposit_id: int) -> dict[str, Any]:
+        with closing(ctx.conn()) as c:
+            got = deposits.get(c, ctx.owner_of(request), deposit_id)
+        if got is None:
+            raise HTTPException(404, "no such deposit")
+        return got
+
+    @api.get("/api/deposits/{deposit_id}/audio")
+    def audio(deposit_id: int, request: Request, origin: str | None = Header(None)):
+        """A moment's slice, or the whole audio of a source the bank fetched, with Range support."""
+        got = _mine_or_404(request, deposit_id)
+        path = moments.slice_path(deposit_id) if got["size"] == "moment" else moments.source_path(got)
+        if path is None or not blobs.exists(path):
+            raise HTTPException(404, "The bank has no audio for this deposit.")
+        return _serve(path, origin)
+
+    @api.get("/api/deposits/{deposit_id}/stems/{name}")
+    def stem(deposit_id: int, name: str, request: Request, origin: str | None = Header(None)):
+        """One stem of a moment's slice as FLAC."""
+        if name not in stems.STEM_NAMES:
+            raise HTTPException(404, f"Stems are {', '.join(stems.STEM_NAMES)}.")
+        _mine_or_404(request, deposit_id)
+        path = stems.stem_path(moments.stems_folder(deposit_id), name)
+        if not blobs.exists(path):
+            raise HTTPException(404, "This moment has not been separated into stems.")
+        return _serve(path, origin, "audio/flac")
+
+    @api.get("/api/deposits/{deposit_id}/card")
+    def card(deposit_id: int, request: Request):
+        """The engine's whole card for a moment's slice (its times are in the slice)."""
+        _mine_or_404(request, deposit_id)
+        path = moments.card_path(deposit_id)
+        if not blobs.exists(path):
+            raise HTTPException(404, "This moment has not been analyzed yet.")
+        return FileResponse(blobs.ensure(path) or path, media_type="application/json")
+
     @api.get("/api/deposits/{deposit_id}")
     def get(deposit_id: int, request: Request):
         with closing(ctx.conn()) as c:
@@ -121,6 +205,7 @@ def router(ctx: AppContext) -> APIRouter:
                 raise HTTPException(409, str(e)) from None
         if not gone:
             raise HTTPException(404, "no such deposit")
+        ctx.moment_runs.forget(deposit_id)  # a queued moment from a link is skipped
         return Response(status_code=204)
 
     return api

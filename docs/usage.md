@@ -22,6 +22,9 @@ tastr stems 1                    # split track 1 into vocals, bass, other and dr
 tastr lookup                     # catalog BPM/key for every track (opt-in, docs/lookup.md)
 tastr deposit list               # the bank: every track, plus the moments and collections you added (features.md)
 tastr deposit add moment --source https://example.com/set --start 15:38 --end 16:30 --note "the handover"
+                                 # fetches the whole set once, cuts 15:38-16:30, analyzes it and separates its stems
+                                 # (needs the links extra and ffmpeg; --no-fetch only saves it, --no-stems skips stems)
+tastr deposit fetch 7            # finish a moment saved with --no-fetch, or try a failed one again
 tastr set-owner you@example.com  # give tracks with no owner to a hosted-mode user (hosting.md)
 tastr pack library.tar --owner you@example.com  # your library, audio and stems in one file for a hosted server (deploy.md)
 tastr unpack library.tar        # on the hosted server, into its empty library

@@ -73,6 +73,13 @@ def main(argv: list[str] | None = None) -> int:
     da.add_argument("--tag", action="append", default=[], help="a tag; repeat for more")
     da.add_argument("--in", dest="held_by", type=int, metavar="ID", help="the deposit it sits in")
     da.add_argument("--owner", help="on a hosted server's database, whose bank it goes in")
+    da.add_argument("--no-fetch", action="store_true",
+                    help="a moment with --source, --start and --end: only save it (it waits as needs-source)")
+    da.add_argument("--no-stems", action="store_true", help="fetch, cut and analyze the moment, but don't separate it")
+    df = dps.add_parser("fetch", help="finish a moment from a link: fetch its source, cut it, analyze it, separate it")
+    df.add_argument("deposit_id", type=int)
+    df.add_argument("--no-stems", action="store_true")
+    df.add_argument("--owner")
     dl = dps.add_parser("list", help="deposits, newest first")
     dl.add_argument("--size", choices=["moment", "track", "collection"])
     dl.add_argument("--tag")
@@ -534,6 +541,17 @@ def _deposit(args) -> int:
 
     conn = db.connect(args.db)
     try:
+        if args.action == "add" and args.size == "moment" and args.source and args.start and args.end:
+            from . import moments
+
+            got = moments.add(conn, args.owner, args.source, deposits.parse_time(args.start),
+                              deposits.parse_time(args.end), note=args.note, title=args.title, tags=args.tag)
+            if args.no_fetch:
+                print(json.dumps(got, indent=2))
+                return 0
+            return _finish_moment(conn, args.owner, got["id"], not args.no_stems)
+        if args.action == "fetch":
+            return _finish_moment(conn, args.owner, args.deposit_id, not args.no_stems)
         if args.action == "add":
             if args.source and not args.source.startswith(("http://", "https://")):
                 raise deposits.DepositError("--source has to be a link.")
@@ -567,6 +585,21 @@ def _deposit(args) -> int:
         print(f"{d['id']:>5}  {d['size']:<10} {d['title'] or d['source_uri'] or '(untitled)'}{span}{tags}{note}")
     if found["total"] > len(found["deposits"]):
         print(f"... {found['total'] - len(found['deposits'])} more (--limit)", file=sys.stderr)
+    return 0
+
+
+def _finish_moment(conn, owner, moment_id: int, separate: bool) -> int:
+    """Run a moment from a link in the foreground (tastr/moments.py) and print it."""
+    from . import moments
+
+    print(f"moment {moment_id}", file=sys.stderr)
+    try:
+        got = moments.run(conn, owner, moment_id, separate=separate,
+                          on_stage=lambda name: print(f"  {name}...", file=sys.stderr))
+    except moments.MomentError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(json.dumps(got, indent=2))
     return 0
 
 

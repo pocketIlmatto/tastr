@@ -262,10 +262,21 @@ rest of the app changes.
 - A moment can sit in a track or a collection, and can point at each track it spans, as a transition between two
   tracks does.
 - Tags carry where they came from, so tags imported from elsewhere stay apart from your own.
-- A deposit with a link and no audio yet is marked `needs-source`. Fetching and breaking it down comes next.
-- `tastr deposit add`, `tastr deposit list` and `tastr deposit show ID` work from a terminal
-  ([usage.md](usage.md#command-line)); `/api/deposits` is the same over HTTP. On a hosted server each person has
-  their own bank.
+- A deposit with a link and no audio yet is marked `needs-source`.
+- **A moment from a link.** Give a link (YouTube, SoundCloud, Mixcloud and the other sites yt-dlp reads), a start,
+  an end and, if you like, a sentence on what caught your ear. Tastr fetches the **whole** source once and keeps it
+  as a deposit of its own: a track, or a collection when it runs past 20 minutes (a DJ set, a mix). A second
+  moment from the same video, even under another link to it, uses that copy instead of downloading it again.
+  The moment is cut out of it and sits in it at its start and end. Only the moment is broken down: the engine's
+  card (BPM, key, energy, sections, tags) and its four stems, where stem separation is installed. Its status
+  goes from `needs-source` through `working` to `ready`, or to `failed` with the reason in its extracted data;
+  fetching it again picks up where it stopped. Moments are up to 15 minutes, sources up to 6 hours. Breaking
+  down a whole set comes later. This needs the links extra (`pip install 'tastr[links]'`) and ffmpeg, and works
+  on your own install for now: the hosted server doesn't fetch from links.
+- `tastr deposit add`, `tastr deposit fetch ID`, `tastr deposit list` and `tastr deposit show ID` work from a
+  terminal ([usage.md](usage.md#command-line)); `/api/deposits` is the same over HTTP, with
+  `POST /api/deposits/moments` for a moment from a link and `/api/deposits/{id}/audio`, `/stems/{name}` and
+  `/card` to read a moment back. On a hosted server each person has their own bank.
 
 ## Files
 

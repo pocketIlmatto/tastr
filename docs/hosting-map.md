@@ -396,6 +396,10 @@ flowchart LR
   hits the limit rolls back a transaction that wasn't committed.
 - A card's waveform data goes to the bucket after the card's transaction, never inside it (`transactionSync` is
   a synchronous call, so a fetch can't wait in it); the six-hourly sweep moves any that a card had to keep.
+- Pages: `worker/build.py` writes the two pages the app serves, `index.html` (`/`) and `bank.html` (`/bank`,
+  `/bank/<id>`), into the bundle with their files' hashes in place; `create_app` reads both as it starts, so a page
+  left out stops the whole Worker. Their inline scripts are allowed by hash (the CSP is built from `index.html`), so
+  `bank.html` uses only scripts `index.html` has word for word.
 - Browser files: `worker/build.py` puts the page's files, sql.js (for the Simple and SQL searches; pinned in
   `worker/package.json` at the version `routes/search.py` names) and the Rust engine's WebAssembly build (for
   `TASTR_BROWSER_ENGINE`; `deploy-worker.yml` builds it, and `src/tastr_build.py` records its hash for the

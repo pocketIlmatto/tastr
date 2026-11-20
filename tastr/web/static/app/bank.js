@@ -129,18 +129,20 @@ function sourceBits(dp, long) {
 
 const list = { size: "", rows: [], total: 0, tracks: null, loaded: false, error: "" };
 
+let listAsk = 0;  // the newest list request: an older answer (a filter clicked twice quickly) is dropped
 async function loadList(more = false) {
-  const q = new URLSearchParams({ limit: PAGE, offset: more ? list.rows.length : 0 });
+  const me = ++listAsk, q = new URLSearchParams({ limit: PAGE, offset: more ? list.rows.length : 0 });
   if (list.size) q.set("size", list.size);
   try {
     const [got, tr] = await Promise.all([api(`/api/deposits?${q}`),
       list.tracks == null ? api("/api/deposits?size=track&limit=1") : null]);
+    if (me !== listAsk) return;
     list.rows = more ? [...list.rows, ...got.deposits] : got.deposits;
     list.total = got.total;
     if (tr) list.tracks = tr.total;
     list.error = "";
-  } catch (e) { list.error = e.message; }
-  list.loaded = true;
+  } catch (e) { if (me === listAsk) list.error = e.message; }
+  if (me === listAsk) list.loaded = true;
 }
 
 function listView() {
@@ -342,13 +344,21 @@ function foundView(dp, f) {
 
 let pollTimer = 0;
 
+let queued = 0;  // a deposit sent to /fetch: its job may wait behind another one before it shows as working
+
 async function fetchAgain(dp, btn, out) {  // POST /fetch: a moment from a link, saved without fetching or failed
   btn.disabled = true; btn.textContent = "Starting…";
-  try { await api(`${base(dp)}/fetch`, { method: "POST" }); render(false); }
+  try { await api(`${base(dp)}/fetch`, { method: "POST" }); queued = dp.id; render(false); }
   catch (e) { out.textContent = e.message; btn.disabled = false; btn.textContent = "Try again"; }
 }
 
 function stateView(dp) {
+  if (queued === dp.id && (dp.status === "needs-source" || dp.status === "failed")) {
+    return h("section", { class: "bk-sec" }, h("h3", {}, "Breaking down"),
+      h("p", {}, "Waiting its turn: Tastr breaks down one moment at a time."),
+      h("p", { class: "muted" }, "This runs without you. Come back later; the page updates when it's done."));
+  }
+  if (queued === dp.id) queued = 0;  // it started (or finished): back to the deposit's own state
   const canFetch = dp.size === "moment" && dp.source_kind === "link" && isNum(dp.start_s);
   if (dp.status === "working") {
     const at = stageAt(dp);
@@ -441,7 +451,7 @@ export async function render(fresh = true) {
   document.title = `${dp.note || titleOf(dp)} · Bank · Tastr`;
   root.replaceChildren(depositView(dp));
   list.loaded = false;  // the list reads it again on the way back, in case it changed
-  if (dp.status === "working") pollTimer = setTimeout(() => { if (me === drawn) render(false); }, POLL_MS);
+  if (dp.status === "working" || queued === dp.id) pollTimer = setTimeout(() => { if (me === drawn) render(false); }, POLL_MS);
 }
 
 // The look switch, as in the app (help.js setLook): data-look on <html>, remembered per browser.
@@ -453,7 +463,9 @@ function setLook(v) {
 }
 
 if (typeof document !== "undefined" && $("bk")) {
-  setLook(document.documentElement.dataset.look);
+  let saved = document.documentElement.dataset.look;
+  try { saved = saved || localStorage.getItem("tastr-look"); } catch (_) {}
+  setLook(saved);
   document.querySelectorAll(".look-pick button").forEach((b) => b.addEventListener("click", () => setLook(b.dataset.look)));
   window.addEventListener("popstate", () => render());
   render();

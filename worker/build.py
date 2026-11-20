@@ -1,8 +1,8 @@
 """Lay out the Worker from the app (TAS-84): run before `pywrangler dev` or `pywrangler deploy`.
 
 - src/tastr/: the tastr package's Python files (the Worker bundle takes Python modules; other files are left out).
-- src/tastr/web/static/index.html: the page, with each /static/ file's content hash already in its URL
-  (server.versioned_index reads the files, which aren't in the bundle).
+- src/tastr/web/static/index.html and bank.html: the pages (the app, and the bank at /bank), with each /static/
+  file's content hash already in its URL (server.versioned_index reads the files, which aren't in the bundle).
 - public/static/: the browser files, served by Workers Static Assets, with the UI's modules also in
   public/static/app-<hash>/, where the page loads them (server.versioned_index), so a deploy never mixes old and
   new modules.
@@ -55,10 +55,12 @@ def build() -> None:
         dest = src / f.relative_to(PKG)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(f, dest)
-    page = src / "web" / "static" / "index.html"
-    page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text(versioned_index())
-    shutil.copytree(PKG / "web" / "static", public / "static", ignore=shutil.ignore_patterns("index.html"))
+    pages = ("index.html", "bank.html")  # create_app reads both when it starts
+    for name in pages:
+        page = src / "web" / "static" / name
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(versioned_index(name))
+    shutil.copytree(PKG / "web" / "static", public / "static", ignore=shutil.ignore_patterns(*pages))
     shutil.copytree(PKG / "web" / "static" / "app", public / "static" / f"app-{app_version()}")
     (public / "_headers").write_text(asset_headers(app_version()))
 

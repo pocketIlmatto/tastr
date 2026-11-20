@@ -32,7 +32,7 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 fail=0
-for path in /api/health /api/config / /api/tracks /static/style.css /sqljs/sql-wasm.js \
+for path in /api/health /api/config / /bank /api/tracks /static/style.css /sqljs/sql-wasm.js \
             ${CHECK_ENGINE:+/engine/tastr_engine.wasm}; do
   code=$(curl -s -o /dev/null -w "%{http_code}" "localhost:$PORT$path")
   echo "$code $path"

@@ -98,3 +98,21 @@ def test_tracks_collections_and_captures():
     out = [B.foundLine(track).t, B.foundLine(set).t, B.siteOf(set), B.rangeOf(cap), B.foundOf(track).bars];
     """)
     assert out == ["124 BPM · 8A · 2:30", "72:40 long · 1 moment cut from it", "SoundCloud", "around 1:42", None]
+
+
+def test_the_hosted_csp_allows_the_bank_pages_inline_script():
+    """The hosted CSP lists the hashes of index.html's inline scripts only (context.py), so bank.html may use only
+    scripts that index.html has word for word."""
+    from tastr.web import hosted
+
+    index = set(hosted.inline_script_hashes((STATIC / "index.html").read_text()))
+    bank = hosted.inline_script_hashes((STATIC / "bank.html").read_text())
+    assert bank and set(bank) <= index
+
+
+def test_the_worker_bundle_carries_the_bank_page():
+    """create_app reads bank.html as it starts; a Worker bundle without it wouldn't start at all."""
+    build = (Path(__file__).resolve().parents[1] / "worker" / "build.py").read_text()
+    assert '"bank.html"' in build
+    check = (Path(__file__).resolve().parents[1] / "worker" / "check.sh").read_text()
+    assert " /bank " in check

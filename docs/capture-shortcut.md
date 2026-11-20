@@ -61,7 +61,7 @@ To use a variable, long-press a field (or tap it and pick from the bar above the
 | 11 | **Set Variable** | Name `Now` |
 | 12 | **Get Dictionary Value** | Value for `playing` in **Now** |
 | 13 | **If** | *Get Dictionary Value* is `true` *(check: the condition may read "is" with a text value; if so, compare to `true` as text, or switch to `has any value` on `title`)* |
-| 14 | **Get Dictionary Value** ×5, each followed by **Set Variable** | `title` → `Title`, `artist` → `Artist`, `position_s` → `Position`, `uri` → `Link`; then a **Text** `spotify` → `HeardOn` |
+| 14 | **Get Dictionary Value** ×4, each followed by **Set Variable** | `title` → `Title`, `artist` → `Artist`, `position_s` → `Position`, `uri` → `Link`; then a **Text** `spotify` → `HeardOn` |
 | 15 | **Otherwise** | (step 3 goes here) |
 | 16 | **End If** | (after step 3) |
 
@@ -100,8 +100,8 @@ Music** in the *Otherwise* branch, so a clip is always kept, and tell the thread
 | 31 | **Get Dictionary Value** | Value for `title` in *Contents of URL* |
 | 32 | **Show Notification** | `Saved to Tastr: ` + *Dictionary Value* |
 
-Form fields for action 30. Leave a field out rather than sending it empty when the variable isn't set on that path
-(Shortcuts sends an empty value otherwise, which Tastr ignores too).
+Form fields for action 30. Add them all: on a path where a variable was never set, Shortcuts sends the field empty,
+and Tastr treats an empty field as missing.
 
 | Field | Type | Value |
 |---|---|---|

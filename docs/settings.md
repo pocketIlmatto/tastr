@@ -52,6 +52,7 @@ what each does, is in [hosting-map.md](hosting-map.md#worker-secrets). The ones 
 | `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | Cloudflare **R2 > Manage API tokens**, Object Read & Write on `tastr-audio` only | New token, put both, then delete the old token |
 | `TASTR_MODAL_KEY`, `TASTR_MODAL_SECRET` | Modal **Settings > Proxy Auth Tokens** | New token, put both, then delete the old one |
 | `TASTR_LINK_SECRET` | `openssl rand -hex 32` | Put a new value. Every Strudel and playlist link already shared stops working |
+| `TASTR_CAPTURE_KEYS` (optional) | `email:key` entries; make each key with `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` and keep it in your password manager and the shortcut ([capture.md](capture.md#the-key)) | Add a second entry for the same email with a new key, put the new key in the shortcut, then remove the old entry. Removing an entry revokes that key at once |
 | `TASTR_GITHUB_TOKEN` (optional) | GitHub fine-grained token, read-only Actions on this repository | Before its end date: new token, put it, delete the old |
 | `FREQBLOG_API_KEY` (optional) | [FreqBlog](https://api.freqblog.com/docs) account | Only if it leaks |
 | `ANTHROPIC_API_KEY` (optional) | Anthropic Console **Settings > API Keys**, with a monthly spend limit on its workspace | Only if it leaks; without it "Ask Claude to change it" is off |

@@ -38,7 +38,8 @@ from . import runner, s3
 
 log = logging.getLogger(__name__)
 
-FOLDERS = ("uploads", "stems", "keylock")  # what lives in the bucket, by its folder under TASTR_HOME (keylock: tastr/keylock.py)
+FOLDERS = ("uploads", "stems", "keylock", "captures")  # what lives in the bucket, by its folder under TASTR_HOME
+# (keylock: tastr/keylock.py; captures: recordings sent to the capture address, tastr/web/routes/capture.py)
 LINK_SECONDS = 3600  # signed links for playback and for Modal; a page asks again for a new one
 UPLOAD_SECONDS = 3600  # signed links a page uploads through (TASTR_DIRECT_UPLOAD); it asks again if one runs out
 # Where the disk is memory (the Cloudflare Worker sets this False, worker/src/entry.py), a local copy is dropped as

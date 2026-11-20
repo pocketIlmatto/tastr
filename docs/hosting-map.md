@@ -36,6 +36,7 @@ flowchart TB
   F([Friend's browser])
   S([strudel.cc])
   PL([Music players: exported M3U8, XSPF, PLS playlists])
+  SC([iPhone shortcut: capture key])
   subgraph CF[Cloudflare]
     ACC[Access app: one-time PIN login]
     BYP[Access app on /pub: Bypass]
@@ -70,6 +71,7 @@ flowchart TB
   ACC -->|/static, /sqljs, /engine: no Worker| SA
   S -->|signed /pub link| BYP --> W
   PL -->|signed /pub link| BYP
+  SC -->|/pub/capture + capture key| BYP
   W -->|/pub/preview.png, /pub/favicon.svg| SA
   W -->|everything else| DO
   AL --> DO
@@ -110,6 +112,28 @@ the six-hourly sweep deletes uploads that got a link and were never finished (af
 track points at once they're two days old (it deletes nothing if most uploads match no track, which would mean
 the paths are off). An upload of bytes the library already has isn't analyzed or kept again; the page can ask
 `POST /api/tracks/known` first and skip those files.
+
+Captures from the iPhone shortcut ([capture.md](capture.md)) take the same Bypass, so nothing else about the
+Access setup changes: the Worker sends `/pub/capture` to the Durable Object like any other request, and Tastr
+checks the capture key itself.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant P as iPhone shortcut
+  participant C as Cloudflare Access: /pub Bypass
+  participant W as Worker: Durable Object Library
+  participant A as R2 audio bucket
+  P->>C: POST /pub/capture, Authorization: Bearer <capture key>, form fields (+ a recording)
+  C->>W: passed through, no login
+  W->>W: key's hash matches one in TASTR_CAPTURE_KEYS? (else 401)
+  W->>W: size, length, fields and today's cap (413, 422, 429)
+  opt a recording came with it
+    W->>A: put captures/<hash>/<hash>.m4a
+  end
+  W->>W: add a moment to the key owner's bank
+  W-->>P: 201 {id, title, status}
+```
 
 ## An upload, step by step
 
@@ -275,6 +299,13 @@ Four layers, each assuming the one before it might be bypassed.
    the Cover Art Archive (`coverartarchive.org`, which redirects to `archive.org`) for that release's front cover
    (`tastr/coverart.py`), only for admins and only when `TASTR_LOOKUP` is set (or `TASTR_COVER_ART=1`), and keeps
    the answer, a miss included, as `covers/fetched/<track id>`.
+5. **The capture address.** The iPhone shortcut can't sign in either, so `/pub/capture` and `/pub/capture/now`
+   take the same Bypass and check a capture key instead (`Authorization: Bearer`, [capture.md](capture.md)). A
+   key, set in `TASTR_CAPTURE_KEYS` as `email:key`, can only add moments to that email's bank: these two
+   addresses are all it opens, and neither reads, changes or deletes anything. Tastr keeps only the keys'
+   SHA-256 hashes and compares them in constant time; the key is never logged (Workers Logs show any header whose
+   name contains "auth" as `REDACTED`, as they do the Access token and cookies). Recordings are capped in size and
+   length, and captures per person per day; recordings go to the audio bucket under `captures/`.
 
 Keys are split so a leak stays small. The audio bucket's R2 token is scoped to `tastr-audio`, not the benchmark
 bucket `tastr-data`. The Worker reaches Modal with a proxy auth token that can only call the `api` endpoint, and
@@ -317,6 +348,7 @@ Variables and Secrets** as type **Secret** (a plain Text variable added there is
 | `TASTR_ACCESS_TEAM_DOMAIN`, `TASTR_ACCESS_AUD` | Checking Cloudflare's token. Not secret, but kept out of the repository. |
 | `TASTR_ADMIN_EMAILS` | Who gets the Admin tab and keeps audio forever |
 | `TASTR_LINK_SECRET` | Signing Strudel and playlist links |
+| `TASTR_CAPTURE_KEYS` (optional) | The capture address's keys, `email:key` entries, each adding only to that email's bank ([capture.md](capture.md)). Without it `/pub/capture` answers 401 |
 | `TASTR_STORAGE_GB` | A spending cap on the uploads, stems and key-locked copies the bucket holds |
 | `TASTR_AUDIO_BUCKET`, `TASTR_AUDIO_ENDPOINT`, `TASTR_AUDIO_ACCESS_KEY_ID`, `TASTR_AUDIO_SECRET_ACCESS_KEY` | The audio bucket `tastr-audio` and its own token ([deploy.md](deploy.md#2-r2-bucket-for-audio)). Required on the Worker. |
 | `TASTR_MODAL_URL`, `TASTR_MODAL_KEY`, `TASTR_MODAL_SECRET` | The Modal `api` endpoint's address (`modal deploy` prints it) and a Modal proxy auth token |
@@ -329,7 +361,9 @@ These have defaults and change only if you set a secret of the same name ([hosti
 `TASTR_MAX_UPLOAD_MB`, `TASTR_MAX_MINUTES`, `TASTR_MAX_FILES`, `TASTR_DAILY_TRACKS`, `TASTR_MAX_ANALYSES`,
 `TASTR_BULK_AT_ONCE` (tracks a bulk action runs at once; defaults to `TASTR_MAX_ANALYSES`), `TASTR_DAILY_STEMS`,
 `TASTR_DAILY_DRUMS`, `TASTR_DAILY_ASKS` (Claude asks per person per day, default 20), `TASTR_DAILY_KEYLOCK`
-(new mash-up key lock stretches per person per day, default 40), `TASTR_AUDIO_DAYS` (default 0, keep
+(new mash-up key lock stretches per person per day, default 40), `TASTR_CAPTURE_MB` and `TASTR_CAPTURE_SECONDS`
+(the largest and longest recording a capture may carry, default 5 MB and 60 seconds), `TASTR_DAILY_CAPTURES`
+(captures per person per day, default 100), `TASTR_AUDIO_DAYS` (default 0, keep
 audio; admins set each person's own on the Admin tab),
 `TASTR_MODAL_WORKSPACE` (your Modal workspace name, so the Admin tab's Modal link opens the app) and
 `TASTR_WATCH_MINUTES` (default 15: how often the server checks GitHub Actions for the Admin log; `0` turns it

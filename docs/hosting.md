@@ -69,6 +69,9 @@ Install the extra that checks tokens: `pip install -e '.[hosted]'`. Then set:
 | `TASTR_GITHUB_TOKEN` | none | a fine-grained token with read-only Actions access, needed while that repository is private, and on the Cloudflare Worker (GitHub's limit without one is per IP address, which Cloudflare shares) |
 | `TASTR_WATCH_MINUTES` | 15 | how often the server checks GitHub Actions for the Admin log; `0` turns it off |
 | `TASTR_MODAL_WORKSPACE` | none | your Modal workspace name; the Admin tab's Modal link then opens the `tastr-web` app instead of Modal's app list |
+| `TASTR_CAPTURE_KEYS` | none | keys for the capture address `/pub/capture` (the iPhone shortcut), `email:key` entries, each adding only to that email's bank ([capture.md](capture.md)). Keep it secret |
+| `TASTR_CAPTURE_MB`, `TASTR_CAPTURE_SECONDS` | 5, 60 | the largest and longest recording a capture may carry |
+| `TASTR_DAILY_CAPTURES` | 100 | captures each person can send per UTC day |
 | `TASTR_LINK_SECRET` | random | signs the Strudel links; set it (e.g. `openssl rand -hex 32`) so links survive a restart. Keep it secret |
 | `TASTR_AUDIO_BUCKET` | none | keep uploads and stems in this S3-compatible bucket (R2), with the disk as a cache; see [Audio in a bucket](#audio-in-a-bucket) |
 | `TASTR_AUDIO_ENDPOINT` | none | the bucket's S3 endpoint, for R2 `https://<account id>.r2.cloudflarestorage.com` |

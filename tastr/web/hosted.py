@@ -103,6 +103,12 @@ class Settings:
     # Uploads go from the browser straight to the audio bucket on a signed link (TAS-66), instead of through
     # this server. Needs the bucket on and its CORS rule to allow PUT from the app's own origin (docs/deploy.md).
     direct_upload: bool = False
+    # The capture address (/pub/capture, routes/capture.py): keys that may only add deposits to one person's bank,
+    # kept as (owner, sha256 of the key) so the keys themselves aren't held here. TASTR_CAPTURE_KEYS (a secret).
+    capture_keys: tuple[tuple[str | None, bytes], ...] = ()
+    capture_mb: float = 5  # the largest recording a capture may carry
+    capture_seconds: float = 60  # and its longest length
+    daily_captures: int = 100  # captures per key owner per UTC day
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -138,6 +144,10 @@ class Settings:
             github_workflows=tuple(w.strip() for w in env.get("TASTR_GITHUB_WORKFLOWS", "").split(",") if w.strip()),
             watch_minutes=float(env.get("TASTR_WATCH_MINUTES", cls.watch_minutes)),
             direct_upload=env.get("TASTR_DIRECT_UPLOAD", "").strip().lower() in ("1", "true", "yes", "on"),
+            capture_keys=capture_keys(env.get("TASTR_CAPTURE_KEYS", ""), hosted),
+            capture_mb=float(env.get("TASTR_CAPTURE_MB", cls.capture_mb)),
+            capture_seconds=float(env.get("TASTR_CAPTURE_SECONDS", cls.capture_seconds)),
+            daily_captures=int(env.get("TASTR_DAILY_CAPTURES", cls.daily_captures)),
         )
         if hosted and not (s.access_team_domain and s.access_aud):
             # Fail closed: a hosted server that can't check logins must not start.
@@ -181,6 +191,42 @@ class Settings:
         else:
             out["modal"] = "https://modal.com/apps"
         return out
+
+
+CAPTURE_KEY_MIN = 32  # characters; `secrets.token_urlsafe(32)` makes 43
+
+
+def capture_keys(text: str, hosted: bool) -> tuple[tuple[str | None, bytes], ...]:
+    """TASTR_CAPTURE_KEYS: entries `email:key`, separated by commas or new lines, each key adding to that email's
+    bank. Two entries for one email are how a key is rotated (both work until the old one is removed). On your
+    own machine a bare `key` adds to the one local library. Too-short keys, and bare keys on a hosted server, are
+    left out with a warning that never shows the key."""
+    out = []
+    for entry in re.split(r"[,\s]+", text.strip()):
+        if not entry:
+            continue
+        owner, _, key = entry.rpartition(":")
+        owner = owner.strip().lower() or None
+        if len(key) < CAPTURE_KEY_MIN:
+            log.warning("TASTR_CAPTURE_KEYS: the key for %s is shorter than %d characters; left out",
+                        owner or "the local library", CAPTURE_KEY_MIN)
+            continue
+        if owner is None and hosted:
+            log.warning("TASTR_CAPTURE_KEYS: a key without an email can't be used on a hosted server; left out")
+            continue
+        out.append((owner, hashlib.sha256(key.encode()).digest()))
+    return tuple(out)
+
+
+def capture_owner(keys: tuple[tuple[str | None, bytes], ...], presented: str) -> tuple[bool, str | None]:
+    """(True, whose bank) when `presented` is one of the capture keys, else (False, None). Every key is compared,
+    each in constant time, so how long this takes doesn't tell which one, or how much of one, matched."""
+    digest = hashlib.sha256(presented.encode()).digest()
+    found, owner = False, None
+    for who, d in keys:
+        if hmac.compare_digest(d, digest) and not found:
+            found, owner = True, who
+    return found, owner
 
 
 def names(files: list[str], most: int = 3) -> str:
@@ -361,7 +407,7 @@ def stored_bytes(home: Path) -> int:
     if blobs.enabled():
         return blobs.stored_bytes()
     total = 0
-    for sub in ("uploads", "stems", "keylock"):
+    for sub in ("uploads", "stems", "keylock", "captures"):
         d = home / sub
         if d.is_dir():
             total += sum(f.stat().st_size for f in d.rglob("*") if f.is_file())

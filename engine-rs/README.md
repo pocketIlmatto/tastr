@@ -25,14 +25,19 @@ println!("{:?} BPM ({:?} likely right)", r.bpm, r.bpm_likely_correct);
 if let Some(k) = &r.key {
     println!("key {} ({})", k.camelot, k.mode);
 }
-println!("first downbeat at {:?} s, {} beats per bar", r.downbeat_times.first(), r.beats_per_bar);
+if let Some(g) = &r.grid {
+    // A DJ beat grid: tempo and first beat to a fraction of a millisecond, one anchor per tempo.
+    println!("grid {} BPM from {:.4} s, first downbeat {:?}, {} anchor(s)", g.bpm, g.first_beat, g.first_downbeat, g.anchors.len());
+}
 ```
 
 With the default `decode` feature, `tastr_engine::dj::analyze_file(bytes, &opts)` takes WAV, FLAC, MP3,
 AAC/M4A or Ogg Vorbis file bytes instead. `DjOptions::default().with_beats_per_bar(3)` sets the meter instead of
 detecting it.
 
-Beat times sit on the engine's analysis frames (about 23 ms apart), so treat them as a rough grid. More on what
+`beat_times` are the beat tracker's, on the engine's analysis frames (about 23 ms steps). For a DJ grid use
+`grid`: each tracked beat moved onto its attack at sample resolution and a line fitted through them, with a
+new anchor where the tempo changes. More on what
 the engine measures, and how well, is in Tastr's
 [engine report](https://github.com/pocketIlmatto/tastr/blob/main/docs/engine-report.md) and
 [docs/rust-engine.md](https://github.com/pocketIlmatto/tastr/blob/main/docs/rust-engine.md#using-the-engine-as-a-library).

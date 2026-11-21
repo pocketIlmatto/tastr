@@ -22,13 +22,17 @@ const LOW_HZ: f64 = 150.0;
 const SEARCH_S: f64 = 0.035;
 /// Attacks weaker than this (natural-log energy ratio, summed over both bands) don't count.
 const MIN_STRENGTH: f64 = 0.4;
-/// Beats further than this from the fitted line are dropped and the line refitted (seconds).
+/// Beats further than this from the fitted line are dropped and the line refitted (seconds), in rounds that
+/// tighten to OUTLIER_S, so a line first pulled off by a drifting tempo doesn't throw most beats away.
+const OUTLIER_ROUNDS_S: [f64; 4] = [0.06, 0.03, 0.018, 0.012];
 const OUTLIER_S: f64 = 0.012;
-/// Segments are split only when long enough and when the split clearly helps.
-const MIN_SEGMENT: usize = 32;
-const SPLIT_RMS_S: f64 = 0.004;
-const SPLIT_GAIN: f64 = 0.5;
-const SPLIT_TEMPO: f64 = 0.0005;
+/// A line keeps growing while it fits at least FIT_SHARE of its attacks within OUTLIER_S and the newest
+/// TAIL attacks don't sit on one side of it by more than TAIL_MEAN_S on average (a drifting tempo; jitter
+/// averages out); then a new anchor starts. No anchor covers fewer than MIN_SEGMENT beats.
+const FIT_SHARE: f64 = 0.85;
+const TAIL: usize = 6;
+const TAIL_MEAN_S: f64 = 0.006;
+const MIN_SEGMENT: usize = 16;
 const MAX_ANCHORS: usize = 16;
 /// Too few attacks to trust a grid.
 const MIN_POINTS: usize = 8;
@@ -87,7 +91,7 @@ pub fn fit(y: &[f32], sr: f64, beats: &[f64], downbeats: &[f64], beats_per_bar: 
         return None;
     }
     let mut segments = Vec::new();
-    split(&points, period, &mut segments);
+    segment(&points, period, &mut segments);
     segments.sort_by(|a, b| a.k0.total_cmp(&b.k0));
     let first = &segments[0];
     // Carry the first segment's line back to the earliest beat at or after 0 s.
@@ -156,7 +160,7 @@ impl Segment {
 }
 
 /// Weighted least-squares line through (k, t) with weights s, dropping points further than OUTLIER_S from it
-/// and refitting (three rounds). `period` is the fallback slope for fewer than two points.
+/// and refitting (OUTLIER_ROUNDS_S). `period` is the fallback slope for fewer than two points.
 fn fit_line(points: &[(f64, f64, f64)], period: f64) -> Segment {
     let mut keep = vec![true; points.len()];
     let mut seg = Segment {
@@ -168,7 +172,7 @@ fn fit_line(points: &[(f64, f64, f64)], period: f64) -> Segment {
         used: 0,
         cost: 0.0,
     };
-    for _ in 0..3 {
+    for limit in OUTLIER_ROUNDS_S {
         let (mut sw, mut sk, mut st, mut skk, mut skt) = (0.0, 0.0, 0.0, 0.0, 0.0);
         for (p, _) in points.iter().zip(&keep).filter(|(_, &k)| k) {
             let (k, t, w) = *p;
@@ -188,14 +192,8 @@ fn fit_line(points: &[(f64, f64, f64)], period: f64) -> Segment {
         } else {
             seg.intercept = (st - seg.period * sk) / sw;
         }
-        let mut changed = false;
         for (p, k) in points.iter().zip(keep.iter_mut()) {
-            let ok = (p.1 - seg.at(p.0)).abs() <= OUTLIER_S;
-            changed |= ok != *k;
-            *k = ok;
-        }
-        if !changed {
-            break;
+            *k = (p.1 - seg.at(p.0)).abs() <= limit;
         }
     }
     let (mut sse, mut w, mut used, mut dropped) = (0.0, 0.0, 0, 0.0);
@@ -219,34 +217,52 @@ fn fit_line(points: &[(f64, f64, f64)], period: f64) -> Segment {
     seg
 }
 
-/// Fit `points` as one line, or split it in two where that clearly fits better (a tempo change), recursively.
-fn split(points: &[(f64, f64, f64)], period: f64, out: &mut Vec<Segment>) {
-    let whole = fit_line(points, period);
-    let total: f64 = points.iter().map(|p| p.2).sum();
-    let rms = libm::sqrt(whole.cost / total.max(1e-12));
-    if out.len() + 1 >= MAX_ANCHORS || points.len() < 2 * MIN_SEGMENT || rms <= SPLIT_RMS_S {
-        out.push(whole);
-        return;
-    }
-    let mut best: Option<(f64, usize)> = None;
-    let mut i = MIN_SEGMENT;
-    while i + MIN_SEGMENT <= points.len() {
-        let (a, b) = (fit_line(&points[..i], whole.period), fit_line(&points[i..], whole.period));
-        let sse = a.cost + b.cost;
-        let differs = (a.period - b.period).abs() / whole.period > SPLIT_TEMPO
-            || (a.at(points[i].0) - b.at(points[i].0)).abs() > OUTLIER_S / 2.0;
-        if differs && best.is_none_or(|(s, _)| sse < s) {
-            best = Some((sse, i));
+/// Whether one line explains these attacks: most within OUTLIER_S, and neither end drifting off it.
+fn fits(seg: &Segment, points: &[(f64, f64, f64)]) -> bool {
+    let drift = |ps: &[(f64, f64, f64)]| {
+        ps.len() == TAIL && (ps.iter().map(|p| p.1 - seg.at(p.0)).sum::<f64>() / TAIL as f64).abs() > TAIL_MEAN_S
+    };
+    seg.used as f64 >= FIT_SHARE * points.len() as f64
+        && !drift(&points[points.len().saturating_sub(TAIL)..])
+        && !drift(&points[..TAIL.min(points.len())])
+}
+
+/// Cover `points` with lines from the start: each grows one attack at a time while it `fits`, and the next
+/// starts where it stopped. Neighbours that fit as one line are then merged back (a short noisy stretch
+/// shouldn't leave an anchor behind).
+fn segment(points: &[(f64, f64, f64)], period: f64, out: &mut Vec<Segment>) {
+    let mut bounds = Vec::new();
+    let mut start = 0;
+    let mut end = (start + MIN_SEGMENT).min(points.len());
+    while end < points.len() {
+        let seg = fit_line(&points[start..=end], period);
+        if fits(&seg, &points[start..=end]) || bounds.len() + 2 > MAX_ANCHORS {
+            end += 1;
+            continue;
         }
-        i += 4;
-    }
-    match best {
-        Some((sse, i)) if sse < SPLIT_GAIN * whole.cost => {
-            split(&points[..i], whole.period, out);
-            split(&points[i..], whole.period, out);
+        // Stop before the run that broke it, but keep at least MIN_SEGMENT beats.
+        let cut = (end + 1).saturating_sub(TAIL / 2).max(start + MIN_SEGMENT);
+        if points.len() - cut < MIN_SEGMENT {
+            end += 1;
+            continue;
         }
-        _ => out.push(whole),
+        bounds.push((start, cut));
+        start = cut;
+        end = (start + MIN_SEGMENT).min(points.len());
     }
+    bounds.push((start, points.len()));
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for b in bounds {
+        if let Some(last) = merged.last_mut() {
+            let both = &points[last.0..b.1];
+            if fits(&fit_line(both, period), both) {
+                last.1 = b.1;
+                continue;
+            }
+        }
+        merged.push(b);
+    }
+    out.extend(merged.into_iter().map(|(a, b)| fit_line(&points[a..b], period)));
 }
 
 /// The energy-ratio onset function on the whole band and the low band, every HOP_SAMPLES samples.
@@ -420,6 +436,39 @@ mod tests {
         assert!((g.anchors[0].bpm - 120.0).abs() < 0.02 && (g.anchors[1].bpm - 126.0).abs() < 0.02, "{:?}", g.anchors);
         assert!((g.anchors[1].time - change).abs() < 0.6, "{:?} vs {change}", g.anchors);
         assert_eq!(g.first_downbeat, None);
+    }
+
+    #[test]
+    fn a_drifting_live_tempo_stays_within_a_few_ms() {
+        // A drummer speeding up from 118 to 122 BPM over 120 beats: no single line fits within 20 ms.
+        let mut starts = Vec::new();
+        let mut t = 0.4;
+        for k in 0..120 {
+            starts.push(t);
+            t += 60.0 / (118.0 + 4.0 * k as f64 / 120.0);
+        }
+        let g = fit(&clicks(&starts, t + 1.0), SR, &coarse(&starts, 0.01), &[], 4).unwrap();
+        assert!(g.anchors.len() >= 2, "{g:?}");
+        let mut worst: f64 = 0.0;
+        for &s in &starts {
+            let a = g.anchors.iter().rev().find(|a| a.time <= s + 0.1).unwrap();
+            let p = 60.0 / a.bpm;
+            let k = libm::round((s - a.time) / p);
+            worst = worst.max((s - (a.time + k * p)).abs());
+        }
+        assert!(worst < 0.02, "worst {worst} with {:?}", g.anchors);
+    }
+
+    #[test]
+    fn a_steady_drummer_with_jitter_keeps_one_anchor() {
+        // 125 BPM played by hand: each hit up to 8 ms early or late (sd about 4.6 ms), no drift.
+        let p = 60.0 / 125.0;
+        let starts: Vec<f64> = (0..200)
+            .map(|k| 0.3 + k as f64 * p + 0.008 * libm::sin(k as f64 * 7.31 + libm::sin(k as f64 * 1.7)))
+            .collect();
+        let g = fit(&clicks(&starts, starts[199] + 1.0), SR, &coarse(&starts, 0.01), &[], 4).unwrap();
+        assert!(g.anchors.len() <= 2, "{:?}", g.anchors);
+        assert!((g.bpm - 125.0).abs() < 0.05 && (g.first_beat - 0.3).abs() < 0.004, "{g:?}");
     }
 
     #[test]

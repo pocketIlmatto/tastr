@@ -41,6 +41,7 @@ the changed JSON with the run's write-up.
 | Key (MIREX weighted) | 1 exact, 0.5 off by a fifth, 0.3 relative major/minor, 0.2 parallel, 0 otherwise |
 | Key exactly right | share of tracks with tonic and mode both right |
 | Beat / downbeat F | beats within 70 ms, ignoring the first 5 s |
+| Tracker / DJ grid F (20 ms, 10 ms) and offset | on datasets with beat labels: the tracker's beats and the DJ grid's beats (`dj.rs`, [Beat grid](#dj-beat-grid)) within 20 and 10 ms, and the median signed offset (ms, estimate minus label) of the beats matched within 70 ms |
 | Sections F (0.5 s / 3 s) | section starts within 0.5 s or 3 s of a labeled one, track start and end excluded |
 
 Each metric is averaged over the tracks that have that label. The summary also

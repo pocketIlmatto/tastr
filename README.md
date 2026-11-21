@@ -93,7 +93,7 @@ Tastr's code is under the MIT License ([LICENSE](LICENSE)). Security reports: se
 [SECURITY.md](SECURITY.md).
 
 Two generated tables in `engine-rs/src/consts.rs` hold numbers fitted on public datasets, so they
-also carry the datasets' terms:
+also carry the datasets' terms (`engine-rs/NOTICE` repeats this for people who use the engine on its own):
 
 - `KEY_WEIGHTS` and `KEY_BIAS` (the learned key model) were fitted on GiantSteps Key and
   the Beatport EDM Key dataset (Zenodo 1101082), both CC BY-SA 4.0. Treat these weights

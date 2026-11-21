@@ -6,8 +6,10 @@ pub mod bench;
 pub mod card;
 pub mod consts;
 pub mod cqt;
+#[cfg(feature = "decode")]
 pub mod decode;
 mod detmath;
+pub mod dj;
 pub mod drums;
 pub mod features;
 pub mod json;
@@ -27,6 +29,7 @@ pub const SR: u32 = 22050;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Mono audio at 22,050 Hz from file bytes.
+#[cfg(feature = "decode")]
 pub fn load(bytes: Vec<u8>) -> Result<Vec<f32>, String> {
     let d = decode::decode(bytes)?;
     Ok(resample::resample(&d.samples, d.sr, SR))
@@ -154,6 +157,7 @@ pub mod ffi {
     ///
     /// # Safety
     /// `ptr` must come from `tastr_alloc(len)` and hold `len` written bytes; it is freed here.
+    #[cfg(feature = "decode")]
     #[no_mangle]
     pub unsafe extern "C" fn tastr_card(ptr: *mut u8, len: usize, beats_per_bar: i32) -> i32 {
         unsafe { tastr_card_hits(ptr, len, beats_per_bar, std::ptr::null(), 0) }
@@ -165,6 +169,7 @@ pub mod ffi {
     ///
     /// # Safety
     /// As tastr_card; `hits` must point at `hits_n` readable float64 values (or `hits_n` be 0).
+    #[cfg(feature = "decode")]
     #[no_mangle]
     pub unsafe extern "C" fn tastr_card_hits(
         ptr: *mut u8,
@@ -296,6 +301,7 @@ pub mod ffi {
     ///
     /// # Safety
     /// `ptr` must come from `tastr_alloc(len)` and hold `len` written bytes; it is freed here.
+    #[cfg(feature = "decode")]
     #[no_mangle]
     pub unsafe extern "C" fn tastr_signals(ptr: *mut u8, len: usize) -> i32 {
         let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };

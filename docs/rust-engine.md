@@ -25,6 +25,9 @@ can't decode, are decoded by the server and analyzed by Rust from the samples.
 
 ```
 engine-rs/
+  src/dj.rs          the library API for other programs: BPM, beats, downbeats, meter, key and sections from
+                     interleaved PCM or a file, running only the core and sections stages (see "Using the
+                     engine as a library")
   src/decode.rs      audio bytes -> mono f32 (symphonia: WAV, FLAC, MP3, AAC/M4A, Ogg Vorbis; not Opus), with
                      the M4A edit list honoured (symphonia ignores it), and MP3s whose ID3v2 tag has a
                      compressed frame read past the tag (symphonia 0.5 refused them; 8 of FMA Keys' 695)
@@ -54,7 +57,8 @@ engine-rs/
   src/main.rs        `tastr-engine <file> [out dir]`: the native build as a command; writes every output as
                      <name>.f32 plus manifest.json ({name: [rows, cols]}). `rhythm`, `chroma` and `ward`
                      subcommands run one step on a .f32 input, to compare it with librosa on the same input;
-                     `card <file> <out.json> [beats per bar]` writes the whole card
+                     `card <file> <out.json> [beats per bar]` writes the whole card; `dj <file> [beats
+                     per bar]` prints the DJ result as JSON
   run-wasm.mjs       the same through the WebAssembly build, under Node
   .cargo/config.toml WebAssembly SIMD on (same bits, faster)
 tests/test_rust_engine.py   native vs WebAssembly bit for bit; every signal, beats, chroma and Ward vs librosa
@@ -79,6 +83,32 @@ cd .. && python -m pytest tests/test_rust_engine.py
 
 CI builds both only when `engine-rs/` or its test changes (about 50 s from clean, less with the cache);
 otherwise the test skips.
+
+## Using the engine as a library
+
+Other Rust programs can run the engine on their own machine, for example a DJ tool that wants BPM, beats, key
+and sections. `src/dj.rs` is the API for that (since 0.5.0); `engine-rs/README.md` has the example and the
+licence notes.
+
+- **Add it** as a git dependency pinned to a tag: `tastr-engine = { git =
+  "https://github.com/pocketIlmatto/tastr", tag = "engine-v0.5.0" }`. Cargo finds the crate inside the repo.
+  Callers that decode audio themselves (ffmpeg, a DAW) can add `default-features = false` to leave out the
+  `decode` feature and Symphonia.
+- **Call it** with interleaved PCM at any rate and channel count, `dj::analyze_pcm(&samples, 44_100, 2,
+  &DjOptions::default())`, or with file bytes, `dj::analyze_file(bytes, &opts)`. Channels are averaged and the
+  audio resampled to 22,050 Hz, as for a card. `DjOptions::default().with_beats_per_bar(3)` sets the meter.
+- **What comes back:** `DjResult` with the BPM (two decimals) and how likely it is right, the half and double
+  alternatives, every beat and downbeat, the meter, the key (with Camelot and how likely it is right), the
+  sections and the loudness. The answers are the card's own for the same audio (a unit test checks). The
+  struct is `#[non_exhaustive]`, so later versions can add fields (a sub-millisecond beat grid and cue points
+  are planned) without breaking callers.
+- **From the command line:** `tastr-engine dj song.mp3` prints the same as JSON.
+- **Limits:** beats sit on the analysis frame grid (hop 512 at 22,050 Hz, about 23 ms), not a fitted DJ grid.
+  Downbeats are right on about two thirds of songs (GTZAN, see engine-report.md). The API may still change
+  before 1.0; pin a tag.
+- **Speed:** it runs only the core and sections stages and skips the bass CQT, which only the suggestions read.
+  A 4-minute track took 4.4 s against 5.0 s for the whole card (one core, release build, 2026-11-21); most of
+  the time is the shared signals (HPSS, CQT) both need.
 
 ## How the two builds stay identical
 

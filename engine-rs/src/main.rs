@@ -13,6 +13,9 @@
 //!
 //! `tastr-engine card <audio file> <out.json> [beats per bar]` writes the whole card (TrackCard.to_dict() JSON,
 //! "source" null) and prints the timings.
+//!
+//! `tastr-engine dj <audio file> [beats per bar]` prints the DJ analysis (BPM, beats, downbeats, meter, key,
+//! sections; see `dj.rs`) as JSON on stdout. Errors go to stderr with exit code 1.
 
 use std::time::Instant;
 use tastr_engine::Matrix;
@@ -45,7 +48,7 @@ fn load(file: &str) -> Vec<f32> {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: tastr-engine <audio file> [out dir] | rhythm <onset.f32> [bpm] <out dir> | chroma <harmonic.f32> <out dir> | ward <z.f32> <rows> <k> <out dir> | card <audio file> <out.json> [beats per bar]");
+    eprintln!("usage: tastr-engine <audio file> [out dir] | rhythm <onset.f32> [bpm] <out dir> | chroma <harmonic.f32> <out dir> | ward <z.f32> <rows> <k> <out dir> | card <audio file> <out.json> [beats per bar] | dj <audio file> [beats per bar]");
     std::process::exit(2);
 }
 
@@ -66,6 +69,16 @@ fn main() {
             let b = tastr_engine::segment::agglomerative(&z, k);
             let data: Vec<f32> = b.iter().map(|&v| v as f32).collect();
             write(arg(5), &[("boundaries", Matrix { rows: 1, cols: data.len(), data })]);
+        }
+        "dj" => {
+            let mut opts = tastr_engine::dj::DjOptions::default();
+            if let Some(m) = args.get(3) {
+                opts = opts.with_beats_per_bar(m.parse().unwrap_or_else(|_| usage()));
+            }
+            let r = tastr_engine::dj::analyze_mono(load(arg(2)), &opts);
+            let mut out = String::new();
+            r.to_json().write(&mut out);
+            println!("{out}");
         }
         "card" => {
             let t0 = Instant::now();

@@ -209,7 +209,8 @@ def rekordbox_items(path: str | Path, audio_dir: str | Path | None = None) -> li
         if audio is None:
             continue
         truth = Truth(bpm=t.bpm, tonic=t.tonic, mode=t.mode, beats=t.beats or None,
-                      downbeats=t.downbeats or None, beats_per_bar=t.beats_per_bar)
+                      downbeats=t.downbeats or None, beats_per_bar=t.beats_per_bar,
+                      cues=sorted(set(t.hot_cues) | set(t.memory_cues)) or None)
         label = " - ".join(x for x in (t.artist, t.name) if x) or Path(t.location).stem
         items.append(Item(id=f"rb-{i:04d}-{label[:60]}", path=str(audio), truth=truth,
                           meta={"rekordbox_key": t.key_text, "grid_anchors": t.grid_anchors}))

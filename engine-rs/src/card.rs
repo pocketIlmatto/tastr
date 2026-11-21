@@ -71,6 +71,8 @@ pub struct Card {
     pub sample_rate: i64,
     pub core: Core,
     pub sections: Vec<Section>,
+    /// Suggested DJ cue points (cues.rs), also in extras["sections.cues"].
+    pub cues: Vec<crate::cues::Cue>,
     pub tags: Vec<(String, f64)>,
     pub suggestions: Vec<Suggestion>,
     /// name -> (times, values)

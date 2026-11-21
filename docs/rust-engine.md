@@ -103,9 +103,17 @@ licence notes.
   alternatives, every beat and downbeat, the meter, the key (with Camelot and how likely it is right), the
   sections and the loudness, and since 0.6.0 `grid`, the DJ beat grid: BPM to three decimals, the first beat
   and first downbeat to a tenth of a millisecond, an anchor per tempo and how well the attacks fit it
-  (`grid.rs`; [bench.md, DJ beat grid](bench.md#dj-beat-grid)). The tracker's answers are the card's own for
-  the same audio (a unit test checks). The struct is `#[non_exhaustive]`, so later versions can add fields
-  (cue points are planned) without breaking callers.
+  (`grid.rs`; [bench.md, DJ beat grid](bench.md#dj-beat-grid)), and suggested cue points. The tracker's answers
+  are the card's own for the same audio (a unit test checks). The struct is `#[non_exhaustive]`, so later
+  versions can add fields without breaking callers.
+- **Cue points** (`cues`, since 0.6.0; `src/cues.rs`): up to 16, each on a downbeat with its bar number, a kind
+  and a 0 to 1 score. `start` is bar 1 after any silence at the start (Rekordbox's auto cue, but on the bar
+  instead of the first beat). Every section start gets a `section` cue. `drop` is the biggest energy rise after
+  a low stretch and `mix_out` the phrase start where the energy falls into the outro (or 32 bars from the end
+  when it never does); both sit on the phrase grid, 4-bar steps counted from `start`, and stand for a section
+  start within 2 bars of them. `phrase` cues mark other phrase starts where the energy changes, at least 8 bars
+  from any other cue. In the DJ result they sit on `grid` (each moved to its nearest grid beat); the card has the tracker's times, in `extras["sections.cues"]`; the app doesn't show them. How well
+  they match: [bench.md](bench.md#cue-points).
 - **From the command line:** `tastr-engine dj song.mp3` prints the same as JSON.
 - **Limits:** `beat_times` sit on the analysis frame grid (hop 512 at 22,050 Hz, about 23 ms); use `grid` for
   DJ work. Downbeats (and so `first_downbeat`) are right on about two thirds of songs (GTZAN, see

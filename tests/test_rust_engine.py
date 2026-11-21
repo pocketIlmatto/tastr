@@ -386,7 +386,7 @@ def test_bench_sections_find_the_parts():
     part = np.searchsorted([e * bar * info["sr"] / info["hop"] for e in edges[1:-1]], np.arange(frames), side="right")
     mel = ((rng.random((len(edges), 80)) * 10)[part].T + rng.random((80, frames))) ** 2
     sig = ss.signals_from_mel(mel, info)
-    bar_times, starts, current = ss._starts(sig, list(np.arange(0, duration, bar)), duration, info, configs)
+    bar_times, starts, current, _cues = ss._starts(sig, list(np.arange(0, duration, bar)), duration, info, configs)
     assert current in configs and np.allclose(bar_times[:5], np.arange(5) * bar)
     for c, s in starts.items():
         for e in edges[1:-1]:

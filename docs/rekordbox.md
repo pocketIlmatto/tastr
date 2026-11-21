@@ -19,7 +19,7 @@ ratings, My Tag) are left out. Rekordbox's column describes versions 6 and 7.
 | Song structure | Phrase analysis: Intro, Up, Down, Chorus, Verse, Bridge, Outro, with a Low / Mid / High mood per track | Sections (intro, build, drop, chorus, outro...) on an energy curve; parts that sound alike share a letter | Not yet: phrases aren't in the XML export ([below](#not-compared-yet)) |
 | Energy | Only the phrase mood | Energy curve, loudness and an energy score | No: Rekordbox has nothing comparable |
 | Vocals | Marks where vocals are (AI vocal detection, shown above the waveform) | Vocal stem from separation, but no vocal markers on the card | Not yet |
-| Cue points | Auto cue at the first beat or after the silence at the start; memory and hot cues by hand | Cue points by hand | No |
+| Cue points | Auto cue at the first beat or after the silence at the start; memory and hot cues by hand | Cue points by hand in the app; the engine also suggests up to 8 (start, sections, drop, mix out) | Yes: suggested cues against your hot and memory cues, within a bar ([bench.md](bench.md#cue-points)) |
 | Waveform | Blue, RGB or 3-band colored waveforms | Frequency-colored waveform, energy chart, spectrogram, live 3D view | No (display only) |
 | Stems | Real-time stem parts in the decks (Rekordbox 7) | Four Demucs stems (vocals, bass, other, drums), saved with the track | No |
 | Mood and style | My Tag, set by hand | Scored vibe tags (dark, percussive, bass-heavy...) and danceability | No: Rekordbox has nothing automatic |

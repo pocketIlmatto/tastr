@@ -211,6 +211,26 @@
    "beats_per_bar": 4,
    "score": -11.96
   },
+  "sections.cues": [
+   {
+    "bar": 1,
+    "kind": "start",
+    "score": 1.0,
+    "time_s": 0.0
+   },
+   {
+    "bar": 9,
+    "kind": "drop",
+    "score": 1.0,
+    "time_s": 14.978
+   },
+   {
+    "bar": 25,
+    "kind": "mix_out",
+    "score": 1.0,
+    "time_s": 44.978
+   }
+  ],
   "suggestions.bass": {
    "bar_notes": [
     "A",

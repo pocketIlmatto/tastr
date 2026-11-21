@@ -1,7 +1,7 @@
 # tastr-engine
 
 The music analysis engine behind [Tastr](https://github.com/pocketIlmatto/tastr), in pure Rust. It finds the
-BPM, beats, downbeats, meter, key and song sections of a track (and, for Tastr's own cards, drum patterns,
+BPM, beats, downbeats, meter, key, song sections and suggested DJ cue points of a track (and, for Tastr's own cards, drum patterns,
 vibe tags and production suggestions). It builds natively and for WebAssembly with the same results, and
 needs no network: everything runs on the caller's machine.
 
@@ -28,6 +28,10 @@ if let Some(k) = &r.key {
 if let Some(g) = &r.grid {
     // A DJ beat grid: tempo and first beat to a fraction of a millisecond, one anchor per tempo.
     println!("grid {} BPM from {:.4} s, first downbeat {:?}, {} anchor(s)", g.bpm, g.first_beat, g.first_downbeat, g.anchors.len());
+}
+// Suggested cue points (start, sections, drop, mix out), on the grid when there is one.
+for c in &r.cues {
+    println!("cue {} at {:.2} s (bar {}, score {})", c.kind, c.time_s, c.bar, c.score);
 }
 ```
 

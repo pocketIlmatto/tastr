@@ -43,6 +43,9 @@ the changed JSON with the run's write-up.
 | Beat / downbeat F | beats within 70 ms, ignoring the first 5 s |
 | Tracker / DJ grid F (20 ms, 10 ms) and offset | on datasets with beat labels: the tracker's beats and the DJ grid's beats (`dj.rs`, [Beat grid](#dj-beat-grid)) within 20 and 10 ms, and the median signed offset (ms, estimate minus label) of the beats matched within 70 ms |
 | Sections F (0.5 s / 3 s) | section starts within 0.5 s or 3 s of a labeled one, track start and end excluded |
+| Hand cues with a cue (1 bar) | share of hand-set cue points (Rekordbox hot and memory cues) with a suggested cue within one bar |
+| Cues near a hand cue (1 bar) | share of suggested cue points within one bar of a hand-set one |
+| Section starts with a cue (1 bar) | share of labeled section starts with a section, phrase, drop or mix-out cue within one bar |
 
 Each metric is averaged over the tracks that have that label. The summary also
 counts key results by category (so "relative 140" shows the minor/major
@@ -814,6 +817,42 @@ found on only 0.56 of 175, against 0.86 on GTZAN, where the detector was tuned.
 runs core's tempo logic on onset envelopes rebuilt from the same release's
 spectrograms and scores it against 60 / the median labeled beat interval, per
 train / val split. See "Tempo notes" for how close it is to the audio path.
+
+## Cue points
+
+The engine suggests DJ cue points (`cues` in the DJ API, `extras["sections.cues"]` on the card;
+[rust-engine.md](rust-engine.md#using-the-engine-as-a-library)). Two benches score them, both within one bar:
+
+- **Rekordbox cues.** The `rekordbox` dataset reads plain hot and memory cues from the collection XML as
+  `Truth.cues`, so `tastr bench rekordbox <xml>` reports the share of those cues with a suggested cue nearby
+  (`cue_recall`) and the share of suggested cues near one of them (`cue_precision`). Any dataset with section
+  labels also gets `cue_section_recall`.
+- **Harmonix section starts.** `tastr spec-bench sections harmonix --limit 60 --remote` ends with a "cue points"
+  line: the share of labeled section starts (not the track's start or end) with a section, phrase, drop or
+  mix-out cue within one labeled bar, and the share of those cues near a labeled start.
+
+### First runs (2026-11-21)
+
+28 tracks with cues from the owner's Rekordbox 7.2.19 export (house, afro house, pop), run locally, and 60
+Harmonix tracks on Modal. 20 of the Rekordbox tracks have 1 to 4 cues that look hand-set; 8 have exactly 8 hot
+cues, which looks like an auto-cue tool's output, so they are shown apart. The owner doesn't trust these cues as
+ground truth, so read them as a sanity check, not a target. 109 of the 112 cues sit on a downbeat; the first
+memory cue is at the first beat in only 3 of 19 tracks, and most memory cues mark mix-out points late in the
+track.
+
+| Version | Rekordbox cues matched (28 / 20 hand / 8 auto) | Suggestions near a cue (28) | Harmonix starts with a cue | Harmonix cues near a start | Cues per track (RB / Harmonix) |
+|---|---|---|---|---|---|
+| v1: start, drop, mix-out, sections snapped to the 4/8-bar grid, at most 8, 8 bars apart | 0.426 / 0.396 / 0.500 | 0.203 | 0.332 | 0.496 | 7.7 / 7.2 |
+| v2 (shipped): a cue at every section start as well, at most 16 | 0.523 / 0.476 / 0.641 | 0.174 | 0.501 | 0.500 | 11.1 / 10.6 |
+
+- **Snapping sections to the phrase grid lost them.** Only half of Harmonix's section starts fall on a 4-bar
+  phrase ([Sections](#sections)), and many Rekordbox misses in v1 were 2 to 3 bars from a section start. Cueing
+  each section start where the sections stage puts it raised both recalls; precision held on Harmonix.
+- **Precision on hand-set tracks says little:** those tracks have 1 or 2 cues, against 11 suggestions.
+- **Tempo errors cost everything:** the one track read at the wrong tempo (97.65 for 120) missed both its cues.
+- **The section starts plus the start cue alone** matched 0.571 of the Rekordbox cues at 11.4 per track in an
+  offline check; v2's drop and mix-out cues sit on the 4-bar grid from the first sound and stand in for a
+  section start within 2 bars, which costs a little recall there.
 
 ## Sections
 

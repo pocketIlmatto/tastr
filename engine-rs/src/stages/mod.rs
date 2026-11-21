@@ -47,6 +47,12 @@ pub struct Ctx {
 
 impl Ctx {
     pub fn new(y: Vec<f32>, beats_per_bar: Option<i64>) -> Ctx {
+        Ctx::with_bass(y, beats_per_bar, true)
+    }
+
+    /// As `new`; `bass` false leaves `bass_cqt` empty, for callers that skip the suggestions stage (its only
+    /// reader).
+    pub fn with_bass(y: Vec<f32>, beats_per_bar: Option<i64>, bass: bool) -> Ctx {
         let sr = crate::SR as f64;
         let spec = spectral::stft(&y);
         let mag = spectral::magnitude(&spec, 1);
@@ -71,7 +77,8 @@ impl Ctx {
         let nyq = sr / 2.0;
         let lm = features::mel_frequencies(130, 30.0, 11000.0f64.min(nyq));
         let chroma = cqt::chroma_cqt(&harmonic, sr, HOP);
-        let bass_cqt = cqt::bass_cqt(&harmonic, sr, HOP);
+        let bass_cqt =
+            if bass { cqt::bass_cqt(&harmonic, sr, HOP) } else { Matrix { rows: 0, cols: 0, data: Vec::new() } };
         Ctx {
             sr,
             harmonic,
@@ -115,6 +122,11 @@ const STAGES: [(&str, &str, &[&str], StageFn); 5] = [
 /// Every stage over the audio; a failing stage is recorded in card.errors and the stages that
 /// need it are skipped.
 pub fn run(ctx: &mut Ctx) -> Card {
+    run_only(ctx, &STAGES.map(|s| s.0))
+}
+
+/// The named stages only, in the usual order, with the same error handling as `run`.
+pub fn run_only(ctx: &mut Ctx, only: &[&str]) -> Card {
     let mut card = Card {
         duration: crate::np::round_dec(ctx.y.len() as f64 / ctx.sr, 3),
         sample_rate: ctx.sr as i64,
@@ -122,6 +134,9 @@ pub fn run(ctx: &mut Ctx) -> Card {
         ..Default::default()
     };
     for (name, version, requires, f) in STAGES {
+        if !only.contains(&name) {
+            continue;
+        }
         let failed: Vec<&str> = requires
             .iter()
             .filter(|d| card.errors.iter().any(|(e, _)| e == *d) || !card.stages_run.iter().any(|(s, _)| s == *d))

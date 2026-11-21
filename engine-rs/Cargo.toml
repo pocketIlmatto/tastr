@@ -1,9 +1,14 @@
 [package]
 name = "tastr-engine"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
-description = "Tastr's analysis engine in Rust, built for the server (native) and the browser (WebAssembly)."
+description = "Tastr's music analysis engine: BPM, beats, downbeats, meter, key, sections and more, in pure Rust (native and WebAssembly)."
+repository = "https://github.com/pocketIlmatto/tastr"
+homepage = "https://github.com/pocketIlmatto/tastr"
+readme = "README.md"
+keywords = ["audio", "music", "bpm", "key-detection", "beat-tracking"]
+categories = ["multimedia::audio", "science"]
 publish = false
 
 [lib]
@@ -12,9 +17,16 @@ crate-type = ["rlib", "cdylib"]
 [[bin]]
 name = "tastr-engine"
 path = "src/main.rs"
+required-features = ["decode"]
+
+[features]
+default = ["decode"]
+# Audio file decoding (Symphonia, MPL-2.0). Callers that decode themselves can turn it off and use
+# dj::analyze_pcm or analyze().
+decode = ["dep:symphonia"]
 
 [dependencies]
-symphonia = { version = "0.6", default-features = false, features = ["wav", "pcm", "mp3", "flac", "ogg", "vorbis", "isomp4", "aac", "id3v1", "id3v2", "ape"] }
+symphonia = { optional = true, version = "0.6", default-features = false, features = ["wav", "pcm", "mp3", "flac", "ogg", "vorbis", "isomp4", "aac", "id3v1", "id3v2", "ape"] }
 rustfft = "6"
 libm = "0.2"
 miniz_oxide = "0.9"

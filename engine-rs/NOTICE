@@ -1,0 +1,19 @@
+tastr-engine
+Copyright (c) Tastr contributors. The code is under the MIT License (see LICENSE in the Tastr repository).
+
+Fitted tables in src/consts.rs
+  - KEY_WEIGHTS and KEY_BIAS (the learned key model) were fitted on the GiantSteps Key dataset and the
+    Beatport EDM Key dataset (Zenodo record 1101082), both under Creative Commons Attribution-ShareAlike 4.0
+    (CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/). Treat these weights as derived from that
+    data: credit the datasets and share changes to the weights alike.
+  - BPM_KNOTS and KEY_KNOTS (the "likely right" tables) were fitted on GiantSteps and Beatport tempo and key
+    results and on HJDB from the Beat This! release (Zenodo record 13922116, CC BY 4.0): credit the datasets.
+  Keep this notice with any copy of the engine you distribute.
+
+Third-party crates
+  symphonia (optional "decode" feature, on by default): MPL-2.0.
+  rustfft: MIT OR Apache-2.0. libm: MIT OR Apache-2.0. miniz_oxide: MIT OR Zlib OR Apache-2.0.
+
+Not included
+  The optional ADTOF drum model Tastr's server can use (CC BY-NC-SA) is not part of this crate; the engine
+  only accepts its hits as input.

@@ -298,7 +298,7 @@ agent account). Dependabot PRs never qualify.
 ## Engine release
 
 `.github/workflows/release-engine.yml` builds the `tastr-engine` command (engine-rs/) for macOS on Apple silicon
-(`macos-14`), Linux on x86-64 and Linux on ARM (Ubuntu 22.04 runners, so the programs need glibc 2.35 or newer),
+(`macos-15`), Linux on x86-64 and Linux on ARM (Ubuntu 22.04 runners, so the programs need glibc 2.35 or newer),
 so people who don't build Rust can run `tastr-engine dj song.mp3`.
 
 - **On a tag:** pushing `engine-v<version>` checks the tag matches `version` in `engine-rs/Cargo.toml`, runs the

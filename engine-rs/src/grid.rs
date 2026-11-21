@@ -26,12 +26,14 @@ const MIN_STRENGTH: f64 = 0.4;
 /// tighten to OUTLIER_S, so a line first pulled off by a drifting tempo doesn't throw most beats away.
 const OUTLIER_ROUNDS_S: [f64; 4] = [0.06, 0.03, 0.018, 0.012];
 const OUTLIER_S: f64 = 0.012;
-/// A line keeps growing while it fits at least FIT_SHARE of its attacks within OUTLIER_S and the newest
-/// TAIL attacks don't sit on one side of it by more than TAIL_MEAN_S on average (a drifting tempo; jitter
-/// averages out); then a new anchor starts. No anchor covers fewer than MIN_SEGMENT beats.
-const FIT_SHARE: f64 = 0.85;
-const TAIL: usize = 6;
-const TAIL_MEAN_S: f64 = 0.006;
+/// Anchors: the split of the attacks into lines that minimises squared error plus ANCHOR_COST * jitter^2 *
+/// ln(attacks) per line (a BIC-like penalty, so a hand-played steady tempo keeps one line and a drifting one
+/// gets as many as it needs). Jitter is the spread of the attacks around lines through their neighbours
+/// (NEIGHBOURS each side), at least MIN_JITTER_S; attacks further than OUTLIER_S from that local line are left
+/// out. No line covers fewer than MIN_SEGMENT attacks.
+const ANCHOR_COST: f64 = 6.0;
+const NEIGHBOURS: usize = 8;
+const MIN_JITTER_S: f64 = 0.001;
 const MIN_SEGMENT: usize = 16;
 const MAX_ANCHORS: usize = 16;
 /// Too few attacks to trust a grid.
@@ -217,52 +219,121 @@ fn fit_line(points: &[(f64, f64, f64)], period: f64) -> Segment {
     seg
 }
 
-/// Whether one line explains these attacks: most within OUTLIER_S, and neither end drifting off it.
-fn fits(seg: &Segment, points: &[(f64, f64, f64)]) -> bool {
-    let drift = |ps: &[(f64, f64, f64)]| {
-        ps.len() == TAIL && (ps.iter().map(|p| p.1 - seg.at(p.0)).sum::<f64>() / TAIL as f64).abs() > TAIL_MEAN_S
-    };
-    seg.used as f64 >= FIT_SHARE * points.len() as f64
-        && !drift(&points[points.len().saturating_sub(TAIL)..])
-        && !drift(&points[..TAIL.min(points.len())])
+/// Plain least-squares line through (k, t) from prefix sums: (sse, n) for points a..b.
+struct Sums {
+    n: Vec<f64>,
+    k: Vec<f64>,
+    t: Vec<f64>,
+    kk: Vec<f64>,
+    kt: Vec<f64>,
+    tt: Vec<f64>,
 }
 
-/// Cover `points` with lines from the start: each grows one attack at a time while it `fits`, and the next
-/// starts where it stopped. Neighbours that fit as one line are then merged back (a short noisy stretch
-/// shouldn't leave an anchor behind).
-fn segment(points: &[(f64, f64, f64)], period: f64, out: &mut Vec<Segment>) {
-    let mut bounds = Vec::new();
-    let mut start = 0;
-    let mut end = (start + MIN_SEGMENT).min(points.len());
-    while end < points.len() {
-        let seg = fit_line(&points[start..=end], period);
-        if fits(&seg, &points[start..=end]) || bounds.len() + 2 > MAX_ANCHORS {
-            end += 1;
-            continue;
+impl Sums {
+    fn new(points: &[(f64, f64, f64)]) -> Sums {
+        let mut s = Sums { n: vec![0.0], k: vec![0.0], t: vec![0.0], kk: vec![0.0], kt: vec![0.0], tt: vec![0.0] };
+        for &(k, t, _) in points {
+            s.n.push(s.n.last().unwrap() + 1.0);
+            s.k.push(s.k.last().unwrap() + k);
+            s.t.push(s.t.last().unwrap() + t);
+            s.kk.push(s.kk.last().unwrap() + k * k);
+            s.kt.push(s.kt.last().unwrap() + k * t);
+            s.tt.push(s.tt.last().unwrap() + t * t);
         }
-        // Stop before the run that broke it, but keep at least MIN_SEGMENT beats.
-        let cut = (end + 1).saturating_sub(TAIL / 2).max(start + MIN_SEGMENT);
-        if points.len() - cut < MIN_SEGMENT {
-            end += 1;
-            continue;
-        }
-        bounds.push((start, cut));
-        start = cut;
-        end = (start + MIN_SEGMENT).min(points.len());
+        s
     }
-    bounds.push((start, points.len()));
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    for b in bounds {
-        if let Some(last) = merged.last_mut() {
-            let both = &points[last.0..b.1];
-            if fits(&fit_line(both, period), both) {
-                last.1 = b.1;
-                continue;
+
+    fn sse(&self, a: usize, b: usize) -> f64 {
+        let d = |v: &Vec<f64>| v[b] - v[a];
+        let (n, k, t, kk, kt, tt) = (d(&self.n), d(&self.k), d(&self.t), d(&self.kk), d(&self.kt), d(&self.tt));
+        let skk = kk - k * k / n;
+        let skt = kt - k * t / n;
+        let stt = tt - t * t / n;
+        (if skk > 0.0 { stt - skt * skt / skk } else { stt }).max(0.0)
+    }
+}
+
+/// Each attack's distance from a least-squares line through its NEIGHBOURS on either side (not itself).
+fn local_residuals(points: &[(f64, f64, f64)]) -> Vec<f64> {
+    (0..points.len())
+        .map(|i| {
+            let lo = i.saturating_sub(NEIGHBOURS);
+            let hi = (i + NEIGHBOURS + 1).min(points.len());
+            let (k, t): (Vec<f64>, Vec<f64>) =
+                points[lo..hi].iter().enumerate().filter(|(j, _)| lo + j != i).map(|(_, p)| (p.0, p.1)).unzip();
+            if k.len() < 2 {
+                return 0.0;
+            }
+            let (slope, icpt) = crate::np::polyfit1(&k, &t);
+            points[i].1 - (icpt + slope * points[i].0)
+        })
+        .collect()
+}
+
+/// Split `points` into lines (see ANCHOR_COST) by dynamic programming over where each line starts.
+fn segment(points: &[(f64, f64, f64)], period: f64, out: &mut Vec<Segment>) {
+    let local = local_residuals(points);
+    let clean: Vec<(f64, f64, f64)> =
+        points.iter().zip(&local).filter(|(_, r)| r.abs() <= OUTLIER_S).map(|(p, _)| *p).collect();
+    let n = clean.len();
+    if n < 2 * MIN_SEGMENT {
+        out.push(fit_line(points, period));
+        return;
+    }
+    let mut abs: Vec<f64> = local.iter().filter(|r| r.abs() <= OUTLIER_S).map(|r| r.abs()).collect();
+    abs.sort_by(|a, b| a.total_cmp(b));
+    let jitter = (1.4826 * abs[abs.len() / 2]).max(MIN_JITTER_S);
+    let sums = Sums::new(&clean);
+    let mut penalty = ANCHOR_COST * jitter * jitter * libm::log(n as f64);
+    let starts = loop {
+        // best[j]: the cheapest cover of clean[..j]; from[j]: where its last line starts.
+        let mut best = vec![f64::INFINITY; n + 1];
+        let mut from = vec![0usize; n + 1];
+        best[0] = 0.0;
+        for j in MIN_SEGMENT..=n {
+            for i in 0..=j - MIN_SEGMENT {
+                if !best[i].is_finite() {
+                    continue;
+                }
+                let c = best[i] + sums.sse(i, j) + penalty;
+                if c < best[j] {
+                    best[j] = c;
+                    from[j] = i;
+                }
             }
         }
-        merged.push(b);
+        let mut starts = Vec::new();
+        let mut j = n;
+        while j > 0 {
+            starts.push(from[j]);
+            j = from[j];
+        }
+        starts.reverse();
+        if starts.len() <= MAX_ANCHORS {
+            break starts;
+        }
+        penalty *= 2.0;
+    };
+    // Lines through the clean attacks; then each boundary moves to the first attack (outliers included) that
+    // the next line explains better than the previous one, and every line refits robustly on its stretch.
+    let ends: Vec<usize> = starts.iter().skip(1).copied().chain([n]).collect();
+    let rough: Vec<Segment> = starts.iter().zip(&ends).map(|(&a, &b)| fit_line(&clean[a..b], period)).collect();
+    let mut cuts = vec![f64::NEG_INFINITY];
+    for s in 1..rough.len() {
+        let (prev, next) = (&rough[s - 1], &rough[s]);
+        let (gap_lo, gap_hi) = (clean[starts[s] - 1].0, clean[starts[s]].0);
+        let cut = points
+            .iter()
+            .filter(|p| p.0 > gap_lo && p.0 <= gap_hi)
+            .find(|p| (p.1 - next.at(p.0)).abs() < (p.1 - prev.at(p.0)).abs())
+            .map_or(gap_hi, |p| p.0);
+        cuts.push(cut);
     }
-    out.extend(merged.into_iter().map(|(a, b)| fit_line(&points[a..b], period)));
+    cuts.push(f64::INFINITY);
+    for w in cuts.windows(2) {
+        let part: Vec<(f64, f64, f64)> = points.iter().filter(|p| p.0 >= w[0] && p.0 < w[1]).copied().collect();
+        out.push(fit_line(&part, period));
+    }
 }
 
 /// The energy-ratio onset function on the whole band and the low band, every HOP_SAMPLES samples.

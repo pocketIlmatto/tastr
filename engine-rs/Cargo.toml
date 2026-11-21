@@ -9,7 +9,9 @@ homepage = "https://github.com/pocketIlmatto/tastr"
 readme = "README.md"
 keywords = ["audio", "music", "bpm", "key-detection", "beat-tracking"]
 categories = ["multimedia::audio", "science"]
-publish = false
+rust-version = "1.88"
+# Only the code and its notices go to crates.io: no test audio, benchmark data or wasm runner.
+include = ["src/**/*.rs", "Cargo.toml", "Cargo.lock", "README.md", "NOTICE", "LICENSE"]
 
 [lib]
 crate-type = ["rlib", "cdylib"]

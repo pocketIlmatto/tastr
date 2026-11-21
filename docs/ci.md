@@ -302,12 +302,20 @@ agent account). Dependabot PRs never qualify.
 so people who don't build Rust can run `tastr-engine dj song.mp3`.
 
 - **On a tag:** pushing `engine-v<version>` checks the tag matches `version` in `engine-rs/Cargo.toml`, runs the
-  engine's unit tests and builds on each platform, checks each program starts, and attaches
+  engine's unit tests and builds on each platform, checks each program starts, publishes the crate to
+  [crates.io](https://crates.io/crates/tastr-engine), and then attaches
   `tastr-engine-<version>-<platform>.tar.gz` (the program, LICENSE, NOTICE and the engine README) plus
-  `SHA256SUMS` to a GitHub release named after the tag.
+  `SHA256SUMS` to a GitHub release named after the tag. If publishing fails, no release is made.
+- **To release:** bump `version` in `engine-rs/Cargo.toml` (and `Cargo.lock`, which `cargo build` updates),
+  merge, then push the tag from `main`: `git tag engine-v0.7.0 && git push origin engine-v0.7.0`. A crates.io
+  version is permanent (it can be yanked, not replaced), so a failed run after publishing needs a new version.
+- **What ships to crates.io:** only `src/`, `Cargo.toml`, `Cargo.lock`, README, NOTICE and LICENSE (the
+  `include` list in `engine-rs/Cargo.toml`). The `tests` workflow runs `cargo publish --dry-run` whenever the
+  engine changes, so a package that wouldn't build on its own fails there first.
 - **By hand:** Actions > release-engine > Run workflow builds the chosen branch and keeps the archives as a
   workflow artifact for 7 days, with no release. Use it to try a build before tagging.
-- **Secrets:** none; the release job uses the workflow's own `GITHUB_TOKEN` with `contents: write`.
+- **Secrets:** `CARGO_REGISTRY_TOKEN` for the publish job ([settings.md](settings.md#github-actions-secrets)); the
+  release job uses the workflow's own `GITHUB_TOKEN` with `contents: write`.
 - **Cost:** three builds of about 3-5 minutes each, only on engine tags or by hand (free on a public
   repository; macOS minutes would count 10x on a private one).
 

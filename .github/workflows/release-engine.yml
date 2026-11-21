@@ -1,11 +1,12 @@
 name: release-engine
 # Builds the `tastr-engine` command-line program (engine-rs/) for macOS on Apple silicon, Linux on x86-64 and
 # Linux on ARM, so people who don't build Rust can run `tastr-engine dj song.mp3` (docs/ci.md, "Engine release").
-# On a pushed tag `engine-v<version>` it checks the tag matches engine-rs/Cargo.toml, builds, and attaches the
-# archives and their SHA-256 sums to a GitHub release for that tag. Actions > release-engine > Run workflow builds
+# On a pushed tag `engine-v<version>` it checks the tag matches engine-rs/Cargo.toml, builds, publishes the crate
+# to crates.io, and attaches the archives and their SHA-256 sums to a GitHub release for that tag. Actions > release-engine > Run workflow builds
 # the chosen branch and keeps the archives as a workflow artifact for a week, with no release.
-# Linux builds run on Ubuntu 22.04 so the programs need only glibc 2.35 or newer. Needs no secrets: the release is
-# made with the workflow's own GITHUB_TOKEN.
+# Linux builds run on Ubuntu 22.04 so the programs need only glibc 2.35 or newer. The release is made with the
+# workflow's own GITHUB_TOKEN; publishing needs the repository secret CARGO_REGISTRY_TOKEN (docs/settings.md).
+# A crates.io version can't be replaced (only yanked), so a tag publishes once.
 on:
   push:
     tags: ["engine-v*"]
@@ -66,9 +67,27 @@ jobs:
             dist/*.tar.gz
             dist/*.sha256
           retention-days: 7
-  release:
+  publish:
     if: startsWith(github.ref, 'refs/tags/engine-v')
     needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Publish to crates.io
+        working-directory: engine-rs
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::repository secret CARGO_REGISTRY_TOKEN isn't set (docs/settings.md)"
+            exit 1
+          fi
+          rustup toolchain install 1.97.0 --profile minimal
+          cargo +1.97.0 publish --locked
+  release:
+    if: startsWith(github.ref, 'refs/tags/engine-v')
+    needs: [build, publish]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -85,4 +104,4 @@ jobs:
           cat dist/*.sha256 > dist/SHA256SUMS
           gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS \
             --repo "${GITHUB_REPOSITORY}" --title "Tastr engine ${GITHUB_REF_NAME#engine-v}" \
-            --notes "The \`tastr-engine\` command for macOS (Apple silicon) and Linux (x86-64, ARM). Unpack, then run \`./tastr-engine dj song.mp3\` for BPM, beats, the DJ beat grid, key and sections as JSON. Check downloads against SHA256SUMS. See README.md and NOTICE inside each archive (MIT; the key model's weights are CC BY-SA 4.0)."
+            --notes "The \`tastr-engine\` command for macOS (Apple silicon) and Linux (x86-64, ARM). Unpack, then run \`./tastr-engine dj song.mp3\` for BPM, beats, the DJ beat grid, key and sections as JSON. Check downloads against SHA256SUMS. As a Rust library: https://crates.io/crates/tastr-engine. See README.md and NOTICE inside each archive (MIT; the key model's weights are CC BY-SA 4.0)."

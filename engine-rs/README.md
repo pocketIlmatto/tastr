@@ -7,14 +7,19 @@ needs no network: everything runs on the caller's machine.
 
 ## Use it from Rust
 
-The API may change before 1.0, so pin a tag:
+It's on [crates.io](https://crates.io/crates/tastr-engine). The API may change before 1.0, so each 0.x minor
+version can break it:
 
 ```toml
 [dependencies]
-tastr-engine = { git = "https://github.com/pocketIlmatto/tastr", tag = "engine-v0.5.0" }
+tastr-engine = "0.6"
 # If you decode audio yourself (ffmpeg, a DAW), leave out the built-in decoder:
-# tastr-engine = { git = "...", tag = "engine-v0.5.0", default-features = false }
+# tastr-engine = { version = "0.6", default-features = false }
 ```
+
+Each release is also a tag `engine-v<version>` in the repository, so a git dependency pinned to one works too:
+`tastr-engine = { git = "https://github.com/pocketIlmatto/tastr", tag = "engine-v0.6.0" }`. Needs Rust 1.88 or
+newer.
 
 ```rust
 use tastr_engine::dj::{analyze_pcm, DjOptions};

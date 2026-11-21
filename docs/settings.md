@@ -18,6 +18,7 @@ early: nothing warns before it lapses.
 | `CLAUDE_CODE_OAUTH_TOKEN` | about a year after `claude setup-token` made it | slow-tests and worker-errors open their issue but Claude doesn't start |
 | `ISSUES_TOKEN` | the date picked when it was made | slow-tests, worker-errors, health and bench-smoke can't open or comment on their issues, so those runs go red |
 | `AUTOMERGE_TOKEN` | the date picked when it was made | code PRs stop auto-merging, and the automerge run goes red |
+| `CARGO_REGISTRY_TOKEN` | the date picked when it was made on crates.io | an `engine-v*` tag can't publish the crate, so that release run goes red and makes no GitHub release |
 | `TASTR_GITHUB_TOKEN`, and any other fine-grained GitHub token | the date picked when it was made (GitHub shows it under **Settings > Developer settings > Fine-grained tokens**) | the Admin log's GitHub lines |
 
 The other tokens below don't expire unless one was set when it was made; check at the source if unsure.
@@ -35,6 +36,7 @@ Repository **Settings > Secrets and variables > Actions**.
 | `CF_LOGS_TOKEN` | `worker-errors.yml` | Cloudflare custom token, Account > Workers Observability > Read only | New token, replace; a refused token turns the run red ([ci.md](ci.md#worker-errors)) |
 | `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` | `slow-tests.yml`, `worker-errors.yml`, `dependabot-fix.yml` (also under **Dependabot** secrets if that run says it can't see it) | `claude setup-token` (the owner's Claude plan), or the Anthropic Console (billed per use) | Run `claude setup-token` again and replace the secret |
 | `AUTOMERGE_TOKEN` (optional) | `automerge.yml` | GitHub **Settings > Developer settings > Fine-grained tokens**, owner's account, only `pocketIlmatto/tastr`, permissions **Contents**, **Pull requests** and **Workflows**: Read and write. Without it only docs-and-tests PRs auto-merge ([ci.md](ci.md#auto-merge)) | New token, replace the secret, revoke the old; note its expiry in the calendar above |
+| `CARGO_REGISTRY_TOKEN` | `release-engine.yml` (publish job, on an `engine-v*` tag) | [crates.io](https://crates.io) **Account Settings > API Tokens**, signed in with the owner's GitHub account: scope **publish-update** (plus **publish-new** for the very first publish), crate `tastr-engine`, with an expiry date ([ci.md](ci.md#engine-release)) | New token, replace the secret, revoke the old on crates.io; note its expiry in the calendar above |
 
 Repository setting: **Settings > General > Pull Requests > Allow auto-merge** must be on for `automerge.yml`
 ([ci.md](ci.md#auto-merge)).

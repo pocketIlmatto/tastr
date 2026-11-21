@@ -1,0 +1,88 @@
+name: release-engine
+# Builds the `tastr-engine` command-line program (engine-rs/) for macOS on Apple silicon, Linux on x86-64 and
+# Linux on ARM, so people who don't build Rust can run `tastr-engine dj song.mp3` (docs/ci.md, "Engine release").
+# On a pushed tag `engine-v<version>` it checks the tag matches engine-rs/Cargo.toml, builds, and attaches the
+# archives and their SHA-256 sums to a GitHub release for that tag. Actions > release-engine > Run workflow builds
+# the chosen branch and keeps the archives as a workflow artifact for a week, with no release.
+# Linux builds run on Ubuntu 22.04 so the programs need only glibc 2.35 or newer. Needs no secrets: the release is
+# made with the workflow's own GITHUB_TOKEN.
+on:
+  push:
+    tags: ["engine-v*"]
+  workflow_dispatch:
+concurrency:
+  group: release-engine-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            name: macos-arm64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            name: linux-x86_64
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            name: linux-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check the tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/engine-v')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' engine-rs/Cargo.toml | head -n 1)
+          if [ "engine-v$version" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} doesn't match engine-rs/Cargo.toml version $version"
+            exit 1
+          fi
+      - name: Build
+        working-directory: engine-rs
+        run: |
+          rustup toolchain install 1.97.0 --profile minimal --target ${{ matrix.target }}
+          cargo +1.97.0 test --release --locked --lib --target ${{ matrix.target }}
+          cargo +1.97.0 build --release --locked --bin tastr-engine --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' engine-rs/Cargo.toml | head -n 1)
+          dir="tastr-engine-$version-${{ matrix.name }}"
+          mkdir -p "dist/$dir"
+          cp "engine-rs/target/${{ matrix.target }}/release/tastr-engine" "dist/$dir/"
+          cp LICENSE engine-rs/NOTICE engine-rs/README.md "dist/$dir/"
+          status=0; "dist/$dir/tastr-engine" >/dev/null 2>&1 || status=$?
+          [ "$status" -eq 2 ]  # it runs here and prints its usage (exit 2) when given nothing
+          tar -C dist -czf "dist/$dir.tar.gz" "$dir"
+          cd dist && shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tastr-engine-${{ matrix.name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          retention-days: 7
+  release:
+    if: startsWith(github.ref, 'refs/tags/engine-v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat dist/*.sha256 > dist/SHA256SUMS
+          gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS \
+            --repo "${GITHUB_REPOSITORY}" --title "Tastr engine ${GITHUB_REF_NAME#engine-v}" \
+            --notes "The \`tastr-engine\` command for macOS (Apple silicon) and Linux (x86-64, ARM). Unpack, then run \`./tastr-engine dj song.mp3\` for BPM, beats, the DJ beat grid, key and sections as JSON. Check downloads against SHA256SUMS. See README.md and NOTICE inside each archive (MIT; the key model's weights are CC BY-SA 4.0)."

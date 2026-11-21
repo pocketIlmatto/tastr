@@ -295,6 +295,22 @@ agent account). Dependabot PRs never qualify.
   "auto-merge is not allowed".
 - **Already green:** GitHub can't turn on auto-merge for a PR whose checks have all passed; merge those by hand.
 
+## Engine release
+
+`.github/workflows/release-engine.yml` builds the `tastr-engine` command (engine-rs/) for macOS on Apple silicon
+(`macos-14`), Linux on x86-64 and Linux on ARM (Ubuntu 22.04 runners, so the programs need glibc 2.35 or newer),
+so people who don't build Rust can run `tastr-engine dj song.mp3`.
+
+- **On a tag:** pushing `engine-v<version>` checks the tag matches `version` in `engine-rs/Cargo.toml`, runs the
+  engine's unit tests and builds on each platform, checks each program starts, and attaches
+  `tastr-engine-<version>-<platform>.tar.gz` (the program, LICENSE, NOTICE and the engine README) plus
+  `SHA256SUMS` to a GitHub release named after the tag.
+- **By hand:** Actions > release-engine > Run workflow builds the chosen branch and keeps the archives as a
+  workflow artifact for 7 days, with no release. Use it to try a build before tagging.
+- **Secrets:** none; the release job uses the workflow's own `GITHUB_TOKEN` with `contents: write`.
+- **Cost:** three builds of about 3-5 minutes each, only on engine tags or by hand (free on a public
+  repository; macOS minutes would count 10x on a private one).
+
 ## Deploy workflow
 
 `.github/workflows/deploy.yml` ships the hosted app (Modal, then the Cloudflare Worker through `deploy-worker.yml`; [deploy.md](deploy.md#updating)). It

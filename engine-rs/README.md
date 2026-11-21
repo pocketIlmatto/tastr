@@ -44,10 +44,17 @@ the engine measures, and how well, is in Tastr's
 
 ## From the command line
 
+Download the program for macOS (Apple silicon) or Linux (x86-64, ARM) from the repository's
+[releases](https://github.com/pocketIlmatto/tastr/releases) (tags `engine-v*`), check it against `SHA256SUMS`,
+unpack it and run:
+
 ```sh
-cargo build --release
-./target/release/tastr-engine dj song.mp3 > song.json
+./tastr-engine dj song.mp3 > song.json
 ```
+
+Or build it yourself with `cargo build --release` (the program is `target/release/tastr-engine`). On macOS a
+downloaded program may need `xattr -d com.apple.quarantine tastr-engine` before the first run, since it isn't
+signed.
 
 ## Licences
 

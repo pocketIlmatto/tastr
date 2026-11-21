@@ -1,5 +1,5 @@
 tastr-engine
-Copyright (c) Tastr contributors. The code is under the MIT License (see LICENSE in the Tastr repository).
+Copyright (c) Tastr contributors. The code is under the MIT License (see LICENSE).
 
 Fitted tables in src/consts.rs
   - KEY_WEIGHTS and KEY_BIAS (the learned key model) were fitted on the GiantSteps Key dataset and the

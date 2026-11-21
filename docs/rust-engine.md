@@ -92,9 +92,9 @@ Other Rust programs can run the engine on their own machine, for example a DJ to
 and sections. `src/dj.rs` is the API for that (since 0.5.0); `engine-rs/README.md` has the example and the
 licence notes.
 
-- **Add it** as a git dependency pinned to a tag: `tastr-engine = { git =
-  "https://github.com/pocketIlmatto/tastr", tag = "engine-v0.5.0" }`. Cargo finds the crate inside the repo.
-  Callers that decode audio themselves (ffmpeg, a DAW) can add `default-features = false` to leave out the
+- **Add it** from crates.io, `tastr-engine = "0.6"`, or as a git dependency pinned to a release tag,
+  `tastr-engine = { git = "https://github.com/pocketIlmatto/tastr", tag = "engine-v0.6.0" }` (Cargo finds the
+  crate inside the repo). Needs Rust 1.88 or newer. Callers that decode audio themselves (ffmpeg, a DAW) can add `default-features = false` to leave out the
   `decode` feature and Symphonia.
 - **Call it** with interleaved PCM at any rate and channel count, `dj::analyze_pcm(&samples, 44_100, 2,
   &DjOptions::default())`, or with file bytes, `dj::analyze_file(bytes, &opts)`. Channels are averaged and the

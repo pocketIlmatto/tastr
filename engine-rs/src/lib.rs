@@ -13,6 +13,7 @@ mod detmath;
 pub mod dj;
 pub mod drums;
 pub mod features;
+pub mod grid;
 pub mod json;
 pub mod music;
 pub mod np;
@@ -226,6 +227,46 @@ pub mod ffi {
                 -(len + 1)
             }
         }
+    }
+
+    /// The DJ analysis (dj.rs) of the `len` file bytes at `ptr`, as JSON; return value and buffer as tastr_card.
+    ///
+    /// # Safety
+    /// As tastr_card.
+    #[cfg(feature = "decode")]
+    #[no_mangle]
+    pub unsafe extern "C" fn tastr_dj(ptr: *mut u8, len: usize, beats_per_bar: i32) -> i32 {
+        let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
+        match load(bytes) {
+            Ok(y) => finish(dj_json(y, beats_per_bar)),
+            Err(e) => {
+                let n = e.len() as i32;
+                CARD.with(|c| *c.borrow_mut() = e);
+                -(n + 1)
+            }
+        }
+    }
+
+    /// The same from `n` mono float32 samples at 22,050 Hz, as tastr_card_f32.
+    ///
+    /// # Safety
+    /// As tastr_card_f32.
+    #[no_mangle]
+    pub unsafe extern "C" fn tastr_dj_f32(ptr: *mut u8, n: usize, beats_per_bar: i32) -> i32 {
+        let bytes = unsafe { Vec::from_raw_parts(ptr, 4 * n, 4 * n) };
+        let y: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+        drop(bytes);
+        finish(dj_json(y, beats_per_bar))
+    }
+
+    fn dj_json(y: Vec<f32>, beats_per_bar: i32) -> String {
+        let mut opts = dj::DjOptions::default();
+        if let Some(m) = meter(beats_per_bar) {
+            opts = opts.with_beats_per_bar(m);
+        }
+        let mut out = String::new();
+        dj::analyze_mono(y, &opts).to_json().write(&mut out);
+        out
     }
 
     /// One benchmark step (bench.rs): `line_len` bytes of UTF-8 at `line` (`<op> key=value ...`) and `n` float64

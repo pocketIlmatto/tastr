@@ -14,6 +14,7 @@
 
 use crate::card::{Card, Key, Section};
 pub use crate::cues::Cue;
+use crate::grid::Grid;
 use crate::json::Json;
 use crate::stages::{self, Ctx};
 use crate::SR;
@@ -51,7 +52,8 @@ pub struct DjResult {
     pub bpm_likely_correct: Option<f64>,
     /// Half and double the BPM, the usual alternatives when a listener counts the beat differently.
     pub bpm_alternatives: Vec<f64>,
-    /// Every beat. They sit on the analysis frame grid (about 23 ms apart at 22,050 Hz, hop 512).
+    /// Every beat as the tracker found it, on the analysis frame grid (about 23 ms steps at 22,050 Hz, hop 512).
+    /// For a DJ grid use `grid`.
     pub beat_times: Vec<f64>,
     /// The first beat of every bar.
     pub downbeat_times: Vec<f64>,
@@ -64,10 +66,14 @@ pub struct DjResult {
     /// Song sections with rough labels ("intro", "verse", "drop", ...), start and end on bar lines.
     pub sections: Vec<Section>,
     /// Suggested DJ cue points in time order, at most 16: `start` (bar 1 after any silence at the start),
-    /// `section` and `phrase` (on the phrase grid), `drop` and `mix_out`. Empty without a beat grid.
+    /// `section` (every section start), `phrase`, `drop` and `mix_out`. Each sits on its bar's downbeat, moved
+    /// onto `grid` when there is one. Empty without beats.
     pub cues: Vec<Cue>,
     /// Mean loudness in dB (RMS, not LUFS).
     pub loudness_db: Option<f64>,
+    /// The beat grid to a fraction of a millisecond: tempo, first beat, first downbeat and an anchor wherever the
+    /// tempo changes (see `grid.rs`). None when there are too few clear attacks.
+    pub grid: Option<Grid>,
     /// Stages that failed, as (stage, message). Empty when everything ran.
     pub errors: Vec<(String, String)>,
 }
@@ -102,10 +108,28 @@ pub fn analyze_file(bytes: Vec<u8>, opts: &DjOptions) -> Result<DjResult, String
 /// Analyze mono audio already at the engine's rate (`tastr_engine::SR`, 22,050 Hz).
 pub fn analyze_mono(y: Vec<f32>, opts: &DjOptions) -> DjResult {
     let mut ctx = Ctx::with_bass(y, opts.beats_per_bar, false);
-    from_card(stages::run_only(&mut ctx, &STAGES))
+    let card = stages::run_only(&mut ctx, &STAGES);
+    let c = &card.core;
+    let grid = crate::grid::fit(&ctx.y, ctx.sr, &c.beat_times, &c.downbeat_times, c.beats_per_bar);
+    from_card(card, grid)
 }
 
-fn from_card(card: Card) -> DjResult {
+/// The cues moved onto the grid: each to the nearest grid beat of the tempo stretch it falls in (the last anchor
+/// at or before it, with half a beat of slack). Without a grid they keep the tracker's times.
+fn on_grid(mut cues: Vec<Cue>, grid: Option<&Grid>) -> Vec<Cue> {
+    let Some(g) = grid.filter(|g| !g.anchors.is_empty()) else {
+        return cues;
+    };
+    for c in &mut cues {
+        let a = g.anchors.iter().rev().find(|a| a.time <= c.time_s + 30.0 / a.bpm).unwrap_or(&g.anchors[0]);
+        let period = 60.0 / a.bpm;
+        let k = crate::np::round_half_even((c.time_s - a.time) / period);
+        c.time_s = crate::np::round_dec(a.time + k * period, 4);
+    }
+    cues
+}
+
+fn from_card(card: Card, grid: Option<Grid>) -> DjResult {
     let alternatives = match card.extras.get("core.bpm_alternatives") {
         Some(Json::Arr(v)) => v.iter().filter_map(|j| if let Json::Num(n) = j { Some(*n) } else { None }).collect(),
         _ => Vec::new(),
@@ -123,8 +147,9 @@ fn from_card(card: Card) -> DjResult {
         meter_set: c.meter_set,
         key: c.key,
         sections: card.sections,
-        cues: card.cues,
+        cues: on_grid(card.cues, grid.as_ref()),
         loudness_db: c.loudness_db,
+        grid,
         errors: card.errors,
     }
 }
@@ -166,11 +191,23 @@ impl DjResult {
             .with("key", key)
             .with("loudness_db", self.loudness_db)
             .with("beat_times", self.beat_times.clone())
+            .with("grid", self.grid.as_ref().map_or(Json::Null, grid_json))
             .with("downbeat_times", self.downbeat_times.clone())
             .with("sections", Json::Arr(sections))
             .with("cues", Json::Arr(self.cues.iter().map(Cue::json).collect()))
             .with("errors", Json::Obj(self.errors.iter().map(|(k, m)| (k.clone(), Json::from(m.clone()))).collect()))
     }
+}
+
+fn grid_json(g: &Grid) -> Json {
+    let anchors: Vec<Json> = g.anchors.iter().map(|a| Json::obj().with("time", a.time).with("bpm", a.bpm)).collect();
+    Json::obj()
+        .with("bpm", g.bpm)
+        .with("first_beat", g.first_beat)
+        .with("first_downbeat", g.first_downbeat)
+        .with("anchors", Json::Arr(anchors))
+        .with("fit_ms", g.fit_ms)
+        .with("beats_used", g.beats_used)
 }
 
 #[cfg(test)]
@@ -228,6 +265,12 @@ mod tests {
         for (i, &t) in r.downbeat_times.iter().take(6).enumerate() {
             assert_eq!(t, r.beat_times[first + 4 * i]);
         }
+        // The grid finds the clicks themselves: first beat 0.25 s, 124 BPM, one anchor.
+        let g = r.grid.as_ref().unwrap();
+        assert!((g.first_beat - 0.25).abs() < 0.002, "{g:?}");
+        assert!((g.bpm - 124.0).abs() < 0.01 && g.anchors.len() == 1, "{g:?}");
+        let fd = g.first_downbeat.unwrap();
+        assert!(((fd - 0.25) / beat - libm::round((fd - 0.25) / beat)).abs() < 0.01, "{g:?}");
         assert!(!r.sections.is_empty());
         assert!((r.duration - 40.0).abs() < 0.01);
         assert_eq!(r.bpm_alternatives.len(), 2);
@@ -331,11 +374,23 @@ mod tests {
         for w in r.cues.windows(2) {
             assert!(w[1].time_s > w[0].time_s);
         }
+        // On the grid: each cue is its bar's downbeat moved onto a grid beat, near the sound itself.
+        let g = r.grid.as_ref().unwrap();
         for c in &r.cues {
-            assert!(r.downbeat_times.contains(&c.time_s), "{c:?} is not on a downbeat");
+            let db = r.downbeat_times[c.bar as usize - 1];
+            assert!((c.time_s - db).abs() < 0.035, "{c:?} is far from its downbeat {db}");
+            let a = g.anchors.iter().rev().find(|a| a.time <= c.time_s + 0.1).unwrap_or(&g.anchors[0]);
+            let k = (c.time_s - a.time) / (60.0 / a.bpm);
+            assert!((k - k.round()).abs() < 1e-3, "{c:?} is not on a grid beat");
+            let beats = (c.time_s - 2.3) / (bar / 4.0);
+            // (Within 30 ms: on this synthetic the soft hats let the fitted tempo drift ~20 ms by the end.)
+            assert!((beats - beats.round()).abs() * bar / 4.0 < 0.03, "{c:?} is off the beat");
         }
+        // The card keeps the tracker's times; bars and kinds are the same.
         let card = crate::analyze(crate::resample::resample(&y, 44_100, SR), Some(4), None);
-        assert_eq!(card.cues, r.cues);
+        let same = |cs: &[Cue]| cs.iter().map(|c| (c.bar, c.kind)).collect::<Vec<_>>();
+        assert_eq!(same(&card.cues), same(&r.cues));
+        assert!(card.cues.iter().all(|c| card.core.downbeat_times.contains(&c.time_s)));
         let mut s = String::new();
         card.extras.write(&mut s);
         assert!(s.contains("\"sections.cues\""), "{s}");
@@ -346,9 +401,16 @@ mod tests {
         let r = analyze_pcm(&click_track(44_100, 124.0, 0.25, 20.0), 44_100, 1, &DjOptions::default()).unwrap();
         let mut s = String::new();
         r.to_json().write(&mut s);
-        for k in
-            ["\"bpm\"", "\"beat_times\"", "\"downbeat_times\"", "\"8A\"", "\"A minor\"", "\"sections\"", "\"cues\""]
-        {
+        for k in [
+            "\"bpm\"",
+            "\"beat_times\"",
+            "\"downbeat_times\"",
+            "\"8A\"",
+            "\"A minor\"",
+            "\"sections\"",
+            "\"first_beat\"",
+            "\"cues\"",
+        ] {
             assert!(s.contains(k), "{k} missing from {s}");
         }
     }

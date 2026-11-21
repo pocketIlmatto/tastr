@@ -41,6 +41,7 @@ the changed JSON with the run's write-up.
 | Key (MIREX weighted) | 1 exact, 0.5 off by a fifth, 0.3 relative major/minor, 0.2 parallel, 0 otherwise |
 | Key exactly right | share of tracks with tonic and mode both right |
 | Beat / downbeat F | beats within 70 ms, ignoring the first 5 s |
+| Tracker / DJ grid F (20 ms, 10 ms) and offset | on datasets with beat labels: the tracker's beats and the DJ grid's beats (`dj.rs`, [Beat grid](#dj-beat-grid)) within 20 and 10 ms, and the median signed offset (ms, estimate minus label) of the beats matched within 70 ms |
 | Sections F (0.5 s / 3 s) | section starts within 0.5 s or 3 s of a labeled one, track start and end excluded |
 | Hand cues with a cue (1 bar) | share of hand-set cue points (Rekordbox hot and memory cues) with a suggested cue within one bar |
 | Cues near a hand cue (1 bar) | share of suggested cue points within one bar of a hand-set one |
@@ -722,6 +723,56 @@ about 9 dB above snares, part of why its snare recall is low.
 
 Iterate with `--limit`, run the full set before keeping a change. With `--jobs 4` locally: IDMT 21 s,
 MDB 22 s, stemgmd-mix 27 s (100 grooves), synth 9 s.
+
+## DJ beat grid
+
+`engine-rs/src/grid.rs` (2026-11-21, crate 0.6.0) turns the tracker's beats into a DJ grid for the library API
+(`dj.rs`, `tastr-engine dj`); cards are unchanged. Every dataset with beat labels scores it next to the tracker
+(`tracker_*` and `grid_*` in [What gets scored](#what-gets-scored)).
+
+- **Why:** the tracker's beats sit on 23 ms frames and run early: the onset envelope's 93 ms windows peak before
+  the attack. On the synthetic suite they are 22 ms early; on Ballroom 18 ms. At 70 ms that doesn't show; a
+  DJ grid needs a few ms.
+- **How:** each tracked beat moves to the strongest attack within 35 ms (and a fifth of a beat), found with
+  ln(energy in the next 10 ms / energy in the last 10 ms), on the whole band plus a zero-phase low band (kick),
+  every 8 samples. That ratio rises across the 10 ms before an attack and drops sharply once the attack enters
+  the "before" window, so the attack is where it falls through half its peak. A weighted line fit (rounds that
+  drop attacks 60, 30, 18 and then 12 ms off the line) gives BPM and the first beat.
+- **Anchors:** the attacks are split into lines by dynamic programming, minimising squared error plus
+  6 x jitter² x ln(attacks) per line, at least 16 attacks each; jitter is the spread around lines through each
+  attack's 8 neighbours either side. Hand-played but steady music keeps one line, a drummer who speeds up or an
+  edit gets more. Each boundary sits on the first attack the next line explains better.
+- **Decoders:** a click track encoded as MP3 (with and without the LAME header), AAC/M4A, Vorbis and FLAC gives
+  the same first beat to 0.1 ms whether Symphonia decodes it or ffmpeg does (without a LAME header both keep
+  the 1,105-sample encoder delay, so both read 25 ms late). A test checks the formats agree within 1 ms.
+
+Synthetic suite (12 tracks, exact labels) and the first 60 Ballroom excerpts (`--limit 60`, Modal,
+2026-11-21). F is beat F-measure ignoring the first 5 s; offset is the mean of each track's median signed
+error of the beats matched within 70 ms.
+
+| | Tracker | Grid, one line | Grid, greedy anchors | Grid, penalised anchors (shipped) |
+|---|---|---|---|---|
+| Synthetic F at 20 / 10 ms | 0.272 / 0.005 | | | 0.992 / 0.992 |
+| Synthetic offset | -22.1 ms | | | +1.4 ms |
+| Ballroom F at 70 ms | 0.621 | 0.598 | 0.626 | 0.597 |
+| Ballroom F at 20 ms | 0.302 | 0.411 | 0.458 | 0.421 |
+| Ballroom F at 10 ms | 0.131 | 0.263 | 0.320 | 0.274 |
+| Ballroom offset | -18.3 ms | -2.9 ms | -3.2 ms | -2.1 ms |
+| Ballroom tracks with 1 / 2 / 3+ anchors | | 60 / 0 / 0 | 1 / 9 / 50 | 58 / 2 / 0 |
+
+- The greedy version grew each line while 85% of its attacks stayed within 12 ms and its last 6 didn't sit
+  more than 6 ms to one side. It scored best at 20 ms but gave 50 of 60 thirty-second excerpts three to five
+  anchors: it followed the dancers' band's jitter (median fit 6 ms) rather than real tempo changes, which is not
+  what a DJ grid should do, and it lost 0.26 at 20 ms on a steady 128 BPM track. The penalised split keeps
+  steady tracks on one line and still finds a 120 to 126 BPM change and a 118 to 122 BPM drift in the unit
+  tests.
+- Ballroom is live ballroom recordings, the hard case; `fit_ms` (median 6.2 ms there, under 1 ms on programmed
+  synthetic tracks) says how far a track's attacks sit from its grid.
+- Still open: tracks read at half or double tempo get a grid at that tempo (Chrisanne1-03 at 166 for 84 put
+  its grid on the off-beats). Eight excerpts score 0 for tracker and grid alike, five of them Cafe_Paradiso
+  with the BPM right, which looks like a label offset on that album rather than a beat problem. Full-length
+  tracks, GTZAN (only spectrograms in the bucket, no audio) and electronic music with beat labels are not
+  measured yet.
 
 ## Downbeats
 

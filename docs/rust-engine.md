@@ -28,6 +28,8 @@ engine-rs/
   src/dj.rs          the library API for other programs: BPM, beats, downbeats, meter, key and sections from
                      interleaved PCM or a file, running only the core and sections stages (see "Using the
                      engine as a library")
+  src/grid.rs        the DJ beat grid: each tracked beat moved onto its attack (an energy-ratio onset function at
+                     sample resolution), a line fitted through them, more anchors where the tempo changes
   src/decode.rs      audio bytes -> mono f32 (symphonia: WAV, FLAC, MP3, AAC/M4A, Ogg Vorbis; not Opus), with
                      the M4A edit list honoured (symphonia ignores it), and MP3s whose ID3v2 tag has a
                      compressed frame read past the tag (symphonia 0.5 refused them; 8 of FMA Keys' 695)
@@ -99,21 +101,25 @@ licence notes.
   audio resampled to 22,050 Hz, as for a card. `DjOptions::default().with_beats_per_bar(3)` sets the meter.
 - **What comes back:** `DjResult` with the BPM (two decimals) and how likely it is right, the half and double
   alternatives, every beat and downbeat, the meter, the key (with Camelot and how likely it is right), the
-  sections, suggested cue points and the loudness. The answers are the card's own for the same audio (a unit
-  test checks). The struct is `#[non_exhaustive]`, so later versions can add fields (a sub-millisecond beat grid
-  is planned) without breaking callers.
+  sections and the loudness, and since 0.6.0 `grid`, the DJ beat grid: BPM to three decimals, the first beat
+  and first downbeat to a tenth of a millisecond, an anchor per tempo and how well the attacks fit it
+  (`grid.rs`; [bench.md, DJ beat grid](bench.md#dj-beat-grid)), and suggested cue points. The tracker's answers
+  are the card's own for the same audio (a unit test checks). The struct is `#[non_exhaustive]`, so later
+  versions can add fields without breaking callers.
 - **Cue points** (`cues`, since 0.6.0; `src/cues.rs`): up to 16, each on a downbeat with its bar number, a kind
   and a 0 to 1 score. `start` is bar 1 after any silence at the start (Rekordbox's auto cue, but on the bar
   instead of the first beat). Every section start gets a `section` cue. `drop` is the biggest energy rise after
   a low stretch and `mix_out` the phrase start where the energy falls into the outro (or 32 bars from the end
   when it never does); both sit on the phrase grid, 4-bar steps counted from `start`, and stand for a section
   start within 2 bars of them. `phrase` cues mark other phrase starts where the energy changes, at least 8 bars
-  from any other cue. The card has them too, in `extras["sections.cues"]`; the app doesn't show them. How well
+  from any other cue. In the DJ result they sit on `grid` (each moved to its nearest grid beat); the card has the tracker's times, in `extras["sections.cues"]`; the app doesn't show them. How well
   they match: [bench.md](bench.md#cue-points).
 - **From the command line:** `tastr-engine dj song.mp3` prints the same as JSON.
-- **Limits:** beats sit on the analysis frame grid (hop 512 at 22,050 Hz, about 23 ms), not a fitted DJ grid.
-  Downbeats are right on about two thirds of songs (GTZAN, see engine-report.md). The API may still change
-  before 1.0; pin a tag.
+- **Limits:** `beat_times` sit on the analysis frame grid (hop 512 at 22,050 Hz, about 23 ms); use `grid` for
+  DJ work. Downbeats (and so `first_downbeat`) are right on about two thirds of songs (GTZAN, see
+  engine-report.md). The API may still change before 1.0; pin a tag.
+- **Benchmarks** call it through the native library too (`tastr_dj`, `tastr_dj_f32`; `rust.dj_from_file`), so
+  `tastr bench` scores the grid on every dataset with beat labels.
 - **Speed:** it runs only the core and sections stages and skips the bass CQT, which only the suggestions read.
   A 4-minute track took 4.4 s against 5.0 s for the whole card (one core, release build, 2026-11-21); most of
   the time is the shared signals (HPSS, CQT) both need.

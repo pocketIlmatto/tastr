@@ -18,6 +18,7 @@ the Brier score.
 | Tempo | BPM within 4% | 0.488 | 0.767 | GiantSteps Tempo, 43 tracks |
 | Tempo | BPM within 4% | 0.829 | 0.971 | hjdb (jungle / hardcore), 35 held-out tracks |
 | Bar 1 | right phase | 0.43 | 0.64 | GTZAN, 933 songs in 4/4 |
+| DJ grid | beats within 20 ms | 0.302 | 0.421 | Ballroom, first 60 excerpts (library API only) |
 | 3/4 time | waltzes found | none | 0.86 | GTZAN, 49 songs in 3/4 |
 | Drums | tom onset F | 0.013 | 0.369 | MDB Drums, real mixes (optional model) |
 | Sections | boundary F within 3 s | 0.477 | 0.577 | Harmonix Set, 912 songs |
@@ -125,6 +126,27 @@ timbre / chord change, bass change and bar-to-bar change, with near-silence mask
 
 **Still open:** loops whose bars are identical carry no bar-level information. GTZAN clips are 30 s, so
 nothing measures full tracks from their start. Details: [rhythm.md](rhythm.md).
+
+## DJ beat grid
+
+The library API (`dj.rs`, for other programs such as DJ tools) adds a beat grid: tempo and first beat to a
+fraction of a millisecond, and an anchor where the tempo really changes. The tracker's beats ran 18-22 ms
+early (its onset windows peak before the attack); the grid moves each beat onto its attack and fits a line.
+Cards are unchanged.
+
+- **Found with:** the synthetic suite and Ballroom at 20 and 10 ms windows (new bench columns).
+- **Checked on:** the first 60 Ballroom excerpts on Modal; synthetic click tracks in five formats for decoder
+  offsets.
+
+| Score | Tracker | Grid |
+|---|---|---|
+| Synthetic, beats within 10 ms | 0.005 | 0.992 |
+| Ballroom, beats within 20 ms | 0.302 | 0.421 |
+| Ballroom, beats within 10 ms | 0.131 | 0.274 |
+| Ballroom, mean offset | -18.3 ms | -2.1 ms |
+
+**Still open:** half/double tempo reads give a grid at that tempo; only 30 s live excerpts measured.
+Details: [bench.md, DJ beat grid](bench.md#dj-beat-grid).
 
 ## 3/4 time
 

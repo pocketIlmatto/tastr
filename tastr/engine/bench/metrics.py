@@ -12,6 +12,7 @@ import numpy as np
 TEMPO_TOLERANCE = 0.04  # 4% either side, the standard Acc1/Acc2 tolerance
 TEMPO_FACTORS = (1.0, 2.0, 0.5, 3.0, 1 / 3)
 BEAT_WINDOW = 0.07  # seconds, the standard beat F-measure window
+TIGHT_WINDOWS = (0.02, 0.01)  # seconds, for DJ beat grids, where 70 ms is far too loose
 
 # MIREX weighted key score per error category.
 KEY_WEIGHTS = {"correct": 1.0, "fifth": 0.5, "relative": 0.3, "parallel": 0.2, "other": 0.0}
@@ -95,6 +96,53 @@ def beat_scores(est: list[float], ref: list[float], prefix: str = "beat", skip: 
     est = [t for t in est if t >= skip]
     ref = [t for t in ref if t >= skip]
     return {f"{prefix}_f": f_measure(est, ref, BEAT_WINDOW)["f"]}
+
+
+def matched_offsets(est: list[float], ref: list[float], window: float) -> list[float]:
+    """est - ref for each pair match_events pairs up within `window` (seconds)."""
+    est, ref = sorted(est), sorted(ref)
+    i = j = 0
+    out = []
+    while i < len(est) and j < len(ref):
+        if abs(est[i] - ref[j]) <= window:
+            out.append(est[i] - ref[j])
+            i += 1
+            j += 1
+        elif est[i] < ref[j]:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def tight_beat_scores(est: list[float], ref: list[float], prefix: str, skip: float = 5.0) -> dict:
+    """Beat F at 70, 20 and 10 ms and the median signed offset (ms, est - ref) of the beats matched within 70 ms,
+    ignoring the first `skip` seconds. For comparing beat grids, where a few ms matter."""
+    est = [t for t in est if t >= skip]
+    ref = [t for t in ref if t >= skip]
+    row = {f"{prefix}_f": f_measure(est, ref, BEAT_WINDOW)["f"]}
+    for w in TIGHT_WINDOWS:
+        row[f"{prefix}_f_{round(w * 1000)}ms"] = f_measure(est, ref, w)["f"]
+    off = matched_offsets(est, ref, BEAT_WINDOW)
+    row[f"{prefix}_offset_ms"] = round(float(np.median(off)) * 1000, 2) if off else None
+    return row
+
+
+def grid_beats(grid: dict | None, duration: float) -> list[float]:
+    """Every beat of a DJ grid (the `grid` of the engine's dj result: anchors with a time and a bpm), up to
+    `duration` seconds."""
+    if not grid or not grid.get("anchors"):
+        return []
+    anchors = grid["anchors"]
+    beats = []
+    for i, a in enumerate(anchors):
+        end = anchors[i + 1]["time"] if i + 1 < len(anchors) else duration
+        period = 60.0 / a["bpm"]
+        k = 0
+        while a["time"] + k * period < end - 1e-6:
+            beats.append(a["time"] + k * period)
+            k += 1
+    return beats
 
 
 def boundary_scores(est: list[float], ref: list[float], duration: float | None = None) -> dict:

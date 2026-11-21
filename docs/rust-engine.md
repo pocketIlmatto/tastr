@@ -28,6 +28,8 @@ engine-rs/
   src/dj.rs          the library API for other programs: BPM, beats, downbeats, meter, key and sections from
                      interleaved PCM or a file, running only the core and sections stages (see "Using the
                      engine as a library")
+  src/grid.rs        the DJ beat grid: each tracked beat moved onto its attack (an energy-ratio onset function at
+                     sample resolution), a line fitted through them, more anchors where the tempo changes
   src/decode.rs      audio bytes -> mono f32 (symphonia: WAV, FLAC, MP3, AAC/M4A, Ogg Vorbis; not Opus), with
                      the M4A edit list honoured (symphonia ignores it), and MP3s whose ID3v2 tag has a
                      compressed frame read past the tag (symphonia 0.5 refused them; 8 of FMA Keys' 695)
@@ -99,13 +101,17 @@ licence notes.
   audio resampled to 22,050 Hz, as for a card. `DjOptions::default().with_beats_per_bar(3)` sets the meter.
 - **What comes back:** `DjResult` with the BPM (two decimals) and how likely it is right, the half and double
   alternatives, every beat and downbeat, the meter, the key (with Camelot and how likely it is right), the
-  sections and the loudness. The answers are the card's own for the same audio (a unit test checks). The
-  struct is `#[non_exhaustive]`, so later versions can add fields (a sub-millisecond beat grid and cue points
-  are planned) without breaking callers.
+  sections and the loudness, and since 0.6.0 `grid`, the DJ beat grid: BPM to three decimals, the first beat
+  and first downbeat to a tenth of a millisecond, an anchor per tempo and how well the attacks fit it
+  (`grid.rs`; [bench.md, DJ beat grid](bench.md#dj-beat-grid)). The tracker's answers are the card's own for
+  the same audio (a unit test checks). The struct is `#[non_exhaustive]`, so later versions can add fields
+  (cue points are planned) without breaking callers.
 - **From the command line:** `tastr-engine dj song.mp3` prints the same as JSON.
-- **Limits:** beats sit on the analysis frame grid (hop 512 at 22,050 Hz, about 23 ms), not a fitted DJ grid.
-  Downbeats are right on about two thirds of songs (GTZAN, see engine-report.md). The API may still change
-  before 1.0; pin a tag.
+- **Limits:** `beat_times` sit on the analysis frame grid (hop 512 at 22,050 Hz, about 23 ms); use `grid` for
+  DJ work. Downbeats (and so `first_downbeat`) are right on about two thirds of songs (GTZAN, see
+  engine-report.md). The API may still change before 1.0; pin a tag.
+- **Benchmarks** call it through the native library too (`tastr_dj`, `tastr_dj_f32`; `rust.dj_from_file`), so
+  `tastr bench` scores the grid on every dataset with beat labels.
 - **Speed:** it runs only the core and sections stages and skips the bass CQT, which only the suggestions read.
   A 4-minute track took 4.4 s against 5.0 s for the whole card (one core, release build, 2026-11-21); most of
   the time is the shared signals (HPSS, CQT) both need.

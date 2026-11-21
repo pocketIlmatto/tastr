@@ -424,3 +424,24 @@ def test_bench_reports_bad_calls():
         rust.bench("nope")
     with pytest.raises(rust.RustEngineError, match="cut short"):
         rust.bench("downbeat_phase", np.zeros(10), bands=128, frames=100, beats=0)
+
+
+def test_dj_result_from_file_and_samples(stereo_44k):
+    """The DJ analysis through the library: the card's beats and key plus a fitted grid, whose first beat is the
+    same sample whichever format the track was encoded in (the decoder trims MP3/AAC priming as ffmpeg does)."""
+    from tastr.engine import rust
+    from tastr.engine.audio import load_audio
+
+    wav = stereo_44k[0]
+    d = rust.dj_from_file(wav)
+    card = rust.card_from_file(wav)
+    assert d["bpm"] == card["core"]["bpm"] and d["beat_times"] == card["core"]["beat_times"]
+    assert d["key"]["camelot"] == card["core"]["key"]["camelot"]
+    assert d["engine_version"] == rust.version()
+    g = d["grid"]
+    assert g["anchors"][0]["time"] == g["first_beat"] and abs(g["bpm"] - 124.0) < 0.05
+    for f in stereo_44k[1:]:
+        other = rust.dj_from_file(f)["grid"]
+        assert abs(other["first_beat"] - g["first_beat"]) < 0.001, (f.suffix, other, g)
+    s = rust.dj_from_samples(load_audio(wav, rust.SR))
+    assert abs(s["grid"]["first_beat"] - g["first_beat"]) < 0.001

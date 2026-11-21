@@ -13,6 +13,7 @@
 //! The result may gain fields in later versions (it is `#[non_exhaustive]`), so read it by field name.
 
 use crate::card::{Card, Key, Section};
+use crate::grid::Grid;
 use crate::json::Json;
 use crate::stages::{self, Ctx};
 use crate::SR;
@@ -50,7 +51,8 @@ pub struct DjResult {
     pub bpm_likely_correct: Option<f64>,
     /// Half and double the BPM, the usual alternatives when a listener counts the beat differently.
     pub bpm_alternatives: Vec<f64>,
-    /// Every beat. They sit on the analysis frame grid (about 23 ms apart at 22,050 Hz, hop 512).
+    /// Every beat as the tracker found it, on the analysis frame grid (about 23 ms steps at 22,050 Hz, hop 512).
+    /// For a DJ grid use `grid`.
     pub beat_times: Vec<f64>,
     /// The first beat of every bar.
     pub downbeat_times: Vec<f64>,
@@ -64,6 +66,9 @@ pub struct DjResult {
     pub sections: Vec<Section>,
     /// Mean loudness in dB (RMS, not LUFS).
     pub loudness_db: Option<f64>,
+    /// The beat grid to a fraction of a millisecond: tempo, first beat, first downbeat and an anchor wherever the
+    /// tempo changes (see `grid.rs`). None when there are too few clear attacks.
+    pub grid: Option<Grid>,
     /// Stages that failed, as (stage, message). Empty when everything ran.
     pub errors: Vec<(String, String)>,
 }
@@ -98,10 +103,13 @@ pub fn analyze_file(bytes: Vec<u8>, opts: &DjOptions) -> Result<DjResult, String
 /// Analyze mono audio already at the engine's rate (`tastr_engine::SR`, 22,050 Hz).
 pub fn analyze_mono(y: Vec<f32>, opts: &DjOptions) -> DjResult {
     let mut ctx = Ctx::with_bass(y, opts.beats_per_bar, false);
-    from_card(stages::run_only(&mut ctx, &STAGES))
+    let card = stages::run_only(&mut ctx, &STAGES);
+    let c = &card.core;
+    let grid = crate::grid::fit(&ctx.y, ctx.sr, &c.beat_times, &c.downbeat_times, c.beats_per_bar);
+    from_card(card, grid)
 }
 
-fn from_card(card: Card) -> DjResult {
+fn from_card(card: Card, grid: Option<Grid>) -> DjResult {
     let alternatives = match card.extras.get("core.bpm_alternatives") {
         Some(Json::Arr(v)) => v.iter().filter_map(|j| if let Json::Num(n) = j { Some(*n) } else { None }).collect(),
         _ => Vec::new(),
@@ -120,6 +128,7 @@ fn from_card(card: Card) -> DjResult {
         key: c.key,
         sections: card.sections,
         loudness_db: c.loudness_db,
+        grid,
         errors: card.errors,
     }
 }
@@ -161,10 +170,22 @@ impl DjResult {
             .with("key", key)
             .with("loudness_db", self.loudness_db)
             .with("beat_times", self.beat_times.clone())
+            .with("grid", self.grid.as_ref().map_or(Json::Null, grid_json))
             .with("downbeat_times", self.downbeat_times.clone())
             .with("sections", Json::Arr(sections))
             .with("errors", Json::Obj(self.errors.iter().map(|(k, m)| (k.clone(), Json::from(m.clone()))).collect()))
     }
+}
+
+fn grid_json(g: &Grid) -> Json {
+    let anchors: Vec<Json> = g.anchors.iter().map(|a| Json::obj().with("time", a.time).with("bpm", a.bpm)).collect();
+    Json::obj()
+        .with("bpm", g.bpm)
+        .with("first_beat", g.first_beat)
+        .with("first_downbeat", g.first_downbeat)
+        .with("anchors", Json::Arr(anchors))
+        .with("fit_ms", g.fit_ms)
+        .with("beats_used", g.beats_used)
 }
 
 #[cfg(test)]
@@ -222,6 +243,12 @@ mod tests {
         for (i, &t) in r.downbeat_times.iter().take(6).enumerate() {
             assert_eq!(t, r.beat_times[first + 4 * i]);
         }
+        // The grid finds the clicks themselves: first beat 0.25 s, 124 BPM, one anchor.
+        let g = r.grid.as_ref().unwrap();
+        assert!((g.first_beat - 0.25).abs() < 0.002, "{g:?}");
+        assert!((g.bpm - 124.0).abs() < 0.01 && g.anchors.len() == 1, "{g:?}");
+        let fd = g.first_downbeat.unwrap();
+        assert!(((fd - 0.25) / beat - libm::round((fd - 0.25) / beat)).abs() < 0.01, "{g:?}");
         assert!(!r.sections.is_empty());
         assert!((r.duration - 40.0).abs() < 0.01);
         assert_eq!(r.bpm_alternatives.len(), 2);
@@ -284,7 +311,15 @@ mod tests {
         let r = analyze_pcm(&click_track(44_100, 124.0, 0.25, 20.0), 44_100, 1, &DjOptions::default()).unwrap();
         let mut s = String::new();
         r.to_json().write(&mut s);
-        for k in ["\"bpm\"", "\"beat_times\"", "\"downbeat_times\"", "\"8A\"", "\"A minor\"", "\"sections\""] {
+        for k in [
+            "\"bpm\"",
+            "\"beat_times\"",
+            "\"downbeat_times\"",
+            "\"8A\"",
+            "\"A minor\"",
+            "\"sections\"",
+            "\"first_beat\"",
+        ] {
             assert!(s.contains(k), "{k} missing from {s}");
         }
     }

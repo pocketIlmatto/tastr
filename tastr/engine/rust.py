@@ -97,6 +97,9 @@ def _load() -> ctypes.CDLL:
         for fn in (lib.tastr_card_hits, lib.tastr_card_f32_hits):
             fn.restype = ctypes.c_int32
             fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int32, ctypes.c_void_p, ctypes.c_size_t]
+        for fn in (lib.tastr_dj, lib.tastr_dj_f32):
+            fn.restype = ctypes.c_int32
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int32]
         lib.tastr_card_ptr.restype = ctypes.c_void_p
         lib.tastr_card_ptr.argtypes = []
         lib.tastr_bench.restype = ctypes.c_int32
@@ -168,6 +171,25 @@ def card_from_samples(y: np.ndarray, beats_per_bar=None, drum_hits: dict | None 
     h = _hits(drum_hits)
     return _result(lib, lib.tastr_card_f32_hits(ptr, y.size, _meter(beats_per_bar), h.ctypes.data, h.size),
                    "the samples")
+
+
+def dj_from_file(path: str | os.PathLike, beats_per_bar=None) -> dict:
+    """The DJ analysis (engine-rs/src/dj.rs: BPM, beats, downbeats, key, sections and the fitted beat grid) for an
+    audio file, decoded by the Rust engine."""
+    lib = _load()
+    data = Path(path).read_bytes()
+    ptr = lib.tastr_alloc(len(data))  # handed over: tastr_dj frees it
+    ctypes.memmove(ptr, data, len(data))
+    return _result(lib, lib.tastr_dj(ptr, len(data), _meter(beats_per_bar)), str(path))
+
+
+def dj_from_samples(y: np.ndarray, beats_per_bar=None) -> dict:
+    """The same for mono audio already decoded at 22,050 Hz."""
+    lib = _load()
+    y = np.ascontiguousarray(y, dtype="<f4")
+    ptr = lib.tastr_alloc(y.nbytes)
+    ctypes.memmove(ptr, y.ctypes.data, y.nbytes)
+    return _result(lib, lib.tastr_dj_f32(ptr, y.size, _meter(beats_per_bar)), "the samples")
 
 
 def bench(op: str, *arrays, **params) -> dict:

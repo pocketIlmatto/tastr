@@ -27,7 +27,7 @@ use crate::card::Card;
 use crate::features::{mel_frequencies, Matrix};
 use crate::json::Json;
 use crate::stages::{core, sections, suggestions, Ctx, HOP};
-use crate::{cqt, music, spectral, SR};
+use crate::{cqt, cues, music, spectral, SR};
 
 /// The bands of a 128-band log-mel spectrogram (Beat This!'s and the engine's own: 30 Hz to 11 kHz).
 fn log_mel_freqs(bands: usize) -> Vec<f64> {
@@ -223,6 +223,15 @@ fn sections_op(a: &mut Args) -> Result<Json, String> {
         starts.push(Json::from(sections::segment_with(&z, duration, n_bars, sections::SETTINGS)));
     }
     out.set("starts", Json::Arr(starts));
+    // The cue points the card would suggest, from the stage's own settings and the bar energy core would store.
+    if downbeats.len() >= 2 {
+        let rms_db: Vec<f32> = rms.iter().map(|&v| 20.0f32 * libm::log10f(v.max(1e-5))).collect();
+        let (t, v) = core::bar_energy_series(&downbeats, &rms_db, sr, hop, duration);
+        let energy = sections::bar_energy_from_series(&t, &v, &bar_times, duration).unwrap_or_default();
+        let current = sections::segment_with(&z, duration, n_bars, sections::SETTINGS);
+        let cues = cues::pick(&bar_times, &energy, &current, cues::audible_start(&rms, sr, hop));
+        out.set("cues", Json::Arr(cues.iter().map(cues::Cue::json).collect()));
+    }
     Ok(out)
 }
 

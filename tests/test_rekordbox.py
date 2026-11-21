@@ -92,6 +92,7 @@ def test_rekordbox_dataset_finds_audio_by_name(tmp_path, xml):
     assert it.path.endswith("Night Shift.mp3")
     assert it.truth.bpm == 120 and it.truth.downbeats[0] == 1.5
     assert it.meta["rekordbox_key"] == "Am"
+    assert it.truth.cues == [0.5, 2.5]  # memory and hot cues, not the loop
 
 
 def _library(tmp_path):

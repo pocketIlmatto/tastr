@@ -57,7 +57,7 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     set_features(ctx, card, bpm, &beat_idx, &rms_db, duration, (stability, pulse_clarity));
     set_key(ctx, card);
     if !card.core.downbeat_times.is_empty() {
-        let (t, v) = bar_energy_series(&card.core.downbeat_times, &rms_db, sr, duration);
+        let (t, v) = bar_energy_series(&card.core.downbeat_times, &rms_db, sr, HOP, duration);
         card.series.push(("energy".into(), t, v));
     }
     Ok(())
@@ -774,14 +774,22 @@ fn swing(onset: &[f32], beats: &[usize]) -> (f64, f64) {
     (clip(avg / 0.5 * 100.0, 50.0, 75.0), clip(1.0 - spread / 0.08, 0.0, 1.0))
 }
 
-fn bar_energy_series(downbeats: &[f64], rms_db: &[f32], sr: f64, duration: f64) -> (Vec<f64>, Vec<f64>) {
+/// The card's "energy" series: each bar's mean RMS in dB, scaled 0 to 1 between the 5th and 95th percentile
+/// bars, at its downbeat. `rms_db` is per frame, `hop` samples apart at `sr`.
+pub fn bar_energy_series(
+    downbeats: &[f64],
+    rms_db: &[f32],
+    sr: f64,
+    hop: usize,
+    duration: f64,
+) -> (Vec<f64>, Vec<f64>) {
     let mut edges = downbeats.to_vec();
     edges.push(duration);
     let raw: Vec<f64> = edges
         .windows(2)
         .map(|w| {
-            let fa = (w[0] * sr / HOP as f64) as usize;
-            let fb = ((w[1] * sr / HOP as f64) as usize).max(fa + 1);
+            let fa = (w[0] * sr / hop as f64) as usize;
+            let fb = ((w[1] * sr / hop as f64) as usize).max(fa + 1);
             let seg = if fa < rms_db.len() { &rms_db[fa..fb.min(rms_db.len())] } else { &rms_db[rms_db.len() - 1..] };
             mean_f32(seg) as f64
         })

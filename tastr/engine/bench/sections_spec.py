@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .metrics import boundary_scores
+from .metrics import boundary_scores, cue_scores
 
 SECONDS = (16, 18, 20, 22, 24, 28, 32)
 PHRASES = (1, 2, 4)
@@ -115,7 +115,8 @@ def _starts(sig: dict, downbeats, duration: float, info: dict, configs) -> tuple
                    hop=info["hop"], duration=repr(float(duration)), downbeats=len(downbeats),
                    configs=",".join(f"{s}:{p}:{c}" for s, p, c in configs))
     current = (r["current"][0], int(r["current"][1]), r["current"][2])
-    return np.asarray(r["bar_times"]), dict(zip(configs, r["starts"])) if r["starts"] else None, current
+    starts = dict(zip(configs, r["starts"])) if r["starts"] else None
+    return np.asarray(r["bar_times"]), starts, current, r.get("cues") or []
 
 
 def run(items_info) -> dict:
@@ -128,10 +129,17 @@ def run(items_info) -> dict:
         sig = signals_from_mel(mel, info)
         n_frames = sig["mfcc"].shape[1]
         duration = n_frames * info["hop"] / info["sr"]
-        bar_times, starts, current = _starts(sig, downbeats, duration, info, configs)
+        bar_times, starts, current, cues = _starts(sig, downbeats, duration, info, configs)
         if starts is None:
             continue
         row = {"id": sid, "split": split, "duration": round(duration, 1), "n_ref": len(bounds)}
+        # Cue points: labeled section starts (not the track's start or end) with a cue within one labeled bar.
+        inner = [b for b in bounds if 1.0 < b < duration - 1.0]
+        if inner:
+            bar = float(np.median(np.diff(downbeats)))
+            c = cue_scores([q["time_s"] for q in cues if q["kind"] != "start"], inner, bar)
+            row |= {"cue_section_recall": round(c["cue_recall"], 3), "cue_precision": round(c.get("cue_precision", 0.0), 3),
+                    "n_cues": len(cues), "cue_kinds": [q["kind"] for q in cues]}
         for c in configs:
             est = [0.0] + [float(bar_times[s]) for s in starts[c][1:]]
             s = boundary_scores(est, bounds, duration)
@@ -151,8 +159,15 @@ def run(items_info) -> dict:
             for c, v in scores.items()]
     best = max((g for g in grid if g["tune"]), key=lambda g: g["tune"]["f_3"], default=None)
     current = next((g for g in grid if (g["seconds"], g["phrase"], g["cap"]) == current), None)
+    cue_rows = [r for r in rows if "cue_section_recall" in r]
+    kinds = [k for r in cue_rows for k in r["cue_kinds"]]
+    cues = {"tracks": len(cue_rows),
+            "section_recall": round(float(np.mean([r["cue_section_recall"] for r in cue_rows])), 3) if cue_rows else None,
+            "precision": round(float(np.mean([r["cue_precision"] for r in cue_rows])), 3) if cue_rows else None,
+            "cues_per_track": round(len(kinds) / len(cue_rows), 2) if cue_rows else None,
+            "kinds": {k: kinds.count(k) for k in sorted(set(kinds))}}
     return {"tracks": len(rows), "tune_tracks": sum(r["split"] == "tune" for r in rows), "info": info,
-            "current": current, "best_on_tune": best, "grid": grid, "rows": rows}
+            "current": current, "best_on_tune": best, "grid": grid, "cues": cues, "rows": rows}
 
 
 def format_report(r: dict) -> str:
@@ -166,6 +181,11 @@ def format_report(r: dict) -> str:
            "current:  " + line(r["current"]) if r.get("current") else "current: n/a",
            "best on tune:  " + line(r["best_on_tune"]) if r.get("best_on_tune") else "best: n/a", ""]
     out += [line(g) for g in sorted(r["grid"], key=lambda g: -(g["tune"] or {}).get("f_3", 0))[:15]]
+    c = r.get("cues") or {}
+    if c.get("tracks"):
+        out += ["", f"cue points ({c['tracks']} tracks, {c['cues_per_track']} per track): section starts with a cue "
+                f"within 1 bar {c['section_recall']:.3f}, cues within 1 bar of a section start {c['precision']:.3f}",
+                "  kinds: " + ", ".join(f"{k} {v}" for k, v in c["kinds"].items())]
     return "\n".join(out)
 
 

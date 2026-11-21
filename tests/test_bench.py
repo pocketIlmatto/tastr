@@ -41,6 +41,31 @@ def test_beat_scores_window():
     assert metrics.beat_scores([t + 0.25 for t in ref], ref)["beat_f"] == 0.0
 
 
+def test_tight_beat_scores_and_offset():
+    ref = [5 + i * 0.5 for i in range(20)]
+    row = metrics.tight_beat_scores([t + 0.015 for t in ref], ref, "grid")
+    assert row["grid_f"] == 1.0 and row["grid_f_20ms"] == 1.0 and row["grid_f_10ms"] == 0.0
+    assert row["grid_offset_ms"] == 15.0
+    assert metrics.tight_beat_scores([], ref, "grid")["grid_offset_ms"] is None
+
+
+def test_grid_beats_follow_the_anchors():
+    grid = {"anchors": [{"time": 0.5, "bpm": 120.0}, {"time": 4.5, "bpm": 60.0}]}
+    assert metrics.grid_beats(grid, 7.0) == [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.5, 6.5]
+    assert metrics.grid_beats(None, 7.0) == [] and metrics.grid_beats({"anchors": []}, 7.0) == []
+
+
+def test_grid_scores_join_the_row_when_beats_are_labeled():
+    item = datasets.Item(id="x", path=None, truth=datasets.Truth(beats=[5 + i * 0.5 for i in range(20)]))
+    card = runner.TrackCard.from_dict({"source": {"kind": "file", "uri": "x"}, "duration": 14.6, "core": {
+        "beat_times": [5 + i * 0.5 - 0.02 for i in range(20)], "beats_per_bar": 4}})
+    dj = {"grid": {"anchors": [{"time": 0.001, "bpm": 120.0}], "fit_ms": 0.5}}
+    row = runner.score_item(item, card, dj)
+    assert row["tracker_f_10ms"] == 0.0 and row["tracker_offset_ms"] == -20.0
+    assert row["grid_f_10ms"] == 1.0 and row["grid_anchors"] == 1 and row["grid_fit_ms"] == 0.5
+    assert "grid_f" not in runner.score_item(item, card)
+
+
 @pytest.mark.parametrize("text,key", [
     ("A minor", (9, "minor")), ("Ebm", (3, "minor")), ("f# maj", (6, "major")), ("C#:min", (1, "minor")),
     ("Bb", (10, "major")), ("8A", (9, "minor")), ("8B", (0, "major")), ("12A", (1, "minor")), ("nope", None),

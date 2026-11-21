@@ -45,7 +45,21 @@ def rust_card(item: Item) -> TrackCard:
     return TrackCard.from_dict({**d, "source": asdict(src)})
 
 
-def score_item(item: Item, card: TrackCard) -> dict:
+def rust_dj(item: Item) -> dict:
+    """The engine's DJ result (dj.rs: tracker beats plus the fitted beat grid) for one bench track."""
+    from .. import rust
+
+    if item.synth is not None:
+        return rust.dj_from_samples(item.synth())
+    try:
+        return rust.dj_from_file(item.path)
+    except rust.RustDecodeError:
+        from ..audio import load_audio
+
+        return rust.dj_from_samples(load_audio(item.path, SR))
+
+
+def score_item(item: Item, card: TrackCard, dj: dict | None = None) -> dict:
     """Estimates, confidences and scores for one track, as a flat dict."""
     t, c = item.truth, card.core
     row: dict = {"id": item.id, "path": item.path, "errors": dict(card.errors)}
@@ -68,6 +82,13 @@ def score_item(item: Item, card: TrackCard) -> dict:
         row.update(metrics.beat_scores(c.beat_times, t.beats, "beat"))
     if t.downbeats:
         row.update(metrics.beat_scores(c.downbeat_times, t.downbeats, "downbeat"))
+    if t.beats and dj is not None:
+        # The DJ grid against the tracker's beats at tight windows (the tracker's beat_f above stays as it was).
+        row.update(metrics.tight_beat_scores(c.beat_times, t.beats, "tracker"))
+        row.update(metrics.tight_beat_scores(metrics.grid_beats(dj.get("grid"), card.duration), t.beats, "grid"))
+        g = dj.get("grid") or {}
+        row["grid_anchors"] = len(g.get("anchors") or [])
+        row["grid_fit_ms"] = g.get("fit_ms")
     if t.beats_per_bar in (3, 4):
         row["ref_meter"] = t.beats_per_bar
         row["est_meter"] = c.beats_per_bar
@@ -80,7 +101,7 @@ def score_item(item: Item, card: TrackCard) -> dict:
 def _work(item: Item) -> dict:
     t0 = time.time()
     try:
-        row = score_item(item, rust_card(item))
+        row = score_item(item, rust_card(item), rust_dj(item) if item.truth.beats else None)
     except Exception as e:  # one unreadable file shouldn't sink a 600-track run
         row = {"id": item.id, "path": item.path, "errors": {"bench": f"{type(e).__name__}: {e}"}}
     row["seconds"] = round(time.time() - t0, 2)
@@ -90,13 +111,14 @@ def _work(item: Item) -> dict:
 DRUM_AND_BASS = "Drum & Bass"  # Beatport's genre name
 FAST_RANGE = (160.0, 181.0)  # drum & bass at its DJ tempo
 SUMMARY_METRICS = ["acc1", "acc2", "key_weighted", "key_correct", "beat_f", "downbeat_f", "boundary_f_0.5", "boundary_f_3",
-                   "meter_correct"]
+                   "meter_correct", "tracker_f_20ms", "tracker_f_10ms", "tracker_offset_ms", "grid_f", "grid_f_20ms",
+                   "grid_f_10ms", "grid_offset_ms"]
 
 
 def summarize(rows: list[dict]) -> dict:
     out: dict = {"tracks": len(rows), "failed": sum(1 for r in rows if "bench" in r.get("errors", {}))}
     for m in SUMMARY_METRICS:
-        vals = [r[m] for r in rows if m in r]
+        vals = [r[m] for r in rows if r.get(m) is not None]
         if vals:
             out[m] = round(metrics.mean(vals), 4)
             out[f"{m}_n"] = len(vals)
@@ -191,6 +213,13 @@ LABELS = {
     "boundary_f_0.5": "Sections F (0.5 s)",
     "boundary_f_3": "Sections F (3 s)",
     "meter_correct": "Meter (3/4 vs 4/4)",
+    "tracker_f_20ms": "Tracker beats F (20 ms)",
+    "tracker_f_10ms": "Tracker beats F (10 ms)",
+    "tracker_offset_ms": "Tracker beats offset (ms)",
+    "grid_f": "DJ grid F (70 ms)",
+    "grid_f_20ms": "DJ grid F (20 ms)",
+    "grid_f_10ms": "DJ grid F (10 ms)",
+    "grid_offset_ms": "DJ grid offset (ms)",
 }
 
 

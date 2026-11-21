@@ -1,7 +1,7 @@
 # tastr-engine
 
 The music analysis engine behind [Tastr](https://github.com/pocketIlmatto/tastr), in pure Rust. It finds the
-BPM, beats, downbeats, meter, key and song sections of a track (and, for Tastr's own cards, drum patterns,
+BPM, beats, downbeats, meter, key, song sections and suggested DJ cue points of a track (and, for Tastr's own cards, drum patterns,
 vibe tags and production suggestions). It builds natively and for WebAssembly with the same results, and
 needs no network: everything runs on the caller's machine.
 
@@ -26,6 +26,9 @@ if let Some(k) = &r.key {
     println!("key {} ({})", k.camelot, k.mode);
 }
 println!("first downbeat at {:?} s, {} beats per bar", r.downbeat_times.first(), r.beats_per_bar);
+for c in &r.cues {
+    println!("cue {} at {:.2} s (bar {}, score {})", c.kind, c.time_s, c.bar, c.score);
+}
 ```
 
 With the default `decode` feature, `tastr_engine::dj::analyze_file(bytes, &opts)` takes WAV, FLAC, MP3,

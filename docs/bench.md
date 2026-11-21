@@ -42,6 +42,9 @@ the changed JSON with the run's write-up.
 | Key exactly right | share of tracks with tonic and mode both right |
 | Beat / downbeat F | beats within 70 ms, ignoring the first 5 s |
 | Sections F (0.5 s / 3 s) | section starts within 0.5 s or 3 s of a labeled one, track start and end excluded |
+| Hand cues with a cue (1 bar) | share of hand-set cue points (Rekordbox hot and memory cues) with a suggested cue within one bar |
+| Cues near a hand cue (1 bar) | share of suggested cue points within one bar of a hand-set one |
+| Section starts with a cue (1 bar) | share of labeled section starts with a section, phrase, drop or mix-out cue within one bar |
 
 Each metric is averaged over the tracks that have that label. The summary also
 counts key results by category (so "relative 140" shows the minor/major

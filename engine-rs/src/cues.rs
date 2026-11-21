@@ -1,21 +1,25 @@
 //! Suggested DJ cue points: where a DJ would mix in, mark a section change, catch the drop or start mixing out.
 //!
-//! Every cue sits on a downbeat. Section and phrase cues sit on the phrase grid, which counts 4-bar steps from
-//! the `start` cue, the first downbeat after any silence at the start of the track (what Rekordbox's auto cue
-//! does, on bar 1 instead of the first beat). The picker reads only the bar times, the per-bar energy (0 to 1),
-//! the section starts and where the audio becomes audible, so it is cheap and the same on every build: it uses
-//! plain arithmetic and comparisons, no floating-point library calls.
+//! Every cue sits on a downbeat. The `start` cue is the first downbeat after any silence at the start of the
+//! track (what Rekordbox's auto cue does, on bar 1 instead of the first beat). Every section start from the
+//! sections stage gets a `section` cue, unless the start, drop or mix-out cue is within 2 bars of it (then that
+//! cue marks the boundary). The `drop`, `mix_out` and `phrase` cues sit on the phrase grid, 4-bar steps counted
+//! from `start`. The picker reads only the bar times, the per-bar energy (0 to 1), the section starts and where
+//! the audio becomes audible, so it is cheap and the same on every build: it uses plain arithmetic and
+//! comparisons, no floating-point library calls.
 
 use crate::np::{clip, median, round_dec};
 
-/// The most cues a track gets.
-pub const MAX_CUES: usize = 8;
-/// Cues closer than this many bars to a stronger one are dropped (`start`, `drop` and `mix_out` always stay).
+/// The most cues a track gets: room for every section start (the stage makes at most 12) plus `start`, `drop`
+/// and `mix_out`; `phrase` cues fill what is left.
+pub const MAX_CUES: usize = 16;
+/// A `phrase` cue needs this many bars between it and every other cue.
 pub const MIN_SPACING_BARS: usize = 8;
-/// The phrase grid's step and the phrase length section starts snap to first, in bars.
+/// The phrase grid's step and the phrase length, in bars.
 const GRID_BARS: usize = 4;
 const PHRASE_BARS: usize = 8;
-/// A section start snaps to the 8-bar phrase grid when one is within this many bars, else to the 4-bar grid.
+/// The mix-out point snaps to an 8-bar phrase start within this many bars of the fall; a section start this
+/// close to the start, drop or mix-out cue counts as the same boundary.
 const SNAP_BARS: usize = 2;
 /// Bars of energy compared on each side of a boundary.
 const WINDOW_BARS: usize = 4;
@@ -112,9 +116,6 @@ pub fn pick(bars: &[f64], energy: &[f64], section_starts: &[usize], audible: f64
             drop = Some((k, rise));
         }
     }
-    if let Some((k, rise)) = drop {
-        fixed.push(cue(k, "drop", 0.5 + rise));
-    }
 
     // mix_out: the last phrase start at or before the fall into the outro.
     let quiet = crate::np::percentile(e, 25.0);
@@ -132,25 +133,32 @@ pub fn pick(bars: &[f64], energy: &[f64], section_starts: &[usize], audible: f64
         }
         _ => n.checked_sub(NO_OUTRO_BARS).filter(|&b| b > i0).map(|b| i0 + (b - i0) / PHRASE_BARS * PHRASE_BARS),
     };
-    if let Some(k) = mix_out.filter(|&k| k > i0 && k < n && drop.is_none_or(|(d, _)| d != k)) {
-        fixed.push(cue(k, "mix_out", 0.5 + (mean(k.saturating_sub(WINDOW_BARS), k) - mean(k, k + WINDOW_BARS))));
+    let mix_out = mix_out.filter(|&k| k > i0 && k < n && drop.is_none_or(|(d, _)| d != k));
+
+    // Every section start after bar 1, each once, in order.
+    let mut starts: Vec<usize> = section_starts.iter().cloned().filter(|&s| s > i0 && s < n).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    let drop = drop.map(|(k, _)| k);
+    if let Some(k) = drop {
+        fixed.push(cue(k, "drop", 0.5 + change(k)));
+    }
+    if let Some(k) = mix_out {
+        fixed.push(cue(k, "mix_out", 0.5 - change(k)));
+    }
+    // A section start within 2 bars of the start, drop or mix-out is that same boundary: the grid cue stays,
+    // since the grid counts from the first sound and the sections' 2-bar snap from the first downbeat.
+    for &k in &starts {
+        if fixed.iter().all(|c| (c.bar - 1).abs_diff(k as i64) > SNAP_BARS as u64) {
+            fixed.push(cue(k, "section", 0.3 + 1.4 * change(k).abs()));
+        }
     }
 
-    // section and phrase cues: candidates scored by the energy change across them.
+    // phrase cues: phrase starts where the energy changes, away from every other cue.
     let mut cands: Vec<Cue> = Vec::new();
-    for &s in section_starts {
-        if s <= i0 {
-            continue;
-        }
-        let k8 = i0 + ((s - i0) + PHRASE_BARS / 2) / PHRASE_BARS * PHRASE_BARS;
-        let k = if k8.abs_diff(s) <= SNAP_BARS { k8 } else { i0 + ((s - i0) + GRID_BARS / 2) / GRID_BARS * GRID_BARS };
-        if k > i0 && k < last && !cands.iter().any(|c| c.bar == k as i64 + 1) {
-            cands.push(cue(k, "section", 0.3 + 1.4 * change(k).abs()));
-        }
-    }
     for k in (i0 + PHRASE_BARS..last).step_by(PHRASE_BARS) {
         let d = change(k).abs();
-        if d >= PHRASE_MIN_CHANGE && !cands.iter().any(|c| c.bar == k as i64 + 1) {
+        if d >= PHRASE_MIN_CHANGE {
             let bonus = if on_grid(k, 4 * PHRASE_BARS) {
                 0.1
             } else if on_grid(k, 2 * PHRASE_BARS) {
@@ -224,21 +232,19 @@ mod tests {
     }
 
     #[test]
-    fn section_starts_snap_to_the_phrase_grid() {
-        // Sound from bar 3 (index 2); a section starting 2 bars off the 8-bar grid snaps onto it, one 4 off
-        // snaps to the 4-bar grid.
-        let e = levels(&[(2, 0.0), (8, 0.2), (12, 0.8), (40, 0.4)]);
+    fn every_section_start_is_a_cue() {
+        // Sound from bar 3 (index 2); sections start at bars 13, 35 and 51 (indices 12, 34, 50), off the 4-bar
+        // grid. The drop lands on the grid at bar 15 and the mix-out at bar 35, so they mark the first two
+        // boundaries; bar 51 gets a section cue where it is.
+        let e = levels(&[(2, 0.0), (10, 0.2), (22, 0.8), (40, 0.4)]);
         let bars = grid(&e, 0.0);
-        let cues = pick(&bars, &e, &[0, 12, 34], 4.0);
-        let k = kinds(&cues);
-        assert_eq!(k[0], (3, "start"));
-        assert!(k.iter().any(|&(b, _)| b == 11), "{k:?}");
-        assert!(k.iter().all(|&(b, _)| (b - 3) % 4 == 0), "{k:?}");
+        let k = kinds(&pick(&bars, &e, &[0, 12, 34, 50], 4.0));
+        assert_eq!(k, vec![(3, "start"), (15, "drop"), (35, "mix_out"), (51, "section")]);
     }
 
     #[test]
     fn spacing_cap_and_flat_tracks() {
-        // Alternating energy every 4 bars gives many candidates; the cap and spacing hold.
+        // Alternating energy every 4 bars and 50 section starts: the cap holds.
         let e: Vec<f64> = (0..200).map(|i| if (i / 4) % 2 == 0 { 0.2 } else { 0.9 }).collect();
         let bars = grid(&e, 0.0);
         let starts: Vec<usize> = (0..200).step_by(4).collect();

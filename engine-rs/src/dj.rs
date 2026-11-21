@@ -63,7 +63,7 @@ pub struct DjResult {
     pub key: Option<Key>,
     /// Song sections with rough labels ("intro", "verse", "drop", ...), start and end on bar lines.
     pub sections: Vec<Section>,
-    /// Suggested DJ cue points in time order, at most 8: `start` (bar 1 after any silence at the start),
+    /// Suggested DJ cue points in time order, at most 16: `start` (bar 1 after any silence at the start),
     /// `section` and `phrase` (on the phrase grid), `drop` and `mix_out`. Empty without a beat grid.
     pub cues: Vec<Cue>,
     /// Mean loudness in dB (RMS, not LUFS).

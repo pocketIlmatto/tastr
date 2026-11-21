@@ -204,6 +204,23 @@ on a 4-bar phrase. The stage now asks for one section per 18 s and snaps to 2 ba
 boundary lands about one bar off, outside the 3 s window. Harmonix is mostly pop, and no public dance-music set with drop labels and audio turned up. Details:
 [bench.md, Sections](bench.md#sections).
 
+## Cue points
+
+New in engine 0.6.0: up to 16 suggested DJ cue points per track, each on a downbeat: the start (bar 1 after any
+silence), every section start, the drop (biggest energy rise after a low stretch), the mix-out point (where
+the energy falls into the outro) and phrase starts where the energy changes. They are in the DJ API and the
+card's extras; the app doesn't show them yet.
+
+| Within one bar | Share |
+|---|---|
+| Harmonix section starts with a cue (60 tracks) | 0.501 |
+| Cues near a Harmonix section start | 0.500 |
+| Rekordbox cues with a suggested cue (28 tracks from the owner's library) | 0.523 |
+
+**Still open:** the cues can only be as good as the sections (boundary F 0.55 to 0.58 at 3 s) and the
+downbeats (bar 1 right on about two thirds of songs); there is no trusted set of hand-placed DJ cues yet.
+Details: [bench.md, Cue points](bench.md#cue-points).
+
 ## Danceability, energy and vibe tags
 
 These were hand-picked weights. Danceability was refit to 0.75 percussiveness plus 0.25 tempo fit (a bell

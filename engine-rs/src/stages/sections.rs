@@ -3,7 +3,9 @@
 
 use super::{Ctx, HOP};
 use crate::card::{Card, Section};
+use crate::cues;
 use crate::features::{power_to_db, Matrix};
+use crate::json::Json;
 use crate::np::{self, clip, interp, pairwise_sum, round_dec, round_half_even};
 use crate::segment;
 
@@ -32,6 +34,7 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
             confidence: Some(0.0),
         }];
         set_features(card);
+        set_cues(ctx, card, &bar_times, &bar_energy);
         return Ok(());
     }
 
@@ -67,7 +70,20 @@ pub fn run(ctx: &mut Ctx, card: &mut Card) -> Result<(), String> {
     }
     card.sections = sections;
     set_features(card);
+    set_cues(ctx, card, &bar_times, &bar_energy);
     Ok(())
+}
+
+/// Suggested DJ cue points (cues.rs) on the card and in extras["sections.cues"]. None without a beat grid.
+fn set_cues(ctx: &Ctx, card: &mut Card, bar_times: &[f64], bar_energy: &[f64]) {
+    if card.core.downbeat_times.len() < 2 {
+        return;
+    }
+    let starts: Vec<usize> =
+        card.sections.iter().filter_map(|s| s.start_bar).map(|b| (b.max(1) - 1) as usize).collect();
+    let cues = cues::pick(bar_times, bar_energy, &starts, cues::audible_start(&ctx.rms, ctx.sr, HOP));
+    card.extras.set("sections.cues", Json::Arr(cues.iter().map(cues::Cue::json).collect()));
+    card.cues = cues;
 }
 
 pub fn bar_times(downbeats: &[f64], duration: f64) -> Vec<f64> {
@@ -109,18 +125,25 @@ fn amplitude_db(rms: &[f32]) -> Vec<f32> {
     power_to_db(&power, 1.0, Some(80.0))
 }
 
+/// Each bar's energy, 0 to 1, read from the card's energy series at the bar's middle; None when the series is
+/// too short.
+pub fn bar_energy_from_series(times: &[f64], values: &[f64], bar_times: &[f64], duration: f64) -> Option<Vec<f64>> {
+    if times.len() < 2 {
+        return None;
+    }
+    let mids: Vec<f64> = (0..bar_times.len())
+        .map(|i| {
+            let end = if i + 1 < bar_times.len() { bar_times[i + 1] } else { duration };
+            (bar_times[i] + end) / 2.0
+        })
+        .collect();
+    let raw: Vec<f64> = mids.iter().map(|&m| interp(m, times, values)).collect();
+    Some(scale01(&raw))
+}
+
 fn bar_energy(ctx: &Ctx, card: &Card, bar_times: &[f64], duration: f64) -> Vec<f64> {
-    if let Some((times, values)) = card.energy_series() {
-        if times.len() >= 2 {
-            let mids: Vec<f64> = (0..bar_times.len())
-                .map(|i| {
-                    let end = if i + 1 < bar_times.len() { bar_times[i + 1] } else { duration };
-                    (bar_times[i] + end) / 2.0
-                })
-                .collect();
-            let raw: Vec<f64> = mids.iter().map(|&m| interp(m, times, values)).collect();
-            return scale01(&raw);
-        }
+    if let Some(e) = card.energy_series().and_then(|(t, v)| bar_energy_from_series(t, v, bar_times, duration)) {
+        return e;
     }
     let db = amplitude_db(&ctx.rms);
     let onset = &ctx.onset;

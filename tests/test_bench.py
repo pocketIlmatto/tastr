@@ -35,6 +35,27 @@ def test_boundary_scores_ignore_track_edges():
     assert metrics.boundary_scores([0.0], [0.0, 32.0], duration=64.0)["boundary_f_3"] == 0.0
 
 
+def test_cue_scores_within_a_bar():
+    s = metrics.cue_scores([0.0, 31.0, 50.0], [0.5, 32.0, 64.0], bar=2.0)
+    assert s["cue_recall"] == pytest.approx(2 / 3) and s["cue_precision"] == pytest.approx(2 / 3)
+    assert "cue_precision" not in metrics.cue_scores([], [1.0], bar=2.0)
+
+
+def test_score_item_scores_cues_against_hand_cues_and_sections():
+    from tastr.engine.card import TrackCard
+
+    card = TrackCard.from_dict({"source": {"kind": "file", "uri": "t.wav"},
+        "duration": 96.0, "core": {"bpm": 120.0, "downbeat_times": [2.0 * i for i in range(48)], "beats_per_bar": 4},
+        "extras": {"sections.cues": [{"time_s": 0.0, "bar": 1, "kind": "start", "score": 1.0},
+                                     {"time_s": 32.0, "bar": 17, "kind": "drop", "score": 0.9},
+                                     {"time_s": 80.0, "bar": 41, "kind": "mix_out", "score": 0.7}]}})
+    row = runner.score_item(datasets.Item(id="t", truth=datasets.Truth(cues=[0.1, 33.5, 70.0])), card)
+    assert row["cue_recall"] == pytest.approx(2 / 3) and row["cue_precision"] == pytest.approx(2 / 3)
+    row = runner.score_item(datasets.Item(id="t", truth=datasets.Truth(boundaries=[0.0, 31.0, 64.0])), card)
+    assert row["cue_section_recall"] == 0.5  # 31 s has the drop within a bar, 64 s nothing; 0 s doesn't count
+    assert "cue_section_recall" in runner.summarize([row])
+
+
 def test_beat_scores_window():
     ref = [5 + i * 0.5 for i in range(20)]
     assert metrics.beat_scores([t + 0.05 for t in ref], ref)["beat_f"] == 1.0

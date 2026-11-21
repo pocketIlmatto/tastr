@@ -117,6 +117,20 @@ def boundary_scores(est: list[float], ref: list[float], duration: float | None =
     }
 
 
+def cue_scores(est: list[float], ref: list[float], bar: float) -> dict:
+    """Suggested cue points against hand-placed ones: the share of hand cues with a suggested cue within one bar
+    (`cue_recall`) and the share of suggested cues within one bar of a hand cue (`cue_precision`)."""
+    def near(t, ts):
+        return any(abs(t - u) <= bar + 1e-6 for u in ts)
+
+    out: dict = {"n_cues_est": len(est), "n_cues_ref": len(ref)}
+    if ref:
+        out["cue_recall"] = sum(near(t, est) for t in ref) / len(ref)
+    if est and ref:
+        out["cue_precision"] = sum(near(t, ref) for t in est) / len(est)
+    return out
+
+
 def mean(values) -> float | None:
     vals = [v for v in values if v is not None]
     return float(np.mean(vals)) if vals else None

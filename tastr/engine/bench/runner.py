@@ -12,6 +12,7 @@ Save reports and pass one back as `baseline` to see what a change moved.
 from __future__ import annotations
 
 import json
+import statistics
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -74,7 +75,24 @@ def score_item(item: Item, card: TrackCard) -> dict:
         row["meter_correct"] = float(c.beats_per_bar == t.beats_per_bar)
     if t.boundaries:
         row.update(metrics.boundary_scores([s.start for s in card.sections], t.boundaries, card.duration))
+    cues = card.extras.get("sections.cues")
+    if cues is not None and (t.cues or t.boundaries):
+        bar = _bar_seconds(c.downbeat_times, c.bpm, c.beats_per_bar)
+        if t.cues:
+            row.update(metrics.cue_scores([q["time_s"] for q in cues], t.cues, bar))
+        if t.boundaries:  # labeled section starts with a section or phrase cue within a bar (start and end free)
+            inner = [b for b in t.boundaries if 1.0 < b < card.duration - 1.0]
+            marks = [q["time_s"] for q in cues if q["kind"] in ("section", "phrase", "drop", "mix_out")]
+            if inner:
+                row["cue_section_recall"] = metrics.cue_scores(marks, inner, bar)["cue_recall"]
     return row
+
+
+def _bar_seconds(downbeats: list[float], bpm: float | None, beats_per_bar: int) -> float:
+    """One bar, from the downbeats (their median spacing), else the BPM, else 2 s."""
+    if len(downbeats) >= 2:
+        return float(statistics.median(b - a for a, b in zip(downbeats, downbeats[1:])))
+    return beats_per_bar * 60.0 / bpm if bpm else 2.0
 
 
 def _work(item: Item) -> dict:
@@ -90,7 +108,7 @@ def _work(item: Item) -> dict:
 DRUM_AND_BASS = "Drum & Bass"  # Beatport's genre name
 FAST_RANGE = (160.0, 181.0)  # drum & bass at its DJ tempo
 SUMMARY_METRICS = ["acc1", "acc2", "key_weighted", "key_correct", "beat_f", "downbeat_f", "boundary_f_0.5", "boundary_f_3",
-                   "meter_correct"]
+                   "meter_correct", "cue_recall", "cue_precision", "cue_section_recall"]
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -191,6 +209,9 @@ LABELS = {
     "boundary_f_0.5": "Sections F (0.5 s)",
     "boundary_f_3": "Sections F (3 s)",
     "meter_correct": "Meter (3/4 vs 4/4)",
+    "cue_recall": "Hand cues with a cue (1 bar)",
+    "cue_precision": "Cues near a hand cue (1 bar)",
+    "cue_section_recall": "Section starts with a cue (1 bar)",
 }
 
 

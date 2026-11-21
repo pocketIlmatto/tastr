@@ -48,6 +48,9 @@ def test_sections_spec_finds_labeled_boundaries(tmp_path):
     assert (report["current"]["seconds"], report["current"]["phrase"]) == (const("SECONDS_PER_SECTION"),
                                                                           const("PHRASE_BARS"))
     assert "best on tune" in sections_spec.format_report(report)
+    # The suggested cue points find every labeled change (each is a loudness step) and say so in the report.
+    assert report["cues"]["tracks"] == 4 and report["cues"]["section_recall"] == 1.0
+    assert report["cues"]["kinds"]["start"] == 4 and "cue points" in sections_spec.format_report(report)
 
 
 def test_sections_spec_reads_the_annotation_bundle(tmp_path):

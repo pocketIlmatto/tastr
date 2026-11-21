@@ -1,4 +1,4 @@
-//! What a DJ tool needs from a track, and nothing else: BPM, beats, downbeats, meter, key and sections.
+//! What a DJ tool needs from a track, and nothing else: BPM, beats, downbeats, meter, key, sections and cue points.
 //!
 //! This is the API for using the engine from other Rust programs (docs/rust-engine.md, "Using the engine as a
 //! library"). It runs only the core and sections stages, so it skips the drum patterns, vibe tags and
@@ -13,6 +13,7 @@
 //! The result may gain fields in later versions (it is `#[non_exhaustive]`), so read it by field name.
 
 use crate::card::{Card, Key, Section};
+pub use crate::cues::Cue;
 use crate::json::Json;
 use crate::stages::{self, Ctx};
 use crate::SR;
@@ -62,6 +63,9 @@ pub struct DjResult {
     pub key: Option<Key>,
     /// Song sections with rough labels ("intro", "verse", "drop", ...), start and end on bar lines.
     pub sections: Vec<Section>,
+    /// Suggested DJ cue points in time order, at most 8: `start` (bar 1 after any silence at the start),
+    /// `section` and `phrase` (on the phrase grid), `drop` and `mix_out`. Empty without a beat grid.
+    pub cues: Vec<Cue>,
     /// Mean loudness in dB (RMS, not LUFS).
     pub loudness_db: Option<f64>,
     /// Stages that failed, as (stage, message). Empty when everything ran.
@@ -119,6 +123,7 @@ fn from_card(card: Card) -> DjResult {
         meter_set: c.meter_set,
         key: c.key,
         sections: card.sections,
+        cues: card.cues,
         loudness_db: c.loudness_db,
         errors: card.errors,
     }
@@ -163,6 +168,7 @@ impl DjResult {
             .with("beat_times", self.beat_times.clone())
             .with("downbeat_times", self.downbeat_times.clone())
             .with("sections", Json::Arr(sections))
+            .with("cues", Json::Arr(self.cues.iter().map(Cue::json).collect()))
             .with("errors", Json::Obj(self.errors.iter().map(|(k, m)| (k.clone(), Json::from(m.clone()))).collect()))
     }
 }
@@ -279,12 +285,70 @@ mod tests {
         assert!(r.beat_times.is_empty());
     }
 
+    /// 2.3 s of silence, then 16 bars of soft hats and a pad, 32 bars with a kick on every beat, 16 bars of pad
+    /// again, at 124 BPM: (audio at 44.1 kHz, bar length in seconds).
+    fn intro_drop_outro() -> (Vec<f32>, f64) {
+        let sr = 44_100.0;
+        let beat = 60.0 / 124.0;
+        let lead = 2.3;
+        let n = ((lead + 64.0 * 4.0 * beat + 1.0) * sr) as usize;
+        let mut y = vec![0.0f32; n];
+        let two_pi = 2.0 * std::f64::consts::PI;
+        for b in 0..64 * 4 {
+            let t0 = lead + b as f64 * beat;
+            let loud = (64..192).contains(&b);
+            let start = (t0 * sr) as usize;
+            for i in 0..(0.06 * sr) as usize {
+                let t = i as f64 / sr;
+                let kick = if loud { (-t / 0.02).exp() * (two_pi * 55.0 * t).sin() } else { 0.0 };
+                // a short high tick as the hat, off a cheap deterministic hash so it sounds noisy
+                let h = ((i as u64).wrapping_mul(2_654_435_761) % 1000) as f64 / 500.0 - 1.0;
+                let hat = 0.15 * (-t / 0.005).exp() * h;
+                y[start + i] += (kick * if b % 4 == 0 { 1.0 } else { 0.8 } + hat) as f32;
+            }
+        }
+        let first = (lead * sr) as usize;
+        for (i, v) in y.iter_mut().enumerate().skip(first) {
+            let t = i as f64 / sr;
+            let pad: f64 = [220.0, 261.63, 329.63].iter().map(|f| (two_pi * f * t).sin()).sum();
+            *v = 0.6 * *v + (0.04 * pad) as f32;
+        }
+        (y, 4.0 * beat)
+    }
+
+    #[test]
+    fn cues_on_a_track_with_an_intro_a_drop_and_an_outro() {
+        let (y, bar) = intro_drop_outro();
+        // The meter is set: with no accents in the intro the detector hears 3/4, which isn't what this checks.
+        let r = analyze_pcm(&y, 44_100, 1, &DjOptions::default().with_beats_per_bar(4)).unwrap();
+        assert!(!r.cues.is_empty() && r.cues.len() <= crate::cues::MAX_CUES, "{:?}", r.cues);
+        let start = &r.cues[0];
+        assert_eq!(start.kind, "start");
+        assert!(start.time_s >= 2.3 - bar / 8.0 && start.time_s < 2.3 + bar, "{start:?}");
+        let near = |kind: &str, t: f64| r.cues.iter().any(|c| c.kind == kind && (c.time_s - t).abs() <= bar / 2.0);
+        assert!(near("drop", 2.3 + 16.0 * bar), "{:?}", r.cues);
+        assert!(near("mix_out", 2.3 + 48.0 * bar), "{:?}", r.cues);
+        for w in r.cues.windows(2) {
+            assert!(w[1].time_s > w[0].time_s);
+        }
+        for c in &r.cues {
+            assert!(r.downbeat_times.contains(&c.time_s), "{c:?} is not on a downbeat");
+        }
+        let card = crate::analyze(crate::resample::resample(&y, 44_100, SR), Some(4), None);
+        assert_eq!(card.cues, r.cues);
+        let mut s = String::new();
+        card.extras.write(&mut s);
+        assert!(s.contains("\"sections.cues\""), "{s}");
+    }
+
     #[test]
     fn json_has_the_fields() {
         let r = analyze_pcm(&click_track(44_100, 124.0, 0.25, 20.0), 44_100, 1, &DjOptions::default()).unwrap();
         let mut s = String::new();
         r.to_json().write(&mut s);
-        for k in ["\"bpm\"", "\"beat_times\"", "\"downbeat_times\"", "\"8A\"", "\"A minor\"", "\"sections\""] {
+        for k in
+            ["\"bpm\"", "\"beat_times\"", "\"downbeat_times\"", "\"8A\"", "\"A minor\"", "\"sections\"", "\"cues\""]
+        {
             assert!(s.contains(k), "{k} missing from {s}");
         }
     }

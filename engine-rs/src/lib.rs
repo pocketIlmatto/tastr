@@ -6,6 +6,7 @@ pub mod bench;
 pub mod card;
 pub mod consts;
 pub mod cqt;
+pub mod cues;
 #[cfg(feature = "decode")]
 pub mod decode;
 mod detmath;

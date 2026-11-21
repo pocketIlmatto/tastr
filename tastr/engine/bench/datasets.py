@@ -34,6 +34,7 @@ class Truth:
     boundaries: list[float] | None = None  # section start times, seconds
     labels: list[str] | None = None  # section labels, same length as boundaries
     beats_per_bar: int | None = None  # 3 or 4 when the labeled bars are steadily that long
+    cues: list[float] | None = None  # hand-placed cue points, seconds (Rekordbox hot and memory cues)
 
 
 @dataclass
